@@ -117,39 +117,243 @@ body,
     min-height: 0;
 }
 
-.sidebar {
+/* Palette ---------------------------------------------------------------- */
+.palette {
     width: var(--sidebar-w);
     background: var(--bg-1);
     border-right: 1px solid var(--border);
-    overflow-y: auto;
-    padding: 12px 8px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
 }
 
-.sidebar-section + .sidebar-section {
-    margin-top: 16px;
+.palette-header {
+    padding: 10px 10px 8px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
 }
 
-.sidebar-title {
+.palette-search-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.palette-search-icon {
+    position: absolute;
+    left: 9px;
+    color: var(--text-3);
+    pointer-events: none;
+}
+
+.palette-search {
+    flex: 1;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-1);
+    padding: 6px 28px 6px 30px;
+    font-size: 12px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 80ms ease;
+}
+
+.palette-search::placeholder {
+    color: var(--text-3);
+}
+
+.palette-search:focus {
+    border-color: var(--accent);
+}
+
+.palette-search-clear {
+    position: absolute;
+    right: 6px;
+    background: transparent;
+    border: none;
+    color: var(--text-3);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.palette-search-clear:hover {
+    background: var(--bg-3);
+    color: var(--text-1);
+}
+
+.palette-stats {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
     font-size: 11px;
+    color: var(--text-3);
+    padding: 0 2px;
+}
+
+.palette-stats b {
+    color: var(--text-2);
+    font-weight: 600;
+}
+
+.palette-stats-sep {
+    color: var(--border-strong);
+}
+
+.palette-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 4px 12px;
+}
+
+.palette-empty {
+    padding: 24px 12px;
+    color: var(--text-3);
+    text-align: center;
+    font-size: 12px;
+}
+
+.palette-empty .quote {
+    color: var(--text-1);
+    font-weight: 600;
+}
+
+.palette-category + .palette-category {
+    margin-top: 2px;
+}
+
+.palette-category-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--text-1);
+    padding: 7px 8px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    text-align: left;
+    border-radius: var(--radius-sm);
+}
+
+.palette-category-header:hover {
+    background: var(--bg-2);
+}
+
+.palette-cat-chevron {
+    width: 12px;
+    text-align: center;
+    color: var(--text-3);
+    font-size: 9px;
+}
+
+.palette-cat-icon {
+    width: 16px;
+    text-align: center;
+    font-size: 14px;
+    font-weight: normal;
+}
+
+.palette-cat-label {
+    flex: 1;
+}
+
+.palette-cat-count {
+    color: var(--text-3);
+    font-size: 11px;
+    font-weight: 500;
+    background: var(--bg-2);
+    border-radius: 9px;
+    padding: 1px 7px;
+}
+
+.palette-category-body {
+    padding: 2px 0 6px 12px;
+}
+
+.palette-group {
+    margin-top: 4px;
+}
+
+.palette-group-label {
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-3);
-    padding: 0 8px 6px;
+    padding: 4px 8px 2px;
 }
 
-.palette-item {
-    padding: 7px 10px;
-    margin: 2px 0;
+.palette-component {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    margin: 1px 0;
     border-radius: var(--radius-sm);
     color: var(--text-2);
     cursor: grab;
     user-select: none;
-    transition: background 80ms ease, color 80ms ease;
+    transition: background 60ms ease, color 60ms ease;
+    font-size: 12px;
 }
 
-.palette-item:hover {
+.palette-component:hover {
     background: var(--bg-2);
     color: var(--text-1);
+}
+
+.palette-component:active {
+    cursor: grabbing;
+}
+
+.palette-component.is-planned {
+    color: var(--text-3);
+}
+
+.palette-component.is-planned:hover {
+    color: var(--text-2);
+}
+
+.palette-component-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    opacity: 0.85;
+}
+
+.palette-component.is-planned .palette-component-dot {
+    opacity: 0.4;
+}
+
+.palette-component-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.palette-availability {
+    font-size: 11px;
+    width: 14px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.palette-availability-yes {
+    color: var(--accent-source);
+}
+
+.palette-availability-no {
+    color: var(--text-3);
+    opacity: 0.5;
 }
 
 .canvas-shell {

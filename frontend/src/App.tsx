@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import EditorTabs from './workflow-ui/EditorTabs';
 import EngineSelector, { type EngineId } from './workflow-ui/EngineSelector';
+import Palette from './workflow-ui/Palette';
 
 type RuntimeState = 'connecting' | 'ready' | 'offline';
 
@@ -38,28 +39,7 @@ export default function App() {
             </header>
 
             <main className="workspace">
-                <aside className="sidebar">
-                    <div className="sidebar-section">
-                        <div className="sidebar-title">Sources</div>
-                        <div className="palette-item">CSV</div>
-                        <div className="palette-item">Parquet</div>
-                        <div className="palette-item">SQLite</div>
-                    </div>
-                    <div className="sidebar-section">
-                        <div className="sidebar-title">Transforms</div>
-                        <div className="palette-item">Filter</div>
-                        <div className="palette-item">Project</div>
-                        <div className="palette-item">Join</div>
-                        <div className="palette-item">Aggregate</div>
-                    </div>
-                    <div className="sidebar-section">
-                        <div className="sidebar-title">Sinks</div>
-                        <div className="palette-item">CSV</div>
-                        <div className="palette-item">Parquet</div>
-                        <div className="palette-item">SQLite</div>
-                    </div>
-                </aside>
-
+                <Palette />
                 <section className="canvas-shell">
                     <EditorTabs engine={engine} />
                 </section>
