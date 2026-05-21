@@ -1,0 +1,12 @@
+[package]
+name = "duckle-slothdb-engine"
+description = "SlothDB-backed execution engine for Duckle pipelines."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }

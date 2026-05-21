@@ -1,0 +1,92 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/desktop",
+    "crates/runtime",
+    "crates/connectors",
+    "crates/workflow-engine",
+    "crates/transform-engine",
+    "crates/stream-engine",
+    "crates/duckdb-engine",
+    "crates/slothdb-engine",
+    "crates/execution-core",
+    "crates/plugin-sdk",
+    "crates/metadata",
+    "crates/scheduler",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Sourav Roy"]
+repository = "https://github.com/SouravRoy-ETL/duckle"
+homepage = "https://github.com/SouravRoy-ETL/duckle"
+rust-version = "1.80"
+
+[workspace.dependencies]
+# Internal crates
+duckle-runtime = { path = "crates/runtime", version = "0.0.1" }
+duckle-connectors = { path = "crates/connectors", version = "0.0.1" }
+duckle-workflow-engine = { path = "crates/workflow-engine", version = "0.0.1" }
+duckle-transform-engine = { path = "crates/transform-engine", version = "0.0.1" }
+duckle-stream-engine = { path = "crates/stream-engine", version = "0.0.1" }
+duckle-duckdb-engine = { path = "crates/duckdb-engine", version = "0.0.1" }
+duckle-slothdb-engine = { path = "crates/slothdb-engine", version = "0.0.1" }
+duckle-execution-core = { path = "crates/execution-core", version = "0.0.1" }
+duckle-plugin-sdk = { path = "crates/plugin-sdk", version = "0.0.1" }
+duckle-metadata = { path = "crates/metadata", version = "0.0.1" }
+duckle-scheduler = { path = "crates/scheduler", version = "0.0.1" }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Errors
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Async
+tokio = { version = "1.42", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Common
+uuid = { version = "1.11", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Arrow / columnar
+arrow = "53"
+arrow-array = "53"
+arrow-schema = "53"
+parquet = "53"
+
+# Storage
+rusqlite = { version = "0.32", features = ["bundled"] }
+duckdb = "1.1"
+
+# Tauri (used by apps/desktop)
+tauri = { version = "2", features = [] }
+tauri-build = { version = "2", features = [] }
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+strip = "symbols"
+panic = "abort"
+
+# Faster release builds for dev iteration on the desktop app.
+[profile.release-fast]
+inherits = "release"
+codegen-units = 16
+lto = "thin"
+strip = "none"
+
+[profile.dev]
+opt-level = 0
+debug = true

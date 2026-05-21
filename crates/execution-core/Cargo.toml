@@ -1,0 +1,13 @@
+[package]
+name = "duckle-execution-core"
+description = "Engine-agnostic execution abstractions for Duckle (logical plan, execution handle)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+async-trait = { workspace = true }

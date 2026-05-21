@@ -1,0 +1,16 @@
+[package]
+name = "duckle-runtime"
+description = "Duckle process runtime: app state, IPC plumbing, log streaming."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

@@ -1,0 +1,12 @@
+[package]
+name = "duckle-duckdb-engine"
+description = "DuckDB-backed execution engine for Duckle pipelines."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
