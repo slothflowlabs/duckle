@@ -1566,6 +1566,15 @@ fn build_join(inputs: &NodeInputs, props: &JsonValue, kind: &str) -> Result<Stri
         .get("rightKey")
         .and_then(JsonValue::as_str)
         .ok_or_else(|| "join: rightKey property required".to_string())?;
+    // The form's joinType, if set, overrides the component-id default so
+    // changing it in the UI actually takes effect.
+    let kind = match string_prop(props, "joinType").as_deref() {
+        Some("inner") => "INNER",
+        Some("left") => "LEFT",
+        Some("right") => "RIGHT",
+        Some("full") | Some("outer") => "FULL OUTER",
+        _ => kind,
+    };
     Ok(format!(
         "SELECT m.*, r.* FROM {} m {} JOIN {} r ON m.{} = r.{}",
         quote_ident(left),
@@ -1647,10 +1656,17 @@ fn build_tsv_source(props: &JsonValue) -> String {
 
 fn build_parquet_source(props: &JsonValue) -> String {
     let path = string_prop(props, "path").unwrap_or_default();
-    format!(
-        "SELECT * FROM read_parquet('{}')",
-        sql_escape(&path)
-    )
+    // Optional projection: comma-separated column list pushed into the read.
+    let select = string_prop(props, "columns")
+        .filter(|s| !s.trim().is_empty())
+        .map(|c| {
+            c.split(',')
+                .map(|s| quote_ident(s.trim()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_else(|| "*".into());
+    format!("SELECT {} FROM read_parquet('{}')", select, sql_escape(&path))
 }
 
 fn build_json_source(props: &JsonValue) -> String {
