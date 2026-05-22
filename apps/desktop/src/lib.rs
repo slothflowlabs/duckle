@@ -316,7 +316,8 @@ fn engine_status(app: tauri::AppHandle) -> Result<Vec<EngineStatus>, String> {
     Ok(engine_manager::status(&dir))
 }
 
-/// Download + install an engine into app-data, streaming progress.
+/// Download + install an engine (duckdb / slothdb) into app-data,
+/// streaming progress.
 #[tauri::command]
 async fn engine_install(
     app: tauri::AppHandle,
@@ -324,21 +325,15 @@ async fn engine_install(
     on_progress: Channel<InstallProgress>,
 ) -> Result<String, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    match engine.as_str() {
-        "duckdb" => {
-            let result = tokio::task::spawn_blocking(move || {
-                engine_manager::install_duckdb(&dir, |p| {
-                    let _ = on_progress.send(p);
-                })
-            })
-            .await
-            .map_err(|e| e.to_string())?;
-            if let Err(ref e) = result {
-                let _ = ();
-                tracing::warn!("DuckDB install failed: {}", e);
-            }
-            result
-        }
-        other => Err(format!("Engine '{}' can't be installed automatically yet", other)),
+    let result = tokio::task::spawn_blocking(move || {
+        engine_manager::install(&dir, &engine, |p| {
+            let _ = on_progress.send(p);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    if let Err(ref e) = result {
+        tracing::warn!("Engine install failed: {}", e);
     }
+    result
 }
