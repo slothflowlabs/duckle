@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="340" viewBox="0 0 1280 340" fill="none" role="img" aria-label="Duckle — visual local-first ETL">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#18D4E0"/>
+      <stop offset="1" stop-color="#5B6EFB"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0E1320"/>
+      <stop offset="1" stop-color="#070910"/>
+    </linearGradient>
+    <linearGradient id="wm" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#EAF2FF"/>
+      <stop offset="1" stop-color="#9FB3D8"/>
+    </linearGradient>
+    <clipPath id="sq"><rect x="56" y="56" width="92" height="92" rx="26"/></clipPath>
+  </defs>
+
+  <rect x="1" y="1" width="1278" height="338" rx="26" fill="url(#bg)" stroke="#1b2436" stroke-width="1.5"/>
+
+  <!-- logo mark -->
+  <rect x="56" y="56" width="92" height="92" rx="26" fill="url(#g)"/>
+  <g clip-path="url(#sq)">
+    <rect x="-60" y="56" width="38" height="92" fill="#ffffff" opacity="0.18" transform="skewX(-18)">
+      <animate attributeName="x" values="-70;180" dur="3.6s" repeatCount="indefinite"/>
+    </rect>
+  </g>
+  <text x="102" y="103" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="64" font-weight="800" fill="#fff">D</text>
+
+  <!-- wordmark + motto -->
+  <text x="172" y="92" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="62" font-weight="800" fill="url(#wm)">Duckle</text>
+  <text x="60" y="200" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="26" font-weight="600" fill="#cfe0ff">Clean data in. Smart data out.</text>
+  <text x="60" y="240" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="18" font-weight="400" fill="#7e8aa3">Visual, local-first ETL that scrubs the garbage out of</text>
+  <text x="60" y="266" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="18" font-weight="400" fill="#7e8aa3">your data — and your AI.</text>
+
+  <!-- pipeline graph -->
+  <g font-family="'Segoe UI', system-ui, Arial, sans-serif">
+    <!-- edges -->
+    <line x1="848" y1="186" x2="936" y2="186" stroke="#2b3852" stroke-width="2.5"/>
+    <line x1="1064" y1="186" x2="1152" y2="186" stroke="#2b3852" stroke-width="2.5"/>
+    <circle r="4.5" fill="#18D4E0"><animate attributeName="cx" values="848;936" dur="1.5s" repeatCount="indefinite"/><animate attributeName="cy" values="186;186" dur="1.5s" repeatCount="indefinite"/></circle>
+    <circle r="4.5" fill="#5B6EFB"><animate attributeName="cx" values="1064;1152" dur="1.5s" begin="0.4s" repeatCount="indefinite"/><animate attributeName="cy" values="186;186" dur="1.5s" repeatCount="indefinite"/></circle>
+
+    <!-- source node -->
+    <rect x="720" y="150" width="128" height="72" rx="14" fill="#121a2b" stroke="#2b3852" stroke-width="1.5"/>
+    <rect x="720" y="150" width="5" height="72" rx="2.5" fill="#fed060"/>
+    <text x="740" y="182" font-size="16" font-weight="700" fill="#e7eefc">messy.csv</text>
+    <text x="740" y="203" font-size="12" fill="#8090ad">source</text>
+
+    <!-- clean node -->
+    <rect x="936" y="150" width="128" height="72" rx="14" fill="#121a2b" stroke="url(#g)" stroke-width="2"/>
+    <rect x="936" y="150" width="5" height="72" rx="2.5" fill="#18D4E0"/>
+    <text x="956" y="182" font-size="16" font-weight="700" fill="#e7eefc">clean</text>
+    <text x="956" y="203" font-size="12" fill="#8090ad">dedup · validate</text>
+
+    <!-- sink node -->
+    <rect x="1152" y="150" width="72" height="72" rx="14" fill="#121a2b" stroke="#2b3852" stroke-width="1.5"/>
+    <rect x="1152" y="150" width="5" height="72" rx="2.5" fill="#a78bfa"/>
+    <text x="1172" y="182" font-size="15" font-weight="700" fill="#e7eefc">AI</text>
+    <text x="1172" y="203" font-size="11" fill="#8090ad">/ DB</text>
+  </g>
+</svg>
