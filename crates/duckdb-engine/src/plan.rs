@@ -29,6 +29,9 @@ pub struct Stage {
     pub label: String,
     pub sql: String,
     pub kind: StageKind,
+    /// For sinks: the upstream object name they read from, so the
+    /// executor can report a row count.
+    pub from: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -276,22 +279,29 @@ fn build_stage(
         .as_ref()
         .cloned()
         .unwrap_or(JsonValue::Null);
-    let (sql, kind) = if component_id.starts_with("snk.") {
+    let (sql, kind, from) = if component_id.starts_with("snk.") {
         let from_view = inputs
             .main()
             .ok_or_else(|| missing_input(node, "main"))?;
-        (build_sink_sql(component_id, &props, from_view)?, StageKind::Sink)
+        (
+            build_sink_sql(component_id, &props, from_view)?,
+            StageKind::Sink,
+            Some(from_view.to_string()),
+        )
     } else {
         let body = build_view_sql(component_id, &props, inputs).map_err(|e| {
             EngineError::Config(format!("{} ({} / {}): {}", node.data.label, component_id, node.id, e))
         })?;
+        // Materialize as a real table so the result persists across the
+        // separate CLI invocations the executor uses per stage.
         (
             format!(
-                "CREATE OR REPLACE TEMP VIEW {} AS {}",
+                "CREATE OR REPLACE TABLE {} AS {}",
                 quote_ident(&node.id),
                 body
             ),
             StageKind::View,
+            None,
         )
     };
     Ok(Stage {
@@ -300,6 +310,22 @@ fn build_stage(
         label: node.data.label.clone(),
         sql,
         kind,
+        from,
+    })
+}
+
+/// The `SELECT * FROM <reader>` SQL for a source format — used by the
+/// engine's inspect path to DESCRIBE / sample without materializing.
+pub fn source_select_for_format(format: &str, props: &JsonValue) -> Option<String> {
+    Some(match format {
+        "csv" => build_csv_source(props),
+        "tsv" => build_tsv_source(props),
+        "parquet" => build_parquet_source(props),
+        "json" | "jsonl" | "ndjson" => build_json_source(props),
+        "sqlite" => build_sqlite_source(props),
+        "duckdb" => build_duckdb_source(props),
+        "s3" | "gcs" | "azureblob" | "http" | "https" => build_cloud_source(props),
+        _ => return None,
     })
 }
 
@@ -827,6 +853,14 @@ fn build_csv_source(props: &JsonValue) -> String {
     }
     if let Some(n) = null_val.as_deref().filter(|s| !s.is_empty()) {
         args.push(format!("nullstr='{}'", sql_escape(n)));
+    }
+    if let Some(skip) = props.get("skipLines").and_then(JsonValue::as_u64) {
+        if skip > 0 {
+            args.push(format!("skip={}", skip));
+        }
+    }
+    if let Some(enc) = string_prop(props, "encoding").filter(|s| !s.is_empty()) {
+        args.push(format!("encoding='{}'", sql_escape(&enc)));
     }
     format!("SELECT * FROM read_csv_auto({})", args.join(", "))
 }

@@ -43,7 +43,16 @@ async fn run_now_executes_pipeline_from_disk_and_records_history() {
     )
     .unwrap();
 
-    let engine = DuckdbEngine::new().unwrap();
+    // Drives the real DuckDB CLI; soft-skip if not provided.
+    let engine = match std::env::var("DUCKLE_DUCKDB_BIN").ok() {
+        Some(bin) if std::path::Path::new(&bin).exists() => {
+            DuckdbEngine::new(std::path::PathBuf::from(bin))
+        }
+        _ => {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN to a duckdb CLI to run");
+            return;
+        }
+    };
     let sched = Scheduler::new(engine);
     sched.set_workspace(Some(ws.to_path_buf()));
 

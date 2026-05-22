@@ -43,3 +43,6 @@ coverage/
 # Embedded engines downloaded at runtime
 .duckle/cache/
 .duckle/engines/
+
+# Local DuckDB CLI for tests (DUCKLE_DUCKDB_BIN)
+.duckdb-cli/

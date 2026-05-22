@@ -1,23 +1,25 @@
-//! Duckle DuckDB engine adapter.
+//! Duckle DuckDB engine adapter — CLI-driven.
 //!
-//! Holds a single in-process DuckDB connection and lends it out to
-//! callers that need to inspect a source's schema, sample its rows, or
-//! eventually execute a full pipeline plan.
+//! Rather than statically linking libduckdb (which bloats the binary to
+//! tens of MB and makes builds glacial), this drives the official DuckDB
+//! **CLI** that Duckle downloads into the app-data dir on first launch.
+//! The engine shells out to `duckdb -json -c "<sql>"` and parses the
+//! JSON it prints. SQL generation lives in `plan.rs` and is unchanged;
+//! only execution + inspection talk to the CLI here.
 //!
-//! Most heavy lifting (CSV inference, Parquet schema, JSON inference,
-//! SQLite scanning) is delegated to DuckDB's own readers via SQL like
-//! `DESCRIBE SELECT * FROM read_csv_auto('...')`. This means we get
-//! DuckDB's mature dialect inference for free instead of re-implementing
-//! it in Rust.
+//! Execution model: a temp on-disk `.duckdb` file. Each non-sink stage
+//! materializes a `CREATE OR REPLACE TABLE` (so it persists across the
+//! separate CLI invocations); sinks `COPY` from the upstream table.
+//! Cancellation kills the in-flight child process.
 
-use async_trait::async_trait;
-use duckdb::{Connection, InterruptHandle};
 use duckle_metadata::{Column, DataType};
 use duckle_plugin_sdk::{Inspection, InspectError};
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value as JsonValue};
+use serde::Serialize;
+use serde_json::Value as JsonValue;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 use thiserror::Error;
 
@@ -28,12 +30,16 @@ pub use plan::{CompiledPipeline, PipelineDoc, Stage, StageKind};
 
 #[derive(Debug, Error)]
 pub enum EngineError {
-    #[error("duckdb: {0}")]
-    Duck(#[from] duckdb::Error),
     #[error("config: {0}")]
     Config(String),
     #[error("unsupported: {0}")]
     Unsupported(String),
+    #[error("query: {0}")]
+    Query(String),
+    #[error("cancelled")]
+    Cancelled,
+    #[error("{0}")]
+    Other(String),
 }
 
 impl From<EngineError> for InspectError {
@@ -46,403 +52,429 @@ impl From<EngineError> for InspectError {
     }
 }
 
-/// Sample rows fetched alongside the schema for the Preview tab.
+/// Rows sampled alongside the schema for the Preview tab.
 const PREVIEW_LIMIT: usize = 8;
+/// Rows captured per stage during a run.
+const PREVIEW_ROW_LIMIT: usize = 50;
 
-/// Source-format / target-system dispatcher used by the autodetect Tauri
-/// command. New formats only need a new arm here.
+/// Drives the downloaded DuckDB CLI. Cheap to clone; holds only the
+/// binary path and a shared cancel flag.
 #[derive(Clone)]
 pub struct DuckdbEngine {
-    conn: Arc<Mutex<Connection>>,
+    bin: PathBuf,
     cancel: Arc<AtomicBool>,
-    interrupt: Arc<InterruptHandle>,
 }
 
 impl std::fmt::Debug for DuckdbEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DuckdbEngine").finish_non_exhaustive()
+        f.debug_struct("DuckdbEngine")
+            .field("bin", &self.bin)
+            .finish()
     }
 }
 
 impl DuckdbEngine {
-    /// Create a fresh in-memory DuckDB instance. The engine is process-
-    /// global, but each `inspect_*` call uses isolated SQL so multiple
-    /// runs don't trample each other.
-    pub fn new() -> Result<Self, EngineError> {
-        let conn = Connection::open_in_memory()?;
-        // Install the extensions we use, then LOAD them into this
-        // connection. INSTALL writes to a process/user-global extension
-        // directory, so we serialize it with a `Once` — otherwise two
-        // engines starting at the same time race on the install file
-        // move ("Could not move file: Access is denied"). Subsequent
-        // engines skip INSTALL (the files are already on disk) and only
-        // LOAD into their own connection.
-        //
-        // parquet is preloaded so the first `COPY ... (FORMAT PARQUET)`
-        // doesn't trigger a lazy auto-install (which needs network +
-        // a writable dir and is the racy path the integration tests
-        // caught).
-        static EXT_INSTALL: std::sync::Once = std::sync::Once::new();
-        EXT_INSTALL.call_once(|| {
-            let _ = conn.execute_batch(
-                "INSTALL sqlite; INSTALL json; INSTALL httpfs; INSTALL parquet;",
-            );
-        });
-        let _ = conn.execute_batch("LOAD sqlite; LOAD json; LOAD httpfs; LOAD parquet;");
-        let interrupt = conn.interrupt_handle();
-        Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+    /// Construct an engine pointing at a DuckDB CLI binary. The binary
+    /// need not exist yet — calls fail with a clear error if it's
+    /// missing, and the first-run setup installs it.
+    pub fn new(bin: PathBuf) -> Self {
+        Self {
+            bin,
             cancel: Arc::new(AtomicBool::new(false)),
-            interrupt,
-        })
+        }
     }
 
-    /// Request that any in-flight pipeline run halts. Two layers:
-    ///   1. Sets the cancel flag so the run loop bails before starting
-    ///      another stage.
-    ///   2. Calls `InterruptHandle::interrupt()` — this is the
-    ///      thread-safe, lock-free interrupt path. It signals DuckDB
-    ///      to abort whatever the connection is currently executing,
-    ///      so even a long-running query returns ~immediately.
+    pub fn binary(&self) -> &Path {
+        &self.bin
+    }
+
+    pub fn is_available(&self) -> bool {
+        self.bin.exists()
+    }
+
+    /// Signal any in-flight run to stop. The polling loop in `run` sees
+    /// the flag and kills the active CLI child, so even a long query
+    /// returns promptly.
     pub fn request_cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
-        self.interrupt.interrupt();
     }
 
-    /// Clear a pending cancel — done at the start of every new run.
     pub fn clear_cancel(&self) {
         self.cancel.store(false, Ordering::Relaxed);
     }
 
-    /// Run an arbitrary closure with the underlying connection. Locked
-    /// across the closure so we can hold prepared statements safely.
-    pub fn with_connection<R>(&self, f: impl FnOnce(&Connection) -> R) -> R {
-        let guard = self.conn.lock().expect("duckdb connection poisoned");
-        f(&guard)
+    /// Run SQL through the CLI against an optional db file. Returns raw
+    /// stdout. Cancellation-aware: polls the child and kills it if a
+    /// cancel was requested.
+    fn run(&self, db: Option<&Path>, sql: &str, json: bool) -> Result<String, EngineError> {
+        if !self.bin.exists() {
+            return Err(EngineError::Config(format!(
+                "DuckDB engine isn't installed (expected at {}). Open Setup to install it.",
+                self.bin.display()
+            )));
+        }
+        let mut cmd = std::process::Command::new(&self.bin);
+        match db {
+            Some(p) => {
+                cmd.arg(p);
+            }
+            None => {
+                cmd.arg(":memory:");
+            }
+        }
+        if json {
+            cmd.arg("-json");
+        }
+        cmd.arg("-bail").arg("-c").arg(sql);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // No console flash on Windows for the per-stage spawns.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| EngineError::Other(format!("could not start duckdb: {}", e)))?;
+
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => {
+                    if self.cancel.load(Ordering::Relaxed) {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(EngineError::Cancelled);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(40));
+                }
+                Err(e) => return Err(EngineError::Other(e.to_string())),
+            }
+        }
+
+        let out = child
+            .wait_with_output()
+            .map_err(|e| EngineError::Other(e.to_string()))?;
+        if !out.status.success() {
+            let mut msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            if msg.is_empty() {
+                msg = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            }
+            if msg.is_empty() {
+                msg = "DuckDB CLI exited with an error".into();
+            }
+            return Err(EngineError::Query(msg));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
+
+    /// Run SQL and return the first JSON array of rows it printed
+    /// (DESCRIBE / SELECT produce one array; preludes produce none).
+    fn run_rows(&self, db: Option<&Path>, sql: &str) -> Result<Vec<JsonValue>, EngineError> {
+        let out = self.run(db, sql, true)?;
+        Ok(parse_json_arrays(&out).into_iter().next().unwrap_or_default())
+    }
+
+    // ---- Inspection ----------------------------------------------------
 
     /// Inspect a source for its schema and a small preview. `format` is
-    /// the same string the frontend ships (`"csv"`, `"parquet"`, ...).
+    /// the string the frontend ships (`"csv"`, `"parquet"`, `"s3"`, ...).
     pub fn inspect(&self, format: &str, options: JsonValue) -> Result<Inspection, EngineError> {
-        match format {
-            "csv" | "tsv" => self.inspect_csv(options),
-            "parquet" => self.inspect_parquet(options),
-            "json" | "jsonl" | "ndjson" => self.inspect_json(options),
-            "sqlite" => self.inspect_sqlite(options),
-            "duckdb" => self.inspect_duckdb(options),
-            "s3" | "gcs" | "azureblob" | "http" | "https" => {
-                self.inspect_cloud_url(format, options)
-            }
-            other => Err(EngineError::Unsupported(format!(
-                "Format '{}' is not supported by the DuckDB engine yet",
-                other
-            ))),
-        }
+        let select = plan::source_select_for_format(format, &options).ok_or_else(|| {
+            EngineError::Unsupported(format!("Format '{}' is not supported", format))
+        })?;
+        let prelude = self.source_prelude(format, &options);
+
+        let describe_sql = format!("{}DESCRIBE {};", prelude, select);
+        let cols = self.run_rows(None, &describe_sql)?;
+        let schema: Vec<Column> = cols.iter().filter_map(parse_describe_row).collect();
+
+        let sample_sql = format!("{}{} LIMIT {};", prelude, select, PREVIEW_LIMIT);
+        let rows = self.run_rows(None, &sample_sql).unwrap_or_default();
+
+        Ok(Inspection {
+            schema,
+            sample_rows: rows,
+        })
     }
 
-    /// Cloud / HTTP URL inspector. Routes by the URL's file extension
-    /// to the matching DuckDB reader. Installs the right extensions
-    /// lazily (azure needs the azure extension; gcs/s3 work through
-    /// httpfs). If the request options include credentials (placed
-    /// there by frontend connection auto-fill), they are wired into a
-    /// DuckDB SECRET before the inspect runs; otherwise the engine
-    /// falls back to environment variables.
-    fn inspect_cloud_url(
-        &self,
-        format: &str,
-        options: JsonValue,
-    ) -> Result<Inspection, EngineError> {
-        // Apply credentials if present.
-        if let Some(stmt) = secret_statement(format, "duckle_inspect", &options) {
-            self.with_connection(|conn| {
-                if let Err(e) = conn.execute_batch(&stmt) {
-                    tracing::warn!("CREATE SECRET failed (inspect): {}", e);
-                }
-            });
+    /// Statements that must run before a source query: cloud credentials,
+    /// the azure extension, or ATTACH for a DuckDB file.
+    fn source_prelude(&self, format: &str, options: &JsonValue) -> String {
+        let mut p = String::new();
+        if let Some(secret) = secret_statement(format, "duckle_inspect", options) {
+            p.push_str(&secret);
+            p.push(' ');
         }
-        #[derive(Debug, Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Opts {
-            #[serde(default)]
-            path: Option<String>,
-            #[serde(default)]
-            url: Option<String>,
-            #[serde(default)]
-            bucket: Option<String>,
-            #[serde(default)]
-            key: Option<String>,
-            #[serde(default)]
-            format: Option<String>,
-        }
-        let opts: Opts =
-            serde_json::from_value(options.clone()).map_err(|e| EngineError::Config(e.to_string()))?;
-        let url = opts
-            .path
-            .or(opts.url)
-            .or_else(|| match (opts.bucket, opts.key) {
-                (Some(b), Some(k)) => {
-                    let scheme = match format {
-                        "s3" => "s3://",
-                        "gcs" => "gs://",
-                        "azureblob" => "az://",
-                        _ => "https://",
-                    };
-                    Some(format!("{}{}/{}", scheme, b, k.trim_start_matches('/')))
-                }
-                _ => None,
-            })
-            .ok_or_else(|| {
-                EngineError::Config("Cloud source needs a path / URL".into())
-            })?;
-
-        // Lazily install Azure extension if needed.
         if format == "azureblob" {
-            self.with_connection(|conn| {
-                let _ = conn.execute_batch("INSTALL azure; LOAD azure;");
-            });
+            p.push_str("INSTALL azure; LOAD azure; ");
         }
-
-        // Infer file format from URL extension if user didn't specify.
-        let lower = url.to_ascii_lowercase();
-        let chosen = opts.format.as_deref().map(str::to_string).unwrap_or_else(|| {
-            if lower.ends_with(".parquet") || lower.ends_with(".pq") {
-                "parquet".into()
-            } else if lower.ends_with(".json") || lower.ends_with(".jsonl") || lower.ends_with(".ndjson") {
-                "json".into()
-            } else if lower.ends_with(".tsv") {
-                "tsv".into()
-            } else {
-                "csv".into()
+        if format == "duckdb" {
+            if let Some(db) = options.get("database").and_then(JsonValue::as_str) {
+                p.push_str(&format!(
+                    "ATTACH '{}' AS source_db (READ_ONLY); ",
+                    sql_escape(db)
+                ));
             }
-        });
-
-        let mut new_options = options;
-        if let Some(obj) = new_options.as_object_mut() {
-            obj.insert("path".into(), JsonValue::String(url));
         }
-        self.inspect(&chosen, new_options)
+        p
     }
 
-    fn inspect_csv(&self, options: JsonValue) -> Result<Inspection, EngineError> {
-        #[derive(Debug, Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Opts {
-            path: String,
-            #[serde(default = "yes")]
-            has_header: bool,
-            #[serde(default)]
-            delimiter: Option<String>,
-            #[serde(default)]
-            quote_char: Option<String>,
-            #[serde(default)]
-            null_value: Option<String>,
-            #[serde(default)]
-            skip_lines: Option<u32>,
-            #[serde(default)]
-            encoding: Option<String>,
-        }
-        fn yes() -> bool {
-            true
-        }
+    // ---- Execution -----------------------------------------------------
 
-        let opts: Opts =
-            serde_json::from_value(options).map_err(|e| EngineError::Config(e.to_string()))?;
-        let mut args = vec![format!("'{}'", sql_escape(&opts.path))];
-        args.push(format!("header={}", opts.has_header));
-        if let Some(d) = &opts.delimiter {
-            args.push(format!("delim='{}'", sql_escape(d)));
-        }
-        if let Some(q) = &opts.quote_char {
-            if !q.is_empty() {
-                args.push(format!("quote='{}'", sql_escape(q)));
-            }
-        }
-        if let Some(n) = &opts.null_value {
-            if !n.is_empty() {
-                args.push(format!("nullstr='{}'", sql_escape(n)));
-            }
-        }
-        if let Some(s) = opts.skip_lines {
-            if s > 0 {
-                args.push(format!("skip={}", s));
-            }
-        }
-        if let Some(e) = opts.encoding {
-            if !e.is_empty() {
-                args.push(format!("encoding='{}'", sql_escape(&e)));
-            }
-        }
-        let from = format!("read_csv_auto({})", args.join(", "));
-        self.describe_and_preview(&from)
+    pub fn execute_pipeline(&self, doc: &PipelineDoc) -> RunResult {
+        self.execute_pipeline_with_events(doc, None::<&str>, |_| {})
     }
 
-    fn inspect_parquet(&self, options: JsonValue) -> Result<Inspection, EngineError> {
-        #[derive(Debug, Deserialize)]
-        struct Opts {
-            path: String,
-        }
-        let opts: Opts =
-            serde_json::from_value(options).map_err(|e| EngineError::Config(e.to_string()))?;
-        let from = format!("read_parquet('{}')", sql_escape(&opts.path));
-        self.describe_and_preview(&from)
-    }
+    /// Execute a pipeline, optionally only the subgraph upstream of
+    /// `target`, streaming [`PipelineEvent`]s through `on_event`.
+    pub fn execute_pipeline_with_events<F>(
+        &self,
+        doc: &PipelineDoc,
+        target: Option<&str>,
+        mut on_event: F,
+    ) -> RunResult
+    where
+        F: FnMut(PipelineEvent),
+    {
+        let total_start = Instant::now();
+        self.clear_cancel();
 
-    fn inspect_json(&self, options: JsonValue) -> Result<Inspection, EngineError> {
-        #[derive(Debug, Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Opts {
-            path: String,
-            #[serde(default)]
-            format: Option<String>,
+        if !self.bin.exists() {
+            return RunResult::failed(
+                total_start,
+                "DuckDB engine isn't installed yet. Open Setup to install it.".into(),
+            );
         }
-        let opts: Opts =
-            serde_json::from_value(options).map_err(|e| EngineError::Config(e.to_string()))?;
-        let mut args = vec![format!("'{}'", sql_escape(&opts.path))];
-        if let Some(fmt) = opts.format.as_deref() {
-            let mapped = match fmt {
-                "array" => "array",
-                "jsonl" | "ndjson" => "newline_delimited",
-                "object" => "unstructured",
-                _ => "auto",
-            };
-            args.push(format!("format='{}'", mapped));
-        }
-        let from = format!("read_json_auto({})", args.join(", "));
-        self.describe_and_preview(&from)
-    }
 
-    fn inspect_sqlite(&self, options: JsonValue) -> Result<Inspection, EngineError> {
-        #[derive(Debug, Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Opts {
-            database: String,
-            mode: Option<String>,
-            schema_name: Option<String>,
-            table_name: Option<String>,
-            sql: Option<String>,
-        }
-        let opts: Opts =
-            serde_json::from_value(options).map_err(|e| EngineError::Config(e.to_string()))?;
-        let from = match opts.mode.as_deref().unwrap_or("table") {
-            "sql" => {
-                let sql = opts
-                    .sql
-                    .ok_or_else(|| EngineError::Config("SQL query is required".into()))?;
-                format!("sqlite_scan('{}', '{}')", sql_escape(&opts.database), sql_escape(&sql))
-            }
-            _ => {
-                let table = opts
-                    .table_name
-                    .ok_or_else(|| EngineError::Config("Table name is required".into()))?;
-                let qualified = match opts.schema_name {
-                    Some(s) if !s.is_empty() => format!("{}.{}", s, table),
-                    _ => table,
-                };
-                format!(
-                    "sqlite_scan('{}', '{}')",
-                    sql_escape(&opts.database),
-                    sql_escape(&qualified)
-                )
-            }
+        let compiled = match target {
+            Some(t) => plan::compile_partial(doc, t),
+            None => plan::compile(doc),
         };
-        self.describe_and_preview(&from)
-    }
+        let compiled = match compiled {
+            Ok(c) => c,
+            Err(e) => return RunResult::failed(total_start, e.to_string()),
+        };
 
-    fn inspect_duckdb(&self, options: JsonValue) -> Result<Inspection, EngineError> {
-        #[derive(Debug, Deserialize)]
-        struct Opts {
-            database: String,
-            sql: Option<String>,
-        }
-        let opts: Opts =
-            serde_json::from_value(options).map_err(|e| EngineError::Config(e.to_string()))?;
-        // Attach the other DB file and run user SQL (or SELECT *) against it.
-        self.with_connection(|conn| -> Result<Inspection, EngineError> {
-            conn.execute_batch(&format!(
-                "ATTACH '{}' AS source_db (READ_ONLY);",
-                sql_escape(&opts.database)
-            ))?;
-            let result = (|| -> Result<Inspection, EngineError> {
-                let sql = opts
-                    .sql
-                    .as_deref()
-                    .unwrap_or("SELECT 1 AS placeholder LIMIT 0");
-                let from = format!("({})", sql);
-                self.describe_and_preview(&from)
-            })();
-            let _ = conn.execute_batch("DETACH source_db;");
-            result
-        })
-    }
-
-    fn describe_and_preview(&self, from_clause: &str) -> Result<Inspection, EngineError> {
-        self.with_connection(|conn| -> Result<Inspection, EngineError> {
-            let schema = read_schema(conn, from_clause)?;
-            let sample_rows = read_preview(conn, from_clause, &schema, PREVIEW_LIMIT)?;
-            Ok(Inspection {
-                schema,
-                sample_rows,
-            })
-        })
-    }
-}
-
-fn read_schema(conn: &Connection, from_clause: &str) -> Result<Vec<Column>, EngineError> {
-    let mut stmt = conn.prepare(&format!("DESCRIBE SELECT * FROM {}", from_clause))?;
-    let rows = stmt.query_map([], |row| {
-        let name: String = row.get(0)?;
-        let type_name: String = row.get(1)?;
-        let null_flag: String = row.get(2).unwrap_or_else(|_| "YES".to_string());
-        Ok((name, type_name, null_flag))
-    })?;
-    let mut columns = Vec::new();
-    for row in rows {
-        let (name, type_name, null_flag) = row?;
-        columns.push(Column {
-            name,
-            data_type: map_duckdb_type(&type_name),
-            nullable: !null_flag.eq_ignore_ascii_case("NO"),
-            primary_key: None,
+        on_event(PipelineEvent::Started {
+            total_stages: compiled.stages.len() as u32,
         });
+
+        // Temp on-disk DB for this run.
+        let db_path = std::env::temp_dir().join(format!(
+            "duckle_run_{}_{}.duckdb",
+            std::process::id(),
+            now_nanos()
+        ));
+        let _guard = TempDbGuard(db_path.clone());
+
+        // Cloud credentials, prefixed to every stage invocation (each is
+        // a fresh CLI session).
+        let secrets = collect_pipeline_secrets(doc);
+        let secret_prefix = if secrets.is_empty() {
+            String::new()
+        } else {
+            format!("{} ", secrets.join(" "))
+        };
+
+        let mut nodes: std::collections::BTreeMap<String, NodeRunStatus> = Default::default();
+        let mut overall_error: Option<String> = None;
+        let mut was_cancelled = false;
+        let mut preview: Vec<NodePreview> = Vec::new();
+
+        for stage in &compiled.stages {
+            if self.cancel.load(Ordering::Relaxed) {
+                was_cancelled = true;
+                on_event(PipelineEvent::Cancelled);
+                break;
+            }
+            let kind_label = match stage.kind {
+                StageKind::Sink => "sink",
+                StageKind::View => "view",
+            };
+            on_event(PipelineEvent::StageStarted {
+                node_id: stage.node_id.clone(),
+                label: stage.label.clone(),
+                kind: kind_label.into(),
+            });
+
+            let started = Instant::now();
+            let sql = format!("{}{}", secret_prefix, stage.sql);
+            let result = self.run(Some(&db_path), &sql, false);
+            let elapsed_ms = started.elapsed().as_millis() as u64;
+
+            match result {
+                Ok(_) => {
+                    let rows_opt = match stage.kind {
+                        StageKind::Sink => stage
+                            .from
+                            .as_ref()
+                            .and_then(|f| self.count_rows(&db_path, f).ok()),
+                        StageKind::View => self.count_rows(&db_path, &stage.node_id).ok(),
+                    };
+                    nodes.insert(
+                        stage.node_id.clone(),
+                        NodeRunStatus {
+                            status: "ok".into(),
+                            kind: Some(kind_label.into()),
+                            rows: rows_opt,
+                            duration_ms: Some(elapsed_ms),
+                            error: None,
+                        },
+                    );
+                    on_event(PipelineEvent::StageFinished {
+                        node_id: stage.node_id.clone(),
+                        kind: kind_label.into(),
+                        status: "ok".into(),
+                        rows: rows_opt,
+                        duration_ms: elapsed_ms,
+                        error: None,
+                    });
+                    if stage.kind == StageKind::View {
+                        if let Ok(p) = self.preview_table(&db_path, &stage.node_id) {
+                            preview.push(p);
+                        }
+                    }
+                }
+                Err(EngineError::Cancelled) => {
+                    was_cancelled = true;
+                    on_event(PipelineEvent::Cancelled);
+                    break;
+                }
+                Err(err) => {
+                    let msg = err.to_string();
+                    nodes.insert(
+                        stage.node_id.clone(),
+                        NodeRunStatus {
+                            status: "error".into(),
+                            kind: Some(kind_label.into()),
+                            rows: None,
+                            duration_ms: Some(elapsed_ms),
+                            error: Some(msg.clone()),
+                        },
+                    );
+                    on_event(PipelineEvent::StageFinished {
+                        node_id: stage.node_id.clone(),
+                        kind: kind_label.into(),
+                        status: "error".into(),
+                        rows: None,
+                        duration_ms: elapsed_ms,
+                        error: Some(msg.clone()),
+                    });
+                    overall_error.get_or_insert(format!("{}: {}", stage.label, msg));
+                    break;
+                }
+            }
+        }
+
+        let final_status = if was_cancelled {
+            "cancelled"
+        } else if overall_error.is_some() {
+            "error"
+        } else {
+            "ok"
+        };
+        on_event(PipelineEvent::Finished {
+            status: final_status.into(),
+            duration_ms: total_start.elapsed().as_millis() as u64,
+        });
+
+        RunResult {
+            status: final_status.into(),
+            duration_ms: total_start.elapsed().as_millis() as u64,
+            nodes,
+            preview,
+            error: overall_error,
+        }
     }
-    Ok(columns)
+
+    fn count_rows(&self, db: &Path, name: &str) -> Result<u64, EngineError> {
+        let sql = format!("SELECT COUNT(*) AS n FROM {};", plan::quote_ident(name));
+        let rows = self.run_rows(Some(db), &sql)?;
+        let n = rows
+            .first()
+            .and_then(|r| r.get("n"))
+            .and_then(|v| v.as_u64().or_else(|| v.as_i64().map(|x| x.max(0) as u64)))
+            .unwrap_or(0);
+        Ok(n)
+    }
+
+    fn preview_table(&self, db: &Path, name: &str) -> Result<NodePreview, EngineError> {
+        let q = plan::quote_ident(name);
+        let cols = self.run_rows(Some(db), &format!("DESCRIBE {};", q))?;
+        let schema: Vec<Column> = cols.iter().filter_map(parse_describe_row).collect();
+        let rows = self
+            .run_rows(Some(db), &format!("SELECT * FROM {} LIMIT {};", q, PREVIEW_ROW_LIMIT))
+            .unwrap_or_default();
+        Ok(NodePreview {
+            node_id: name.to_string(),
+            columns: schema,
+            rows,
+        })
+    }
 }
 
-fn read_preview(
-    conn: &Connection,
-    from_clause: &str,
-    schema: &[Column],
-    limit: usize,
-) -> Result<Vec<JsonValue>, EngineError> {
-    if schema.is_empty() {
-        return Ok(Vec::new());
+/// Removes the temp run database (and its WAL) when dropped.
+struct TempDbGuard(PathBuf);
+impl Drop for TempDbGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+        let mut wal = self.0.clone().into_os_string();
+        wal.push(".wal");
+        let _ = std::fs::remove_file(PathBuf::from(wal));
     }
-    let column_list = schema
-        .iter()
-        .map(|c| format!("\"{}\"", c.name.replace('"', "\"\"")))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sql = format!(
-        "SELECT {} FROM {} LIMIT {}",
-        column_list, from_clause, limit
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query([])?;
+}
+
+fn now_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
+/// Parse the (possibly multiple) top-level JSON arrays the DuckDB CLI
+/// prints in `-json` mode.
+fn parse_json_arrays(s: &str) -> Vec<Vec<JsonValue>> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
     let mut out = Vec::new();
-    while let Some(row) = rows.next()? {
-        let mut map = Map::with_capacity(schema.len());
-        for (idx, col) in schema.iter().enumerate() {
-            let value = duckdb_value_to_json(row, idx);
-            map.insert(col.name.clone(), value);
+    let stream = serde_json::Deserializer::from_str(trimmed).into_iter::<JsonValue>();
+    for value in stream {
+        match value {
+            Ok(JsonValue::Array(a)) => out.push(a),
+            Ok(_) => {}
+            Err(_) => break,
         }
-        out.push(JsonValue::Object(map));
     }
-    Ok(out)
+    out
+}
+
+/// Turn one DuckDB `DESCRIBE` row into a Column.
+fn parse_describe_row(v: &JsonValue) -> Option<Column> {
+    let name = v.get("column_name")?.as_str()?.to_string();
+    let type_name = v
+        .get("column_type")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("VARCHAR");
+    let nullable = v
+        .get("null")
+        .and_then(JsonValue::as_str)
+        .map(|s| !s.eq_ignore_ascii_case("NO"))
+        .unwrap_or(true);
+    Some(Column {
+        name,
+        data_type: map_duckdb_type(type_name),
+        nullable,
+        primary_key: None,
+    })
 }
 
 fn map_duckdb_type(t: &str) -> DataType {
-    // DuckDB type names are uppercase but may include parameters: VARCHAR,
-    // INTEGER, BIGINT, DECIMAL(10,2), TIMESTAMP_NS, etc.
     let upper = t.to_uppercase();
     let base = upper.split('(').next().unwrap_or(&upper).trim();
     match base {
@@ -463,48 +495,13 @@ fn map_duckdb_type(t: &str) -> DataType {
     }
 }
 
-fn duckdb_value_to_json(row: &duckdb::Row<'_>, idx: usize) -> JsonValue {
-    use duckdb::types::Value;
-    let value: Value = match row.get::<usize, Value>(idx) {
-        Ok(v) => v,
-        Err(_) => return JsonValue::Null,
-    };
-    match value {
-        Value::Null => JsonValue::Null,
-        Value::Boolean(b) => JsonValue::Bool(b),
-        Value::TinyInt(n) => JsonValue::from(n),
-        Value::SmallInt(n) => JsonValue::from(n),
-        Value::Int(n) => JsonValue::from(n),
-        Value::BigInt(n) => JsonValue::from(n),
-        Value::HugeInt(n) => JsonValue::String(n.to_string()),
-        Value::UTinyInt(n) => JsonValue::from(n),
-        Value::USmallInt(n) => JsonValue::from(n),
-        Value::UInt(n) => JsonValue::from(n),
-        Value::UBigInt(n) => JsonValue::String(n.to_string()),
-        Value::Float(f) => serde_json::Number::from_f64(f as f64)
-            .map(JsonValue::Number)
-            .unwrap_or(JsonValue::Null),
-        Value::Double(f) => serde_json::Number::from_f64(f)
-            .map(JsonValue::Number)
-            .unwrap_or(JsonValue::Null),
-        Value::Decimal(d) => JsonValue::String(d.to_string()),
-        Value::Timestamp(_, _) | Value::Date32(_) | Value::Time64(_, _) => {
-            JsonValue::String(format!("{:?}", value))
-        }
-        Value::Text(s) => JsonValue::String(s),
-        Value::Blob(b) => JsonValue::String(format!("<{} bytes>", b.len())),
-        other => JsonValue::String(format!("{:?}", other)),
-    }
-}
-
 pub(crate) fn sql_escape(s: &str) -> String {
     s.replace('\'', "''")
 }
 
 /// Build a `CREATE OR REPLACE SECRET` statement for a cloud format if
-/// the options carry credentials. `secret_name` is used to make
-/// per-source secrets so different connections in the same pipeline
-/// don't trample each other.
+/// the options carry credentials. `secret_name` keeps per-source
+/// secrets distinct so connections don't trample each other.
 pub(crate) fn secret_statement(
     format: &str,
     secret_name: &str,
@@ -560,8 +557,7 @@ pub(crate) fn secret_statement(
     }
 }
 
-/// Walk the pipeline doc and produce CREATE SECRET statements for
-/// every cloud source/sink that has its credentials populated.
+/// CREATE SECRET statements for every cloud source/sink with creds.
 pub(crate) fn collect_pipeline_secrets(doc: &PipelineDoc) -> Vec<String> {
     let mut out = Vec::new();
     for node in &doc.nodes {
@@ -584,11 +580,8 @@ pub(crate) fn collect_pipeline_secrets(doc: &PipelineDoc) -> Vec<String> {
     out
 }
 
-// ---- Pipeline execution ------------------------------------------------
+// ---- Streaming events + run result -------------------------------------
 
-/// Streaming events emitted while a pipeline runs. Tauri's `Channel`
-/// ferries these to the frontend so the UI can light up node badges
-/// stage-by-stage without waiting for the final result.
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PipelineEvent {
@@ -627,6 +620,18 @@ pub struct RunResult {
     pub error: Option<String>,
 }
 
+impl RunResult {
+    fn failed(start: Instant, error: String) -> Self {
+        RunResult {
+            status: "error".into(),
+            duration_ms: start.elapsed().as_millis() as u64,
+            nodes: Default::default(),
+            preview: Vec::new(),
+            error: Some(error),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct NodeRunStatus {
     pub status: String,
@@ -647,11 +652,8 @@ pub struct NodePreview {
     pub rows: Vec<JsonValue>,
 }
 
-const PREVIEW_ROW_LIMIT: usize = 50;
-
-/// SQL for a single stage of a compiled pipeline. Returned by the
-/// `compile_pipeline` Tauri command so the frontend can show the
-/// generated SQL or copy it to the clipboard without executing.
+/// SQL for a single stage — returned by the `compile_pipeline` command
+/// so the frontend can show / copy the generated SQL without running.
 #[derive(Debug, Serialize)]
 pub struct StageSql {
     pub node_id: String,
@@ -660,7 +662,6 @@ pub struct StageSql {
     pub sql: String,
 }
 
-/// Free function — doesn't need an engine to compile a pipeline.
 pub fn compile_pipeline_sql(doc: &PipelineDoc) -> Result<Vec<StageSql>, EngineError> {
     let compiled = plan::compile(doc)?;
     Ok(compiled
@@ -676,310 +677,4 @@ pub fn compile_pipeline_sql(doc: &PipelineDoc) -> Result<Vec<StageSql>, EngineEr
             sql: s.sql,
         })
         .collect())
-}
-
-impl DuckdbEngine {
-    /// Execute a pipeline end-to-end with no event stream.
-    pub fn execute_pipeline(&self, doc: &PipelineDoc) -> RunResult {
-        self.execute_pipeline_with_events(doc, None::<&str>, |_| {})
-    }
-
-    /// Execute a pipeline emitting [`PipelineEvent`]s through the given
-    /// callback. If `target` is `Some`, runs only the subgraph upstream
-    /// of (and including) that node — the "run from here" path.
-    pub fn execute_pipeline_with_events<F>(
-        &self,
-        doc: &PipelineDoc,
-        target: Option<&str>,
-        mut on_event: F,
-    ) -> RunResult
-    where
-        F: FnMut(PipelineEvent),
-    {
-        let total_start = Instant::now();
-        self.clear_cancel();
-
-        let compiled_result = if let Some(target_id) = target {
-            plan::compile_partial(doc, target_id)
-        } else {
-            plan::compile(doc)
-        };
-        let compiled = match compiled_result {
-            Ok(c) => c,
-            Err(e) => {
-                return RunResult {
-                    status: "error".into(),
-                    duration_ms: total_start.elapsed().as_millis() as u64,
-                    nodes: Default::default(),
-                    preview: Vec::new(),
-                    error: Some(e.to_string()),
-                };
-            }
-        };
-
-        on_event(PipelineEvent::Started {
-            total_stages: compiled.stages.len() as u32,
-        });
-
-        // Wire any cloud credentials before stages run. Failures here
-        // are non-fatal — DuckDB will fall back to env vars / IMDS.
-        let secret_stmts = collect_pipeline_secrets(doc);
-        if !secret_stmts.is_empty() {
-            self.with_connection(|conn| {
-                for stmt in &secret_stmts {
-                    if let Err(e) = conn.execute_batch(stmt) {
-                        tracing::warn!("CREATE SECRET failed: {}", e);
-                    }
-                }
-            });
-        }
-
-        let mut nodes: std::collections::BTreeMap<String, NodeRunStatus> = Default::default();
-        let mut overall_error: Option<String> = None;
-        let mut was_cancelled = false;
-        let mut preview_collected: Vec<NodePreview> = Vec::new();
-
-        // Drop any leftover views from a prior run so we don't read
-        // stale data.
-        self.with_connection(|conn| {
-            for stage in &compiled.stages {
-                if stage.kind == StageKind::View {
-                    let _ = conn.execute(
-                        &format!("DROP VIEW IF EXISTS {}", plan::quote_ident(&stage.node_id)),
-                        [],
-                    );
-                }
-            }
-        });
-
-        for stage in &compiled.stages {
-            if self.cancel.load(Ordering::Relaxed) {
-                was_cancelled = true;
-                on_event(PipelineEvent::Cancelled);
-                break;
-            }
-
-            let kind_label = match stage.kind {
-                StageKind::Sink => "sink",
-                StageKind::View => "view",
-            };
-
-            on_event(PipelineEvent::StageStarted {
-                node_id: stage.node_id.clone(),
-                label: stage.label.clone(),
-                kind: kind_label.into(),
-            });
-
-            let started = Instant::now();
-            let mut previews_for_stage: Vec<NodePreview> = Vec::new();
-            let result = self.with_connection(|conn| {
-                if stage.kind == StageKind::Sink {
-                    let rows = conn.execute(&stage.sql, [])?;
-                    Ok::<u64, duckdb::Error>(rows as u64)
-                } else {
-                    conn.execute(&stage.sql, [])?;
-                    Ok(0)
-                }
-            });
-            let elapsed_ms = started.elapsed().as_millis() as u64;
-
-            // For view stages, after a successful creation, also count
-            // rows + grab a preview so the frontend can light up the
-            // node's "n rows" badge and populate its Preview tab.
-            let view_row_count = if let Ok(_) = &result {
-                if stage.kind == StageKind::View {
-                    let stage_id = stage.node_id.clone();
-                    let from_clause = plan::quote_ident(&stage_id);
-                    let count_result = self.with_connection(|conn| {
-                        let mut stmt = conn
-                            .prepare(&format!("SELECT COUNT(*) FROM {}", from_clause))?;
-                        let n: i64 = stmt.query_row([], |r| r.get::<usize, i64>(0))?;
-                        Ok::<i64, duckdb::Error>(n)
-                    });
-                    if let Ok(p) = self.preview_view(&stage_id) {
-                        previews_for_stage.push(p);
-                    }
-                    count_result.ok().map(|n| n.max(0) as u64)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            match result {
-                Ok(rows) => {
-                    let rows_opt = if stage.kind == StageKind::Sink {
-                        Some(rows)
-                    } else {
-                        view_row_count
-                    };
-                    nodes.insert(
-                        stage.node_id.clone(),
-                        NodeRunStatus {
-                            status: "ok".into(),
-                            kind: Some(kind_label.into()),
-                            rows: rows_opt,
-                            duration_ms: Some(elapsed_ms),
-                            error: None,
-                        },
-                    );
-                    on_event(PipelineEvent::StageFinished {
-                        node_id: stage.node_id.clone(),
-                        kind: kind_label.into(),
-                        status: "ok".into(),
-                        rows: rows_opt,
-                        duration_ms: elapsed_ms,
-                        error: None,
-                    });
-                    // Collect previews for every view, not just leaves.
-                    preview_collected.extend(previews_for_stage);
-                }
-                Err(err) => {
-                    let msg = err.to_string();
-                    nodes.insert(
-                        stage.node_id.clone(),
-                        NodeRunStatus {
-                            status: "error".into(),
-                            kind: Some(kind_label.into()),
-                            rows: None,
-                            duration_ms: Some(elapsed_ms),
-                            error: Some(msg.clone()),
-                        },
-                    );
-                    on_event(PipelineEvent::StageFinished {
-                        node_id: stage.node_id.clone(),
-                        kind: kind_label.into(),
-                        status: "error".into(),
-                        rows: None,
-                        duration_ms: elapsed_ms,
-                        error: Some(msg.clone()),
-                    });
-                    overall_error.get_or_insert(format!("{}: {}", stage.label, msg));
-                    break;
-                }
-            }
-        }
-
-        // Previews collected per-stage during the run; nothing extra
-        // to do here unless we want to fall back to leaves on partial
-        // failure.
-        let preview = preview_collected;
-
-        let final_status = if was_cancelled {
-            "cancelled"
-        } else if overall_error.is_some() {
-            "error"
-        } else {
-            "ok"
-        };
-
-        on_event(PipelineEvent::Finished {
-            status: final_status.into(),
-            duration_ms: total_start.elapsed().as_millis() as u64,
-        });
-
-        RunResult {
-            status: final_status.into(),
-            duration_ms: total_start.elapsed().as_millis() as u64,
-            nodes,
-            preview,
-            error: overall_error,
-        }
-    }
-
-    fn preview_view(&self, view_id: &str) -> Result<NodePreview, EngineError> {
-        let from_clause = plan::quote_ident(view_id);
-        let inspection = self.with_connection(|conn| -> Result<Inspection, EngineError> {
-            let schema = read_schema(conn, &from_clause)?;
-            let rows = read_preview(conn, &from_clause, &schema, PREVIEW_ROW_LIMIT)?;
-            Ok(Inspection {
-                schema,
-                sample_rows: rows,
-            })
-        })?;
-        Ok(NodePreview {
-            node_id: view_id.to_string(),
-            columns: inspection.schema,
-            rows: inspection.sample_rows,
-        })
-    }
-}
-
-/// Convenience: a [`SchemaInspector`] impl backed by [`DuckdbEngine`].
-/// Used by the desktop autodetect command.
-pub struct DuckdbInspector {
-    engine: DuckdbEngine,
-    format: String,
-}
-
-impl DuckdbInspector {
-    pub fn new(engine: DuckdbEngine, format: impl Into<String>) -> Self {
-        Self {
-            engine,
-            format: format.into(),
-        }
-    }
-}
-
-#[async_trait]
-impl duckle_plugin_sdk::SchemaInspector for DuckdbInspector {
-    fn component_id(&self) -> &str {
-        &self.format
-    }
-
-    async fn inspect(
-        &self,
-        config: JsonValue,
-    ) -> Result<Inspection, InspectError> {
-        let engine = self.engine.clone();
-        let format = self.format.clone();
-        tokio::task::spawn_blocking(move || engine.inspect(&format, config))
-            .await
-            .map_err(|e| InspectError::Other(e.to_string()))?
-            .map_err(Into::into)
-    }
-}
-
-/// Lightweight serializable preview row — useful in tests + the
-/// downstream Tauri command output.
-#[derive(Debug, Serialize)]
-pub struct PreviewRow(pub Map<String, JsonValue>);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[tokio::test]
-    async fn csv_via_duckdb() {
-        let mut f = NamedTempFile::new().unwrap();
-        write!(
-            f,
-            "order_id,status,amount,created_at\n\
-             1001,paid,129.95,2026-05-18\n\
-             1002,pending,49.00,2026-05-18\n\
-             1003,paid,12.50,2026-05-19\n"
-        )
-        .unwrap();
-        f.flush().unwrap();
-
-        let engine = DuckdbEngine::new().unwrap();
-        let result = engine
-            .inspect(
-                "csv",
-                serde_json::json!({ "path": f.path().to_str().unwrap() }),
-            )
-            .unwrap();
-        assert_eq!(result.schema.len(), 4);
-        assert_eq!(result.schema[0].name, "order_id");
-        assert!(
-            matches!(result.schema[0].data_type, DataType::Int32 | DataType::Int64),
-            "expected order_id to be integer, got {:?}",
-            result.schema[0].data_type
-        );
-        assert!(result.sample_rows.len() <= PREVIEW_LIMIT);
-        assert!(result.sample_rows.len() >= 3);
-    }
 }

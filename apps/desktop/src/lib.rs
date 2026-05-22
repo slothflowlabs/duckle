@@ -34,12 +34,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            // Resolve where the downloaded DuckDB CLI lives, so the
+            // engine can shell out to it. The binary may not exist yet
+            // (first run installs it via the setup screen); the engine
+            // just errors clearly until then.
+            if let Ok(dir) = app.path().app_data_dir() {
+                let _ = DUCKDB_BIN.set(engine_manager::duckdb_path(&dir));
+            }
             // Boot the scheduler. The `.setup` hook runs on the main
             // thread, OUTSIDE any tokio runtime, so calling spawn_ticker
             // (which uses tokio::spawn) directly here panics with
             // "there is no reactor running". Hop onto Tauri's async
-            // runtime first — once we're inside that task, tokio::spawn
-            // resolves the ambient runtime correctly.
+            // runtime first.
             if let Ok(eng) = engine() {
                 let s = Scheduler::new(eng);
                 let _ = SCHEDULER.set(s.clone());
@@ -93,12 +99,20 @@ pub struct InspectionPayload {
     pub sample_rows: Vec<JsonValue>,
 }
 
-static DUCKDB_ENGINE: OnceLock<Result<DuckdbEngine, String>> = OnceLock::new();
+static DUCKDB_BIN: OnceLock<PathBuf> = OnceLock::new();
+static DUCKDB_ENGINE: OnceLock<DuckdbEngine> = OnceLock::new();
 
+/// The shared engine, pointed at the downloaded DuckDB CLI. Cheap to
+/// build (just holds a path); cached so the cancel flag is shared
+/// between a run and a cancel.
 fn engine() -> Result<DuckdbEngine, String> {
-    DUCKDB_ENGINE
-        .get_or_init(|| DuckdbEngine::new().map_err(|e| e.to_string()))
-        .clone()
+    let bin = DUCKDB_BIN
+        .get()
+        .cloned()
+        .ok_or_else(|| "Engine path not resolved yet".to_string())?;
+    Ok(DUCKDB_ENGINE
+        .get_or_init(|| DuckdbEngine::new(bin))
+        .clone())
 }
 
 /// Inspect a source's schema. The frontend hands us a format string
