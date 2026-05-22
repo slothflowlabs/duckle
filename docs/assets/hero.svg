@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 340" preserveAspectRatio="xMidYMid meet" fill="none" role="img" aria-label="Duckle - visual local-first ETL">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" preserveAspectRatio="xMidYMid meet" fill="none" role="img" aria-label="Duckle - the local-first data studio">
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#18D4E0"/>
@@ -12,50 +12,56 @@
       <stop offset="0" stop-color="#EAF2FF"/>
       <stop offset="1" stop-color="#9FB3D8"/>
     </linearGradient>
-    <clipPath id="sq"><rect x="56" y="56" width="92" height="92" rx="26"/></clipPath>
+    <clipPath id="sq"><rect x="56" y="48" width="88" height="88" rx="25"/></clipPath>
   </defs>
 
-  <rect x="1" y="1" width="1278" height="338" rx="26" fill="url(#bg)" stroke="#1b2436" stroke-width="1.5"/>
+  <rect x="1" y="1" width="1198" height="298" rx="26" fill="url(#bg)" stroke="#1b2436" stroke-width="1.5"/>
 
   <!-- logo mark -->
-  <rect x="56" y="56" width="92" height="92" rx="26" fill="url(#g)"/>
+  <rect x="56" y="48" width="88" height="88" rx="25" fill="url(#g)"/>
   <g clip-path="url(#sq)">
-    <rect x="-60" y="56" width="38" height="92" fill="#ffffff" opacity="0.18" transform="skewX(-18)">
+    <rect x="-60" y="48" width="36" height="88" fill="#ffffff" opacity="0.18" transform="skewX(-18)">
       <animate attributeName="x" values="-70;180" dur="3.6s" repeatCount="indefinite"/>
     </rect>
   </g>
-  <text x="102" y="103" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="64" font-weight="800" fill="#fff">D</text>
+  <text x="100" y="93" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="60" font-weight="800" fill="#fff">D</text>
 
-  <!-- wordmark + motto -->
-  <text x="172" y="92" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="62" font-weight="800" fill="url(#wm)">Duckle</text>
-  <text x="60" y="200" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="26" font-weight="600" fill="#cfe0ff">Clean data in. Smart data out.</text>
-  <text x="60" y="240" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="18" font-weight="400" fill="#7e8aa3">Visual, local-first ETL that scrubs the garbage out of</text>
-  <text x="60" y="266" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="18" font-weight="400" fill="#7e8aa3">your data - and your AI.</text>
+  <!-- wordmark -->
+  <text x="162" y="112" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="58" font-weight="800" fill="url(#wm)">Duckle</text>
 
-  <!-- pipeline graph -->
+  <!-- tagline + subtitle -->
+  <text x="58" y="178" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="24" font-weight="700" fill="#cfe0ff">Clean data in. Smart data out.</text>
+  <text x="58" y="212" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#8290a8">Visual, local-first ETL. Read files, databases, and the cloud,</text>
+  <text x="58" y="234" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#8290a8">reshape with 40+ transforms, land clean data anywhere.</text>
+  <text x="58" y="262" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="13" font-weight="600" fill="#5f6b82">~9 MB desktop app . no servers . runs on DuckDB</text>
+
+  <!-- flow on the right: Sources -> Duckle -> Sinks -->
   <g font-family="'Segoe UI', system-ui, Arial, sans-serif">
-    <!-- edges -->
-    <line x1="848" y1="186" x2="936" y2="186" stroke="#2b3852" stroke-width="2.5"/>
-    <line x1="1064" y1="186" x2="1152" y2="186" stroke="#2b3852" stroke-width="2.5"/>
-    <circle r="4.5" fill="#18D4E0"><animate attributeName="cx" values="848;936" dur="1.5s" repeatCount="indefinite"/><animate attributeName="cy" values="186;186" dur="1.5s" repeatCount="indefinite"/></circle>
-    <circle r="4.5" fill="#5B6EFB"><animate attributeName="cx" values="1064;1152" dur="1.5s" begin="0.4s" repeatCount="indefinite"/><animate attributeName="cy" values="186;186" dur="1.5s" repeatCount="indefinite"/></circle>
+    <!-- connecting lines -->
+    <line x1="788" y1="150" x2="828" y2="150" stroke="#2b3852" stroke-width="2.5"/>
+    <line x1="998" y1="150" x2="1038" y2="150" stroke="#2b3852" stroke-width="2.5"/>
+    <circle r="4.5" fill="#18D4E0"><animate attributeName="cx" values="788;828" dur="1.5s" repeatCount="indefinite"/><animate attributeName="cy" values="150;150" dur="1.5s" repeatCount="indefinite"/></circle>
+    <circle r="4.5" fill="#5B6EFB"><animate attributeName="cx" values="998;1038" dur="1.5s" begin="0.4s" repeatCount="indefinite"/><animate attributeName="cy" values="150;150" dur="1.5s" repeatCount="indefinite"/></circle>
 
-    <!-- source node -->
-    <rect x="720" y="150" width="128" height="72" rx="14" fill="#121a2b" stroke="#2b3852" stroke-width="1.5"/>
-    <rect x="720" y="150" width="5" height="72" rx="2.5" fill="#fed060"/>
-    <text x="740" y="182" font-size="16" font-weight="700" fill="#e7eefc">messy.csv</text>
-    <text x="740" y="203" font-size="12" fill="#8090ad">source</text>
+    <!-- Sources -->
+    <rect x="640" y="106" width="148" height="88" rx="14" fill="#121a2b" stroke="#2b3852" stroke-width="1.5"/>
+    <rect x="640" y="106" width="5" height="88" rx="2.5" fill="#fed060"/>
+    <text x="662" y="138" font-size="16" font-weight="700" fill="#e7eefc">Sources</text>
+    <text x="662" y="160" font-size="12.5" fill="#8090ad">files . databases</text>
+    <text x="662" y="178" font-size="12.5" fill="#8090ad">cloud . APIs</text>
 
-    <!-- clean node -->
-    <rect x="936" y="150" width="128" height="72" rx="14" fill="#121a2b" stroke="url(#g)" stroke-width="2"/>
-    <rect x="936" y="150" width="5" height="72" rx="2.5" fill="#18D4E0"/>
-    <text x="956" y="182" font-size="16" font-weight="700" fill="#e7eefc">clean</text>
-    <text x="956" y="203" font-size="12" fill="#8090ad">dedup · validate</text>
+    <!-- Duckle core -->
+    <rect x="828" y="106" width="170" height="88" rx="14" fill="#121a2b" stroke="url(#g)" stroke-width="2"/>
+    <rect x="828" y="106" width="5" height="88" rx="2.5" fill="#18D4E0"/>
+    <text x="850" y="138" font-size="16" font-weight="700" fill="#e7eefc">Transform</text>
+    <text x="850" y="160" font-size="12.5" fill="#9fb6dc">filter . join . window</text>
+    <text x="850" y="178" font-size="12.5" fill="#9fb6dc">aggregate . validate</text>
 
-    <!-- sink node -->
-    <rect x="1152" y="150" width="72" height="72" rx="14" fill="#121a2b" stroke="#2b3852" stroke-width="1.5"/>
-    <rect x="1152" y="150" width="5" height="72" rx="2.5" fill="#a78bfa"/>
-    <text x="1172" y="182" font-size="15" font-weight="700" fill="#e7eefc">AI</text>
-    <text x="1172" y="203" font-size="11" fill="#8090ad">/ DB</text>
+    <!-- Sinks -->
+    <rect x="1038" y="106" width="126" height="88" rx="14" fill="#121a2b" stroke="#2b3852" stroke-width="1.5"/>
+    <rect x="1038" y="106" width="5" height="88" rx="2.5" fill="#a78bfa"/>
+    <text x="1060" y="138" font-size="16" font-weight="700" fill="#e7eefc">Sinks</text>
+    <text x="1060" y="160" font-size="12.5" fill="#8090ad">files . DBs</text>
+    <text x="1060" y="178" font-size="12.5" fill="#8090ad">AI / vector</text>
   </g>
 </svg>

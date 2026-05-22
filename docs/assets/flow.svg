@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 360" preserveAspectRatio="xMidYMid meet" fill="none" role="img" aria-label="Sources flow through transforms into sinks">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#18D4E0"/>
+      <stop offset="1" stop-color="#5B6EFB"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0E1320"/>
+      <stop offset="1" stop-color="#080B12"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="1" y="1" width="1118" height="358" rx="22" fill="url(#bg)" stroke="#1b2436" stroke-width="1.5"/>
+
+  <style>text{font-family:'Segoe UI',system-ui,Arial,sans-serif}</style>
+
+  <!-- column headers -->
+  <text x="70" y="44" font-size="13" font-weight="700" letter-spacing="0.08em" fill="#7e8aa3">SOURCES</text>
+  <text x="487" y="44" font-size="13" font-weight="700" letter-spacing="0.08em" fill="#7e8aa3">TRANSFORM</text>
+  <text x="846" y="44" font-size="13" font-weight="700" letter-spacing="0.08em" fill="#7e8aa3">SINKS</text>
+
+  <!-- connectors: sources -> transform -->
+  <g stroke="#2b3852" stroke-width="1.5" fill="none">
+    <path d="M300 80 C 380 80, 380 175, 444 175"/>
+    <path d="M300 124 C 380 124, 380 175, 444 175"/>
+    <path d="M300 168 H 444"/>
+    <path d="M300 212 C 380 212, 380 175, 444 175"/>
+    <path d="M300 256 C 380 256, 380 175, 444 175"/>
+  </g>
+  <circle r="4" fill="#18D4E0"><animate attributeName="cx" values="300;444" dur="1.6s" repeatCount="indefinite"/><animate attributeName="cy" values="168;175" dur="1.6s" repeatCount="indefinite"/></circle>
+
+  <!-- connectors: transform -> sinks -->
+  <g stroke="#2b3852" stroke-width="1.5" fill="none">
+    <path d="M684 175 C 748 175, 748 92, 812 92"/>
+    <path d="M684 175 C 748 175, 748 146, 812 146"/>
+    <path d="M684 175 C 748 175, 748 200, 812 200"/>
+    <path d="M684 175 C 748 175, 748 254, 812 254"/>
+  </g>
+  <circle r="4" fill="#5B6EFB"><animate attributeName="cx" values="684;812" dur="1.6s" begin="0.5s" repeatCount="indefinite"/><animate attributeName="cy" values="175;146" dur="1.6s" begin="0.5s" repeatCount="indefinite"/></circle>
+
+  <!-- source chips -->
+  <g>
+    <rect x="64" y="62" width="236" height="36" rx="9" fill="#121a2b" stroke="#243149"/><rect x="64" y="62" width="4" height="36" rx="2" fill="#fed060"/><text x="82" y="85" font-size="13.5" fill="#dbe6fb">CSV . TSV</text>
+    <rect x="64" y="106" width="236" height="36" rx="9" fill="#121a2b" stroke="#243149"/><rect x="64" y="106" width="4" height="36" rx="2" fill="#fed060"/><text x="82" y="129" font-size="13.5" fill="#dbe6fb">Parquet</text>
+    <rect x="64" y="150" width="236" height="36" rx="9" fill="#121a2b" stroke="#243149"/><rect x="64" y="150" width="4" height="36" rx="2" fill="#fed060"/><text x="82" y="173" font-size="13.5" fill="#dbe6fb">JSON . NDJSON</text>
+    <rect x="64" y="194" width="236" height="36" rx="9" fill="#121a2b" stroke="#243149"/><rect x="64" y="194" width="4" height="36" rx="2" fill="#fed060"/><text x="82" y="217" font-size="13.5" fill="#dbe6fb">SQLite . DuckDB</text>
+    <rect x="64" y="238" width="236" height="36" rx="9" fill="#121a2b" stroke="#243149"/><rect x="64" y="238" width="4" height="36" rx="2" fill="#fed060"/><text x="82" y="261" font-size="13.5" fill="#dbe6fb">S3 . GCS . Azure</text>
+  </g>
+
+  <!-- transform core -->
+  <rect x="444" y="78" width="240" height="194" rx="16" fill="#101826" stroke="url(#g)" stroke-width="2"/>
+  <text x="468" y="112" font-size="15" font-weight="700" fill="#e7eefc">40+ transforms</text>
+  <text x="468" y="142" font-size="13" fill="#9fb6dc">filter (reject port)</text>
+  <text x="468" y="166" font-size="13" fill="#9fb6dc">join . aggregate</text>
+  <text x="468" y="190" font-size="13" fill="#9fb6dc">window . pivot</text>
+  <text x="468" y="214" font-size="13" fill="#9fb6dc">validate . dedupe</text>
+  <text x="468" y="246" font-size="11.5" fill="#5f6b82">custom SQL . routines</text>
+
+  <!-- sink chips -->
+  <g>
+    <rect x="812" y="74" width="244" height="36" rx="9" fill="#121a2b" stroke="#243149"/><rect x="812" y="74" width="4" height="36" rx="2" fill="#a78bfa"/><text x="830" y="97" font-size="13.5" fill="#dbe6fb">Files: CSV . Parquet . JSON</text>
+    <rect x="812" y="128" width="244" height="36" rx="9" fill="#121a2b" stroke="#243149"/><rect x="812" y="128" width="4" height="36" rx="2" fill="#a78bfa"/><text x="830" y="151" font-size="13.5" fill="#dbe6fb">SQLite . DuckDB</text>
+    <rect x="812" y="182" width="244" height="36" rx="9" fill="#121a2b" stroke="#243149"/><rect x="812" y="182" width="4" height="36" rx="2" fill="#a78bfa"/><text x="830" y="205" font-size="13.5" fill="#dbe6fb">S3 . GCS . Azure</text>
+    <rect x="812" y="236" width="244" height="36" rx="9" fill="#121a2b" stroke="#243149"/><rect x="812" y="236" width="4" height="36" rx="2" fill="#5b6efb"/><text x="830" y="259" font-size="13.5" fill="#aab6d4">AI / vector (preview)</text>
+  </g>
+
+  <!-- captions -->
+  <text x="120" y="318" font-size="12.5" fill="#6b7790">drag</text>
+  <text x="487" y="318" font-size="12.5" fill="#6b7790">drop and wire</text>
+  <text x="846" y="318" font-size="12.5" fill="#6b7790">run locally</text>
+</svg>

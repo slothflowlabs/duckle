@@ -28,17 +28,9 @@ Most data tooling forces a choice: a heavyweight enterprise suite you have to ho
 
 You build a pipeline by dragging nodes onto a canvas and wiring them together. Duckle compiles that graph into SQL and executes it on a real analytical engine. Nothing is hidden: click any node to read the **generated SQL** and see a **live preview** of the rows flowing through it.
 
-```
-   sources                 transforms                       sinks
-   -------                 ----------                       -----
-   CSV / TSV          +----------------------+         files (CSV / Parquet
-   Parquet            |  filter (reject port)|         JSON / TSV)
-   JSON / NDJSON  -->  |  join / aggregate    |  -->    SQLite / DuckDB
-   SQLite / DuckDB    |  window / pivot       |         S3 / GCS / Azure
-   S3 / GCS / Azure   |  validate / dedupe    |         AI / vector stores
-                      +----------------------+            (preview)
-        drag                drop and wire                   run locally
-```
+<div align="center">
+<img src="docs/assets/flow.svg" alt="Sources flow through 40+ transforms into files, databases, object storage, and AI stores" width="100%"/>
+</div>
 
 ### Why Duckle is different
 
@@ -69,11 +61,21 @@ The capability matrix below marks each area accordingly.
 
 ---
 
-<div align="center">
-<img src="docs/assets/ui-preview.svg" alt="Duckle designer (illustration)" width="100%"/>
-<br/>
-<sub><i>The Duckle designer (illustration). Add real captures under docs/assets/ to replace this.</i></sub>
-</div>
+## Screenshots
+
+<p align="center">
+  <img src="docs/assets/real-life-screenshot/1.png" alt="The Duckle visual designer with a CSV to Filter to Parquet pipeline" width="100%"/>
+  <br/>
+  <sub>Build a pipeline on the canvas, configure a node, and read the generated SQL. Here a CSV source flows through a Filter into a Parquet sink.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/assets/real-life-screenshot/2.png" alt="Component palette and schema autodetect" width="49%"/>
+  <img src="docs/assets/real-life-screenshot/3.png" alt="Parquet sink configuration in dark theme" width="49%"/>
+</p>
+<p align="center">
+  <sub>Left: the component palette and one-click schema autodetect from the source. Right: sink configuration with write mode, compression, and partitioning, in dark theme.</sub>
+</p>
 
 ---
 
@@ -181,10 +183,10 @@ Duckle ships a thin shell and installs its engine on first launch, which is why 
 | Engine | Role | Status |
 |---|---|---|
 | **DuckDB** | Default execution engine: analytics, file formats, cloud reads, SQL pushdown. | Working |
-| **SlothDB** | Optional embedded analytical engine, installed the same way. | Installable |
+| **SlothDB** | Alternate embedded analytical engine ([SouravRoy-ETL/slothdb](https://github.com/SouravRoy-ETL/slothdb)), installed the same way and selectable per pipeline. | Installable |
 | **Native** | In-process Rust streaming / incremental engine. | Planned |
 
-Both downloadable engines install through the same guided first-run step with a progress bar. No manual setup.
+DuckDB is the default. **SlothDB is a drop-in alternate engine**: install it from the same guided first-run screen and switch to it from the engine selector in the toolbar, with no change to your pipeline. Both downloadable engines install with a progress bar and no manual setup.
 
 ---
 
@@ -201,6 +203,32 @@ Both downloadable engines install through the same guided first-run step with a 
    - Press **Run**, watch the nodes light up, then open the **Output** tab.
 
 That is a real, native ETL pipeline, built and run in under a minute. CSV is just the easiest first node; swap in Parquet, JSON, SQLite, DuckDB, or an S3 URL the same way.
+
+---
+
+## How to use Duckle
+
+1. **Sources** - drag a source onto the canvas and point it at a file, an embedded database, or a cloud URL. Click **Autodetect schema** to read the columns and a sample.
+2. **Transforms** - drag transforms and wire them to the source's output port. Configure each in the properties panel; the **Preview** tab shows live rows and the **Plan** tab shows the generated SQL.
+3. **Data quality** - drop in a validator (Not-Null, Range, Regex, Uniqueness). Passing rows continue on the main port; failures leave the **reject** port, which you can sink or inspect separately.
+4. **Sinks** - finish with a sink (file, SQLite, DuckDB, or cloud) and set its path and write mode.
+5. **Run** - press **Run** to execute on DuckDB (or SlothDB). Nodes light up stage by stage; the **Output** and **Console** tabs report row counts, timing, and errors.
+6. **Reuse** - save Connections, Context variables, and SQL Routines in the workspace; reference `${context.var}` in any field. Everything persists as plain files you can commit.
+7. **Schedule** - attach a cron, interval, or file-watch trigger to run a pipeline automatically.
+
+---
+
+## Documentation
+
+Duckle documents itself as you build, and the reference lives in this repo:
+
+- **In-app** - every node has inline field help, a live **Preview** tab, and a **Plan** tab that shows the exact generated SQL.
+- **Component reference** - the [Capabilities matrix](#capabilities) lists every source, transform, validator, and sink with its current status.
+- **Quickstart and how-to** - the [60-second quickstart](#quickstart-60-seconds) and [How to use Duckle](#how-to-use-duckle) above.
+- **Build and contribute** - [Build from source](#build-from-source) and [CONTRIBUTING](CONTRIBUTING.md).
+- **Samples** - ready-to-run example data under [`samples/`](samples).
+
+A hosted documentation site is on the roadmap.
 
 ---
 
