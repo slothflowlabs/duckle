@@ -95,6 +95,7 @@ export const PALETTE: Category[] = [
                     src('fixedwidth', 'Fixed-width', 'planned'),
                     src('yaml', 'YAML', 'planned'),
                     src('toml', 'TOML', 'planned'),
+                    src('spatial', 'Geospatial (GeoJSON / Shapefile / GeoPackage)', 'available', 'Read geospatial files via the DuckDB spatial extension (ST_Read)'),
                 ],
             },
             {

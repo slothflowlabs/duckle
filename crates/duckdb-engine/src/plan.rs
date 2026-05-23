@@ -498,6 +498,7 @@ fn build_view_sql(
         "src.excel" => Ok(build_excel_source(props)),
         "src.iceberg" => Ok(build_iceberg_source(props)),
         "src.delta" => Ok(build_delta_source(props)),
+        "src.spatial" => Ok(build_spatial_source(props)),
         // Pass-through transforms
         "xf.filter" => build_filter(inputs, props),
         // Log Rows - pass data through unchanged; its rows surface in the
@@ -2444,6 +2445,11 @@ fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
         // Vector Similarity Search uses the vss extension's array_*
         // distance functions; LOAD before the SELECT runs.
         "xf.ai.vector_search" => return "LOAD vss; ".into(),
+        // Spatial is GDAL-backed and ~50 MB; deliberately kept out of
+        // the first-launch DUCKDB_EXTENSIONS pre-fetch so the install
+        // stays small. INSTALL runs lazily on first use, then LOAD on
+        // every subsequent run.
+        "src.spatial" => return "INSTALL spatial; LOAD spatial; ".into(),
         _ => {}
     }
     let db = match string_prop(props, "database").filter(|s| !s.is_empty()) {
@@ -2710,6 +2716,16 @@ fn build_vector_search(inputs: &NodeInputs, props: &JsonValue) -> Result<String,
         );
     }
     Ok(sql)
+}
+
+/// Geospatial source via the DuckDB spatial extension. ST_Read is
+/// GDAL-backed, so the same builder handles GeoJSON, Shapefile,
+/// GeoPackage, KML, GPX, and many more (format auto-detected by file
+/// extension). The geometry column comes through as binary; downstream
+/// transforms (e.g. ST_AsText) can convert it.
+fn build_spatial_source(props: &JsonValue) -> String {
+    let path = string_prop(props, "path").unwrap_or_default();
+    format!("SELECT * FROM ST_Read('{}')", sql_escape(&path))
 }
 
 /// Iceberg source via the DuckDB iceberg extension's `iceberg_scan`.

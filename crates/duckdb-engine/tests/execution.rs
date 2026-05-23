@@ -1973,6 +1973,39 @@ fn vector_search_ranks_by_cosine_similarity() {
 }
 
 #[test]
+fn spatial_source_reads_geojson() {
+    // The spatial extension is GDAL-backed (~50 MB); only opt-in CI /
+    // local runs install it. Set DUCKLE_TEST_SPATIAL=1 to exercise.
+    if std::env::var("DUCKLE_TEST_SPATIAL").ok().as_deref() != Some("1") {
+        eprintln!("skipping: set DUCKLE_TEST_SPATIAL=1 to run spatial tests");
+        return;
+    }
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let geojson = write_file(
+        tmp.path(),
+        "t.geojson",
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"alpha"},"geometry":{"type":"Point","coordinates":[1,2]}},{"type":"Feature","properties":{"name":"beta"},"geometry":{"type":"Point","coordinates":[3,4]}}]}"#,
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("r", "src.spatial", json!({ "path": geojson })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "r", "k")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "spatial read failed: {:?}", result.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2);
+    let names = scalar_string(&format!(
+        "SELECT string_agg(name, ',' ORDER BY name) FROM read_csv_auto('{}')",
+        out
+    ));
+    assert_eq!(names, "alpha,beta", "got {}", names);
+}
+
+#[test]
 fn missing_source_file_errors_cleanly() {
     let tmp = tempfile::tempdir().unwrap();
     let out = out_path(tmp.path(), "never.parquet");

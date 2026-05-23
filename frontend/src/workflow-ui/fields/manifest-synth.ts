@@ -421,6 +421,17 @@ function defaultDescription(comp: ComponentDef): string {
 
 function synthFileSource(comp: ComponentDef): ComponentManifest {
     const ext = comp.id.split('.').pop() ?? 'txt';
+    // src.spatial reads many geo formats via GDAL; surface the common
+    // ones in the file picker rather than a useless ".spatial" filter.
+    const filters = comp.id === 'src.spatial'
+        ? [
+            { name: 'Geospatial', extensions: ['geojson', 'json', 'shp', 'gpkg', 'kml', 'gpx', 'gml'] },
+            { name: 'All files', extensions: ['*'] },
+        ]
+        : [
+            { name: comp.label, extensions: [ext] },
+            { name: 'All files', extensions: ['*'] },
+        ];
     return base(comp, [
         {
             label: 'Source file',
@@ -430,10 +441,7 @@ function synthFileSource(comp: ComponentDef): ComponentManifest {
                     label: 'Path',
                     kind: 'file-path',
                     required: true,
-                    filters: [
-                        { name: comp.label, extensions: [ext] },
-                        { name: 'All files', extensions: ['*'] },
-                    ],
+                    filters,
                 },
                 encodingField(),
                 {
