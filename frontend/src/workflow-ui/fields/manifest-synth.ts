@@ -600,6 +600,27 @@ function fileFormatSection(comp: ComponentDef): FormSection[] {
     return [];
 }
 
+function synthLakehouseSource(comp: ComponentDef): ComponentManifest {
+    // Iceberg + Delta both take a path to the table location: a local
+    // directory containing the metadata + data files, or an `s3://...`
+    // URL backed by a cloud SECRET configured under Connections.
+    return base(comp, [
+        {
+            label: 'Table',
+            fields: [
+                {
+                    key: 'path',
+                    label: 'Table path',
+                    kind: 'text',
+                    required: true,
+                    placeholder: 's3://lake/orders/  or  /var/lakes/orders',
+                    description: 'The Iceberg / Delta table root: a local directory or an s3:// URL.',
+                },
+            ],
+        },
+    ]);
+}
+
 function synthDbSource(comp: ComponentDef): ComponentManifest {
     return base(comp, [
         { label: 'Connection', fields: dbConnectionFields(comp.id) },
@@ -2342,6 +2363,7 @@ export function synthesizeManifest(componentId: string): ComponentManifest | und
 
     // Sources
     if (groupId === 'src.files') return synthFileSource(comp);
+    if (groupId === 'src.lakehouse') return synthLakehouseSource(comp);
     if (groupId === 'src.databases') return synthDbSource(comp);
     if (groupId === 'src.warehouses') return synthWarehouseSource(comp);
     if (groupId === 'src.storage') return synthStorageSource(comp);

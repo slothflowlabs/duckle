@@ -1852,6 +1852,58 @@ fn switch_routes_rows_to_case_outputs() {
 }
 
 #[test]
+fn iceberg_source_reads_fixture() {
+    // Env-gated: set DUCKLE_ICEBERG_FIXTURE to a local Iceberg table
+    // root (the directory that contains metadata/ and data/). DuckDB's
+    // iceberg extension is read-only, so the test can't self-generate.
+    let engine = engine_or_skip!();
+    let path = match std::env::var("DUCKLE_ICEBERG_FIXTURE") {
+        Ok(p) if !p.is_empty() && std::path::Path::new(&p).exists() => p,
+        _ => {
+            eprintln!("skipping: set DUCKLE_ICEBERG_FIXTURE to an Iceberg table directory");
+            return;
+        }
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("r", "src.iceberg", json!({ "path": norm(&path) })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "r", "k")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "iceberg read failed: {:?}", result.error);
+    assert!(count(&format!("read_csv_auto('{}')", out)) >= 0);
+}
+
+#[test]
+fn delta_source_reads_fixture() {
+    // Env-gated: set DUCKLE_DELTA_FIXTURE to a local Delta table root.
+    let engine = engine_or_skip!();
+    let path = match std::env::var("DUCKLE_DELTA_FIXTURE") {
+        Ok(p) if !p.is_empty() && std::path::Path::new(&p).exists() => p,
+        _ => {
+            eprintln!("skipping: set DUCKLE_DELTA_FIXTURE to a Delta table directory");
+            return;
+        }
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("r", "src.delta", json!({ "path": norm(&path) })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "r", "k")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "delta read failed: {:?}", result.error);
+    assert!(count(&format!("read_csv_auto('{}')", out)) >= 0);
+}
+
+#[test]
 fn missing_source_file_errors_cleanly() {
     let tmp = tempfile::tempdir().unwrap();
     let out = out_path(tmp.path(), "never.parquet");

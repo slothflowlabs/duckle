@@ -496,6 +496,8 @@ fn build_view_sql(
         | "src.motherduck" => build_relational_source(component_id, props),
         "src.avro" => Ok(build_avro_source(props)),
         "src.excel" => Ok(build_excel_source(props)),
+        "src.iceberg" => Ok(build_iceberg_source(props)),
+        "src.delta" => Ok(build_delta_source(props)),
         // Pass-through transforms
         "xf.filter" => build_filter(inputs, props),
         // Log Rows - pass data through unchanged; its rows surface in the
@@ -2436,6 +2438,8 @@ fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
         // race on the cached extension file and intermittently fail.
         "src.avro" => return "LOAD avro; ".into(),
         "src.excel" => return "LOAD excel; ".into(),
+        "src.iceberg" => return "LOAD iceberg; ".into(),
+        "src.delta" => return "LOAD delta; ".into(),
         _ => {}
     }
     let db = match string_prop(props, "database").filter(|s| !s.is_empty()) {
@@ -2631,6 +2635,20 @@ fn build_db_sink(props: &JsonValue, from_view: &str) -> String {
 fn build_avro_source(props: &JsonValue) -> String {
     let path = string_prop(props, "path").unwrap_or_default();
     format!("SELECT * FROM read_avro('{}')", sql_escape(&path))
+}
+
+/// Iceberg source via the DuckDB iceberg extension's `iceberg_scan`.
+/// The `path` is the iceberg table location (a local directory or an
+/// `s3://...` URL backed by a cloud SECRET created elsewhere).
+fn build_iceberg_source(props: &JsonValue) -> String {
+    let path = string_prop(props, "path").unwrap_or_default();
+    format!("SELECT * FROM iceberg_scan('{}')", sql_escape(&path))
+}
+
+/// Delta Lake source via the DuckDB delta extension's `delta_scan`.
+fn build_delta_source(props: &JsonValue) -> String {
+    let path = string_prop(props, "path").unwrap_or_default();
+    format!("SELECT * FROM delta_scan('{}')", sql_escape(&path))
 }
 
 /// Excel (.xlsx) source via DuckDB v1.2+ `read_xlsx`. Supports an

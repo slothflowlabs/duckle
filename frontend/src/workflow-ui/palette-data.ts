@@ -98,6 +98,14 @@ export const PALETTE: Category[] = [
                 ],
             },
             {
+                id: 'src.lakehouse',
+                label: 'Lakehouse table formats',
+                components: [
+                    src('iceberg', 'Apache Iceberg', 'available', 'Read Iceberg tables via DuckDB iceberg_scan'),
+                    src('delta', 'Delta Lake', 'available', 'Read Delta Lake tables via DuckDB delta_scan'),
+                ],
+            },
+            {
                 id: 'src.databases',
                 label: 'Databases',
                 components: [

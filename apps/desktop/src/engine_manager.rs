@@ -140,6 +140,8 @@ const DUCKDB_EXTENSIONS: &[&str] = &[
     "mysql",    // MySQL / MariaDB ATTACH
     "excel",    // .xlsx reader
     "avro",     // Avro reader
+    "iceberg",  // Apache Iceberg table scan
+    "delta",    // Delta Lake table scan
 ];
 
 fn duckdb_command(bin: &Path) -> std::process::Command {

@@ -70,7 +70,7 @@ jobs:
         # parallel test threads downloading the same extension into the
         # shared ~/.duckdb cache.
         run: |
-          "$DUCKLE_DUCKDB_BIN" :memory: -c "INSTALL postgres; INSTALL mysql; INSTALL sqlite; INSTALL excel; INSTALL httpfs;"
+          "$DUCKLE_DUCKDB_BIN" :memory: -c "INSTALL postgres; INSTALL mysql; INSTALL sqlite; INSTALL excel; INSTALL httpfs; INSTALL iceberg; INSTALL delta;"
 
       - name: Test
         run: cargo test --workspace
