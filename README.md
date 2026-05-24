@@ -101,8 +101,8 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | **Streaming** | Kafka, Pulsar, Redpanda, NATS, Kinesis, Event Hubs, Pub/Sub | Planned |
 | **APIs and SaaS** | **REST** (cursor / offset / page / Link header pagination), **GraphQL**. Vendor tiles: **Salesforce, HubSpot, Pipedrive, Zendesk, Intercom, Stripe, QuickBooks, Xero, Shopify, Notion, Airtable, GitHub, GitLab, Linear, Jira, Mailchimp, SendGrid, Segment** (thin pre-configured wrappers over REST/GraphQL) | Available |
 | **APIs and SaaS** | gRPC, SOAP, OData, Google Sheets, Excel Online, webhook listener, more SaaS vendors | Planned |
-| **NoSQL and search** | **MongoDB** (official driver), **Cassandra / ScyllaDB** (CQL), **Elasticsearch / OpenSearch** (from+size + search_after) | Available |
-| **NoSQL and search** | Redis, DynamoDB, CouchDB | Planned |
+| **NoSQL and search** | **MongoDB** (official driver), **Cassandra / ScyllaDB** (CQL), **Elasticsearch / OpenSearch** (from+size + search_after), **Redis** (SCAN + GET via the sync client), **CouchDB** (via the `_all_docs` REST endpoint) | Available |
+| **NoSQL and search** | DynamoDB | Planned |
 | **Vector / AI databases** | **pgvector** (rides the postgres ATTACH; server needs `CREATE EXTENSION vector`) | Available |
 | **Vector / AI databases** | Pinecone, Qdrant, Weaviate, Chroma, Milvus, LanceDB | Preview (read paths need vendor scan endpoints; write paths shipped as sinks) |
 
@@ -174,8 +174,8 @@ The whole group runs today. Validators split their input: passing rows continue 
 | **Cloud warehouses** | MotherDuck | Available |
 | **Cloud warehouses** | **Snowflake** (SQL API; PAT or JWT RS256 auth), **BigQuery** (community extension), **Redshift** (postgres ATTACH; all PG write modes), **Databricks SQL** (Statement Execution API + PAT), **Azure Synapse** (TDS) | Available |
 | **HTTP APIs** | **REST** (POST/PUT/PATCH a single batched JSON-array request) and **Webhook** (one POST per row). Bearer / API-key auth + custom headers via the form. Uses `ureq` blocking client. **GraphQL** sink for mutations. | Available |
-| **NoSQL** | **MongoDB** (official driver, insert_many batched), **Cassandra / ScyllaDB** (CQL prepared INSERT), **Elasticsearch / OpenSearch** (`_bulk` NDJSON) | Available |
-| **NoSQL** | Redis, DynamoDB | Planned |
+| **NoSQL** | **MongoDB** (official driver, insert_many batched), **Cassandra / ScyllaDB** (CQL prepared INSERT), **Elasticsearch / OpenSearch** (`_bulk` NDJSON), **Redis** (pipelined SET with optional EXPIRE) | Available |
+| **NoSQL** | DynamoDB | Planned |
 | **Streaming** | Kafka, Pulsar, NATS, Kinesis | Planned |
 | **SOAP** | (use REST sink at the SOAP endpoint until a dedicated component lands) | Planned |
 | **Vector / AI databases** | **pgvector** (Postgres ATTACH), **Pinecone** (`/vectors/upsert`), **Qdrant** (`/collections/{id}/points` PUT), **Weaviate** (`/v1/batch/objects`), **Milvus** (`/v1/vector/insert`) | Available |

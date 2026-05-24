@@ -5696,3 +5696,58 @@ fn snk_cockroach_routes_through_postgres_attach_path() {
         );
     }
 }
+
+#[test]
+fn snk_and_src_redis_roundtrip_via_real_url() {
+    // Env-gated like the mongo / postgres / mysql tests. Set
+    // DUCKLE_REDIS_URL to a working redis URL (e.g. redis://127.0.0.1:6379/0)
+    // to run; otherwise skip cleanly. Write 3 keys via snk.redis, scan
+    // them back via src.redis, assert the count + that they're all
+    // present.
+    let engine = engine_or_skip!();
+    let url = match std::env::var("DUCKLE_REDIS_URL").ok() {
+        Some(u) if !u.is_empty() => u,
+        _ => {
+            eprintln!("skipping: set DUCKLE_REDIS_URL to run Redis tests");
+            return;
+        }
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    // Unique prefix per test run so concurrent runs don't collide.
+    let prefix = format!("duckle_test_{}_", std::process::id());
+    let csv_body = format!(
+        "key,value\n{p}k1,alpha\n{p}k2,beta\n{p}k3,gamma\n",
+        p = prefix
+    );
+    let csv = write_file(tmp.path(), "in.csv", &csv_body);
+
+    let r1 = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("r", "snk.redis", json!({
+                "url": &url,
+                "keyColumn": "key",
+                "valueColumn": "value",
+                "ttlSeconds": 60,
+            })),
+        ]),
+        json!([main_edge("e", "s", "r")]),
+    ));
+    assert_eq!(r1.status, "ok", "redis sink failed: {:?}", r1.error);
+
+    let out = out_path(tmp.path(), "out.csv");
+    let r2 = engine.execute_pipeline(&doc(
+        json!([
+            node("g", "src.redis", json!({
+                "url": &url,
+                "keyPattern": format!("{}*", prefix),
+                "limit": 1000,
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "g", "k")]),
+    ));
+    assert_eq!(r2.status, "ok", "redis source failed: {:?}", r2.error);
+    let n = count(&format!("read_csv_auto('{}')", out));
+    assert_eq!(n, 3, "expected 3 keys round-tripped, got {}", n);
+}

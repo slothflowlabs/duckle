@@ -51,6 +51,10 @@ scylla = "0.13"
 # the library path when they actually connect. Default-on so the
 # shipped binary supports Oracle out of the box.
 oracle = { version = "0.6", optional = true }
+# Redis sync client. Tokio-async is optional and off; we use the blocking
+# Connection / Pipeline API to fit the per-stage CLI shell-out model.
+# Small dep (~300kb).
+redis = { version = "0.27", default-features = false }
 
 [features]
 default = ["oracle"]

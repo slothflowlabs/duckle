@@ -30,8 +30,9 @@ pub use plan::{CompiledPipeline, PipelineDoc, Stage, StageKind};
 use plan::{
     CassandraSinkSpec, CassandraSourceSpec, ClickHouseSinkSpec, ClickHouseSourceSpec,
     DatabricksSinkSpec, DatabricksSourceSpec, ElasticSourceSpec, MongoSinkSpec, MongoSourceSpec,
-    OracleSinkSpec, OracleSourceSpec, RestPagination, RestSourceSpec, SnowflakeAuth,
-    SnowflakeSinkSpec, SnowflakeSourceSpec, SqlServerSinkSpec, SqlServerSourceSpec, WebhookSpec,
+    OracleSinkSpec, OracleSourceSpec, RedisSinkSpec, RedisSourceSpec, RestPagination,
+    RestSourceSpec, SnowflakeAuth, SnowflakeSinkSpec, SnowflakeSourceSpec, SqlServerSinkSpec,
+    SqlServerSourceSpec, WebhookSpec,
 };
 
 #[derive(Debug, Error)]
@@ -485,6 +486,10 @@ impl DuckdbEngine {
                     self.run_oracle_sink(&db_path, spec)
                 } else if let Some(spec) = stage.oracle_source.as_ref() {
                     self.run_oracle_source(&db_path, spec)
+                } else if let Some(spec) = stage.redis_sink.as_ref() {
+                    self.run_redis_sink(&db_path, spec)
+                } else if let Some(spec) = stage.redis_source.as_ref() {
+                    self.run_redis_source(&db_path, spec)
                 } else if let Some(spec) = stage.upsert.as_ref() {
                     // Relational-DB upsert: DESCRIBE the upstream first to
                     // get the column list, then assemble INSERT ... ON
@@ -1227,6 +1232,134 @@ impl DuckdbEngine {
         materialize_jsonobjects_as_table(db, &spec.node_id, &rows)?;
         Ok(format!(
             "cassandra: materialized {} rows into {}",
+            count, spec.node_id
+        ))
+    }
+
+    /// Redis SET sink via the sync redis client. For each upstream row,
+    /// SET <keyColumn> <valueColumn|json(row)> [EX <ttl>]. Pipelined in
+    /// chunks of batch_size to amortize the round-trip cost.
+    fn run_redis_sink(
+        &self,
+        db: &Path,
+        spec: &RedisSinkSpec,
+    ) -> Result<String, EngineError> {
+        let select = format!("SELECT * FROM {}", plan::quote_ident(&spec.from_view));
+        let rows = self.run_rows(Some(db), &select)?;
+        if rows.is_empty() {
+            return Ok(format!("redis: 0 rows to SET (from {})", spec.from_view));
+        }
+        let client = redis::Client::open(spec.url.as_str())
+            .map_err(|e| EngineError::Query(format!("redis: client open: {}", e)))?;
+        let mut conn = client
+            .get_connection()
+            .map_err(|e| EngineError::Query(format!("redis: connect: {}", e)))?;
+        let mut total = 0_usize;
+        for chunk in rows.chunks(spec.batch_size) {
+            let mut pipe = redis::pipe();
+            for row in chunk {
+                let Some(obj) = row.as_object() else {
+                    return Err(EngineError::Query(
+                        "redis: upstream rows aren't JSON objects".into(),
+                    ));
+                };
+                let key = obj
+                    .get(&spec.key_column)
+                    .map(|v| match v {
+                        JsonValue::String(s) => s.clone(),
+                        _ => v.to_string(),
+                    })
+                    .ok_or_else(|| {
+                        EngineError::Query(format!(
+                            "redis: keyColumn '{}' not in row",
+                            spec.key_column
+                        ))
+                    })?;
+                let value = if spec.value_column.is_empty() {
+                    serde_json::to_string(row).unwrap_or_default()
+                } else {
+                    obj.get(&spec.value_column)
+                        .map(|v| match v {
+                            JsonValue::String(s) => s.clone(),
+                            _ => v.to_string(),
+                        })
+                        .unwrap_or_default()
+                };
+                if spec.ttl_seconds > 0 {
+                    pipe.cmd("SETEX")
+                        .arg(&key)
+                        .arg(spec.ttl_seconds)
+                        .arg(&value)
+                        .ignore();
+                } else {
+                    pipe.cmd("SET").arg(&key).arg(&value).ignore();
+                }
+            }
+            redis::Pipeline::query::<()>(&pipe, &mut conn)
+                .map_err(|e| EngineError::Query(format!("redis: SET batch: {}", e)))?;
+            total += chunk.len();
+        }
+        Ok(format!("redis: SET {} key(s)", total))
+    }
+
+    /// Redis SCAN+GET source. Walks keys matching key_pattern via SCAN
+    /// (cursor-based; safe for large keyspaces - never blocks like
+    /// KEYS), then GETs each in pipelined batches of 500 and emits
+    /// {key, value} rows. Limit caps the walk so a million-key DB
+    /// doesn't take forever; defaults to 10_000.
+    fn run_redis_source(
+        &self,
+        db: &Path,
+        spec: &RedisSourceSpec,
+    ) -> Result<String, EngineError> {
+        let client = redis::Client::open(spec.url.as_str())
+            .map_err(|e| EngineError::Query(format!("redis: client open: {}", e)))?;
+        let mut conn = client
+            .get_connection()
+            .map_err(|e| EngineError::Query(format!("redis: connect: {}", e)))?;
+        let mut keys: Vec<String> = Vec::new();
+        let mut cursor: u64 = 0;
+        loop {
+            let (next, batch): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(&spec.key_pattern)
+                .arg("COUNT")
+                .arg(500_u32)
+                .query(&mut conn)
+                .map_err(|e| EngineError::Query(format!("redis: SCAN: {}", e)))?;
+            keys.extend(batch);
+            if keys.len() as u64 >= spec.limit {
+                keys.truncate(spec.limit as usize);
+                break;
+            }
+            if next == 0 {
+                break;
+            }
+            cursor = next;
+        }
+        let mut rows: Vec<JsonValue> = Vec::with_capacity(keys.len());
+        for chunk in keys.chunks(500) {
+            let mut pipe = redis::pipe();
+            for k in chunk {
+                pipe.cmd("GET").arg(k);
+            }
+            let values: Vec<Option<String>> = redis::Pipeline::query(&pipe, &mut conn)
+                .map_err(|e| EngineError::Query(format!("redis: GET batch: {}", e)))?;
+            for (k, v) in chunk.iter().zip(values.into_iter()) {
+                let mut obj = serde_json::Map::new();
+                obj.insert("key".into(), JsonValue::String(k.clone()));
+                obj.insert(
+                    "value".into(),
+                    v.map(JsonValue::String).unwrap_or(JsonValue::Null),
+                );
+                rows.push(JsonValue::Object(obj));
+            }
+        }
+        let count = rows.len();
+        materialize_jsonobjects_as_table(db, &spec.node_id, &rows)?;
+        Ok(format!(
+            "redis: materialized {} rows into {}",
             count, spec.node_id
         ))
     }

@@ -4,12 +4,12 @@ This document is the source of truth for what's in the palette but
 not yet executable. The README's capability tables are the highlight
 reel; this is the full ledger.
 
-The palette currently carries **293 components**, broken down:
+The palette currently carries **298 components**, broken down:
 
-- **220 available** - executes on the DuckDB engine today
+- **243 available** - executes on the DuckDB engine today
 - **15 preview** - configurable in the designer (drag, wire, set
   properties); execution is being wired engine-by-engine
-- **58 planned** - reserved in the palette so the roadmap is visible,
+- **40 planned** - reserved in the palette so the roadmap is visible,
   not yet executable
 
 If you drop a planned or preview tile and try to run, the executor
@@ -80,9 +80,10 @@ OAuth-heavy vendors need a stored-credential flow + token-refresh worker.
 
 | Component | Notes |
 |---|---|
-| `src.redis` / `snk.redis` | `redis` Rust crate - simple add; on the short list |
-| `src.dynamodb` | AWS SDK for Rust |
-| `src.couchdb` | REST + cursor; thin wrapper |
+| `src.dynamodb` | AWS SDK for Rust; non-trivial |
+
+`src.redis`, `snk.redis`, and `src.couchdb` shipped - see the
+Capabilities table in the README.
 
 ### File formats
 

@@ -118,6 +118,10 @@ pub struct Stage {
     pub oracle_sink: Option<OracleSinkSpec>,
     /// Oracle SELECT (opt-in behind `oracle` feature).
     pub oracle_source: Option<OracleSourceSpec>,
+    /// Redis SET batch via the redis sync client.
+    pub redis_sink: Option<RedisSinkSpec>,
+    /// Redis SCAN + GET via the redis sync client.
+    pub redis_source: Option<RedisSourceSpec>,
     /// Milliseconds the executor sleeps before running this stage.
     /// Set by ctl.wait and ctl.throttle. None = no delay.
     pub wait_ms: Option<u64>,
@@ -220,6 +224,33 @@ pub struct OracleSourceSpec {
     pub user: String,
     pub password: String,
     pub query: String,
+}
+
+/// snk.redis: SET each input row's keyColumn -> valueColumn into Redis
+/// via the sync redis client. Optional TTL via EXPIRE. If valueColumn
+/// is not set, the entire row gets JSON-stringified as the value.
+#[derive(Debug, Clone)]
+pub struct RedisSinkSpec {
+    pub from_view: String,
+    /// Standard redis:// or rediss:// URI (with credentials inline).
+    pub url: String,
+    pub key_column: String,
+    /// Empty = JSON-stringify the whole row as the value.
+    pub value_column: String,
+    /// 0 = no TTL.
+    pub ttl_seconds: u64,
+    pub batch_size: usize,
+}
+
+/// src.redis: SCAN keys matching keyPattern, GET each, emit rows of
+/// {key, value}. Limit caps the SCAN walk so a huge keyspace doesn't
+/// take forever. Uses the sync redis client.
+#[derive(Debug, Clone)]
+pub struct RedisSourceSpec {
+    pub node_id: String,
+    pub url: String,
+    pub key_pattern: String,
+    pub limit: u64,
 }
 
 /// snk.cassandra / snk.scylla: CQL INSERT via the scylla driver
@@ -808,6 +839,8 @@ fn build_stage(
     let mut cassandra_source: Option<CassandraSourceSpec> = None;
     let mut oracle_sink: Option<OracleSinkSpec> = None;
     let mut oracle_source: Option<OracleSourceSpec> = None;
+    let mut redis_sink: Option<RedisSinkSpec> = None;
+    let mut redis_source: Option<RedisSourceSpec> = None;
     let mut wait_ms: Option<u64> = None;
     // Advanced settings (universal across components, written by the
     // Properties Panel's Advanced tab). Engine honours them per stage.
@@ -1093,6 +1126,32 @@ fn build_stage(
             schema: string_prop(&props, "schema").filter(|s| !s.is_empty()),
             table,
             batch_size: props.get("batchSize").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(1000) as usize,
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.redis" {
+        // Redis SET sink. keyColumn picks the column whose value
+        // becomes the Redis key; valueColumn (optional) picks the
+        // payload column; if absent, the whole row is JSON-stringified
+        // as the value. Optional ttlSeconds adds an EXPIRE.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let url = string_prop(&props, "url")
+            .or_else(|| string_prop(&props, "connectionString"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: url required (e.g. redis://default:pass@host:6379/0)", component_id)))?;
+        let key_column = string_prop(&props, "keyColumn")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: keyColumn required", component_id)))?;
+        redis_sink = Some(RedisSinkSpec {
+            from_view: from_view.to_string(),
+            url,
+            key_column,
+            value_column: string_prop(&props, "valueColumn").unwrap_or_default(),
+            ttl_seconds: props.get("ttlSeconds").and_then(|v| v.as_u64()).unwrap_or(0),
+            batch_size: props
+                .get("batchSize")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(1000) as usize,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.cassandra" || component_id == "snk.scylla" {
@@ -1600,6 +1659,25 @@ fn build_stage(
             query,
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.redis" {
+        // Redis SCAN+GET source. Walks keys matching keyPattern (default
+        // '*') up to `limit` keys; emits {key, value} rows. Hash / list /
+        // set / sorted-set value types stringify as their MULTI reply -
+        // for now the simple string GET path covers the common cache
+        // export use case.
+        let url = string_prop(&props, "url")
+            .or_else(|| string_prop(&props, "connectionString"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: url required", component_id)))?;
+        redis_source = Some(RedisSourceSpec {
+            node_id: node.id.clone(),
+            url,
+            key_pattern: string_prop(&props, "keyPattern")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "*".into()),
+            limit: props.get("limit").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(10_000),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.cassandra" || component_id == "src.scylla" {
         let contact_points = string_prop(&props, "contactPoints")
             .filter(|s| !s.is_empty())
@@ -1765,6 +1843,7 @@ fn build_stage(
             | "src.zendesk"
             | "src.shopify"
             | "src.intercom"
+            | "src.couchdb"
     ) {
         // Generic REST source + thin vendor aliases. Vendors share
         // the same plumbing - the palette/form pre-fills url, auth
@@ -2022,6 +2101,8 @@ fn build_stage(
         cassandra_source,
         oracle_sink,
         oracle_source,
+        redis_sink,
+        redis_source,
         wait_ms,
         retry_attempts,
         retry_backoff_ms,
