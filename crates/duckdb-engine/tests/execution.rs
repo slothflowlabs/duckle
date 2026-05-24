@@ -3940,6 +3940,95 @@ fn memory_limit_pragma_applied_without_breaking_normal_query() {
 }
 
 #[test]
+fn ctl_iterate_runs_subpipeline_n_times_with_iter_index() {
+    // Sub-pipeline reads in.csv and writes out_<index>.csv where the
+    // suffix comes from ${ITER_INDEX}. After 3 iterations we should
+    // see out_0.csv, out_1.csv, out_2.csv on disk.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let sub_in = write_file(tmp.path(), "sub.csv", "id\n1\n2\n");
+    let out_pattern = out_path(tmp.path(), "out_");
+    let sub_doc_value = json!({
+        "nodes": [
+            node("s", "src.csv", json!({ "path": sub_in, "hasHeader": true })),
+            node("k", "snk.csv", json!({
+                "path": format!("{}${{ITER_INDEX}}.csv", out_pattern),
+                "hasHeader": true
+            })),
+        ],
+        "edges": [main_edge("e", "s", "k")],
+    });
+    let sub_doc_path = out_path(tmp.path(), "sub.json");
+    std::fs::write(&sub_doc_path, serde_json::to_string(&sub_doc_value).unwrap()).unwrap();
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("it", "ctl.iterate", json!({
+                "pipelineRef": sub_doc_path,
+                "count": 3
+            })),
+        ]),
+        json!([]),
+    ));
+    assert_eq!(r.status, "ok", "iterate failed: {:?}", r.error);
+
+    for i in 0..3 {
+        let p = format!("{}{}.csv", out_pattern, i);
+        assert!(
+            std::path::Path::new(&p).exists(),
+            "expected iteration {} to write {}",
+            i,
+            p
+        );
+        let n = count(&format!("read_csv_auto('{}')", p));
+        assert_eq!(n, 2, "iteration {} should have written 2 rows", i);
+    }
+}
+
+#[test]
+fn ctl_foreach_runs_subpipeline_per_upstream_row_with_iter_item() {
+    // Parent reads a CSV with two rows. ctl.foreach runs the sub-pipeline
+    // once per row, substituting ${ITER_ITEM_ID} into the sub-output
+    // file path. After running we should see out_alice.csv + out_bob.csv.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let parent_in = write_file(tmp.path(), "users.csv", "id,name\nalice,Alice\nbob,Bob\n");
+    let sub_in = write_file(tmp.path(), "src.csv", "v\n42\n");
+    let out_prefix = out_path(tmp.path(), "out_");
+    let sub_doc_value = json!({
+        "nodes": [
+            node("s", "src.csv", json!({ "path": sub_in, "hasHeader": true })),
+            node("k", "snk.csv", json!({
+                "path": format!("{}${{ITER_ITEM_ID}}.csv", out_prefix),
+                "hasHeader": true
+            })),
+        ],
+        "edges": [main_edge("e", "s", "k")],
+    });
+    let sub_doc_path = out_path(tmp.path(), "sub.json");
+    std::fs::write(&sub_doc_path, serde_json::to_string(&sub_doc_value).unwrap()).unwrap();
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": parent_in, "hasHeader": true })),
+            node("fe", "ctl.foreach", json!({ "pipelineRef": sub_doc_path })),
+        ]),
+        json!([main_edge("e1", "s", "fe")]),
+    ));
+    assert_eq!(r.status, "ok", "foreach failed: {:?}", r.error);
+
+    for user in ["alice", "bob"] {
+        let p = format!("{}{}.csv", out_prefix, user);
+        assert!(
+            std::path::Path::new(&p).exists(),
+            "expected foreach to write {} for user {}",
+            p,
+            user
+        );
+    }
+}
+
+#[test]
 fn ctl_try_fires_fallback_when_downstream_stage_fails() {
     // Parent pipeline: src.csv -> ctl.try(installs fallback) ->
     // failing stage. Failing stage triggers the fallback (which writes

@@ -362,6 +362,78 @@ impl DuckdbEngine {
                         continue;
                     }
                 }
+                // ctl.iterate: run the sub-pipeline N times, substituting
+                // ${ITER_INDEX} into the pipeline JSON before each call.
+                if let (Some(ref iter_path), Some(count)) =
+                    (stage.iterate_pipeline_path.as_ref(), stage.iterate_count)
+                {
+                    let mut iter_err: Option<String> = None;
+                    for i in 0..count {
+                        let mut subs = std::collections::HashMap::new();
+                        subs.insert("ITER_INDEX".to_string(), i.to_string());
+                        if let Err(e) = self.run_subpipeline_with_subs(iter_path, &subs) {
+                            iter_err = Some(format!(
+                                "ctl.iterate({})[iteration {}]: {}",
+                                iter_path, i, e
+                            ));
+                            break;
+                        }
+                    }
+                    if let Some(e) = iter_err {
+                        result = Err(EngineError::Query(e));
+                        continue;
+                    }
+                }
+                // ctl.foreach: read upstream rows, run the sub-pipeline
+                // once per row with ${ITER_ITEM_<FIELD>} substitutions.
+                if let Some(ref each_path) = stage.foreach_pipeline_path {
+                    // Materialize upstream first if it isn't already
+                    // (the stage's own pass-through SQL runs *after*
+                    // these hooks, so the upstream view is what we
+                    // read - which is the parent's last stage output).
+                    let select = match &stage.from {
+                        Some(f) => format!("SELECT * FROM {}", plan::quote_ident(f)),
+                        None => format!("SELECT * FROM {}", plan::quote_ident(&stage.node_id)),
+                    };
+                    let rows = match self.run_rows(Some(&db_path), &select) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            result = Err(EngineError::Query(format!(
+                                "ctl.foreach({}): can't read upstream: {}",
+                                each_path, e
+                            )));
+                            continue;
+                        }
+                    };
+                    let mut each_err: Option<String> = None;
+                    for (i, row) in rows.iter().enumerate() {
+                        let mut subs = std::collections::HashMap::new();
+                        subs.insert("ITER_INDEX".to_string(), i.to_string());
+                        if let Some(obj) = row.as_object() {
+                            for (k, v) in obj {
+                                let val_str = v
+                                    .as_str()
+                                    .map(String::from)
+                                    .unwrap_or_else(|| v.to_string());
+                                subs.insert(
+                                    format!("ITER_ITEM_{}", k.to_uppercase()),
+                                    val_str,
+                                );
+                            }
+                        }
+                        if let Err(e) = self.run_subpipeline_with_subs(each_path, &subs) {
+                            each_err = Some(format!(
+                                "ctl.foreach({})[row {}]: {}",
+                                each_path, i, e
+                            ));
+                            break;
+                        }
+                    }
+                    if let Some(e) = each_err {
+                        result = Err(EngineError::Query(e));
+                        continue;
+                    }
+                }
                 result = if let Some(spec) = stage.webhook.as_ref() {
                     // HTTP sink (snk.webhook / snk.rest): materialize the
                     // upstream as JSON via DuckDB, then dispatch one
@@ -1862,11 +1934,45 @@ impl DuckdbEngine {
     /// surface as Err(EngineError::Query) with the sub-pipeline's
     /// error message. Used by ctl.runpipeline / ctl.trigger.
     fn run_subpipeline(&self, path: &str) -> Result<(), EngineError> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            EngineError::Config(format!("ctl.runpipeline: read '{}': {}", path, e))
+        self.run_subpipeline_with_subs(path, &std::collections::HashMap::new())
+    }
+
+    /// Read a pipeline file, perform `${KEY}` text substitution from
+    /// the supplied map, parse the result as a PipelineDoc, and run
+    /// it inline. Used by ctl.iterate (${ITER_INDEX}) and ctl.foreach
+    /// (${ITER_ITEM_<field>}). String substitution happens on the raw
+    /// JSON text so any prop value can carry templated content; safe
+    /// because we substitute INSIDE JSON strings only when the
+    /// placeholder is in a string literal already.
+    fn run_subpipeline_with_subs(
+        &self,
+        path: &str,
+        subs: &std::collections::HashMap<String, String>,
+    ) -> Result<(), EngineError> {
+        let mut content = std::fs::read_to_string(path).map_err(|e| {
+            EngineError::Config(format!("sub-pipeline: read '{}': {}", path, e))
         })?;
+        for (key, val) in subs {
+            let placeholder = format!("${{{}}}", key);
+            if content.contains(&placeholder) {
+                // JSON-escape the value before substitution so embedded
+                // quotes / backslashes don't break parsing.
+                let escaped: String = val
+                    .chars()
+                    .flat_map(|c| match c {
+                        '"' => vec!['\\', '"'],
+                        '\\' => vec!['\\', '\\'],
+                        '\n' => vec!['\\', 'n'],
+                        '\r' => vec!['\\', 'r'],
+                        '\t' => vec!['\\', 't'],
+                        c => vec![c],
+                    })
+                    .collect();
+                content = content.replace(&placeholder, &escaped);
+            }
+        }
         let sub_doc: plan::PipelineDoc = serde_json::from_str(&content).map_err(|e| {
-            EngineError::Config(format!("ctl.runpipeline: parse '{}': {}", path, e))
+            EngineError::Config(format!("sub-pipeline: parse '{}': {}", path, e))
         })?;
         let result = self.execute_pipeline(&sub_doc);
         if result.status == "ok" {

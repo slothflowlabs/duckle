@@ -564,8 +564,8 @@ export const PALETTE: Category[] = [
                     ctl('replicate', 'Replicate / Tee', 'available', 'Send the same data to multiple downstream outputs'),
                     ctl('switch', 'Switch / Conditional Split', 'available', 'Route rows to case_1..N outputs by condition; first match wins'),
                     ctl('merge', 'Merge Streams', 'available', 'Concatenate multiple input streams (UNION ALL)'),
-                    ctl('iterate', 'Iterate', 'planned'),
-                    ctl('foreach', 'For Each', 'planned'),
+                    ctl('iterate', 'Iterate', 'available', 'Runs a referenced pipeline N times. Sub-pipeline gets ${ITER_INDEX} (0..N-1) substituted into its props before each call. Side-effect model - sub-pipeline output isn\'t composed into the parent (true block-scope iteration needs the DAG refactor in docs/dag-block-refactor.md).'),
+                    ctl('foreach', 'For Each', 'available', 'Runs a referenced pipeline once per upstream row. ${ITER_INDEX} + ${ITER_ITEM_<FIELD>} (uppercased) substituted into the sub-pipeline props. Side-effect model.'),
                 ],
             },
             {

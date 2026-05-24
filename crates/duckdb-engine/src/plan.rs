@@ -62,6 +62,17 @@ pub struct Stage {
     /// rollbacks, cleanup. NOT a true block-scoped try with
     /// continuation - that needs the DAG refactor.
     pub install_fallback_path: Option<String>,
+    /// ctl.iterate: when set, the executor runs the referenced
+    /// pipeline N times. ${ITER_INDEX} in the sub-pipeline file
+    /// gets substituted to the iteration number (0..N-1). Side-effect
+    /// model - sub-pipeline output isn't composed into the parent.
+    pub iterate_pipeline_path: Option<String>,
+    pub iterate_count: Option<u64>,
+    /// ctl.foreach: when set, the executor reads upstream rows and
+    /// runs the referenced pipeline once per row. ${ITER_INDEX} is
+    /// the row index; ${ITER_ITEM_<FIELD>} (uppercased) is the row's
+    /// value for each top-level field. Side-effect model.
+    pub foreach_pipeline_path: Option<String>,
     /// HTTP per-row sink (snk.webhook / snk.rest). When set, the
     /// executor materializes the upstream view and dispatches requests
     /// via ureq; stage SQL is empty (no DuckDB write).
@@ -778,6 +789,9 @@ fn build_stage(
     let mut webhook: Option<WebhookSpec> = None;
     let mut run_pipeline_path: Option<String> = None;
     let mut install_fallback_path: Option<String> = None;
+    let mut iterate_pipeline_path: Option<String> = None;
+    let mut iterate_count: Option<u64> = None;
+    let mut foreach_pipeline_path: Option<String> = None;
     let mut snowflake_sink: Option<SnowflakeSinkSpec> = None;
     let mut databricks_sink: Option<DatabricksSinkSpec> = None;
     let mut snowflake_source: Option<SnowflakeSourceSpec> = None;
@@ -1292,6 +1306,51 @@ fn build_stage(
                 Some(from_view.to_string()),
             )
         }
+    } else if component_id == "ctl.iterate" {
+        // Run a pipeline file N times. ${ITER_INDEX} in the sub-pipeline
+        // gets substituted to the iteration number (0..N-1). Side-effect
+        // model; sub-pipeline output isn't composed into the parent.
+        let path = string_prop(&props, "pipelineRef")
+            .or_else(|| string_prop(&props, "iteratePipelineRef"))
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: pipelineRef required", component_id)))?;
+        let count = props
+            .get("count")
+            .or_else(|| props.get("iterations"))
+            .and_then(|v| v.as_u64())
+            .filter(|n| *n > 0)
+            .ok_or_else(|| EngineError::Config(format!("{}: count (positive integer) required", component_id)))?;
+        iterate_pipeline_path = Some(path);
+        iterate_count = Some(count);
+        let sql = match inputs.main() {
+            Some(from_view) => format!(
+                "CREATE OR REPLACE TABLE {} AS SELECT * FROM {}",
+                quote_ident(&node.id),
+                quote_ident(from_view)
+            ),
+            None => format!(
+                "CREATE OR REPLACE TABLE {} AS SELECT 'iterated' AS status WHERE 1=0",
+                quote_ident(&node.id)
+            ),
+        };
+        (sql, StageKind::View, None)
+    } else if component_id == "ctl.foreach" {
+        // Run a pipeline file once per upstream row. ${ITER_ITEM_<FIELD>}
+        // (uppercased) substitutes to the row's value for each field;
+        // ${ITER_INDEX} is the row index.
+        let path = string_prop(&props, "pipelineRef")
+            .or_else(|| string_prop(&props, "foreachPipelineRef"))
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: pipelineRef required", component_id)))?;
+        // Upstream IS required - foreach iterates over its rows.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        foreach_pipeline_path = Some(path);
+        let sql = format!(
+            "CREATE OR REPLACE TABLE {} AS SELECT * FROM {}",
+            quote_ident(&node.id),
+            quote_ident(from_view)
+        );
+        (sql, StageKind::View, None)
     } else if component_id == "ctl.try" {
         // Side-effect fallback installer: pass through upstream
         // unchanged; on any subsequent stage failure, the engine
@@ -1836,6 +1895,9 @@ fn build_stage(
         text_search,
         run_pipeline_path,
         install_fallback_path,
+        iterate_pipeline_path,
+        iterate_count,
+        foreach_pipeline_path,
         webhook,
         snowflake_sink,
         databricks_sink,
