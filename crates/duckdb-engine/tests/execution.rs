@@ -2513,11 +2513,22 @@ fn snk_snowflake_posts_multirow_insert() {
     let _ = handle.join();
     let body = String::from_utf8_lossy(&req).to_string();
     assert!(body.contains("Bearer secret-pat"), "expected Bearer auth: {}", body);
-    assert!(body.contains("INSERT INTO \\\"MYDB\\\".\\\"PUBLIC\\\".\\\"USERS\\\""), "expected qualified INSERT: {}", body);
-    // The two rows should be in a single VALUES clause - 'alice' and 'bob' quoted.
+    // The SQL is embedded inside a JSON string, so the identifiers'
+    // double quotes are backslash-escaped: \"MYDB\".\"PUBLIC\".\"USERS\".
+    assert!(
+        body.contains(r#"INSERT INTO \"MYDB\".\"PUBLIC\".\"USERS\""#),
+        "expected qualified INSERT: {}",
+        body
+    );
+    // Single-quoted string literals stay as-is inside the JSON string.
     assert!(body.contains("'alice'"), "expected 'alice' literal: {}", body);
     assert!(body.contains("'bob'"), "expected 'bob' literal: {}", body);
-    assert!(body.contains("\\\"warehouse\\\":\\\"COMPUTE_WH\\\""), "expected warehouse in body: {}", body);
+    // Top-level JSON keys aren't backslash-escaped - just standard JSON.
+    assert!(
+        body.contains(r#""warehouse":"COMPUTE_WH""#),
+        "expected warehouse in body: {}",
+        body
+    );
 }
 
 #[test]
