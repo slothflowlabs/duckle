@@ -702,6 +702,10 @@ export const PALETTE: Category[] = [
                 components: [
                     src('notion', 'Notion', 'available', 'Notion REST. Bearer integration token + Notion-Version header. Cursor pagination on `next_cursor` (cursorNextPath /next_cursor, cursorParam `start_cursor`). responsePath /results.'),
                     src('airtable', 'Airtable', 'available', 'Airtable REST. Bearer Personal Access Token. Cursor pagination on `offset` (cursorNextPath /offset, cursorParam `offset`). responsePath /records.'),
+                    src('asana', 'Asana', 'available', 'Asana REST. Bearer Personal Access Token (https://app.asana.com/0/my-apps). Cursor pagination on `next_page.offset` (cursorNextPath /next_page/offset, cursorParam `offset`). responsePath /data. Base URL https://app.asana.com/api/1.0.'),
+                    src('trello', 'Trello', 'available', 'Trello REST. Anonymous-style auth: append `?key={apiKey}&token={token}` to the URL. No body, no pagination (the API returns full result sets by default). Set responsePath empty since responses are top-level arrays. Base URL https://api.trello.com/1.'),
+                    src('clickup', 'ClickUp', 'available', 'ClickUp REST. Bearer Personal API token (pk_... from Settings > Apps). Page pagination on `?page=N` (paginationType `page`, pageParam `page`). responsePath /tasks (or whatever resource). Base URL https://api.clickup.com/api/v2.'),
+                    src('monday', 'Monday.com', 'available', 'Monday.com GraphQL. Rides src.graphql; auth via Bearer token in Authorization header. POST a GraphQL query as `body`; responsePath /data.<query_name>. Base URL https://api.monday.com/v2.'),
                     src('gsheets', 'Google Sheets', 'planned'),
                     src('excel-online', 'Microsoft Excel Online', 'planned'),
                 ],

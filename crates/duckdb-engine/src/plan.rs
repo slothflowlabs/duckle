@@ -2623,7 +2623,7 @@ fn build_stage(
             limit: props.get("limit").and_then(|v| v.as_i64()).filter(|n| *n > 0),
         });
         (String::new(), StageKind::View, None)
-    } else if matches!(component_id, "src.graphql" | "src.linear") {
+    } else if matches!(component_id, "src.graphql" | "src.linear" | "src.monday") {
         // GraphQL source + Linear alias: POST {query, variables} to
         // the endpoint, walk the response data path. Rides
         // RestSourceSpec. Linear's API is exclusively GraphQL so the
@@ -2695,6 +2695,9 @@ fn build_stage(
             | "src.couchdb"
             | "src.odata"
             | "src.soap"
+            | "src.asana"
+            | "src.trello"
+            | "src.clickup"
     ) {
         // Generic REST source + thin vendor aliases. Vendors share
         // the same plumbing - the palette/form pre-fills url, auth
