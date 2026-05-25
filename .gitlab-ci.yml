@@ -1,0 +1,308 @@
+# Duckle CI/CD for GitLab.
+#
+# Mirrors .github/workflows/ci.yml and .github/workflows/release.yml so the
+# project can run the same push / merge-request / tag pipeline on either
+# platform. The two CI configs are kept feature-equivalent on Linux; multi-OS
+# (Windows + macOS) builds run on GitHub Actions where SaaS runners are free.
+#
+# Triggers:
+#   - push to main / develop       -> test + desktop-build
+#   - merge request                -> test + desktop-build (gated by rules:)
+#   - tag matching v*.*.*          -> test + desktop-build + release upload
+#
+# Required CI variables (Project -> Settings -> CI/CD -> Variables):
+#   - GITLAB_TOKEN  (masked) Personal Access Token with `api` scope, used by
+#     the `release:` keyword for the tag-driven release stage. The token
+#     defaults to $CI_JOB_TOKEN if you don't set one.
+
+stages:
+  - test
+  - build
+  - integration
+  - release
+
+# Shared defaults for any job that needs Rust + DuckDB.
+.rust_defaults: &rust_defaults
+  image: rust:1.83-bookworm
+  cache:
+    key:
+      files:
+        - Cargo.lock
+    paths:
+      - .cargo/
+      - target/
+  before_script:
+    - rustc --version
+    - cargo --version
+
+# Shared defaults for any job that needs Node.
+.node_defaults: &node_defaults
+  image: node:20-bookworm
+  cache:
+    key:
+      files:
+        - frontend/package-lock.json
+    paths:
+      - frontend/node_modules/
+
+# ---- Frontend (type-check + bundle) ---------------------------------------
+frontend:
+  <<: *node_defaults
+  stage: test
+  script:
+    - npm --prefix frontend ci
+    - npm --prefix frontend run build
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG
+
+# ---- Workspace test matrix (Rust + plan tests) ----------------------------
+test:linux:
+  <<: *rust_defaults
+  stage: test
+  variables:
+    DUCKDB_VERSION: "1.5.3"
+  before_script:
+    - rustc --version
+    - apt-get update -qq && apt-get install -y -qq unzip curl ca-certificates
+    # DuckDB CLI for the engine test suite. Pulled from the upstream GitHub
+    # release; cached on the runner via the standard /tmp path.
+    - mkdir -p /tmp/duckdb
+    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" -o duckdb.zip
+    - unzip -o duckdb.zip -d /tmp/duckdb
+    - export DUCKLE_DUCKDB_BIN=/tmp/duckdb/duckdb
+    - $DUCKLE_DUCKDB_BIN :memory: -c "INSTALL postgres; INSTALL mysql; INSTALL sqlite; INSTALL excel; INSTALL httpfs; INSTALL iceberg; INSTALL delta; INSTALL ducklake; INSTALL vss; INSTALL fts; INSTALL inet;"
+  script:
+    - export DUCKLE_DUCKDB_BIN=/tmp/duckdb/duckdb
+    - cargo test --workspace
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG
+
+# Informational style checks - don't block merges.
+style:fmt:
+  <<: *rust_defaults
+  stage: test
+  allow_failure: true
+  script:
+    - rustup component add rustfmt
+    - cargo fmt --all --check
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"
+
+style:clippy:
+  <<: *rust_defaults
+  stage: test
+  allow_failure: true
+  script:
+    - rustup component add clippy
+    - cargo clippy --workspace --all-targets
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"
+
+# ---- Desktop release-build smoke check ------------------------------------
+# Catches the v0.0.7-class bug where `cargo build --release` (without
+# --features custom-protocol) silently shipped a binary that loaded
+# http://localhost:5173 inside the Tauri WebView instead of the embedded
+# frontend.
+desktop-build:linux:
+  image: rust:1.83-bookworm
+  stage: build
+  cache:
+    key:
+      files:
+        - Cargo.lock
+        - frontend/package-lock.json
+    paths:
+      - .cargo/
+      - target/
+      - frontend/node_modules/
+  before_script:
+    # Tauri 2 deps for Linux + Node for the frontend build.
+    - apt-get update -qq && apt-get install -y -qq
+        curl ca-certificates build-essential pkg-config
+        libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev
+        librsvg2-dev libsoup-3.0-dev
+    - curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    - apt-get install -y -qq nodejs
+    - npm --prefix frontend ci
+  script:
+    - npm --prefix frontend run build
+    - cargo build --release --manifest-path apps/desktop/Cargo.toml --features custom-protocol
+    # Verify the embedded frontend chunk is actually in the binary. If
+    # tauri-codegen embedded devUrl instead this would be absent.
+    - asset=$(ls frontend/dist/assets/index-*.js | head -1 | xargs basename)
+    - if grep -q "$asset" target/release/duckle; then
+        echo "OK; embedded frontend asset '$asset' is in the binary";
+      else
+        echo "FAIL; '$asset' not found in binary - tauri-codegen likely embedded devUrl";
+        exit 1;
+      fi
+  artifacts:
+    when: on_success
+    expire_in: 1 week
+    paths:
+      - target/release/duckle
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG
+
+# ---- Live-service integration tests ---------------------------------------
+# Same shape as the GitHub Actions postgres/mysql/minio jobs. GitLab spawns
+# the `services:` containers alongside the job container and routes their
+# default ports through localhost.
+
+integration:postgres:
+  <<: *rust_defaults
+  stage: integration
+  services:
+    - name: pgvector/pgvector:pg16
+      alias: postgres
+      variables:
+        POSTGRES_PASSWORD: pgtest
+        POSTGRES_DB: postgres
+  variables:
+    POSTGRES_HOST_AUTH_METHOD: trust
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq unzip curl ca-certificates
+    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v1.5.3/duckdb_cli-linux-amd64.zip" -o duckdb.zip
+    - unzip -o duckdb.zip -d /tmp/duckdb
+    - export DUCKLE_DUCKDB_BIN=/tmp/duckdb/duckdb
+    - $DUCKLE_DUCKDB_BIN :memory: -c "INSTALL postgres;"
+  script:
+    - export DUCKLE_DUCKDB_BIN=/tmp/duckdb/duckdb
+    - export DUCKLE_PG_HOST=postgres DUCKLE_PG_PORT=5432 DUCKLE_PG_DB=postgres DUCKLE_PG_USER=postgres DUCKLE_PG_PASS=pgtest
+    - cargo test -p duckle-duckdb-engine --test execution -- pg_
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG
+
+integration:mysql:
+  <<: *rust_defaults
+  stage: integration
+  services:
+    - name: mysql:8.0
+      alias: mysql
+      variables:
+        MYSQL_ROOT_PASSWORD: mytest
+        MYSQL_DATABASE: ducktest
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq unzip curl ca-certificates default-mysql-client
+    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v1.5.3/duckdb_cli-linux-amd64.zip" -o duckdb.zip
+    - unzip -o duckdb.zip -d /tmp/duckdb
+    - export DUCKLE_DUCKDB_BIN=/tmp/duckdb/duckdb
+    - $DUCKLE_DUCKDB_BIN :memory: -c "INSTALL mysql;"
+    # Wait for the MySQL service to be ready (it takes a few seconds).
+    - for i in $(seq 1 30); do
+        mysqladmin ping -h mysql -uroot -pmytest --silent && break;
+        echo "Waiting for MySQL... ($i)"; sleep 2;
+      done
+  script:
+    - export DUCKLE_DUCKDB_BIN=/tmp/duckdb/duckdb
+    - export DUCKLE_MYSQL_HOST=mysql DUCKLE_MYSQL_PORT=3306 DUCKLE_MYSQL_DB=ducktest DUCKLE_MYSQL_USER=root DUCKLE_MYSQL_PASS=mytest
+    - cargo test -p duckle-duckdb-engine --test execution -- mysql_
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG
+
+integration:minio:
+  <<: *rust_defaults
+  stage: integration
+  services:
+    - name: minio/minio:latest
+      alias: minio
+      command: ["server", "/data", "--console-address", ":9001"]
+      variables:
+        MINIO_ROOT_USER: minioadmin
+        MINIO_ROOT_PASSWORD: minioadmin
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq unzip curl ca-certificates
+    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v1.5.3/duckdb_cli-linux-amd64.zip" -o duckdb.zip
+    - unzip -o duckdb.zip -d /tmp/duckdb
+    - export DUCKLE_DUCKDB_BIN=/tmp/duckdb/duckdb
+    # Wait for MinIO to be ready.
+    - for i in $(seq 1 30); do
+        curl -fs http://minio:9000/minio/health/live > /dev/null && break;
+        echo "Waiting for MinIO... ($i)"; sleep 2;
+      done
+    # Seed bucket + a test object via DuckDB itself.
+    - $DUCKLE_DUCKDB_BIN :memory: -c "
+        INSTALL httpfs; LOAD httpfs;
+        CREATE OR REPLACE SECRET seed (
+          TYPE S3, KEY_ID 'minioadmin', SECRET 'minioadmin',
+          REGION 'us-east-1', ENDPOINT 'minio:9000',
+          URL_STYLE 'path', USE_SSL false
+        );
+        COPY (SELECT * FROM (VALUES (1,'alice'),(2,'bob'),(3,'carol')) t(id,name))
+          TO 's3://duckle-test/orders.parquet' (FORMAT PARQUET);
+      "
+  script:
+    - export DUCKLE_DUCKDB_BIN=/tmp/duckdb/duckdb
+    - export DUCKLE_MINIO_HOST=minio DUCKLE_MINIO_PORT=9000 DUCKLE_MINIO_BUCKET=duckle-test DUCKLE_MINIO_ACCESS_KEY=minioadmin DUCKLE_MINIO_SECRET_KEY=minioadmin
+    - cargo test -p duckle-duckdb-engine --test execution -- minio_
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG
+
+# ---- Tag-driven release ---------------------------------------------------
+# When a vX.Y.Z tag is pushed, this job picks up the build artifact from
+# desktop-build:linux (via `needs:`) and turns it into a GitLab Release.
+# Equivalent to the GitHub release workflow's `gh release create` step.
+
+release:linux:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - job: desktop-build:linux
+      artifacts: true
+  before_script:
+    # The release-cli image is tiny - no curl, no apt - so we just rename
+    # the artifact in place.
+    - test -f target/release/duckle && cp target/release/duckle Duckle-linux-x64
+    - test -f Duckle-linux-x64
+  script:
+    - echo "Publishing release for tag $CI_COMMIT_TAG"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: "Duckle $CI_COMMIT_TAG"
+    description: |
+      Auto-generated release from GitLab CI on tag `$CI_COMMIT_TAG`.
+
+      See the GitHub Releases page for the Windows + macOS binaries:
+      https://github.com/SouravRoy-ETL/duckle/releases/tag/$CI_COMMIT_TAG
+    assets:
+      links:
+        - name: "Duckle-linux-x64"
+          url: "$CI_PROJECT_URL/-/jobs/$CI_JOB_ID/artifacts/raw/Duckle-linux-x64"
+          link_type: package
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+# ---- Notes ----------------------------------------------------------------
+# Multi-OS builds:
+#   GitLab's free SaaS only includes Linux runners. Windows + macOS builds
+#   run on GitHub Actions (.github/workflows/release.yml), where they're
+#   free on the public-repo tier. If you set up self-hosted GitLab runners
+#   with tags `windows` and `macos`, add jobs that mirror desktop-build:linux
+#   with the appropriate `tags:` and adjusted asset paths.
+#
+# Caching:
+#   The `cargo` and `node_modules` caches are keyed on the lock files; they
+#   survive between branches as long as the lock files don't change. GitLab
+#   caches are runner-local by default - turn on a distributed S3-backed
+#   cache in admin settings for faster cross-runner cache hits.
+#
+# Secrets:
+#   - Set GITLAB_TOKEN in Project -> Settings -> CI/CD -> Variables if you
+#     want a custom token for the release stage. Default $CI_JOB_TOKEN works
+#     for releases in the same project.
+#   - DB / cloud creds for the integration tests are set inline as service
+#     env vars (matches the GitHub Actions config); no secrets needed.

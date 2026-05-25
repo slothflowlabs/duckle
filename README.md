@@ -22,6 +22,74 @@
 
 ---
 
+## Quick links
+
+<table>
+<tr>
+<td valign="top" width="25%">
+
+**Get started**
+
+- [What is Duckle?](#what-is-duckle)
+- [Quickstart (60 s)](#quickstart-60-seconds)
+- [Download / Install](#download--install)
+- [Build from source](#build-from-source)
+- [Run your first pipeline](#run-your-first-pipeline)
+
+</td>
+<td valign="top" width="25%">
+
+**Use the product**
+
+- [Meet Duckie (AI)](#meet-duckie---the-local-ai-pipeline-assistant)
+- [How to use Duckle](#how-to-use-duckle)
+- [Recipes / examples](#recipes-and-examples)
+- [Workspace + Git flow](#workspace-and-git-flow)
+- [Schedules](#schedules-and-triggers)
+- [Connection management](#connection-management)
+- [Context variables](#context-variables)
+
+</td>
+<td valign="top" width="25%">
+
+**Reference**
+
+- [Capabilities matrix](#capabilities)
+- [Sources](#sources-73-available)
+- [Transforms](#transforms-122-available)
+- [Sinks](#sinks-57-available)
+- [Data quality](#data-quality-12-available)
+- [Custom code](#custom-code-7-available)
+- [Control flow](#control-flow-14-available)
+- [Advanced settings](#advanced-settings-per-node)
+- [Engines](#engines)
+- [Configuration](#configuration)
+
+</td>
+<td valign="top" width="25%">
+
+**Resources**
+
+- [Architecture](#architecture)
+- [Clean data for AI](#clean-data-before-it-reaches-your-ai)
+- [Performance tips](#performance-tips)
+- [FAQ](#faq)
+- [Troubleshooting](#troubleshooting)
+- [CI / CD](#ci--cd)
+- [Status](#status)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+- [Releases](https://github.com/SouravRoy-ETL/duckle/releases)
+- [Roadmap doc](docs/roadmap.md)
+- [Contributing doc](CONTRIBUTING.md)
+
+</td>
+</tr>
+</table>
+
+---
+
 ## What is Duckle?
 
 A visual data pipeline studio that runs on your laptop. Drag sources, transforms, validators, and sinks onto a canvas. Wire them together. Press **Run**. Duckle compiles the graph to SQL and executes it through a real columnar engine, with live previews, generated SQL on every node, and zero hidden state.
@@ -296,32 +364,297 @@ When the installer downloads the DuckDB CLI it also pre-fetches the extensions D
 
 ---
 
+## Download / Install
+
+Pick the binary for your OS from the [latest release](https://github.com/SouravRoy-ETL/duckle/releases):
+
+| OS | Asset | How to run |
+|---|---|---|
+| **Windows** | `Duckle-windows-x64.exe` | Double-click. Unsigned binary - Windows SmartScreen will warn the first time; click "More info" -> "Run anyway". |
+| **macOS** (Apple Silicon) | `Duckle-macos-arm64` | `chmod +x Duckle-macos-arm64 && ./Duckle-macos-arm64`. Right-click -> Open the first time to bypass Gatekeeper. |
+| **Linux** (x86_64) | `Duckle-linux-x64` | `chmod +x Duckle-linux-x64 && ./Duckle-linux-x64`. Requires WebKitGTK 4.1 (`libwebkit2gtk-4.1-0` on Debian / Ubuntu). |
+
+The binary is ~9 MB. On first launch you'll be guided through downloading two engines into your app-data directory:
+
+| Engine | Size | Required? | What it powers |
+|---|---|---|---|
+| **DuckDB CLI** | ~30 MB + extensions | **Yes** - cannot run pipelines without it | Every source / transform / sink that runs as SQL |
+| **Duckie AI Assistant** | ~1.1 GB (llama-server + Qwen 2.5 Coder 1.5B GGUF) | Optional | The chat sidebar that generates pipelines from natural language |
+
+App-data location:
+- Windows: `%APPDATA%\io.duckle.app\engines\`
+- macOS: `~/Library/Application Support/io.duckle.app/engines/`
+- Linux: `~/.config/io.duckle.app/engines/`
+
+Delete the `engines/` folder if you ever want to force a fresh install.
+
+---
+
 ## Quickstart (60 seconds)
 
-1. **Download** the latest [release](https://github.com/SouravRoy-ETL/duckle/releases) for your OS, or build from source below.
-   - Windows: `Duckle-windows-x64.exe`
-   - macOS: `Duckle-macos-arm64`
-   - Linux: `Duckle-linux-x64`
-2. **Launch it.** On first run, Duckle offers to install its engines. Click **Install DuckDB** (small, fast). Optionally **Install Duckie AI Assistant** (~1.1 GB) if you want the chat assistant.
-3. **Pick a workspace folder.** Pipelines and config live as plain files here.
+1. **Download** the binary for your OS (see [Download / Install](#download--install) above) - or [build from source](#build-from-source).
+2. **Launch it.** First run shows the setup modal:
+   - Click **Install** on DuckDB (required, takes ~30 s).
+   - Optionally click **Install** on Duckie AI Assistant (~1.1 GB, takes 5-10 min on average broadband).
+3. **Pick a workspace folder.** Pipelines, connections, context variables, and routines live there as plain files.
 4. **Build a pipeline two ways:**
-   - **Click + drag**: pull a **CSV source** in, point it at [`samples/orders.csv`](samples/orders.csv), hit **Autodetect schema**. Drag a **Filter**, wire it up. Drag a **Parquet sink** with an output path. Press **Run**, watch the nodes light up.
-   - **Ask Duckie**: click the **Sparkles** icon (top-right of the toolbar), describe what you want ("read orders.csv, filter where status = 'paid', write to paid.parquet"), and click **Insert into canvas** when the assistant streams back a pipeline.
+   - **Drag + wire**: drag a **CSV source** in, point it at [`samples/orders.csv`](samples/orders.csv), hit **Autodetect schema**. Drag a **Filter**, wire it up. Drag a **Parquet sink** with an output path. Press **Run**, watch the nodes light up.
+   - **Ask Duckie**: click the **Sparkles** icon (top-right of the toolbar), type *"read orders.csv, filter where status = 'paid', write to paid.parquet"*. When Duckie streams back a pipeline, click **Insert into canvas**.
+5. **Inspect.** Click any node to see its generated SQL in the **Plan** tab and a live row sample in the **Preview** tab.
 
-That's a real, native ETL pipeline, built and run in under a minute. CSV is just the easiest first node; swap in Parquet, JSON, S3, Snowflake, MongoDB, or Stripe the same way.
+That's a real, native ETL pipeline built and run in under a minute. CSV is just the easiest first node; swap in Parquet, JSON, S3, Snowflake, MongoDB, or Stripe the same way.
+
+---
+
+## Run your first pipeline
+
+A worked example using the bundled `samples/orders.csv` data.
+
+### 1. Add a source
+
+- Open the **Components** sidebar (left). Click **Sources -> Files -> CSV**.
+- Drag it onto the canvas.
+- In the right-side Properties panel:
+  - **Path**: browse to `samples/orders.csv`
+  - Click **Autodetect schema** - the **Schema** tab fills in column types from the file, the **Preview** tab shows the first 20 rows.
+
+### 2. Add a transform
+
+- **Components -> Transforms -> Rows -> Filter**. Drag onto canvas.
+- Wire the CSV source's `main` output port to the Filter's `main` input.
+- In Properties:
+  - **Predicate**: `status = 'paid'` (you can write raw SQL or use the visual builder)
+  - Filter has two output ports: `pass` (rows matching) and `reject` (rows that don't).
+
+### 3. Add a sink
+
+- **Components -> Sinks -> Files -> Parquet**.
+- Wire Filter's `pass` port to the Parquet sink.
+- **Path**: `paid_orders.parquet`. **Write mode**: `overwrite`. **Compression**: `zstd`.
+
+### 4. Run it
+
+- Press **Run** in the toolbar. Nodes light up in execution order; row counts appear under each.
+- Open the **Output** tab (bottom panel) to see per-stage timing.
+- Click any node to inspect generated SQL in **Plan** + sampled rows in **Preview**.
+
+### 5. Iterate
+
+- Add a **Group By** before the sink to aggregate. Re-run. Sub-second on small data.
+- Cancel mid-run with the **Stop** button - the DuckDB process is killed cleanly.
+- Save your work: **Cmd/Ctrl-S** writes a JSON pipeline file to your workspace folder.
 
 ---
 
 ## How to use Duckle
 
-1. **Sources** - drag a source onto the canvas and point it at a file, an embedded database, a cloud URL, or a SaaS endpoint. Click **Autodetect schema** to read the columns and a sample.
-2. **Transforms** - drag transforms and wire them to the source's output port. Configure each in the properties panel; the **Preview** tab shows live rows and the **Plan** tab shows the generated SQL.
-3. **Data quality** - drop in a validator (Not-Null, Range, Regex, Uniqueness). Passing rows continue on the main port; failures leave the **reject** port, which you can sink or inspect separately.
-4. **Sinks** - finish with a sink (file, database, cloud, vector DB, message bus, email) and set its write mode.
-5. **Run** - press **Run** to execute on DuckDB (or SlothDB). Nodes light up stage by stage; the **Output** and **Console** tabs report row counts, timing, and errors.
-6. **Ask Duckie** - for any task you can describe in English, the AI assistant can sketch a pipeline. Iterate by editing the generated graph or asking follow-up questions.
-7. **Reuse** - save Connections, Context variables, and SQL Routines in the workspace; reference `${context.var}` in any field. Everything persists as plain files you can commit.
-8. **Schedule** - attach a cron, interval, or file-watch trigger to run a pipeline automatically.
+A wider tour of the workflow.
+
+| Step | What you do | Where to look |
+|---|---|---|
+| **1. Sources** | Drag a source, point it at a file / DB / cloud URL / SaaS endpoint. Click **Autodetect schema** to read columns + a sample. | [Sources reference](#sources-73-available) |
+| **2. Transforms** | Wire transforms to source output ports. Configure in the Properties panel. **Preview** tab shows live rows; **Plan** tab shows generated SQL. | [Transforms reference](#transforms-122-available) |
+| **3. Data quality** | Drop in a validator (Not-Null, Range, Regex, Uniqueness). Passing rows continue on the main port; failures route to the **reject** port. | [Data quality reference](#data-quality-12-available) |
+| **4. Sinks** | Finish with a sink (file, DB, cloud, vector DB, message bus, email). Set write mode (overwrite, append, truncate, upsert). | [Sinks reference](#sinks-57-available) |
+| **5. Run** | Press **Run** to execute on DuckDB. Nodes light up stage by stage; **Output** + **Console** show row counts, timing, errors. Stop button kills mid-run. | [Run feedback](#orchestration-and-workspace) |
+| **6. Ask Duckie** | For anything you can describe in English, the AI assistant can sketch a pipeline. Iterate by editing the graph or asking follow-ups. | [Meet Duckie](#meet-duckie---the-local-ai-pipeline-assistant) |
+| **7. Reuse** | Save Connections, Context variables, and SQL Routines in the workspace; reference `${context.var}` in any field. Everything persists as plain files. | [Workspace and Git flow](#workspace-and-git-flow) |
+| **8. Schedule** | Attach a cron, interval, or file-watch trigger to run a pipeline automatically. | [Schedules and triggers](#schedules-and-triggers) |
+
+---
+
+## Recipes and examples
+
+Ready-to-adapt patterns. Each one is a few nodes you wire on the canvas (or ask Duckie to sketch).
+
+### CSV cleanup
+
+> "Read orders.csv, drop nulls, deduplicate by order_id, write to orders_clean.parquet"
+
+```
+src.csv -> qa.not_null -> qa.uniqueness -> snk.parquet
+```
+
+Set `qa.not_null` to the columns that must be present; set `qa.uniqueness` to `order_id`. Rejected rows go to a `snk.csv` on the `reject` port for inspection.
+
+### Postgres -> Snowflake nightly load
+
+> "Read all rows from Postgres `events`, upsert into Snowflake table `analytics.events` on `event_id`"
+
+```
+src.postgres -> snk.snowflake (mode=upsert, conflict=event_id)
+```
+
+Attach a `ctl.schedule` with cron `0 2 * * *` to run nightly at 02:00.
+
+### S3 -> partitioned Parquet
+
+> "Read all .json.gz files in `s3://logs/2026/*/*.json.gz`, parse, write Hive-partitioned by `event_date`"
+
+```
+src.s3 (glob, autodetect json.gz)
+  -> xf.derive (event_date = CAST(ts AS DATE))
+  -> snk.parquet (path=out/, partitionBy=event_date, mode=overwrite_or_ignore)
+```
+
+### RAG ingestion
+
+> "Chunk our docs, embed with OpenAI, dedupe near-identicals, store in pgvector"
+
+```
+src.s3 (markdown files)
+  -> xf.ai.chunk (chunkSize=1500, overlap=150)
+  -> xf.ai.pii (redact)
+  -> xf.ai.embed (model=text-embedding-3-small, baseUrl=https://api.openai.com)
+  -> xf.ai.dedupe (threshold=0.95)
+  -> snk.pgvector (table=docs)
+```
+
+### Slack channel digest
+
+> "Pull yesterday's Slack messages from #support, classify by sentiment, email a summary"
+
+```
+src.slack (channels.history with oldest=yesterday)
+  -> xf.ai.classify (categories=positive,negative,neutral)
+  -> xf.aggregate (group by sentiment, count)
+  -> snk.email (to=oncall@..., subject=Daily Support Digest)
+```
+
+### Webhook -> S3 archive
+
+> "Receive 100 webhooks, archive each one as JSON in S3"
+
+```
+src.webhook (port=8080, maxRequests=100, timeoutMs=300000)
+  -> snk.s3 (path=s3://archive/events/, format=jsonl, partitionBy=event_date)
+```
+
+### Git commit-log analytics
+
+> "Build a dashboard of who's been committing what in the last 30 days"
+
+```
+src.git (mode=log, maxRows=10000)
+  -> xf.filter (date > current_date - INTERVAL '30 days')
+  -> xf.aggregate (group by author_email, count)
+  -> snk.csv (path=author-stats.csv)
+```
+
+More examples live in [`samples/`](samples) - drop the pipeline files into a workspace and open them.
+
+---
+
+## Workspace and Git flow
+
+A workspace is a folder you pick on first launch. Everything you build lives there as plain text:
+
+```
+my-workspace/
+  pipelines/
+    orders_etl.pipeline.json     # the node graph
+    nightly_load.pipeline.json
+  connections/
+    prod-postgres.connection.json # saved DB credentials (encrypted)
+    snowflake-analytics.connection.json
+  contexts/
+    dev.context.json              # variables for dev environment
+    prod.context.json
+  routines/
+    cleanse-addresses.sql         # reusable SQL snippets
+  documents/
+    runbook.md                    # plain-Markdown docs
+  schedules.json                  # all scheduled runs in this workspace
+  run-history/
+    orders_etl/                   # one folder per pipeline
+      2026-05-25T14-30-00.json    # one file per run
+```
+
+**Git-friendly by design.** Every file is human-readable JSON or Markdown. Standard workflows work:
+
+```bash
+git init my-workspace && cd my-workspace
+git add . && git commit -m "Initial pipelines"
+
+# Pull a teammate's update
+git pull --rebase
+
+# Push your changes
+git push
+
+# Branch for a risky migration
+git checkout -b feature/upsert-mode
+# ...edit pipelines in Duckle...
+git diff       # readable JSON diffs
+git push -u origin feature/upsert-mode
+# open PR / MR
+```
+
+**Sensitive values** in connections get encrypted with a workspace-local key (`workspace/.duckle/keys/`). Don't commit that file - add `**/.duckle/keys/` to `.gitignore`. The connection JSON files themselves only hold the ciphertext, which is safe.
+
+---
+
+## Schedules and triggers
+
+Pipelines can run on cron, fixed interval, or file-watch triggers. Configure these in the **Schedule panel** (toolbar -> Schedule icon), not as graph nodes.
+
+| Trigger type | Config | Example |
+|---|---|---|
+| **Cron** | Standard 5-field cron expression with optional timezone | `0 2 * * *` (every day at 2 AM) |
+| **Interval** | `every N {seconds, minutes, hours, days}` | `every 15 minutes` |
+| **File watch** | Watch a directory for new/changed files matching a glob | `/inbox/*.csv` |
+| **Manual** | Run-on-demand only (the default) | - |
+
+Schedules persist to `workspace/schedules.json` and execute via the in-process scheduler crate. They survive app restarts but require Duckle to be running.
+
+For headless / always-on schedules, run the same pipeline from a system cron / systemd timer / Windows Scheduled Task that invokes:
+
+```bash
+duckle run --workspace ~/data --pipeline orders_etl
+```
+
+(CLI run mode is a planned 1.0 feature - tracked in [docs/roadmap.md](docs/roadmap.md).)
+
+---
+
+## Connection management
+
+Saved connections become DuckDB secrets at runtime so credentials never leak into the pipeline JSON.
+
+| Type | Stored fields | Used by |
+|---|---|---|
+| **PostgreSQL / MySQL / etc.** | host, port, user, password, database, ssl mode | `src.postgres`, `snk.postgres`, ... |
+| **Snowflake** | account, user, role, warehouse, PAT or JWT private key | `src.snowflake`, `snk.snowflake` |
+| **S3 / GCS / Azure** | access key, secret, region (or service-account JSON) | All cloud sources/sinks via `httpfs` |
+| **MotherDuck / Databricks / BigQuery** | token, workspace URL | Respective sources/sinks |
+| **Generic REST / SaaS** | base URL, auth scheme (Bearer / API key / Basic), token, custom headers | All REST aliases |
+
+Connections live in `workspace/connections/` as JSON. The token/password field is encrypted with the workspace key; the rest is plain text.
+
+To use a connection in a pipeline, the Properties panel of any compatible source/sink shows a **Connection** dropdown - pick one and the fields auto-fill.
+
+---
+
+## Context variables
+
+Bind any field to a context variable that resolves at run time. Useful for `dev` vs `prod`, per-environment paths, secrets injected from CI, etc.
+
+In a context file (`workspace/contexts/prod.context.json`):
+
+```json
+{
+  "name": "prod",
+  "vars": {
+    "DB_HOST": "db.internal.acme.com",
+    "S3_BUCKET": "acme-prod-data",
+    "BATCH_SIZE": "10000"
+  }
+}
+```
+
+In the Properties panel of any node, switch a field from **Manual** to **Context** and pick `DB_HOST`. Or inline-reference one with `${DB_HOST}` in a string field.
+
+Pick the active context from the topbar's **Context** dropdown. Switch contexts and re-run without editing the pipeline.
 
 ---
 
@@ -387,6 +720,197 @@ duckle/
 - **duckdb-engine** topologically sorts the graph, lowers each node into SQL, and executes by shelling out to the downloaded DuckDB CLI. Non-sink nodes materialize as tables so later stages can reference them; sinks become `COPY ... TO` statements; cancel kills the process. No statically linked database, so the binary stays small.
 - **Duckie** is a `llama-server` subprocess on `127.0.0.1` exposing an OpenAI-compatible chat-completions API. The chat panel streams from it via SSE. The model is sandboxed: no fs, no net, no tools - it can only emit text.
 - **Everything persists** to the workspace folder you choose, as plain JSON and Markdown files.
+
+---
+
+## Configuration
+
+A few knobs you can set without touching code.
+
+| Setting | Where | Effect |
+|---|---|---|
+| **Theme** | Topbar sun/moon toggle | Light / dark, persisted to `localStorage` |
+| **Workspace** | Topbar workspace pill -> Switch | Change the folder Duckle reads/writes to |
+| **Active engine** | Topbar engine selector | DuckDB (default) or SlothDB - per-pipeline |
+| **Active context** | Topbar context dropdown | Switches which context variables resolve at run time |
+| **AI Assistant baseURL** | `xf.ai.llm` / `xf.ai.embed` / `xf.ai.classify` props | Point at any OpenAI-compatible endpoint (default: Duckie's local llama-server) |
+| **Per-stage retry** | Properties panel -> Advanced tab | Total attempts + linear-scaled backoff per stage |
+| **Per-stage memory cap** | Properties panel -> Advanced tab | `PRAGMA memory_limit` applied just to that stage |
+| **DuckDB extensions** | Pre-fetched at install; lazy-loaded for `spatial` | See [First-launch extension pre-fetch](#first-launch-extension-pre-fetch) |
+| **Env var `RUST_LOG`** | Before launching the binary | `RUST_LOG=debug duckle.exe` to see verbose engine logs |
+| **Env var `DUCKLE_DUCKDB_BIN`** | Before running engine tests | Points the integration test suite at a DuckDB CLI |
+
+---
+
+## Performance tips
+
+A few patterns that consistently produce sub-second runs at small / medium data scale, and tractable runs at warehouse scale.
+
+| Tip | Why |
+|---|---|
+| **Use Parquet, not CSV, for intermediate steps** | Columnar + compressed; DuckDB reads only the columns the next stage needs. CSV is fine for source / sink at the edges. |
+| **Push filters as early as possible** | `xf.filter` early in the graph compiles to a `WHERE` that runs at scan time, not a post-scan filter. |
+| **Use the `vss` + `fts` indexes** | Vector + full-text search hit DuckDB extensions directly. Faster than the alternative of pulling data out and indexing in Python. |
+| **Avoid per-row API calls when batch APIs exist** | `xf.ai.embed` batches up to 100 inputs per request; `snk.rest` defaults to one batched request. Per-row patterns (`xf.ai.llm`, `snk.webhook`) are slower by design - use them when you actually need per-row behavior. |
+| **Cap heavy aggregates with the per-stage memory limit** | Properties panel -> Advanced -> Memory limit (MB) prevents one big GROUP BY from blowing through all of RAM. |
+| **Use `ctl.checkpoint` for long-running pipelines** | A checkpoint stage writes a Parquet snapshot to a path you choose, so a future run can resume from there with `src.parquet`. |
+| **Disable `xf.debug.log` in prod** | Logging rows is per-row I/O; fine for dev, costly at scale. |
+| **Sort once at the end, not in the middle** | `xf.sort` is a global sort; doing it once before the sink avoids re-sorting downstream. |
+
+---
+
+## FAQ
+
+<details>
+<summary><b>Is Duckle free? What's the license?</b></summary>
+
+Yes, free + open source. Dual-licensed **MIT OR Apache-2.0**. You can use it commercially, fork it, sell what you build with it. No usage limits, no telemetry.
+
+</details>
+
+<details>
+<summary><b>Does Duckle send my data anywhere?</b></summary>
+
+No. The app runs entirely on your machine. The engines (DuckDB, llama.cpp) are downloaded from official upstream releases on first launch and then run locally. The only network calls Duckle makes on your behalf are the ones your pipelines explicitly do (e.g. a `src.s3` reading from your S3 bucket, or `xf.ai.embed` if you configure it to hit OpenAI).
+
+Duckie AI Assistant runs **fully offline** once the model is downloaded.
+
+</details>
+
+<details>
+<summary><b>How big are pipelines this works well on?</b></summary>
+
+DuckDB is excellent on data that fits on one machine - tens of GB on a laptop, hundreds on a workstation. Beyond that, point Duckle's output at a warehouse / lakehouse that scales horizontally. Duckle is honest about being single-machine.
+
+</details>
+
+<details>
+<summary><b>Do I need DuckDB installed first?</b></summary>
+
+No - Duckle downloads it for you on first launch. The download is ~30 MB and includes the most-used extensions (httpfs, postgres, mysql, iceberg, delta, vss, fts, etc.) so the first time you touch a Postgres source there's no mid-pipeline network pause.
+
+</details>
+
+<details>
+<summary><b>Why is the binary only 9 MB?</b></summary>
+
+Because the engines aren't statically linked. DuckDB and the Duckie LLM both download on first launch with a guided installer. Keeps the actual app download small, keeps updates fast, and lets engines update independently.
+
+</details>
+
+<details>
+<summary><b>Can I use OpenAI / Cohere / Voyage instead of the local Duckie?</b></summary>
+
+Yes. The AI transforms (`xf.ai.embed`, `xf.ai.llm`, `xf.ai.classify`) accept a `baseUrl` prop. Point it at any OpenAI-compatible `/v1/...` endpoint and an `apiKey` and Duckle uses that instead. The local Duckie chat panel is hardwired to localhost; the pipeline AI transforms are configurable.
+
+</details>
+
+<details>
+<summary><b>Where does my pipeline data live?</b></summary>
+
+In the workspace folder you pick on first launch (see [Workspace and Git flow](#workspace-and-git-flow)). Pipelines are plain JSON files you can commit to Git, diff, branch, and review.
+
+</details>
+
+<details>
+<summary><b>Can multiple people collaborate on the same workspace?</b></summary>
+
+Via Git, yes - check the workspace into a repo and use standard branch/PR flows. Duckle does not have a real-time multiplayer mode (single-machine by design).
+
+</details>
+
+<details>
+<summary><b>Can I run pipelines headlessly / from CI?</b></summary>
+
+CLI run mode (`duckle run --workspace ~/data --pipeline orders_etl`) is on the 1.0 roadmap. Today you can run pipelines via the desktop app on a schedule, or by importing the engine crate (`duckle-duckdb-engine`) into your own Rust binary.
+
+</details>
+
+<details>
+<summary><b>Is the Duckie AI assistant any good?</b></summary>
+
+For 90% of common pipelines (read source -> simple transforms -> sink), yes - the Qwen 2.5 Coder model is tuned for structured-JSON generation. For long, complex pipelines you'll likely want to iterate: describe the first half, click insert, then ask for the next half. You can also swap the model: point `xf.ai.llm`'s `baseUrl` at GPT-4 or Claude for more capable pipeline drafting.
+
+</details>
+
+<details>
+<summary><b>Does the Duckie panel need internet after install?</b></summary>
+
+No. Once `llama-server` and the Qwen GGUF are downloaded into your app-data directory, Duckie runs fully offline. Tested by killing wifi and asking it for a pipeline - works fine.
+
+</details>
+
+<details>
+<summary><b>Why DuckDB and not Polars / Apache Spark / X?</b></summary>
+
+DuckDB's SQL surface is wide enough to express most ETL work, it's vectorized and fast on a laptop, it has first-class Iceberg/Delta/Parquet readers, and its extension model lets us add vector + full-text + Postgres ATTACH without code changes. Polars is great but doesn't ship the cloud/format/extension breadth we need; Spark is a great cluster but overkill for the local-first niche we're in.
+
+</details>
+
+<details>
+<summary><b>How do I contribute a new connector?</b></summary>
+
+See the [Contributing](#contributing) section and `crates/duckdb-engine/src/plan.rs` (planner branch) + `crates/duckdb-engine/src/lib.rs` (executor). The shortest path: copy an existing connector with similar shape (e.g. `src.rabbit` for a streaming source, `src.dynamodb` for an HTTP+auth API), adapt, add a test, flip the palette tile.
+
+</details>
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| **Window opens but content shows "localhost refused to connect"** | Release binary built without `--features custom-protocol` (the v0.0.7 bug) | Rebuild with `cargo build --release --features custom-protocol` per [Build from source](#build-from-source). The release workflow already passes this flag. |
+| **"DuckDB CLI not found"** on Run | First-launch installer was skipped or interrupted | Open the engine setup modal from the toolbar; click Install on DuckDB |
+| **"Couldn't download Duckie AI Assistant (HTTP 404)"** | Pinned llama.cpp build temporarily unavailable from upstream | Bump `LLAMACPP_BUILD` in `apps/desktop/src/engine_manager.rs` to a recent stable, rebuild |
+| **Linux: app won't launch, missing libwebkit** | WebKitGTK 4.1 isn't installed | `sudo apt install libwebkit2gtk-4.1-0` (Debian/Ubuntu) or your distro's equivalent |
+| **macOS: "App can't be opened because Apple cannot check it"** | Gatekeeper, unsigned binary | Right-click the binary -> Open -> Open Anyway |
+| **Pipeline runs but a connector errors with "extension not loaded"** | Lazy-loaded extension (e.g. `spatial`) downloaded mid-run and failed | Run `duckdb :memory: -c "INSTALL spatial; LOAD spatial;"` from a terminal to pre-install; relaunch Duckle |
+| **Chat panel says "AI engine not registered"** | Old version of Duckle before AI shipped (pre-v0.0.10) | Update to latest release |
+| **Duckie generates a pipeline but Insert doesn't put anything on the canvas** | Active pipeline tab has been closed; nothing to insert into | Open a pipeline (or create a new one) before clicking Insert |
+| **MotherDuck / Snowflake auth fails** | Token expired, or PAT lacks the role you're trying to use | Regenerate in the vendor UI; paste into the Connection in Duckle |
+| **Postgres `ATTACH` says "could not connect"** | Local SSL mode mismatch | Connection -> Advanced -> set SSL mode to `disable` for localhost / `require` for production |
+| **AI tests skip with no failure** | `DUCKLE_DUCKDB_BIN` isn't set | `export DUCKLE_DUCKDB_BIN=/path/to/duckdb` before `cargo test` |
+
+If you see something not listed, please [open an issue](https://github.com/SouravRoy-ETL/duckle/issues) with steps to reproduce + the relevant log line.
+
+---
+
+## CI / CD
+
+Duckle's CI pipeline runs on **both GitHub and GitLab** - the project mirrors to both. Push / pull-request / merge-request / tag events all trigger builds.
+
+| Trigger | GitHub Actions | GitLab CI |
+|---|---|---|
+| **Push to main or feature branch** | `.github/workflows/ci.yml` | `.gitlab-ci.yml` (`test` + `desktop-build` stages) |
+| **Pull request / merge request** | `.github/workflows/ci.yml` | `.gitlab-ci.yml` (same stages, `rules:` gate on MR events) |
+| **Tag `v*`** | `.github/workflows/release.yml` | `.gitlab-ci.yml` (`release` stage; uploads binaries to GitLab Releases) |
+
+What each pipeline does:
+
+1. **Frontend** - `npm ci` + `npm run build` (type-check + bundle)
+2. **Rust test matrix** - `cargo test --workspace` on Linux + macOS + Windows
+3. **Live-service integration tests** - PostgreSQL + MySQL + MinIO services spun up via Docker, real connector code runs against them
+4. **Desktop release-build smoke check** - `cargo build --release --features custom-protocol` then grep the binary for the embedded frontend JS chunk (catches the v0.0.7-class "binary loads devUrl" bug at PR time)
+5. **Format + clippy** - informational (does not block merge)
+6. **On tag**: build the Duckle binary on all three OSes, upload as release assets
+
+See [`.github/workflows/`](.github/workflows/) and [`.gitlab-ci.yml`](.gitlab-ci.yml) for the exact steps. The two pipelines are kept feature-equivalent so contributors can fork to either platform.
+
+### Releasing a new version
+
+```bash
+# 1. Bump version in apps/desktop/tauri.conf.json
+# 2. Commit
+git commit -am "Release: bump to vX.Y.Z"
+# 3. Tag + push
+git tag vX.Y.Z
+git push origin main vX.Y.Z
+# Both GitHub Actions and GitLab CI pick up the tag and build the
+# release artifacts automatically. Once green, the draft release on
+# GitHub gets the binaries uploaded; un-draft + mark Latest with:
+gh release edit vX.Y.Z --draft=false --latest
+```
 
 ---
 
