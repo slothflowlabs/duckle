@@ -663,7 +663,7 @@ export const PALETTE: Category[] = [
                     code('python', 'Python UDF', 'planned'),
                     code('rust', 'Rust UDF', 'planned'),
                     code('javascript', 'JavaScript UDF', 'planned'),
-                    code('shell', 'Shell Command', 'planned'),
+                    code('shell', 'Shell Command', 'available', 'Run an arbitrary shell command and emit one row with {stdout, stderr, exit_code, duration_ms}. Defaults to cmd.exe on Windows, /bin/sh on Unix. Optional timeout + workingDir. Cancellation kills the child process.'),
                     code('wasm', 'WebAssembly UDF', 'planned'),
                 ],
             },

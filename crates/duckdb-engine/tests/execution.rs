@@ -6779,3 +6779,82 @@ fn src_odata_follows_nextlink_across_pages() {
     ));
     assert_eq!(names, "Widget,Gadget,Sprocket");
 }
+
+/// code.shell: run a portable command, verify exit_code=0 and that
+/// stdout reaches the downstream sink. Picks a command that works on
+/// both cmd.exe (Windows) and /bin/sh (Unix).
+#[test]
+fn code_shell_captures_stdout_and_exit_code() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    // `echo hello` is identical on both cmd.exe and /bin/sh.
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.shell", json!({ "command": "echo hello" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "code.shell failed: {:?}", r.error);
+    let n = count(&format!("read_csv_auto('{}')", out));
+    assert_eq!(n, 1, "expected exactly one summary row, got {}", n);
+    let exit = scalar_string(&format!(
+        "SELECT exit_code FROM read_csv_auto('{}') LIMIT 1",
+        out
+    ));
+    assert_eq!(exit, "0");
+    // cmd.exe echoes with CRLF, sh with LF - both contain 'hello'.
+    let stdout = scalar_string(&format!(
+        "SELECT stdout FROM read_csv_auto('{}') LIMIT 1",
+        out
+    ));
+    assert!(
+        stdout.contains("hello"),
+        "stdout missing 'hello': {:?}",
+        stdout
+    );
+}
+
+/// code.shell with timeoutMs: pick a command that sleeps longer than
+/// the timeout and verify the engine kills the child + returns an
+/// error (rather than waiting forever).
+#[test]
+fn code_shell_timeout_kills_long_running_child() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    // Platform-portable sleep: ping -n 5 127.0.0.1 on Windows takes
+    // ~4s; sleep 5 on Unix takes 5s. Either is well past our 500ms
+    // timeout.
+    let cmd = if cfg!(windows) {
+        "ping -n 10 127.0.0.1 > NUL"
+    } else {
+        "sleep 5"
+    };
+    let started = std::time::Instant::now();
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.shell", json!({
+                "command": cmd,
+                "timeoutMs": 500,
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    let elapsed = started.elapsed();
+    assert_ne!(
+        r.status, "ok",
+        "code.shell should have failed via timeout, got: {:?}",
+        r
+    );
+    // We should have given up in under 2s (the 500ms timeout plus the
+    // poll-loop interval, plus engine overhead). If we hit 5s+ the
+    // timeout/kill plumbing is broken.
+    assert!(
+        elapsed.as_millis() < 3000,
+        "timeout took too long: {}ms",
+        elapsed.as_millis()
+    );
+}

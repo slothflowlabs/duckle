@@ -34,9 +34,9 @@ use plan::{
     KafkaSourceSpec, MilvusSourceSpec, MongoSinkSpec, MongoSourceSpec, NatsSinkSpec,
     NatsSourceSpec, OracleSinkSpec, OracleSourceSpec, PubSubSinkSpec, PubSubSourceSpec,
     QdrantSourceSpec, RabbitSinkSpec, RabbitSourceSpec, RedisSinkSpec, RedisSourceSpec,
-    RestPagination, RestSourceSpec, SnowflakeAuth, SnowflakeSinkSpec, SnowflakeSourceSpec,
-    SqlServerSinkSpec, SqlServerSourceSpec, WeaviateSourceSpec, WebhookSpec, XmlSinkSpec,
-    XmlSourceSpec,
+    RestPagination, RestSourceSpec, ShellSpec, SnowflakeAuth, SnowflakeSinkSpec,
+    SnowflakeSourceSpec, SqlServerSinkSpec, SqlServerSourceSpec, WeaviateSourceSpec, WebhookSpec,
+    XmlSinkSpec, XmlSourceSpec,
 };
 
 #[derive(Debug, Error)]
@@ -542,6 +542,8 @@ impl DuckdbEngine {
                     self.run_rabbit_source(&db_path, spec)
                 } else if let Some(spec) = stage.git_source.as_ref() {
                     self.run_git_source(&db_path, spec)
+                } else if let Some(spec) = stage.shell.as_ref() {
+                    self.run_shell(&db_path, spec)
                 } else if let Some(spec) = stage.upsert.as_ref() {
                     // Relational-DB upsert: DESCRIBE the upstream first to
                     // get the column list, then assemble INSERT ... ON
@@ -2263,6 +2265,89 @@ impl DuckdbEngine {
         Ok(format!(
             "git ({}): materialized {} row(s) into {}",
             mode, count, spec.node_id
+        ))
+    }
+
+    /// code.shell: run a single command and emit one row with the
+    /// captured stdout/stderr/exit_code/duration_ms. Shell defaults to
+    /// cmd.exe on Windows and /bin/sh on Unix; override per stage with
+    /// `shell`. Polls a kill-on-cancel loop every 100ms while the child
+    /// runs so a long-running command doesn't pin a cancelled pipeline.
+    fn run_shell(&self, db: &Path, spec: &ShellSpec) -> Result<String, EngineError> {
+        self.check_cancelled()?;
+        let started = std::time::Instant::now();
+        // Pick shell + argument form.
+        let (shell_cmd, flag) = match spec.shell.as_deref() {
+            Some(custom) => (custom.to_string(), "-c".to_string()),
+            None => {
+                if cfg!(windows) {
+                    ("cmd.exe".to_string(), "/C".to_string())
+                } else {
+                    ("/bin/sh".to_string(), "-c".to_string())
+                }
+            }
+        };
+        let mut cmd = std::process::Command::new(&shell_cmd);
+        cmd.arg(&flag).arg(&spec.command);
+        if let Some(dir) = &spec.working_dir {
+            cmd.current_dir(dir);
+        }
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| EngineError::Query(format!("shell spawn: {}", e)))?;
+        // Poll: cancel kills the child; timeout kills the child; else
+        // wait for natural exit.
+        let deadline = spec
+            .timeout_ms
+            .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms));
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => {}
+                Err(e) => {
+                    let _ = child.kill();
+                    return Err(EngineError::Query(format!("shell wait: {}", e)));
+                }
+            }
+            if self.cancel.load(Ordering::Relaxed) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(EngineError::Cancelled);
+            }
+            if let Some(d) = deadline {
+                if std::time::Instant::now() >= d {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(EngineError::Query(format!(
+                        "shell: timeout after {}ms",
+                        spec.timeout_ms.unwrap_or(0)
+                    )));
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let out = child
+            .wait_with_output()
+            .map_err(|e| EngineError::Query(format!("shell collect: {}", e)))?;
+        let duration_ms = started.elapsed().as_millis() as i64;
+        let exit_code = out.status.code().unwrap_or(-1);
+        let mut row = serde_json::Map::new();
+        row.insert(
+            "stdout".into(),
+            JsonValue::String(String::from_utf8_lossy(&out.stdout).into_owned()),
+        );
+        row.insert(
+            "stderr".into(),
+            JsonValue::String(String::from_utf8_lossy(&out.stderr).into_owned()),
+        );
+        row.insert("exit_code".into(), JsonValue::from(exit_code));
+        row.insert("duration_ms".into(), JsonValue::from(duration_ms));
+        materialize_jsonobjects_as_table(db, &spec.node_id, &[JsonValue::Object(row)])?;
+        Ok(format!(
+            "shell: exit {} in {}ms -> {}",
+            exit_code, duration_ms, spec.node_id
         ))
     }
 

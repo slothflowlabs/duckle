@@ -161,6 +161,8 @@ pub struct Stage {
     pub rabbit_source: Option<RabbitSourceSpec>,
     /// Local git repo reader (shells out to system `git`).
     pub git_source: Option<GitSourceSpec>,
+    /// Shell-exec stage (one-shot std::process::Command).
+    pub shell: Option<ShellSpec>,
     /// Milliseconds the executor sleeps before running this stage.
     /// Set by ctl.wait and ctl.throttle. None = no delay.
     pub wait_ms: Option<u64>,
@@ -556,6 +558,19 @@ pub struct GitSourceSpec {
     pub revision: String,
     pub path_filter: Option<String>,
     pub max_rows: u64,
+}
+
+/// code.shell: run a single shell command and emit one row with
+/// {stdout, stderr, exit_code, duration_ms}. Uses the platform's
+/// default interpreter (cmd.exe /C on Windows, /bin/sh -c on Unix);
+/// override with `shell` if needed. Cancellation kills the child.
+#[derive(Debug, Clone)]
+pub struct ShellSpec {
+    pub node_id: String,
+    pub command: String,
+    pub shell: Option<String>,
+    pub working_dir: Option<String>,
+    pub timeout_ms: Option<u64>,
 }
 
 /// snk.cassandra / snk.scylla: CQL INSERT via the scylla driver
@@ -1169,6 +1184,7 @@ fn build_stage(
     let mut rabbit_sink: Option<RabbitSinkSpec> = None;
     let mut rabbit_source: Option<RabbitSourceSpec> = None;
     let mut git_source: Option<GitSourceSpec> = None;
+    let mut shell: Option<ShellSpec> = None;
     let mut wait_ms: Option<u64> = None;
     // Advanced settings (universal across components, written by the
     // Properties Panel's Advanced tab). Engine honours them per stage.
@@ -2233,6 +2249,25 @@ fn build_stage(
                 .unwrap_or(1000),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "code.shell" {
+        // One-shot shell exec. Emits a single row with the captured
+        // stdout/stderr/exit_code/duration_ms so downstream stages can
+        // branch on success / parse output. Shell defaults to the
+        // platform interpreter; pass `shell` to override.
+        let command = string_prop(&props, "command")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: command required", component_id)))?;
+        shell = Some(ShellSpec {
+            node_id: node.id.clone(),
+            command,
+            shell: string_prop(&props, "shell").filter(|s| !s.is_empty()),
+            working_dir: string_prop(&props, "workingDir").filter(|s| !s.is_empty()),
+            timeout_ms: props
+                .get("timeoutMs")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.xml" {
         // XML row-path source. rowPath is a slash-separated element
         // walk from the root (e.g. "library/books/book"). Each match
@@ -2835,6 +2870,7 @@ fn build_stage(
         rabbit_sink,
         rabbit_source,
         git_source,
+        shell,
         wait_ms,
         retry_attempts,
         retry_backoff_ms,

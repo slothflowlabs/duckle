@@ -51,7 +51,7 @@ Duckle is in **early development**. The visual designer, the DuckDB execution en
 
 **Scope, stated plainly:** Duckle is a single-machine, embedded studio. If you outgrow one box, point Duckle's output at the system that scales. It will not pretend to be a cluster.
 
-The component palette ships **303 nodes** so the roadmap is visible in the product itself. As of the latest engine cut: **267 available**, **11 preview**, **25 planned**. Each node is tagged by availability:
+The component palette ships **303 nodes** so the roadmap is visible in the product itself. As of the latest engine cut: **268 available**, **11 preview**, **24 planned**. Each node is tagged by availability:
 
 - **Available** runs on the DuckDB engine today.
 - **Preview** is configurable in the designer now (drag, wire, set properties); execution is being wired engine-by-engine. This currently covers the AI transforms and some vector DB read sources.
@@ -161,7 +161,8 @@ The whole group runs today. Validators split their input: passing rows continue 
 | **Inline SQL** | Write a `SELECT`; the upstream node is exposed as `input`, and the result runs as a real materialized stage | Available |
 | **SQL Template** | Parameterized SQL with `${context.var}` substitution | Available |
 | **SQL routines** | Reusable, named SQL saved in the workspace and executable inside any pipeline | Available |
-| **Python / Rust / JavaScript / Shell / Wasm UDFs** | Custom-language stages | Planned |
+| **Shell** | Run any shell command; one output row with `{stdout, stderr, exit_code, duration_ms}`. Platform-aware default shell (cmd.exe on Windows, /bin/sh on Unix). Optional `timeoutMs` kills the child; cancellation does the same | Available |
+| **Python / Rust / JavaScript / Wasm UDFs** | Embedded-language stages | Planned |
 
 ### Sinks
 
