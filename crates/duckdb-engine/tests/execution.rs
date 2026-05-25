@@ -6608,6 +6608,54 @@ fn src_git_log_emits_one_row_per_commit() {
     assert_eq!(tweak, "Tweak: pipe | in subject");
 }
 
+/// src.ftp: env-gated integration test. Set DUCKLE_FTP_HOST (and
+/// optionally PORT/USER/PASSWORD/DIRECTORY) to a working FTP server
+/// holding the expected layout. Skips cleanly otherwise.
+#[test]
+fn src_ftp_lists_and_downloads_files_via_real_url() {
+    let engine = engine_or_skip!();
+    let host = match std::env::var("DUCKLE_FTP_HOST").ok() {
+        Some(h) if !h.is_empty() => h,
+        _ => {
+            eprintln!("skipping: set DUCKLE_FTP_HOST to run FTP tests");
+            return;
+        }
+    };
+    let port = std::env::var("DUCKLE_FTP_PORT")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(21);
+    let user = std::env::var("DUCKLE_FTP_USER").unwrap_or_else(|_| "anonymous".into());
+    let password = std::env::var("DUCKLE_FTP_PASSWORD").unwrap_or_else(|_| "anonymous@".into());
+    let directory = std::env::var("DUCKLE_FTP_DIRECTORY").unwrap_or_else(|_| "/".into());
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "files.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("f", "src.ftp", json!({
+                "host": host,
+                "port": port,
+                "user": user,
+                "password": password,
+                "directory": directory,
+                "maxFiles": 10,
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "f", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "src.ftp failed: {:?}", r.error);
+    let n = count(&format!("read_csv_auto('{}')", out));
+    assert!(n >= 1, "expected at least 1 file, got {}", n);
+    // Every row should have a base64-encoded content blob.
+    let any_empty = scalar_string(&format!(
+        "SELECT count(*) FROM read_csv_auto('{}') WHERE length(content_b64) = 0",
+        out
+    ));
+    assert_eq!(any_empty, "0", "every file should have non-empty content_b64");
+}
+
 /// src.git mode=files: list the tracked tree at HEAD and verify each
 /// file lands as one row with mode/type/hash/size/path columns.
 #[test]

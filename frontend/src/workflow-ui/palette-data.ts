@@ -192,7 +192,7 @@ export const PALETTE: Category[] = [
                 id: 'src.misc',
                 label: 'Other',
                 components: [
-                    src('ftp', 'SFTP / FTP', 'planned'),
+                    src('ftp', 'FTP', 'available', 'List + download files from an FTP server via the pure-Rust suppaftp client. Glob pattern filter (`*`, `?`); each file becomes one row {filename, size, modified, content_b64}. Use DuckDB `from_base64(content_b64)` downstream for the raw bytes. SFTP is a separate protocol and a separate component.'),
                     src('http', 'HTTP', 'available', 'Read CSV / Parquet / JSON from any HTTP(S) URL via httpfs'),
                     src('email', 'Email (IMAP)', 'planned'),
                     src('git', 'Git Repository', 'available', 'Read commit log or file tree from a local git working copy. Shells out to the system `git` CLI - no extra Rust dep. mode=log emits {hash, short_hash, author_name, author_email, date, subject}; mode=files emits {mode, type, hash, size, path}.'),

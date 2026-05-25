@@ -30,11 +30,11 @@ pub use plan::{CompiledPipeline, PipelineDoc, Stage, StageKind};
 use plan::{
     AvroSinkSpec, AvroSourceSpec, CassandraSinkSpec, CassandraSourceSpec, ClickHouseSinkSpec,
     ClickHouseSourceSpec, DatabricksSinkSpec, DatabricksSourceSpec, ElasticSourceSpec,
-    FormatFileSinkSpec, FormatFileSourceSpec, FormatKind, GitSourceSpec, KafkaSinkSpec,
-    KafkaSourceSpec, MilvusSourceSpec, MongoSinkSpec, MongoSourceSpec, NatsSinkSpec,
-    NatsSourceSpec, OracleSinkSpec, OracleSourceSpec, PubSubSinkSpec, PubSubSourceSpec,
-    QdrantSourceSpec, RabbitSinkSpec, RabbitSourceSpec, RedisSinkSpec, RedisSourceSpec,
-    RestPagination, RestResponseFormat, RestSourceSpec, ShellSpec, SnowflakeAuth,
+    FormatFileSinkSpec, FormatFileSourceSpec, FormatKind, FtpSourceSpec, GitSourceSpec,
+    KafkaSinkSpec, KafkaSourceSpec, MilvusSourceSpec, MongoSinkSpec, MongoSourceSpec,
+    NatsSinkSpec, NatsSourceSpec, OracleSinkSpec, OracleSourceSpec, PubSubSinkSpec,
+    PubSubSourceSpec, QdrantSourceSpec, RabbitSinkSpec, RabbitSourceSpec, RedisSinkSpec,
+    RedisSourceSpec, RestPagination, RestResponseFormat, RestSourceSpec, ShellSpec, SnowflakeAuth,
     SnowflakeSinkSpec, SnowflakeSourceSpec, SqlServerSinkSpec, SqlServerSourceSpec,
     WeaviateSourceSpec, WebhookSpec, XmlSinkSpec, XmlSourceSpec,
 };
@@ -544,6 +544,8 @@ impl DuckdbEngine {
                     self.run_git_source(&db_path, spec)
                 } else if let Some(spec) = stage.shell.as_ref() {
                     self.run_shell(&db_path, spec)
+                } else if let Some(spec) = stage.ftp_source.as_ref() {
+                    self.run_ftp_source(&db_path, spec)
                 } else if let Some(spec) = stage.upsert.as_ref() {
                     // Relational-DB upsert: DESCRIBE the upstream first to
                     // get the column list, then assemble INSERT ... ON
@@ -2273,6 +2275,85 @@ impl DuckdbEngine {
         Ok(format!(
             "shell: exit {} in {}ms -> {}",
             exit_code, duration_ms, spec.node_id
+        ))
+    }
+
+    /// src.ftp: connect, login, list `directory`, filter by optional
+    /// glob `pattern`, download up to `max_files`. Each file becomes a
+    /// row {filename, size, content_b64, modified}. Content is base64-
+    /// encoded so the row stays JSON-clean for downstream stages /
+    /// CSV sinks; downstream can use `from_base64()` in DuckDB if it
+    /// needs raw bytes back.
+    fn run_ftp_source(&self, db: &Path, spec: &FtpSourceSpec) -> Result<String, EngineError> {
+        use base64::engine::general_purpose::STANDARD as B64;
+        use base64::Engine as _;
+        use suppaftp::FtpStream;
+        self.check_cancelled()?;
+        let addr = format!("{}:{}", spec.host, spec.port);
+        let mut ftp = FtpStream::connect(&addr)
+            .map_err(|e| EngineError::Query(format!("ftp connect {}: {}", addr, e)))?;
+        if spec.secure {
+            return Err(EngineError::Config(
+                "src.ftp: secure=true (FTPS) requires the rustls TLS wrapper which isn't wired up yet. Use secure=false (plain FTP) or wait for the FTPS-explicit feature.".into(),
+            ));
+        }
+        ftp.login(&spec.user, &spec.password)
+            .map_err(|e| EngineError::Query(format!("ftp login: {}", e)))?;
+        if !spec.directory.is_empty() && spec.directory != "/" {
+            ftp.cwd(&spec.directory)
+                .map_err(|e| EngineError::Query(format!("ftp cwd {}: {}", spec.directory, e)))?;
+        }
+        let names = ftp
+            .nlst(None)
+            .map_err(|e| EngineError::Query(format!("ftp nlst: {}", e)))?;
+        let mut rows: Vec<JsonValue> = Vec::new();
+        for name in names.iter() {
+            self.check_cancelled()?;
+            if rows.len() as u64 >= spec.max_files {
+                break;
+            }
+            if let Some(p) = &spec.pattern {
+                if !glob_match(p, name) {
+                    continue;
+                }
+            }
+            let size = ftp.size(name).ok().map(|n| n as i64);
+            // mdtm returns NaiveDateTime in UTC by the FTP spec.
+            let modified = ftp
+                .mdtm(name)
+                .ok()
+                .map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+            let bytes = match ftp.retr_as_buffer(name) {
+                Ok(cur) => cur.into_inner(),
+                Err(e) => {
+                    return Err(EngineError::Query(format!(
+                        "ftp retr {}: {}",
+                        name, e
+                    )))
+                }
+            };
+            let mut row = serde_json::Map::new();
+            row.insert("filename".into(), JsonValue::String(name.clone()));
+            row.insert(
+                "size".into(),
+                size.map(JsonValue::from).unwrap_or(JsonValue::Null),
+            );
+            row.insert(
+                "modified".into(),
+                modified.map(JsonValue::String).unwrap_or(JsonValue::Null),
+            );
+            row.insert(
+                "content_b64".into(),
+                JsonValue::String(B64.encode(&bytes)),
+            );
+            rows.push(JsonValue::Object(row));
+        }
+        let _ = ftp.quit();
+        let count = rows.len();
+        materialize_jsonobjects_as_table(db, &spec.node_id, &rows)?;
+        Ok(format!(
+            "ftp: materialized {} file(s) from {}:{} into {}",
+            count, spec.host, spec.port, spec.node_id
         ))
     }
 
@@ -4983,6 +5064,41 @@ fn parse_git_log(bytes: &[u8]) -> Vec<JsonValue> {
     out
 }
 
+/// Tiny shell-style glob matcher for src.ftp's pattern filter.
+/// Supports `*` (zero or more chars) and `?` (one char). No bracket
+/// expressions, no escape - matches the common ETL `orders_*.csv`
+/// shape without pulling in a glob crate.
+fn glob_match(pattern: &str, name: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let n: Vec<char> = name.chars().collect();
+    fn go(p: &[char], n: &[char]) -> bool {
+        if p.is_empty() {
+            return n.is_empty();
+        }
+        match p[0] {
+            '*' => {
+                // Skip consecutive stars, then try every split.
+                let mut i = 1;
+                while i < p.len() && p[i] == '*' {
+                    i += 1;
+                }
+                if i == p.len() {
+                    return true;
+                }
+                for j in 0..=n.len() {
+                    if go(&p[i..], &n[j..]) {
+                        return true;
+                    }
+                }
+                false
+            }
+            '?' => !n.is_empty() && go(&p[1..], &n[1..]),
+            c => !n.is_empty() && n[0] == c && go(&p[1..], &n[1..]),
+        }
+    }
+    go(&p, &n)
+}
+
 /// Parse `git ls-tree -r -z --long <rev>` output. Records are NUL-
 /// separated; each record is `<mode> <type> <hash> <size>\t<path>`.
 fn parse_git_ls_tree(bytes: &[u8], max_rows: usize) -> Vec<JsonValue> {
@@ -5015,4 +5131,31 @@ fn parse_git_ls_tree(bytes: &[u8], max_rows: usize) -> Vec<JsonValue> {
         out.push(JsonValue::Object(row));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::glob_match;
+
+    #[test]
+    fn glob_match_handles_star_and_question() {
+        // exact matches
+        assert!(glob_match("orders.csv", "orders.csv"));
+        assert!(!glob_match("orders.csv", "orders.json"));
+        // leading and trailing star
+        assert!(glob_match("*.csv", "orders.csv"));
+        assert!(glob_match("orders_*.csv", "orders_2025-05.csv"));
+        assert!(!glob_match("orders_*.csv", "shipments_2025.csv"));
+        // star matches empty
+        assert!(glob_match("orders*.csv", "orders.csv"));
+        // ? is exactly one char
+        assert!(glob_match("v?.txt", "v1.txt"));
+        assert!(!glob_match("v?.txt", "v.txt"));
+        assert!(!glob_match("v?.txt", "v10.txt"));
+        // multiple stars collapse
+        assert!(glob_match("**.csv", "orders.csv"));
+        // bare star matches anything (including empty)
+        assert!(glob_match("*", ""));
+        assert!(glob_match("*", "anything"));
+    }
 }

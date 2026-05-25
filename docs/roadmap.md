@@ -6,10 +6,10 @@ reel; this is the full ledger.
 
 The palette currently carries **303 components**, broken down:
 
-- **269 available** - executes on the DuckDB engine today
+- **270 available** - executes on the DuckDB engine today
 - **11 preview** - configurable in the designer (drag, wire, set
   properties); execution is being wired engine-by-engine
-- **23 planned** - reserved in the palette so the roadmap is visible,
+- **22 planned** - reserved in the palette so the roadmap is visible,
   not yet executable
 
 If you drop a planned or preview tile and try to run, the executor
@@ -70,7 +70,7 @@ OAuth-heavy vendors need a stored-credential flow + token-refresh worker.
 | `src.jdbc` / `snk.jdbc` | Generic JDBC bridges to Java - design question whether to bundle a JVM, ship a separate sidecar, or skip; deferred until a real user need |
 | `src.couchdb` | Standard REST source pattern; not yet wrapped |
 | `src.email` | IMAP/POP3 - more useful as a trigger source than a batch read |
-| `src.ftp` | SFTP / FTP read - DuckDB already reads HTTPS via httpfs; FTP is rarer |
+| `src.sftp` | SFTP read (SSH-based, different protocol from FTP) - separate component, requires russh-sftp or ssh2; not yet shipped |
 | `src.webhook` | Inbound HTTP listener - Duckle is desktop-only, not a server; needs a tunneling story |
 | `src.clipboard` | Desktop-only, niche |
 | `src.airtable` / `src.notion` etc. | All **available** via the simple-auth REST aliases - see SaaS section in the README |

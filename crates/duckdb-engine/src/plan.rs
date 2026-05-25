@@ -163,6 +163,8 @@ pub struct Stage {
     pub git_source: Option<GitSourceSpec>,
     /// Shell-exec stage (one-shot std::process::Command).
     pub shell: Option<ShellSpec>,
+    /// FTP / FTPS file downloader.
+    pub ftp_source: Option<FtpSourceSpec>,
     /// Milliseconds the executor sleeps before running this stage.
     /// Set by ctl.wait and ctl.throttle. None = no delay.
     pub wait_ms: Option<u64>,
@@ -571,6 +573,23 @@ pub struct ShellSpec {
     pub shell: Option<String>,
     pub working_dir: Option<String>,
     pub timeout_ms: Option<u64>,
+}
+
+/// src.ftp: download files from an FTP / FTPS server and emit one row
+/// per file with {filename, size, content, modified}. Synchronous
+/// connection via the suppaftp crate. SFTP is a separate protocol
+/// (SSH-based) and a separate component.
+#[derive(Debug, Clone)]
+pub struct FtpSourceSpec {
+    pub node_id: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub password: String,
+    pub secure: bool,
+    pub directory: String,
+    pub pattern: Option<String>,
+    pub max_files: u64,
 }
 
 /// snk.cassandra / snk.scylla: CQL INSERT via the scylla driver
@@ -1200,6 +1219,7 @@ fn build_stage(
     let mut rabbit_source: Option<RabbitSourceSpec> = None;
     let mut git_source: Option<GitSourceSpec> = None;
     let mut shell: Option<ShellSpec> = None;
+    let mut ftp_source: Option<FtpSourceSpec> = None;
     let mut wait_ms: Option<u64> = None;
     // Advanced settings (universal across components, written by the
     // Properties Panel's Advanced tab). Engine honours them per stage.
@@ -2283,6 +2303,41 @@ fn build_stage(
                 .filter(|n| *n > 0),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.ftp" {
+        // FTP / FTPS list+download. List files at `directory`, filter
+        // by optional glob `pattern` (* and ? wildcards), download
+        // each up to `maxFiles`. Each file becomes a row with the
+        // bytes as a base64 string in `content` (so the row is JSON-
+        // serializable and round-trips through DuckDB cleanly).
+        let host = string_prop(&props, "host")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: host required", component_id)))?;
+        ftp_source = Some(FtpSourceSpec {
+            node_id: node.id.clone(),
+            host,
+            port: props
+                .get("port")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0 && *n < 65536)
+                .map(|n| n as u16)
+                .unwrap_or(21),
+            user: string_prop(&props, "user").unwrap_or_else(|| "anonymous".into()),
+            password: string_prop(&props, "password").unwrap_or_else(|| "anonymous@".into()),
+            secure: props
+                .get("secure")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            directory: string_prop(&props, "directory")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "/".into()),
+            pattern: string_prop(&props, "pattern").filter(|s| !s.is_empty()),
+            max_files: props
+                .get("maxFiles")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(100),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.xml" {
         // XML row-path source. rowPath is a slash-separated element
         // walk from the root (e.g. "library/books/book"). Each match
@@ -2924,6 +2979,7 @@ fn build_stage(
         rabbit_source,
         git_source,
         shell,
+        ftp_source,
         wait_ms,
         retry_attempts,
         retry_backoff_ms,
