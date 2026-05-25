@@ -6,10 +6,10 @@ reel; this is the full ledger.
 
 The palette currently carries **312 components**, broken down:
 
-- **290 available** - executes on the DuckDB engine today
+- **291 available** - executes on the DuckDB engine today
 - **5 preview** - configurable in the designer (drag, wire, set
   properties); execution is being wired engine-by-engine
-- **17 planned** - reserved in the palette so the roadmap is visible,
+- **16 planned** - reserved in the palette so the roadmap is visible,
   not yet executable
 
 If you drop a planned or preview tile and try to run, the executor
@@ -82,7 +82,6 @@ Capabilities table in the README.
 
 | Component | Notes |
 |---|---|
-| `src.dynamodb` | AWS SDK for Rust; non-trivial |
 
 `src.redis`, `snk.redis`, and `src.couchdb` shipped - see the
 Capabilities table in the README.

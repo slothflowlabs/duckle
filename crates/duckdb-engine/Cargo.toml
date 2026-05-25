@@ -27,6 +27,10 @@ ureq = { version = "2.10", default-features = false, features = ["tls", "json"] 
 jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
 rsa = { version = "0.9", features = ["pem", "sha2"] }
 sha2 = "0.10"
+# HMAC-SHA256 for AWS SigV4 signing in src.dynamodb (and any future
+# AWS services we add via direct HTTP). Avoids the aws-sdk-rust
+# dep tree (300+ services we don't need).
+hmac = "0.12"
 base64 = "0.22"
 # MongoDB. The official driver is async-only; we use a minimal tokio
 # rt feature and call .block_on() from the synchronous executor.

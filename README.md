@@ -51,7 +51,7 @@ Duckle is in **early development**. The visual designer, the DuckDB execution en
 
 **Scope, stated plainly:** Duckle is a single-machine, embedded studio. If you outgrow one box, point Duckle's output at the system that scales. It will not pretend to be a cluster.
 
-The component palette ships **312 nodes** so the roadmap is visible in the product itself. As of the latest engine cut: **290 available**, **5 preview**, **17 planned**. Each node is tagged by availability:
+The component palette ships **312 nodes** so the roadmap is visible in the product itself. As of the latest engine cut: **291 available**, **5 preview**, **16 planned**. Each node is tagged by availability:
 
 - **Available** runs on the DuckDB engine today.
 - **Preview** is configurable in the designer now (drag, wire, set properties); execution is being wired engine-by-engine. This currently covers the AI transforms and some vector DB read sources.
@@ -105,8 +105,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | **APIs and SaaS** | **OData v4** (thin alias over src.rest; default responsePath `/value` + follows `@odata.nextLink` across pages; works with SAP, D365, Microsoft Graph) | Available |
 | **APIs and SaaS** | **SOAP** / **generic XML APIs** (thin alias; POST + `text/xml` defaults; `responseFormat=xml` walks the element path into the response body. SOAPAction header settable via `soapAction` prop. Namespace prefixes (`soap:Envelope`) match local-name in the row path) | Available |
 | **APIs and SaaS** | gRPC, Google Sheets, Excel Online, webhook listener, more SaaS vendors | Planned |
-| **NoSQL and search** | **MongoDB** (official driver), **Cassandra / ScyllaDB** (CQL), **Elasticsearch / OpenSearch** (from+size + search_after), **Redis** (SCAN + GET via the sync client), **CouchDB** (via the `_all_docs` REST endpoint) | Available |
-| **NoSQL and search** | DynamoDB | Planned |
+| **NoSQL and search** | **MongoDB** (official driver), **Cassandra / ScyllaDB** (CQL), **Elasticsearch / OpenSearch** (from+size + search_after), **Redis** (SCAN + GET via the sync client), **CouchDB** (via the `_all_docs` REST endpoint), **DynamoDB** (Scan via direct HTTP + AWS SigV4 signing; auto-unwraps typed-attribute response shape; pagination via LastEvaluatedKey) | Available |
 | **Repos and engineering data** | **Git** (commit log or file tree from a local working copy; shells out to the system `git` CLI - no Rust dep) | Available |
 | **File transfer** | **FTP** (list + download via the pure-Rust `suppaftp` client; glob filter; each file becomes one row with base64-encoded content). SFTP is a separate protocol and a separate component. | Available |
 | **Desktop** | **Clipboard** (read system clipboard via pure-Rust `arboard`; auto-detects JSON-array shape and unfolds it into rows). Desktop-only by design - fails clearly on headless systems. | Available |

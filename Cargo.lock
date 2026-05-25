@@ -1798,6 +1798,7 @@ dependencies = [
  "duckle-metadata",
  "duckle-plugin-sdk",
  "futures-util",
+ "hmac",
  "imap",
  "jsonwebtoken",
  "lapin",
