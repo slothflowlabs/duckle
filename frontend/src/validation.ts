@@ -110,10 +110,30 @@ export function validatePipeline(
             }
         }
 
-        // Filter sanity - predicate non-empty if it's a filter
+        // Filter sanity - warn only when the predicate is genuinely empty.
+        // The visual builder writes `predicate` as an object that always
+        // carries a compiled `.sql` string (raw mode carries `rawSql`), and
+        // the engine also accepts a top-level `filterSql`. The old check only
+        // handled a plain string, so any visually-built predicate (the common
+        // case) was wrongly reported as "empty - every row will pass" even
+        // though it filtered correctly. This now mirrors the engine's
+        // filter_predicate_sql + filterSql fallback exactly.
         if (node.data.componentId === 'xf.filter') {
-            const pred =
-                typeof props.predicate === 'string' ? props.predicate.trim() : '';
+            const raw = props.predicate;
+            let pred = '';
+            if (typeof raw === 'string') {
+                pred = raw.trim();
+            } else if (raw && typeof raw === 'object') {
+                const o = raw as { sql?: unknown; rawSql?: unknown; mode?: unknown };
+                if (typeof o.sql === 'string' && o.sql.trim()) {
+                    pred = o.sql.trim();
+                } else if (o.mode === 'raw' && typeof o.rawSql === 'string') {
+                    pred = o.rawSql.trim();
+                }
+            }
+            if (!pred && typeof props.filterSql === 'string') {
+                pred = props.filterSql.trim();
+            }
             if (!pred) {
                 push({
                     severity: 'warning',
