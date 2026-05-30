@@ -4596,13 +4596,29 @@ fn build_distinct(inputs: &NodeInputs, props: &JsonValue) -> Result<String, Stri
         let on = cols.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
         // DISTINCT ON keeps the first row per group in ORDER BY order; with
         // no ORDER BY the surviving non-key columns are nondeterministic
-        // (worse under preserve_insertion_order=false). ORDER BY ALL breaks
-        // ties across every column, so the kept row is the deterministic
-        // per-group minimum instead of an arbitrary one.
+        // (worse under preserve_insertion_order=false).
+        //
+        // Default ORDER BY ALL breaks ties across every column, so the kept
+        // row is the deterministic per-group minimum - but it forces a full
+        // sort on every column (audit B10: ~1.6s vs ~0.01s on 10M rows, a
+        // >100x cost). An optional `orderBy` prop sorts only the key columns
+        // plus the chosen tiebreak columns, keeping determinism at a
+        // fraction of the cost. The default is unchanged (ORDER BY ALL) so
+        // existing pipelines keep their exact current survivor + ordering.
+        let tiebreak = columns_list(props, "orderBy");
+        let order_clause = if tiebreak.is_empty() {
+            "ORDER BY ALL".to_string()
+        } else {
+            // DISTINCT ON requires its keys to lead the ORDER BY; append the
+            // tiebreak columns after them for a deterministic survivor.
+            let tb = tiebreak.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
+            format!("ORDER BY {}, {}", on, tb)
+        };
         Ok(format!(
-            "SELECT DISTINCT ON ({}) * FROM {} ORDER BY ALL",
+            "SELECT DISTINCT ON ({}) * FROM {} {}",
             on,
-            quote_ident(upstream)
+            quote_ident(upstream),
+            order_clause
         ))
     }
 }
@@ -9393,6 +9409,31 @@ mod tests {
             sql.contains("ORDER BY \"id\" OFFSET 5"),
             "skip with orderBy should sort before offset, got: {}",
             sql
+        );
+    }
+
+    #[test]
+    fn distinct_orderby_prop_replaces_order_by_all() {
+        // audit B10: keyed DISTINCT defaults to ORDER BY ALL (deterministic
+        // but a full sort, >100x slower). An `orderBy` prop sorts only the
+        // keys + tiebreak columns; default is unchanged.
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["up".into()]);
+        let default_sql = build_distinct(&ni, &serde_json::json!({"columns": ["status"]})).unwrap();
+        assert!(
+            default_sql.contains("ORDER BY ALL"),
+            "default keyed distinct must keep ORDER BY ALL, got: {}",
+            default_sql
+        );
+        let fast_sql = build_distinct(
+            &ni,
+            &serde_json::json!({"columns": ["status"], "orderBy": ["amount"]}),
+        )
+        .unwrap();
+        assert!(
+            fast_sql.contains("ORDER BY \"status\", \"amount\"") && !fast_sql.contains("ORDER BY ALL"),
+            "orderBy prop must sort keys+tiebreak, not ALL, got: {}",
+            fast_sql
         );
     }
 
