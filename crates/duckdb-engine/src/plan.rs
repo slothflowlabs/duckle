@@ -10273,7 +10273,7 @@ mod tests {
             "v",
         );
         assert!(
-            sql.contains("FORMAT CSV") && sql.contains("DELIMITER '|'") && sql.contains("NULLSTR 'NA'"),
+            sql.contains("FORMAT CSV") && sql.contains("DELIM '|'") && sql.contains("NULLSTR 'NA'"),
             "cloud csv sink must honor options, got: {}",
             sql
         );
