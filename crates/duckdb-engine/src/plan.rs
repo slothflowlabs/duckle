@@ -1701,13 +1701,8 @@ fn validate_column_refs(
         "xf.url.parse" | "xf.ip.parse" => {
             check_single_col(p)?;
         }
-        "xf.cdc.scd1" | "xf.cdc.scd2" | "xf.cdc.compare" | "xf.cdc.diff" => {
+        "xf.cdc.scd1" | "xf.cdc.scd2" | "xf.cdc.compare" => {
             check_list("naturalKey")?;
-            // Diff Detect needs compareColumns too: with none, build_cdc_diff's
-            // `updated` CASE arm is empty, so every matched-key changed row is
-            // classified 'unchanged' and dropped by the default
-            // rejectUnchanged=true - silently losing all updates (audit B3,
-            // HIGH). Fail loud here, like the other cdc transforms.
             check_list("compareColumns")?;
         }
         // Window family: partitionBy + orderBy are upstream columns.
@@ -5325,6 +5320,18 @@ fn build_cdc_diff(inputs: &NodeInputs, props: &JsonValue) -> Result<String, Stri
         return Err("Diff Detect needs natural key columns".to_string());
     }
     let compares = columns_list(props, "compareColumns");
+    // Require compareColumns: with none, the `updated` CASE arm below is
+    // empty, so every matched-key row - changed or not - falls through to
+    // 'unchanged' and is dropped by the default rejectUnchanged=true,
+    // silently losing all updates (audit B3, HIGH). This guard always
+    // fires (unlike the schema-gated check_list path in compile()).
+    if compares.is_empty() {
+        return Err(
+            "Diff Detect needs compare columns (the columns to check for changes); \
+             without them every changed row would be dropped as 'unchanged'"
+                .to_string(),
+        );
+    }
     let reject_unchanged = props
         .get("rejectUnchanged")
         .and_then(|v| v.as_bool())
