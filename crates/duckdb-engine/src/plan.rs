@@ -5560,9 +5560,15 @@ fn build_scd1(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> 
         })
         .collect::<Vec<_>>()
         .join(" AND ");
+    // UNION ALL BY NAME (not positional): the retained unmatched-previous
+    // rows must align to `current` by column NAME. Positional UNION ALL
+    // silently swaps values when the two inputs present columns in a
+    // different order (audit B3, DuckDB-verified). SCD1's documented
+    // precondition is that both inputs share a schema; BY NAME additionally
+    // tolerates column-order differences instead of corrupting them.
     Ok(format!(
         "SELECT * FROM {cur} \
-         UNION ALL \
+         UNION ALL BY NAME \
          SELECT * FROM {prev} p WHERE NOT EXISTS (SELECT 1 FROM {cur} c WHERE {key_eq})",
         cur = quote_ident(cur),
         prev = quote_ident(prev),
@@ -9039,6 +9045,51 @@ mod tests {
             filter.sql.contains("CREATE OR REPLACE TABLE \"f1__reject\""),
             "multi-consumer reject must materialize a table, got: {}",
             filter.sql
+        );
+    }
+
+    #[test]
+    fn scd1_uses_union_all_by_name() {
+        // Regression (audit B3): SCD1 retains unmatched-previous rows via
+        // UNION ALL, which must align cur/prev by column NAME. Positional
+        // UNION ALL silently swaps values when the two inputs present
+        // columns in a different order.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"cur","position":{"x":0,"y":0},"data":{
+                  "label":"cur","componentId":"src.csv",
+                  "properties":{"path":"/tmp/cur.csv","hasHeader":true}}},
+                {"id":"prev","position":{"x":0,"y":0},"data":{
+                  "label":"prev","componentId":"src.csv",
+                  "properties":{"path":"/tmp/prev.csv","hasHeader":true}}},
+                {"id":"scd","position":{"x":0,"y":0},"data":{
+                  "label":"SCD1","componentId":"xf.cdc.scd1",
+                  "properties":{"naturalKey":["id"]}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"out","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/o.parquet"}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"cur","target":"scd",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"prev","sourceHandle":"main","target":"scd","targetHandle":"lookup",
+                  "data":{"connectionType":"lookup"}},
+                {"id":"e3","source":"scd","target":"k1",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let scd = compiled
+            .stages
+            .iter()
+            .find(|s| s.node_id == "scd")
+            .expect("scd1 stage");
+        assert!(
+            scd.sql.contains("UNION ALL BY NAME"),
+            "SCD1 must align by name, got: {}",
+            scd.sql
         );
     }
 
