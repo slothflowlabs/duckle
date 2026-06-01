@@ -1552,7 +1552,7 @@ impl DuckdbEngine {
                             let v = row_obj
                                 .and_then(|o| o.get(c))
                                 .unwrap_or(&JsonValue::Null);
-                            json_to_sql_literal(v)
+                            sql_literal(v, None, Dialect::JsonNative)
                         })
                         .collect();
                     format!("({})", vals.join(", "))
@@ -1659,6 +1659,12 @@ impl DuckdbEngine {
             .join(", ");
         let conn = oracle::Connection::connect(&spec.user, &spec.password, &spec.connect)
             .map_err(|e| EngineError::Query(format!("oracle connect: {}", e)))?;
+        // Upstream DuckDB column types, used both to auto-create the table
+        // and (issue: dialect-mismatch) to render Oracle-correct literals in
+        // the INSERT loop (bool -> 1/0, DATE/TIMESTAMP strings -> TO_DATE /
+        // TO_TIMESTAMP). Kept in fn scope so the insert loop can see it.
+        let col_types: std::collections::HashMap<String, String> =
+            describe_columns(self, db, &spec.from_view).into_iter().collect();
         // Auto-create the target table if it doesn't exist yet, inferring
         // column types from the upstream DuckDB view. The sink otherwise
         // only INSERTs, so loading into a not-yet-created table failed
@@ -1666,8 +1672,6 @@ impl DuckdbEngine {
         // IF NOT EXISTS, so wrap it in a PL/SQL block that swallows
         // ORA-00955 (name is already used) and re-raises anything else.
         {
-            let col_types: std::collections::HashMap<String, String> =
-                describe_columns(self, db, &spec.from_view).into_iter().collect();
             let col_defs = cols
                 .iter()
                 .map(|c| {
@@ -1708,7 +1712,7 @@ impl DuckdbEngine {
                         let v = row_obj
                             .and_then(|o| o.get(c))
                             .unwrap_or(&JsonValue::Null);
-                        json_to_sql_literal(v)
+                        sql_literal(v, col_types.get(c).map(|s| s.as_str()), Dialect::Oracle)
                     })
                     .collect();
                 sql.push_str(&format!(
@@ -2190,7 +2194,7 @@ impl DuckdbEngine {
                             let v = row_obj
                                 .and_then(|o| o.get(c))
                                 .unwrap_or(&JsonValue::Null);
-                            json_to_sql_literal(v)
+                            sql_literal(v, None, Dialect::Cassandra)
                         })
                         .collect();
                     let stmt = format!(
@@ -5169,7 +5173,11 @@ impl DuckdbEngine {
                                     let v = row_obj
                                         .and_then(|o| o.get(c))
                                         .unwrap_or(&JsonValue::Null);
-                                    json_to_sql_literal(v)
+                                    sql_literal(
+                                        v,
+                                        col_types.get(c).map(|s| s.as_str()),
+                                        Dialect::SqlServer,
+                                    )
                                 })
                                 .collect();
                             format!("({})", vals.join(", "))
@@ -6237,7 +6245,7 @@ impl DuckdbEngine {
                             let v = row_obj
                                 .and_then(|o| o.get(c))
                                 .unwrap_or(&JsonValue::Null);
-                            json_to_sql_literal(v)
+                            sql_literal(v, None, Dialect::JsonNative)
                         })
                         .collect();
                     format!("({})", vals.join(", "))
@@ -7435,18 +7443,86 @@ fn describe_columns(engine: &DuckdbEngine, db: &Path, view: &str) -> Vec<(String
         .collect()
 }
 
-fn json_to_sql_literal(v: &JsonValue) -> String {
+/// SQL dialect for literal rendering in driver sinks. JsonNative covers
+/// Snowflake + Databricks (both accept `TRUE`/`FALSE` and `PARSE_JSON(...)`);
+/// the others need dialect-specific forms (live-confirmed on Oracle 21c,
+/// SQL Server 2022, Cassandra 5).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Dialect {
+    JsonNative,
+    Oracle,
+    SqlServer,
+    Cassandra,
+}
+
+/// Render a JSON cell value as a SQL literal for `dialect`, using the
+/// target column's DuckDB type (`target_type`, when the sink knows it) to
+/// pick a correct form. The universal-DuckDB rendering broke non-DuckDB
+/// sinks: `TRUE`/`FALSE` and `PARSE_JSON(...)` are rejected by Oracle
+/// (ORA-00984 / ORA-00904) and SQL Server (Msg 207 / 195), and Oracle does
+/// not implicitly parse ISO date/timestamp strings (ORA-01861/01843).
+/// Snowflake + Databricks (JsonNative) keep the original behavior exactly.
+fn sql_literal(v: &JsonValue, target_type: Option<&str>, dialect: Dialect) -> String {
+    let quote = |s: &str| format!("'{}'", s.replace('\'', "''"));
     match v {
         JsonValue::Null => "NULL".into(),
-        JsonValue::Bool(true) => "TRUE".into(),
-        JsonValue::Bool(false) => "FALSE".into(),
+        JsonValue::Bool(b) => match dialect {
+            // Oracle has no boolean literal in INSERT before 23c; SQL Server
+            // BIT takes 1/0. Cassandra CQL and Snowflake/Databricks accept
+            // real booleans (CQL is lowercase).
+            Dialect::Oracle | Dialect::SqlServer => if *b { "1" } else { "0" }.into(),
+            Dialect::Cassandra => if *b { "true" } else { "false" }.into(),
+            Dialect::JsonNative => if *b { "TRUE" } else { "FALSE" }.into(),
+        },
         JsonValue::Number(n) => n.to_string(),
-        JsonValue::String(s) => format!("'{}'", s.replace('\'', "''")),
+        JsonValue::String(s) => {
+            // Oracle is the only dialect that needs explicit date/timestamp
+            // construction; the rest accept a quoted ISO string. Key off the
+            // DuckDB column type, never the value shape, so a VARCHAR column
+            // holding a date-like string stays a plain string.
+            if dialect == Dialect::Oracle {
+                if let Some(t) = target_type {
+                    let norm = t.trim().to_ascii_uppercase();
+                    if norm == "DATE" {
+                        return format!("TO_DATE({}, 'YYYY-MM-DD')", quote(s));
+                    }
+                    // TIMESTAMP WITH TIME ZONE / TIMESTAMPTZ carry an offset
+                    // suffix (e.g. +00 / +05:30); TO_TIMESTAMP_TZ with TZR
+                    // consumes it. .FF6 accepts both fractional and
+                    // non-fractional values (verified on Oracle 21c).
+                    if norm.contains("TIME ZONE") || norm.contains("TIMESTAMPTZ") {
+                        return format!(
+                            "TO_TIMESTAMP_TZ({}, 'YYYY-MM-DD HH24:MI:SS.FF6 TZR')",
+                            quote(s)
+                        );
+                    }
+                    if norm.starts_with("TIMESTAMP") || norm == "DATETIME" {
+                        return format!(
+                            "TO_TIMESTAMP({}, 'YYYY-MM-DD HH24:MI:SS.FF6')",
+                            quote(s)
+                        );
+                    }
+                }
+            }
+            quote(s)
+        }
         JsonValue::Array(_) | JsonValue::Object(_) => {
             let j = serde_json::to_string(v).unwrap_or_else(|_| "null".into());
-            format!("PARSE_JSON('{}')", j.replace('\'', "''"))
+            match dialect {
+                // PARSE_JSON is Snowflake/Databricks-only; elsewhere store
+                // the JSON as a plain quoted string (lands in VARCHAR/text).
+                Dialect::JsonNative => format!("PARSE_JSON('{}')", j.replace('\'', "''")),
+                _ => quote(&j),
+            }
         }
     }
+}
+
+/// Back-compat shim: the original universal renderer is exactly
+/// `sql_literal(v, None, Dialect::JsonNative)`.
+#[allow(dead_code)]
+fn json_to_sql_literal(v: &JsonValue) -> String {
+    sql_literal(v, None, Dialect::JsonNative)
 }
 
 /// Oracle's multitable INSERT ALL caps the cumulative number of inserted
@@ -9021,6 +9097,102 @@ mod tests {
         // bare star matches anything (including empty)
         assert!(glob_match("*", ""));
         assert!(glob_match("*", "anything"));
+    }
+}
+
+#[cfg(test)]
+mod sql_literal_tests {
+    use super::{sql_literal, Dialect};
+    use serde_json::json;
+
+    #[test]
+    fn json_native_unchanged() {
+        // Snowflake / Databricks must keep the original behavior exactly.
+        let d = Dialect::JsonNative;
+        assert_eq!(sql_literal(&json!(null), None, d), "NULL");
+        assert_eq!(sql_literal(&json!(true), None, d), "TRUE");
+        assert_eq!(sql_literal(&json!(false), None, d), "FALSE");
+        assert_eq!(sql_literal(&json!(42), None, d), "42");
+        assert_eq!(sql_literal(&json!("hi"), None, d), "'hi'");
+        assert_eq!(sql_literal(&json!([1, 2]), None, d), "PARSE_JSON('[1,2]')");
+        assert_eq!(sql_literal(&json!({"k":1}), None, d), "PARSE_JSON('{\"k\":1}')");
+    }
+
+    #[test]
+    fn booleans_per_dialect() {
+        assert_eq!(sql_literal(&json!(true), None, Dialect::Oracle), "1");
+        assert_eq!(sql_literal(&json!(false), None, Dialect::Oracle), "0");
+        assert_eq!(sql_literal(&json!(true), None, Dialect::SqlServer), "1");
+        assert_eq!(sql_literal(&json!(false), None, Dialect::SqlServer), "0");
+        // CQL has real boolean literals (lowercase).
+        assert_eq!(sql_literal(&json!(true), None, Dialect::Cassandra), "true");
+        assert_eq!(sql_literal(&json!(false), None, Dialect::Cassandra), "false");
+    }
+
+    #[test]
+    fn arrays_objects_per_dialect() {
+        // Non-JsonNative dialects get a plain quoted JSON string, not PARSE_JSON.
+        for d in [Dialect::Oracle, Dialect::SqlServer, Dialect::Cassandra] {
+            assert_eq!(sql_literal(&json!([1, 2]), None, d), "'[1,2]'");
+            assert_eq!(sql_literal(&json!({"k":1}), None, d), "'{\"k\":1}'");
+        }
+    }
+
+    #[test]
+    fn oracle_temporal_wrapping() {
+        let d = Dialect::Oracle;
+        assert_eq!(
+            sql_literal(&json!("2024-12-31"), Some("DATE"), d),
+            "TO_DATE('2024-12-31', 'YYYY-MM-DD')"
+        );
+        assert_eq!(
+            sql_literal(&json!("2024-12-31 14:30:00"), Some("TIMESTAMP"), d),
+            "TO_TIMESTAMP('2024-12-31 14:30:00', 'YYYY-MM-DD HH24:MI:SS.FF6')"
+        );
+        // Microsecond form takes the same .FF6 mask (verified on Oracle 21c).
+        assert_eq!(
+            sql_literal(&json!("2024-12-31 14:30:00.123456"), Some("TIMESTAMP_NS"), d),
+            "TO_TIMESTAMP('2024-12-31 14:30:00.123456', 'YYYY-MM-DD HH24:MI:SS.FF6')"
+        );
+        // TIMESTAMP WITH TIME ZONE carries an offset suffix -> TO_TIMESTAMP_TZ.
+        assert_eq!(
+            sql_literal(&json!("2024-12-31 09:00:00+00"), Some("TIMESTAMP WITH TIME ZONE"), d),
+            "TO_TIMESTAMP_TZ('2024-12-31 09:00:00+00', 'YYYY-MM-DD HH24:MI:SS.FF6 TZR')"
+        );
+    }
+
+    #[test]
+    fn oracle_no_wrap_without_temporal_type() {
+        // The deciding input is the column TYPE, never the value shape:
+        // a date-looking string in a VARCHAR (or unknown) column stays plain.
+        let d = Dialect::Oracle;
+        assert_eq!(sql_literal(&json!("2024-12-31"), None, d), "'2024-12-31'");
+        assert_eq!(
+            sql_literal(&json!("2024-12-31"), Some("VARCHAR2(4000)"), d),
+            "'2024-12-31'"
+        );
+        // A non-string value into a DATE column is not wrapped.
+        assert_eq!(sql_literal(&json!(42), Some("DATE"), d), "42");
+    }
+
+    #[test]
+    fn sqlserver_leaves_dates_as_strings() {
+        // SQL Server implicitly casts ISO date/timestamp strings (live-OK),
+        // so it must NOT get TO_DATE wrapping - only bool + JSON change.
+        let d = Dialect::SqlServer;
+        assert_eq!(sql_literal(&json!("2024-12-31"), Some("DATE"), d), "'2024-12-31'");
+        assert_eq!(
+            sql_literal(&json!("2024-12-31 14:30:00"), Some("DATETIME2"), d),
+            "'2024-12-31 14:30:00'"
+        );
+    }
+
+    #[test]
+    fn quote_escaping_preserved() {
+        // Single quotes double in every quoted form, across dialects.
+        for d in [Dialect::Oracle, Dialect::SqlServer, Dialect::Cassandra, Dialect::JsonNative] {
+            assert_eq!(sql_literal(&json!("O'Brien"), None, d), "'O''Brien'");
+        }
     }
 }
 
