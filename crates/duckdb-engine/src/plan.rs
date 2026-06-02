@@ -4180,7 +4180,19 @@ fn build_stage(
         // to disk even when its only consumer was a sink that would just
         // COPY it straight out - turning a ~1.5s job into ~17s. And a
         // consumed reject no longer forces the pass side to a table either.
-        let view_ok = |consumers: usize| !uses_dynamic_pivot && (force_views || consumers <= 1);
+        // An ATTACH-backed source (postgres / mysql / motherduck / ...) must
+        // materialize as a TABLE, never a lazy view. Its body reads the
+        // process-local `duckle_src` alias created by the stage's ATTACH; a
+        // single-consumer VIEW would be inlined into a *downstream* stage
+        // whose separate CLI process never ran that ATTACH, failing with
+        // "schema duckle_src does not exist". Materializing copies the rows
+        // so downstream reads them with no attach needed - and matches how
+        // the other external sources (Oracle / SQL Server / ADBC) already
+        // behave. (Sinks take a different path and are unaffected.)
+        let attach_backed = !attach.is_empty();
+        let view_ok = |consumers: usize| {
+            !uses_dynamic_pivot && !attach_backed && (force_views || consumers <= 1)
+        };
         let main_kw = if view_ok(main_consumers) { "VIEW" } else { "TABLE" };
         let mut sql = format!(
             "{}CREATE OR REPLACE {} {} AS {}",
