@@ -2145,20 +2145,52 @@ impl DuckdbEngine {
             std::env::temp_dir().join(format!("duckle-adbc-{}.parquet", spec.node_id));
         let file = std::fs::File::create(&parquet_path)
             .map_err(|e| EngineError::Query(format!("adbc: temp parquet: {}", e)))?;
-        let mut writer = ArrowWriter::try_new(file, schema, None)
-            .map_err(|e| EngineError::Query(format!("adbc: parquet writer: {}", e)))?;
-        let mut count = 0usize;
+
+        // Encode the Arrow batches to the temp parquet on a dedicated thread
+        // so the parquet encode overlaps the *next* ADBC driver fetch rather
+        // than running strictly after it. The driver pull is the dominant cost
+        // (measured ~2x the encode for a 2M-row source), so the encode hides
+        // behind it almost entirely. Tuning: statistics are disabled (no
+        // downstream stage reads parquet stats here) and the row group is
+        // enlarged - one big group reads back faster than the default
+        // many-small-groups layout. Compression stays the parquet-crate
+        // default (uncompressed): a local temp file optimizes for round-trip
+        // speed, not disk size.
+        use parquet::file::properties::{EnabledStatistics, WriterProperties};
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::None)
+            .set_max_row_group_size(1_000_000)
+            .build();
+        let writer_schema = schema.clone();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<arrow_array::RecordBatch>(8);
+        let writer = std::thread::spawn(move || -> Result<usize, String> {
+            let mut w = ArrowWriter::try_new(file, writer_schema, Some(props))
+                .map_err(|e| e.to_string())?;
+            let mut n = 0usize;
+            for batch in rx {
+                n += batch.num_rows();
+                w.write(&batch).map_err(|e| e.to_string())?;
+            }
+            w.close().map_err(|e| e.to_string())?;
+            Ok(n)
+        });
+
+        // The main thread drives the ADBC reader (its FFI stream is not Send,
+        // so it stays here) and ships each batch to the writer thread. A send
+        // failure means the writer thread already errored; we stop pulling and
+        // surface that error from the join below.
         for batch in reader {
             self.check_cancelled()?;
             let batch = batch.map_err(|e| EngineError::Query(format!("adbc: read batch: {}", e)))?;
-            count += batch.num_rows();
-            writer
-                .write(&batch)
-                .map_err(|e| EngineError::Query(format!("adbc: write parquet: {}", e)))?;
+            if tx.send(batch).is_err() {
+                break;
+            }
         }
-        writer
-            .close()
-            .map_err(|e| EngineError::Query(format!("adbc: close parquet: {}", e)))?;
+        drop(tx); // close the channel so the writer loop terminates
+        let count = writer
+            .join()
+            .map_err(|_| EngineError::Query("adbc: parquet writer thread panicked".into()))?
+            .map_err(|e| EngineError::Query(format!("adbc: write parquet: {}", e)))?;
 
         let ppath = parquet_path
             .to_string_lossy()
