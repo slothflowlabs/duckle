@@ -1430,7 +1430,6 @@ export default function App() {
     return (
         <RunStatusContext.Provider value={runResult?.nodes ?? {}}>
         <div className="app">
-            <UpdateBanner />
             <header
                 className="topbar"
                 data-tauri-drag-region
@@ -1513,6 +1512,8 @@ export default function App() {
                 </div>
                 <WindowControls />
             </header>
+
+            <UpdateBanner />
 
             <main className="workspace">
                 <LeftSidebar
