@@ -390,6 +390,7 @@ export default function App() {
                 if (active) await savePipelineFile(ws, activeJobId, active);
                 await saveRepository(ws, repo as unknown as Array<Record<string, unknown>>);
                 await saveMetadata(ws, { engine, jobs, activeJobId });
+                setJobs(js => js.map(j => (j.id === activeJobId ? { ...j, dirty: false } : j)));
             })();
         };
         window.addEventListener('keydown', onKey);
@@ -903,8 +904,19 @@ export default function App() {
     }, [nodes, edges]);
 
     const handleSave = useCallback(() => {
+        // Flush the active pipeline + repo + metadata to disk now, then clear
+        // the tab's unsaved marker. (Autosave is debounced; the explicit
+        // Save button / Ctrl+S gesture writes immediately.)
         setJobs(js => js.map(j => (j.id === activeJobId ? { ...j, dirty: false } : j)));
-    }, [activeJobId]);
+        if (!isInTauri() || !workspacePathState) return;
+        const ws = workspacePathState;
+        void (async () => {
+            const active = pipelineData[activeJobId];
+            if (active) await savePipelineFile(ws, activeJobId, active);
+            await saveRepository(ws, repo as unknown as Array<Record<string, unknown>>);
+            await saveMetadata(ws, { engine, jobs, activeJobId });
+        })();
+    }, [activeJobId, workspacePathState, pipelineData, repo, engine, jobs]);
 
     const activeJobName = useMemo(
         () => jobs.find(j => j.id === activeJobId)?.name ?? 'pipeline',

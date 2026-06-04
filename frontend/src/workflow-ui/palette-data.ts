@@ -221,7 +221,7 @@ export const PALETTE: Category[] = [
         id: 'transforms',
         label: 'Transforms',
         icon: '∼',
-        accent: '#7d66ff',
+        accent: '#3d8bff',
         groups: [
             {
                 id: 'xf.fields',
@@ -572,7 +572,7 @@ export const PALETTE: Category[] = [
         id: 'control',
         label: 'Control Flow',
         icon: '◇',
-        accent: '#7d66ff',
+        accent: '#5b8def',
         groups: [
             {
                 id: 'ctl.routing',

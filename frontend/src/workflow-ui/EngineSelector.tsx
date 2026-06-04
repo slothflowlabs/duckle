@@ -25,7 +25,7 @@ const ENGINES: EngineMeta[] = [
         id: 'slothdb',
         label: 'SlothDB',
         description: 'Optional embedded analytics engine.',
-        dot: '#7d66ff',
+        dot: '#3d8bff',
     },
     {
         id: 'native',

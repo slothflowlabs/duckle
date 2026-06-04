@@ -427,15 +427,22 @@ pub(crate) fn build_parallelize_branches(
     data_edges: &[&PipelineEdge],
 ) -> Result<(ParallelizeSpec, Vec<String>), EngineError> {
     let p_id = p_node.id.as_str();
-    // Roots per output handle (branch entry nodes).
-    let mut handles: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for e in data_edges {
-        if e.source == p_id {
-            let h = e.source_handle.clone().unwrap_or_else(|| "main".into());
-            handles.entry(h).or_default().push(e.target.clone());
+    // Branch roots: every node directly downstream of the parallelize node.
+    // Branches are defined by their INDEPENDENT downstream subgraphs, not by
+    // which output handle the edge leaves from. The canvas may serialize all
+    // fan-out edges on the same "main" handle (handles are a UI affordance),
+    // but each independent downstream chain is still its own concurrent
+    // branch - so we group by reachability, never by handle id.
+    let mut roots: Vec<String> = Vec::new();
+    {
+        let mut seen_root: HashSet<&str> = HashSet::new();
+        for e in data_edges {
+            if e.source == p_id && e.target != p_id && seen_root.insert(e.target.as_str()) {
+                roots.push(e.target.clone());
+            }
         }
     }
-    if handles.is_empty() {
+    if roots.is_empty() {
         return Err(EngineError::Config(format!(
             "ctl.parallelize ({}): wire at least one branch to an output before running",
             p_id
@@ -455,14 +462,25 @@ pub(crate) fn build_parallelize_branches(
     let mut all_branch: HashSet<String> = HashSet::new();
     let mut branches: Vec<String> = Vec::new();
 
-    for roots in handles.values() {
-        // BFS downstream from the branch roots.
+    for root in &roots {
+        // A root already pulled into an earlier branch's subgraph (two outputs
+        // feeding the same chain) belongs to that branch, not a new one.
+        if all_branch.contains(root.as_str()) {
+            continue;
+        }
+        // BFS the independent downstream subgraph rooted here.
         let mut order: Vec<String> = Vec::new();
         let mut seen: HashSet<&str> = HashSet::new();
-        let mut queue: Vec<&str> = roots.iter().map(|s| s.as_str()).collect();
+        let mut queue: Vec<&str> = vec![root.as_str()];
         while let Some(n) = queue.pop() {
             if n == p_id || !seen.insert(n) {
                 continue;
+            }
+            if all_branch.contains(n) {
+                return Err(EngineError::Config(format!(
+                    "ctl.parallelize ({}): node '{}' is reachable from more than one branch; branches must be independent",
+                    p_id, n
+                )));
             }
             order.push(n.to_string());
             if let Some(succ) = downstream.get(n) {
@@ -471,14 +489,6 @@ pub(crate) fn build_parallelize_branches(
                         queue.push(t);
                     }
                 }
-            }
-        }
-        for n in &order {
-            if all_branch.contains(n) {
-                return Err(EngineError::Config(format!(
-                    "ctl.parallelize ({}): node '{}' is reachable from more than one branch; branches must be independent",
-                    p_id, n
-                )));
             }
         }
         let branch_set: HashSet<&str> = order.iter().map(|s| s.as_str()).collect();
