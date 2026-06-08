@@ -7,6 +7,11 @@ Cargo.lock.bak
 # Tauri build artifacts
 apps/desktop/target/
 apps/desktop/gen/
+# The bundled runner is produced at build time, not committed. Keep the
+# directory itself (via .gitkeep) so the bundle.resources glob always
+# matches; ignore only the binaries staged into it.
+apps/desktop/bin/*
+!apps/desktop/bin/.gitkeep
 
 # Node / frontend
 node_modules/

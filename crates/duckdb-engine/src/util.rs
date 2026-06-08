@@ -8,7 +8,7 @@ use crate::*;
 
 /// True for a property key that holds a credential (case-insensitive
 /// substring match), so its value should never appear in exported SQL.
-pub(crate) fn is_secret_prop_key(key: &str) -> bool {
+pub fn is_secret_prop_key(key: &str) -> bool {
     let k = key.to_ascii_lowercase();
     [
         "password", "passwd", "secret", "token", "apikey", "api_key",

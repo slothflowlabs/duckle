@@ -32,6 +32,7 @@ import {
     type RunResult,
 } from './tauri-bridge';
 import ScheduleEditorModal from './workflow-ui/ScheduleEditorModal';
+import BuildPipelineModal from './workflow-ui/BuildPipelineModal';
 import EngineSetupModal from './workflow-ui/EngineSetupModal';
 import ChatPanel from './workflow-ui/ChatPanel';
 import GitPanel from './workflow-ui/GitPanel';
@@ -414,6 +415,11 @@ export default function App() {
     );
     const handleSchedulePipeline = useCallback((pipelineId: string) => {
         setScheduleModalPipelineId(pipelineId);
+    }, []);
+
+    const [buildModalPipelineId, setBuildModalPipelineId] = useState<string | null>(null);
+    const handleBuildPipeline = useCallback((pipelineId: string) => {
+        setBuildModalPipelineId(pipelineId);
     }, []);
 
     const handleSwitchWorkspace = useCallback(async () => {
@@ -1229,9 +1235,12 @@ export default function App() {
                     break;
                 case 'paste':
                     break;
+                case 'build':
+                    handleBuildPipeline(activeJobId);
+                    break;
             }
         },
-        [handleAutoLayout, setNodes, undo, redo],
+        [handleAutoLayout, setNodes, undo, redo, handleBuildPipeline, activeJobId],
     );
 
     // Repository handlers ---------------------------------------------------
@@ -1603,6 +1612,7 @@ export default function App() {
                     onDuplicateRepoItem={handleDuplicateRepoItem}
                     onDeleteRepoItem={handleDeleteRepoItem}
                     onSchedulePipeline={handleSchedulePipeline}
+                    onBuildPipeline={handleBuildPipeline}
                 />
                 <section className="canvas-shell">
                     <EditorHeader
@@ -1723,6 +1733,19 @@ export default function App() {
                     }
                     workspacePath={workspacePathState}
                     onClose={() => setScheduleModalPipelineId(null)}
+                />
+            ) : null}
+
+            {buildModalPipelineId ? (
+                <BuildPipelineModal
+                    pipelineId={buildModalPipelineId}
+                    pipelineName={
+                        repo.find(r => r.id === buildModalPipelineId)?.name ??
+                        buildModalPipelineId
+                    }
+                    workspacePath={workspacePathState}
+                    contexts={contexts}
+                    onClose={() => setBuildModalPipelineId(null)}
                 />
             ) : null}
 

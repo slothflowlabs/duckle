@@ -543,6 +543,49 @@ pub struct SftpSourceSpec {
     pub host_fingerprint: Option<String>,
 }
 
+/// snk.ftp: upload pipeline output to an FTP / FTPS server. The view is
+/// first COPY-ed to a local temp file in the chosen `format`, then the file
+/// is uploaded via suppaftp `put_file` to `remote_path` (a full remote path
+/// including filename). SFTP is a separate protocol and is handled by
+/// SftpSinkSpec.
+#[derive(Debug, Clone)]
+pub struct FtpSinkSpec {
+    pub from_view: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub password: String,
+    pub secure: bool,
+    /// Full remote path including filename, e.g. /out/orders.csv.
+    pub remote_path: String,
+    /// csv | parquet | json | jsonl (default csv).
+    pub format: String,
+}
+
+/// snk.ftp (SFTP): upload pipeline output to an SFTP (SSH) server. The view
+/// is COPY-ed to a local temp file in the chosen `format`, then uploaded via
+/// russh + russh-sftp `create` + `write_all`. Auth by password or an OpenSSH
+/// private key; the server host key is verified against an optional SHA256
+/// fingerprint pin (mirrors SftpSourceSpec).
+#[derive(Debug, Clone)]
+pub struct SftpSinkSpec {
+    pub from_view: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub password: Option<String>,
+    pub private_key: Option<String>,
+    pub key_passphrase: Option<String>,
+    /// Full remote path including filename, e.g. /out/orders.csv.
+    pub remote_path: String,
+    /// csv | parquet | json | jsonl (default csv).
+    pub format: String,
+    /// Expected server host-key fingerprint, e.g. "SHA256:abc123...". When set,
+    /// the connection is refused unless the server key matches. When empty,
+    /// the key is accepted on trust (trust-on-first-use).
+    pub host_fingerprint: Option<String>,
+}
+
 /// src.clipboard: read the system clipboard. If the text parses as
 /// JSON-array-of-objects, the array becomes rows directly; otherwise
 /// a single row {text, length} is emitted. Desktop-only by definition;

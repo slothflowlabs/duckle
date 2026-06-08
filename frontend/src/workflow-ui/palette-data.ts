@@ -470,6 +470,7 @@ export const PALETTE: Category[] = [
                     snk('yaml', 'YAML', 'available', 'Write the upstream rows as a top-level YAML array (`- key: value` per row).'),
                     snk('toml', 'TOML', 'available', 'Write the upstream rows as TOML. TOML disallows a top-level array so the engine wraps under a `rows` key: `[[rows]]` per row.'),
                     snk('spatial', 'Geospatial (GeoJSON / GeoPackage / ...)', 'available', 'Write geospatial files via the spatial extension'),
+                    snk('ftp', 'File Transfer', 'available', 'Upload pipeline output over FTP / FTPS / SFTP'),
                 ],
             },
             {

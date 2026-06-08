@@ -2869,6 +2869,223 @@ impl DuckdbEngine {
         ))
     }
 
+    /// COPY the upstream view to a local temp file in `format`
+    /// (csv | parquet | json | jsonl; default csv) and return the temp path.
+    /// The caller uploads the file then removes it. Mirrors the file-sink COPY
+    /// syntax (build_csv_sink / build_parquet_sink / build_json_sink): JSON
+    /// "array=true" gives a single JSON array; jsonl gives newline-delimited.
+    fn ftp_copy_view_to_temp(
+        &self,
+        db: &Path,
+        from_view: &str,
+        format: &str,
+    ) -> Result<std::path::PathBuf, EngineError> {
+        let ext = match format {
+            "parquet" => "parquet",
+            "json" => "json",
+            "jsonl" => "jsonl",
+            _ => "csv",
+        };
+        let name = format!("duckle-ftp-{}.{}", std::process::id(), ext);
+        let path = std::env::temp_dir().join(name);
+        // Best-effort clear of any stale temp from a prior run with the same pid.
+        let _ = std::fs::remove_file(&path);
+        let view = plan::quote_ident(from_view);
+        let target = sql_escape(&path.display().to_string());
+        let copy = match format {
+            "parquet" => format!(
+                "COPY (SELECT * FROM {}) TO '{}' (FORMAT PARQUET)",
+                view, target
+            ),
+            "json" => format!(
+                "COPY (SELECT * FROM {}) TO '{}' (FORMAT JSON, ARRAY true)",
+                view, target
+            ),
+            "jsonl" => format!(
+                "COPY (SELECT * FROM {}) TO '{}' (FORMAT JSON, ARRAY false)",
+                view, target
+            ),
+            _ => format!(
+                "COPY (SELECT * FROM {}) TO '{}' (FORMAT CSV, HEADER true)",
+                view, target
+            ),
+        };
+        self.run(Some(db), &copy, false)?;
+        Ok(path)
+    }
+
+    /// snk.ftp (FTP / FTPS): COPY the upstream view to a local temp file in
+    /// `format`, connect + login with suppaftp, upload the file to
+    /// `remote_path` via put_file, then remove the temp file. SFTP targets are
+    /// rejected (a different protocol - use the SFTP option); FTPS is guarded
+    /// the same way as the source until the TLS wrapper is wired.
+    pub(crate) fn run_ftp_sink(&self, db: &Path, spec: &FtpSinkSpec) -> Result<String, EngineError> {
+        use suppaftp::FtpStream;
+        self.check_cancelled()?;
+        if is_sftp_target(&spec.host, spec.port) {
+            return Err(EngineError::Config(
+                "snk.ftp (FTP / FTPS) cannot upload to an SFTP (SSH File Transfer) server - it is a different protocol. Choose the SFTP protocol option, or point this at an FTP/FTPS port (commonly 21)."
+                    .into(),
+            ));
+        }
+        let host_l = spec.host.trim().to_ascii_lowercase();
+        let host = host_l
+            .strip_prefix("ftps://")
+            .or_else(|| host_l.strip_prefix("ftp://"))
+            .map(|h| h.trim_end_matches('/'))
+            .unwrap_or_else(|| spec.host.trim());
+        let addr = format!("{}:{}", host, spec.port);
+
+        let temp = self.ftp_copy_view_to_temp(db, &spec.from_view, &spec.format)?;
+        let upload = (|| -> Result<u64, EngineError> {
+            let bytes = std::fs::read(&temp)
+                .map_err(|e| EngineError::Query(format!("ftp: read temp {}: {}", temp.display(), e)))?;
+            let total = bytes.len() as u64;
+            let mut ftp = FtpStream::connect(&addr)
+                .map_err(|e| EngineError::Query(format!("ftp connect {}: {}", addr, e)))?;
+            if spec.secure {
+                return Err(EngineError::Config(
+                    "snk.ftp: secure=true (FTPS) requires the rustls TLS wrapper which isn't wired up yet. Use plain FTP or wait for the FTPS-explicit feature.".into(),
+                ));
+            }
+            ftp.login(&spec.user, &spec.password)
+                .map_err(|e| EngineError::Query(format!("ftp login: {}", e)))?;
+            let mut reader = std::io::Cursor::new(bytes);
+            ftp.put_file(&spec.remote_path, &mut reader)
+                .map_err(|e| EngineError::Query(format!("ftp put {}: {}", spec.remote_path, e)))?;
+            let _ = ftp.quit();
+            Ok(total)
+        })();
+        let _ = std::fs::remove_file(&temp);
+        let total = upload?;
+        Ok(format!(
+            "ftp: uploaded {} bytes to {}:{}/{}",
+            total, spec.host, spec.port, spec.remote_path
+        ))
+    }
+
+    /// snk.ftp (SFTP): COPY the upstream view to a local temp file in `format`,
+    /// connect over SSH (host-key verified against an optional SHA256
+    /// fingerprint pin), authenticate (private key or password), then upload
+    /// the file to `remote_path` via SftpSession::create + write_all. Removes
+    /// the temp file afterwards. Connect/auth mirror run_sftp_source.
+    pub(crate) fn run_sftp_sink(&self, db: &Path, spec: &SftpSinkSpec) -> Result<String, EngineError> {
+        self.check_cancelled()?;
+
+        // Host-key verification. With a pinned fingerprint, refuse any other
+        // server key; without one, accept on trust (trust-on-first-use).
+        struct Verifier {
+            expected: Option<String>,
+        }
+        impl russh::client::Handler for Verifier {
+            type Error = russh::Error;
+            async fn check_server_key(
+                &mut self,
+                server_public_key: &russh::keys::ssh_key::PublicKey,
+            ) -> Result<bool, Self::Error> {
+                match &self.expected {
+                    None => Ok(true),
+                    Some(want) => {
+                        let got = server_public_key
+                            .fingerprint(russh::keys::HashAlg::Sha256)
+                            .to_string();
+                        let norm = |s: &str| s.trim().trim_start_matches("SHA256:").to_string();
+                        Ok(norm(&got) == norm(want))
+                    }
+                }
+            }
+        }
+
+        let temp = self.ftp_copy_view_to_temp(db, &spec.from_view, &spec.format)?;
+        let result: Result<u64, EngineError> = (|| {
+            let bytes = std::fs::read(&temp).map_err(|e| {
+                EngineError::Query(format!("sftp: read temp {}: {}", temp.display(), e))
+            })?;
+            let total = bytes.len() as u64;
+
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| EngineError::Query(format!("sftp: tokio rt: {}", e)))?;
+
+            let uploaded: Result<(), String> = rt.block_on(async {
+                use russh_sftp::client::SftpSession;
+                use tokio::io::AsyncWriteExt;
+
+                let config = std::sync::Arc::new(russh::client::Config::default());
+                let handler = Verifier {
+                    expected: spec.host_fingerprint.clone(),
+                };
+                let mut session =
+                    russh::client::connect(config, (spec.host.as_str(), spec.port), handler)
+                        .await
+                        .map_err(|e| format!("connect {}:{}: {}", spec.host, spec.port, e))?;
+
+                let authed = if let Some(pem) = &spec.private_key {
+                    let key = russh::keys::decode_secret_key(pem, spec.key_passphrase.as_deref())
+                        .map_err(|e| format!("private key: {}", e))?;
+                    let with_alg = russh::keys::PrivateKeyWithHashAlg::new(
+                        std::sync::Arc::new(key),
+                        Some(russh::keys::HashAlg::Sha256),
+                    );
+                    session
+                        .authenticate_publickey(spec.user.as_str(), with_alg)
+                        .await
+                        .map_err(|e| format!("publickey auth: {}", e))?
+                        .success()
+                } else if let Some(pw) = &spec.password {
+                    session
+                        .authenticate_password(spec.user.as_str(), pw)
+                        .await
+                        .map_err(|e| format!("password auth: {}", e))?
+                        .success()
+                } else {
+                    return Err("no credentials: set a password or a private key".into());
+                };
+                if !authed {
+                    return Err(format!(
+                        "authentication failed for user '{}' (check credentials / host fingerprint)",
+                        spec.user
+                    ));
+                }
+
+                let channel = session
+                    .channel_open_session()
+                    .await
+                    .map_err(|e| format!("open channel: {}", e))?;
+                channel
+                    .request_subsystem(true, "sftp")
+                    .await
+                    .map_err(|e| format!("request sftp subsystem: {}", e))?;
+                let sftp = SftpSession::new(channel.into_stream())
+                    .await
+                    .map_err(|e| format!("sftp session: {}", e))?;
+
+                let mut remote = sftp
+                    .create(spec.remote_path.clone())
+                    .await
+                    .map_err(|e| format!("create {}: {}", spec.remote_path, e))?;
+                remote
+                    .write_all(&bytes)
+                    .await
+                    .map_err(|e| format!("write {}: {}", spec.remote_path, e))?;
+                remote
+                    .shutdown()
+                    .await
+                    .map_err(|e| format!("close {}: {}", spec.remote_path, e))?;
+                Ok(())
+            });
+            uploaded.map_err(EngineError::Query)?;
+            Ok(total)
+        })();
+        let _ = std::fs::remove_file(&temp);
+        let total = result?;
+        Ok(format!(
+            "sftp: uploaded {} bytes to {}:{}/{}",
+            total, spec.host, spec.port, spec.remote_path
+        ))
+    }
+
     /// xf.ai.embed: per-row embedding via an OpenAI-compatible API.
     /// Reads the upstream view, batches rows into groups of
     /// batch_size, sends the input_column text array to /v1/embeddings,

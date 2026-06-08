@@ -11,6 +11,7 @@ import {
     Folder,
     FolderOpen,
     FolderPlus,
+    Package,
     Pencil,
     Plug,
     Plus,
@@ -40,6 +41,7 @@ type Props = {
     onDuplicate: (id: string) => void;
     onDelete: (id: string) => void;
     onSchedulePipeline: (id: string) => void;
+    onBuildPipeline: (id: string) => void;
 };
 
 const TYPE_LABEL: Record<RepoItemType, string> = {
@@ -89,6 +91,7 @@ export default function ProjectTree(props: Props) {
         onDuplicate,
         onDelete,
         onSchedulePipeline,
+        onBuildPipeline,
     } = props;
 
     // Walk up to find which root folder this item lives under.
@@ -262,6 +265,13 @@ export default function ProjectTree(props: Props) {
                 label: 'Schedule…',
                 icon: <AlarmClock size={ICON_SIZE} />,
                 onClick: () => onSchedulePipeline(item.id),
+            });
+            items.push({
+                kind: 'item',
+                key: 'build',
+                label: 'Build pipeline…',
+                icon: <Package size={ICON_SIZE} />,
+                onClick: () => onBuildPipeline(item.id),
             });
         }
         items.push({

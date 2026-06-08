@@ -22,6 +22,7 @@ import {
     LayoutGrid,
     Maximize2,
     MousePointer2,
+    Package,
     Pencil,
     Play,
     Power,
@@ -71,7 +72,14 @@ export type NodeAction =
     | 'copy-id'
     | 'delete';
 
-export type PaneAction = 'paste' | 'select-all' | 'auto-layout' | 'fit-view' | 'undo' | 'redo';
+export type PaneAction =
+    | 'paste'
+    | 'select-all'
+    | 'auto-layout'
+    | 'fit-view'
+    | 'undo'
+    | 'redo'
+    | 'build';
 
 type Props = {
     nodes: Node<DuckleNodeData>[];
@@ -410,6 +418,14 @@ function CanvasInner({
                     shortcut: 'Ctrl+V',
                     onClick: () => onPaneAction('paste'),
                     disabled: true,
+                },
+                { kind: 'separator', key: 's2' },
+                {
+                    kind: 'item',
+                    key: 'build',
+                    label: 'Build pipeline…',
+                    icon: <Package size={ICON_SIZE} />,
+                    onClick: () => onPaneAction('build'),
                 },
             ];
             menu.open(e, items);

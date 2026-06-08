@@ -1,0 +1,27 @@
+[package]
+name = "duckle-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# Lean, no-GUI headless runner: executes a Duckle pipeline file through the
+# DuckDB engine. Bundled into "Build Pipeline" artifacts so a pipeline runs
+# standalone on a server (cron / systemd / Task Scheduler), no desktop app.
+[[bin]]
+name = "duckle-runner"
+path = "src/main.rs"
+
+[dependencies]
+duckle-duckdb-engine = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = "1"
+aes-gcm = "0.10"
+sha2 = "0.10"
+base64 = "0.22"
+getrandom = "0.2"
+# Self-extracting artifact payload (single-file build output). deflate-only
+# (drops aes/zstd/bzip2/lzma/xz); pulls flate2 rust_backend already in the lock.
+zip = { version = "2", default-features = false, features = ["deflate"] }

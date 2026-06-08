@@ -33,6 +33,7 @@
   },
   "bundle": {
     "active": true,
+    "resources": [],
     "targets": [],
     "category": "DeveloperTool",
     "shortDescription": "Embedded, ultra-fast data engineering platform.",

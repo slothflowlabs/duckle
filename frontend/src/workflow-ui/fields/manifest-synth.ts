@@ -583,6 +583,52 @@ function partitionBySection(): FormSection {
 }
 
 function synthFileSink(comp: ComponentDef): ComponentManifest {
+    if (comp.id === 'snk.ftp') {
+        // File-transfer sink (write-side mirror of src.ftp). The view is
+        // written to a local temp file in `format`, then uploaded to
+        // `remotePath` over FTP / FTPS / SFTP.
+        return base(comp, [
+            {
+                label: 'Connection',
+                fields: [
+                    { key: 'protocol', label: 'Protocol', kind: 'select', defaultValue: 'sftp',
+                      options: [{label:'SFTP',value:'sftp'},{label:'FTP',value:'ftp'},{label:'FTPS',value:'ftps'}] },
+                    { key: 'host', label: 'Host', kind: 'text', required: true },
+                    { key: 'port', label: 'Port', kind: 'integer', defaultValue: 22,
+                      description: 'SFTP: 22. FTP / FTPS: usually 21.' },
+                    { key: 'user', label: 'Username', kind: 'text' },
+                    { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
+                ],
+            },
+            {
+                label: 'SFTP key auth (optional)',
+                fields: [
+                    { key: 'privateKey', label: 'Private key (PEM)', kind: 'text',
+                      placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----',
+                      description: 'OpenSSH private key for SFTP key-based auth (instead of a password).' },
+                    { key: 'keyPassphrase', label: 'Key passphrase', kind: 'text', placeholder: '••••••••' },
+                    { key: 'hostFingerprint', label: 'Host fingerprint', kind: 'text',
+                      placeholder: 'SHA256:...',
+                      description: 'Optional SFTP host-key pin. If set, the connection is refused unless the server key matches this SHA256 fingerprint.' },
+                ],
+            },
+            {
+                label: 'Upload',
+                fields: [
+                    { key: 'remotePath', label: 'Remote path', kind: 'text', required: true,
+                      placeholder: '/out/orders.csv',
+                      description: 'Full remote path including the filename.' },
+                    { key: 'format', label: 'Format', kind: 'select', defaultValue: 'csv',
+                      options: [
+                          { label: 'CSV', value: 'csv' },
+                          { label: 'Parquet', value: 'parquet' },
+                          { label: 'JSON', value: 'json' },
+                          { label: 'JSONL / NDJSON', value: 'jsonl' },
+                      ] },
+                ],
+            },
+        ], 'upstream');
+    }
     if (comp.id === 'snk.spatial') {
         // Geospatial sink writes via GDAL; the driver picks the actual
         // file format (GeoJSON / GeoPackage / Shapefile / KML / GPX).

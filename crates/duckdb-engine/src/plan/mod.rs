@@ -9,13 +9,13 @@
 use crate::sql_escape;
 use crate::EngineError;
 use duckle_metadata::{PipelineEdge, PipelineNode};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Pipeline payload sent from the frontend. Just the nodes + edges
 /// directly - no wrapping metadata required for a run.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct PipelineDoc {
     pub nodes: Vec<PipelineNode>,
     #[serde(default)]
@@ -141,6 +141,8 @@ pub enum RuntimeSpec {
     Shell(ShellSpec),
     FtpSource(FtpSourceSpec),
     SftpSource(SftpSourceSpec),
+    FtpSink(FtpSinkSpec),
+    SftpSink(SftpSinkSpec),
     ClipboardSource(ClipboardSourceSpec),
     EmailSource(EmailSourceSpec),
     EmailSink(EmailSinkSpec),
@@ -512,6 +514,8 @@ fn build_stage(
     let mut shell: Option<ShellSpec> = None;
     let mut ftp_source: Option<FtpSourceSpec> = None;
     let mut sftp_source: Option<SftpSourceSpec> = None;
+    let mut ftp_sink: Option<FtpSinkSpec> = None;
+    let mut sftp_sink: Option<SftpSinkSpec> = None;
     let mut clipboard_source: Option<ClipboardSourceSpec> = None;
     let mut email_source: Option<EmailSourceSpec> = None;
     let mut email_sink: Option<EmailSinkSpec> = None;
@@ -1117,6 +1121,70 @@ fn build_stage(
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "row".into()),
         });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.ftp" {
+        // File-transfer sink (write-side mirror of src.ftp). The Protocol
+        // dropdown selects FTP, FTPS, or SFTP. The upstream view is COPY-ed to
+        // a local temp file in `format`, then uploaded to `remotePath` (a full
+        // remote path including filename). FTP / FTPS go through suppaftp; SFTP
+        // (a different, SSH-based protocol) goes through russh + russh-sftp.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let protocol = string_prop(&props, "protocol")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let host = string_prop(&props, "host")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: host required", component_id)))?;
+        let user = string_prop(&props, "user")
+            .or_else(|| string_prop(&props, "username"))
+            .filter(|s| !s.is_empty());
+        let remote_path = string_prop(&props, "remotePath")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                EngineError::Config(format!("{}: remotePath required", component_id))
+            })?;
+        let format = string_prop(&props, "format")
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "csv".into())
+            .to_ascii_lowercase();
+        let port = props
+            .get("port")
+            .and_then(|v| v.as_u64())
+            .filter(|n| *n > 0 && *n < 65536)
+            .map(|n| n as u16);
+        if protocol == "sftp" {
+            sftp_sink = Some(SftpSinkSpec {
+                from_view: from_view.to_string(),
+                host,
+                port: port.unwrap_or(22),
+                user: user.ok_or_else(|| {
+                    EngineError::Config(format!("{}: user required for SFTP", component_id))
+                })?,
+                password: string_prop(&props, "password").filter(|s| !s.is_empty()),
+                private_key: string_prop(&props, "privateKey")
+                    .or_else(|| {
+                        string_prop(&props, "privateKeyPath")
+                            .and_then(|p| std::fs::read_to_string(&p).ok())
+                    })
+                    .filter(|s| !s.is_empty()),
+                key_passphrase: string_prop(&props, "keyPassphrase").filter(|s| !s.is_empty()),
+                remote_path,
+                format,
+                host_fingerprint: string_prop(&props, "hostFingerprint").filter(|s| !s.is_empty()),
+            });
+        } else {
+            ftp_sink = Some(FtpSinkSpec {
+                from_view: from_view.to_string(),
+                host,
+                port: port.unwrap_or(21),
+                user: user.unwrap_or_else(|| "anonymous".into()),
+                password: string_prop(&props, "password").unwrap_or_else(|| "anonymous@".into()),
+                secure: protocol == "ftps"
+                    || props.get("secure").and_then(|v| v.as_bool()).unwrap_or(false),
+                remote_path,
+                format,
+            });
+        }
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.avro" {
         // Avro container-file writer. Schema either inferred from
@@ -3009,6 +3077,8 @@ fn build_stage(
         .or_else(|| shell.map(RuntimeSpec::Shell))
         .or_else(|| ftp_source.map(RuntimeSpec::FtpSource))
         .or_else(|| sftp_source.map(RuntimeSpec::SftpSource))
+        .or_else(|| ftp_sink.map(RuntimeSpec::FtpSink))
+        .or_else(|| sftp_sink.map(RuntimeSpec::SftpSink))
         .or_else(|| clipboard_source.map(RuntimeSpec::ClipboardSource))
         .or_else(|| email_source.map(RuntimeSpec::EmailSource))
         .or_else(|| email_sink.map(RuntimeSpec::EmailSink))

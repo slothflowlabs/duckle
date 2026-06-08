@@ -30,6 +30,7 @@ mod connectors;
 mod run_log;
 mod util;
 pub(crate) use util::*;
+pub use util::is_secret_prop_key;
 pub use history::{append_run_record, load_run_history, RunRecord};
 pub use plan::{CompiledPipeline, PipelineDoc, Stage, StageKind};
 use plan::{
@@ -37,12 +38,14 @@ use plan::{
     AvroSinkSpec, AvroSourceSpec, CassandraSinkSpec, CassandraSourceSpec, ClickHouseSinkSpec,
     ClickHouseSourceSpec, ClipboardSourceSpec, DatabricksSinkSpec, DatabricksSourceSpec,
     DynamoDbSourceSpec, ElasticSourceSpec, EmailSinkSpec, EmailSourceSpec, FormatFileSinkSpec,
-    FormatFileSourceSpec, FormatKind, FtpSourceSpec, GitSourceSpec, JavaScriptSpec, KafkaSinkSpec,
-    KafkaSourceSpec, KinesisSourceSpec, MilvusSourceSpec, MongoSinkSpec, MongoSourceSpec,
+    FormatFileSourceSpec, FormatKind, FtpSinkSpec, FtpSourceSpec, GitSourceSpec, JavaScriptSpec,
+    KafkaSinkSpec, KafkaSourceSpec, KinesisSourceSpec, MilvusSourceSpec, MongoSinkSpec,
+    MongoSourceSpec,
     NatsSinkSpec, NatsSourceSpec, OracleSinkSpec, OracleSourceSpec, PubSubSinkSpec,
     PubSubSourceSpec, QdrantSourceSpec, RabbitSinkSpec, RabbitSourceSpec, RedisSinkSpec,
     RedisSourceSpec, RestPagination, RestResponseFormat, RestSourceSpec, RuntimeSpec, ShellSpec,
-    SftpSourceSpec, SnowflakeAuth, SnowflakeSinkSpec, SnowflakeSourceSpec, SqlServerSinkSpec,
+    SftpSinkSpec, SftpSourceSpec, SnowflakeAuth, SnowflakeSinkSpec, SnowflakeSourceSpec,
+    SqlServerSinkSpec,
     SqlServerSourceSpec, WasmSpec, WeaviateSourceSpec, WebhookSourceSpec, WebhookSpec, XmlSinkSpec,
     XmlSourceSpec,
 };
@@ -841,6 +844,8 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::Shell(spec)) => self.run_shell(&db_path, spec),
                     Some(RuntimeSpec::FtpSource(spec)) => self.run_ftp_source(&db_path, spec),
                     Some(RuntimeSpec::SftpSource(spec)) => self.run_sftp_source(&db_path, spec),
+                    Some(RuntimeSpec::FtpSink(spec)) => self.run_ftp_sink(&db_path, spec),
+                    Some(RuntimeSpec::SftpSink(spec)) => self.run_sftp_sink(&db_path, spec),
                     Some(RuntimeSpec::ClipboardSource(spec)) => {
                         self.run_clipboard_source(&db_path, spec)
                     }

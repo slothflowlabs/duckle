@@ -484,3 +484,30 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
         return null;
     }
 }
+
+// ---- Build pipeline bundle ---------------------------------------------
+
+export type SecretsMode = 'env' | 'passphrase';
+
+/**
+ * Build a single self-contained file for a pipeline via the embedded
+ * duckle-runner. Returns the produced file path. Throws the runner's stderr
+ * on failure so the caller can show it inline.
+ */
+export async function buildBundle(
+    workspacePath: string,
+    pipelineId: string,
+    outFile: string,
+    context: string | null,
+    secretsMode: SecretsMode,
+    passphrase?: string,
+): Promise<string> {
+    return await invoke<string>('build_pipeline_bundle', {
+        workspacePath,
+        pipelineId,
+        outFile,
+        context: context ?? null,
+        secretsMode,
+        passphrase: secretsMode === 'passphrase' ? (passphrase ?? '') : null,
+    });
+}

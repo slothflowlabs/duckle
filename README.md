@@ -394,6 +394,8 @@ Pick the binary for your OS from the [latest release](https://github.com/SouravR
 | **macOS** (Apple Silicon) | `Duckle-macos-arm64` | `chmod +x Duckle-macos-arm64 && ./Duckle-macos-arm64`. Right-click -> Open the first time to bypass Gatekeeper. |
 | **Linux** (x86_64) | `Duckle-linux-x64` | `chmod +x Duckle-linux-x64 && ./Duckle-linux-x64`. Requires WebKitGTK 4.1 (`libwebkit2gtk-4.1-0` on Debian / Ubuntu). |
 
+The single-file binary above is all you need for **Build Pipeline** too: the headless runner is embedded into the app at build time, and exporting a pipeline produces ONE self-contained executable (the engine, the DuckDB CLI, any needed extensions, and the resolved pipeline are all inside that one file). Copy that single file to your server and run or schedule it - no separate runner download required.
+
 The binary is ~30 MB (Linux ~30, macOS ~24, Windows ~28). On first launch you'll be guided through downloading two engines into your app-data directory:
 
 | Engine | Size | Required? | What it powers |

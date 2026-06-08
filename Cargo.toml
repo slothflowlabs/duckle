@@ -8,6 +8,7 @@ members = [
     "crates/transform-engine",
     "crates/stream-engine",
     "crates/duckdb-engine",
+    "crates/duckle-runner",
     "crates/slothdb-engine",
     "crates/execution-core",
     "crates/plugin-sdk",
@@ -90,6 +91,19 @@ inherits = "release"
 codegen-units = 16
 lto = "thin"
 strip = "none"
+
+# Size-optimized profile for the duckle-runner stub. The runner is embedded
+# into the desktop binary via include_bytes! and copied into every built
+# artifact, so its size matters directly. Measured: opt-level "z" =
+# 16,958,976 bytes vs "s" = 19,958,784 bytes vs the default release build's
+# 27,922,944 bytes; "z" is smaller, so keep "z".
+[profile.release-runner]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
 
 [profile.dev]
 opt-level = 0

@@ -97,6 +97,24 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev \
             libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev
 
+      - name: Build duckle-runner (bundled into the app)
+        shell: bash
+        run: |
+          set -e
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo build --profile release-runner --target "${{ matrix.target }}" -p duckle-runner
+            src="target/${{ matrix.target }}/release-runner/duckle-runner"
+          else
+            cargo build --profile release-runner -p duckle-runner
+            src="target/release-runner/duckle-runner"
+          fi
+          mkdir -p apps/desktop/bin
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$src.exe" apps/desktop/bin/duckle-runner.exe
+          else
+            cp "$src" apps/desktop/bin/duckle-runner
+          fi
+
       - name: Build raw Duckle binary
         shell: bash
         run: |
@@ -109,7 +127,7 @@ jobs:
               --manifest-path apps/desktop/Cargo.toml --features custom-protocol
           fi
 
-      - name: Stage release asset
+      - name: Stage release assets
         shell: bash
         run: |
           set -e
@@ -119,8 +137,12 @@ jobs:
           else
             src="target/release/${{ matrix.binary }}"
           fi
+          # The standalone desktop binary, named exactly as before so the
+          # in-app update check (apps/desktop/src/update_check.rs) and the
+          # README download table keep matching it. Single file, double-click.
+          # The duckle-runner is embedded into this binary at compile time
+          # (no separate with-runner asset needed).
           cp "$src" "_release/${{ matrix.asset }}"
-          ls -lh _release
 
       - name: Upload to release
         shell: bash
@@ -130,4 +152,5 @@ jobs:
           REL_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
         run: |
           set -e
-          gh release upload "$REL_TAG" "_release/${{ matrix.asset }}" --clobber
+          asset="${{ matrix.asset }}"
+          gh release upload "$REL_TAG" "_release/$asset" --clobber
