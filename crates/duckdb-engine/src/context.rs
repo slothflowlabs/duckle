@@ -12,7 +12,7 @@
 //! payloads before calling resolveForRun; this port loads them from disk
 //! itself (a naive port reading only repository.json would see zero vars).
 
-use duckle_duckdb_engine::PipelineDoc;
+use crate::PipelineDoc;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -68,11 +68,18 @@ pub struct Resolved {
     pub secret_values: Vec<String>,
 }
 
-/// Read+parse repository.json into the repo item list.
+/// Read+parse repository.json into the repo item list. A missing file yields
+/// an empty list (no contexts / routines / pipeline-refs to resolve), so
+/// resolve_workspace then behaves like a plain pipeline load instead of failing
+/// the run - important for headless callers (the scheduler) and minimal
+/// workspaces. Only a present-but-corrupt repository.json is an error.
 fn read_repo(workspace: &Path) -> Result<Vec<RepoItem>, String> {
     let path = workspace.join("repository.json");
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("read {}: {}", path.display(), e))?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("read {}: {}", path.display(), e)),
+    };
     serde_json::from_str(&text).map_err(|e| format!("parse {}: {}", path.display(), e))
 }
 
@@ -296,4 +303,71 @@ pub fn resolve_workspace(
     }
 
     Ok(Resolved { doc, secret_values })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_workspace;
+    use std::fs;
+
+    fn write(path: &std::path::Path, content: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn resolves_context_var_password_in_node_properties() {
+        // issue #32: a ${context.X} / ${X} password must be substituted before
+        // execution. The canvas did this in the frontend; scheduled runs now go
+        // through resolve_workspace so they substitute too instead of sending
+        // the raw placeholder to the driver (ORA-01017).
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        write(
+            &ws.join("repository.json"),
+            r#"[{"id":"ctx1","name":"Prod","type":"context"}]"#,
+        );
+        write(
+            &ws.join("contexts/ctx1.json"),
+            r#"{"variables":[{"key":"ORACLE_PW","value":"s3cr3t","secret":true}]}"#,
+        );
+        write(
+            &ws.join("pipelines/p1.json"),
+            r#"{"nodes":[{"id":"o","position":{"x":0,"y":0},"data":{"label":"Oracle","componentId":"src.oracle","properties":{"host":"db","password":"${Prod.ORACLE_PW}","user":"${ORACLE_PW}"}}}],"edges":[]}"#,
+        );
+
+        let resolved = resolve_workspace(ws, "p1", None).unwrap();
+        let props = resolved.doc.nodes[0].data.properties.as_ref().unwrap();
+        assert_eq!(
+            props["password"],
+            serde_json::json!("s3cr3t"),
+            "context-namespaced var ${{ContextName.KEY}} must substitute"
+        );
+        assert_eq!(
+            props["user"],
+            serde_json::json!("s3cr3t"),
+            "bare var must substitute too"
+        );
+        assert!(
+            resolved.secret_values.contains(&"s3cr3t".to_string()),
+            "secret value captured for the leak guard"
+        );
+    }
+
+    #[test]
+    fn missing_repository_json_loads_pipeline_without_failing() {
+        // A workspace with no repository.json must still load the pipeline (no
+        // contexts to resolve), not error - this is what keeps a scheduled run
+        // working when there is nothing to substitute.
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        write(
+            &ws.join("pipelines/p1.json"),
+            r#"{"nodes":[{"id":"o","position":{"x":0,"y":0},"data":{"label":"X","componentId":"src.csv","properties":{"path":"${UNSET}"}}}],"edges":[]}"#,
+        );
+        let resolved = resolve_workspace(ws, "p1", None).unwrap();
+        let props = resolved.doc.nodes[0].data.properties.as_ref().unwrap();
+        // No vars -> unknown placeholder left verbatim (not an error).
+        assert_eq!(props["path"], serde_json::json!("${UNSET}"));
+    }
 }

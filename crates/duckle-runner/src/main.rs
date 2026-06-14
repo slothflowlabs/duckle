@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 mod build;
-mod context;
+use duckle_duckdb_engine::context;
 mod selfextract;
 
 const USAGE: &str = "\

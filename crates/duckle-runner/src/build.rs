@@ -12,7 +12,7 @@
 //! or a tripped leak guard). The build never runs a pipeline, so the "1
 //! pipeline error" code is unused here.
 
-use crate::context::{self, substitute_deep};
+use duckle_duckdb_engine::context::{self, substitute_deep};
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::Engine as _;
