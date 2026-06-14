@@ -65,9 +65,9 @@
 <p>Pipelines can run on a cron expression, a fixed interval, or a file-change watch. Schedules live on the pipeline right-click menu and in the Runs/History tab, so you can review past runs and set up future ones from the same place.</p>
 <p>Watermark incremental loads (<code>xf.incremental</code>) and DuckLake CDC persist state to the workspace and advance only on a fully successful run. A partial "Run from here" never advances the watermark, so you can safely re-run a slice of a pipeline without skipping data on the next scheduled load.</p>
 <div class="grid cols-3">
-  <div class="card"><span class="ico">&#128197;</span><h3>Cron</h3><p>Schedule with a standard cron expression for precise recurring runs.</p></div>
-  <div class="card"><span class="ico">&#9201;</span><h3>Interval</h3><p>Run on a fixed interval for simple, regular polling.</p></div>
-  <div class="card"><span class="ico">&#128193;</span><h3>File watch</h3><p>Trigger a run when a watched file changes.</p></div>
+  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span><h3>Cron</h3><p>Schedule with a standard cron expression for precise recurring runs.</p></div>
+  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 1.5"/><path d="M9 2h6"/></svg></span><h3>Interval</h3><p>Run on a fixed interval for simple, regular polling.</p></div>
+  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span><h3>File watch</h3><p>Trigger a run when a watched file changes.</p></div>
 </div>
 
 <h2>Connections and contexts</h2>

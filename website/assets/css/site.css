@@ -242,7 +242,7 @@ a.card:hover { text-decoration: none; }
 /* ---- ecosystem ---- */
 .eco { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 56px 48px; text-align: center; box-shadow: var(--shadow-sm); }
 .eco img.mark { width: 54px; height: 54px; margin: 0 auto 14px; }
-.eco-head { display: inline-flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+.eco-head { display: flex; justify-content: center; align-items: center; gap: 12px; margin-bottom: 18px; }
 .eco-head .mark { width: 38px; height: 38px; margin: 0; }
 .eco-head .eyebrow { margin: 0; }
 .eco blockquote { max-width: 760px; margin: 16px auto 0; color: var(--ink-3); font-size: .96rem; }
@@ -265,6 +265,7 @@ a.card:hover { text-decoration: none; }
 .footer a { display: block; color: var(--ink-2); font-size: .92rem; padding: 4px 0; }
 .footer a:hover { color: var(--accent); text-decoration: none; }
 .footer .brand { display: flex; align-items: center; }
+.footer .legal a { display: inline; padding: 0; }
 .footer .legal { margin-top: 34px; padding-top: 22px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; color: var(--ink-3); font-size: .84rem; }
 
 /* ---- docs ---- */
