@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Duckle">
-  <!-- Duckle "D." mark, dark variant: slate disc with the brand-yellow glyph. -->
+  <!-- Duckle "D." mark, dark variant: slate disc with the brand-orange glyph (matches the desktop app icon). -->
   <circle cx="128" cy="128" r="120" fill="#1B1F2A"/>
-  <g fill="#FFD000">
+  <g fill="#FF6900">
     <path d="M56 54 A74 74 0 0 1 56 202 Z"/>
     <circle cx="173" cy="128" r="27"/>
   </g>

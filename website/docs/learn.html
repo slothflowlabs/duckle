@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Learn hub - Duckle</title>
+<meta name="description" content="Duckle Learn hub: ETL vs ELT, change data capture on DuckDB, local-first data architecture, RAG data prep, warehouse cost savings, and migrating from Talend, Fivetran or Airbyte." />
+<link rel="icon" href="../assets/img/duckle-logo-light.svg" />
+<link rel="preconnect" href="https://rsms.me/" />
+<link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+<link rel="stylesheet" href="../assets/css/site.css" />
+<script>(function(){try{var t=localStorage.getItem("duckle-theme");if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
+</head>
+<body>
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="../index.html"><img class="logo-light" src="../assets/img/duckle-logo-light.svg" alt="" /><img class="logo-dark" src="../assets/img/duckle-logo-dark.svg" alt="" /><span>Duckle<span class="dot">.</span></span></a>
+    <nav class="nav-links" id="navLinks">
+      <a href="../index.html#product">Product</a>
+      <a href="../use-cases.html">Use cases</a>
+      <a href="integrations.html">Integrations</a>
+      <a href="index.html">Docs</a>
+      <a href="learn.html">Learn</a>
+    </nav>
+    <div class="nav-right">
+      <a class="gh-star" id="ghStar" href="https://github.com/SouravRoy-ETL/duckle" target="_blank" rel="noopener" aria-label="Star Duckle on GitHub">
+        <span class="gh-label"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span>Star</span></span>
+        <span class="gh-count" id="ghCount">&#9733;</span>
+      </a>
+      <button class="icon-btn theme-toggle" id="themeToggle" aria-label="Toggle theme" title="Toggle theme">
+        <svg class="moon" width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="sun" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+      </button>
+      <a class="btn btn-primary" href="../index.html#download">Download</a>
+      <button class="icon-btn nav-toggle" id="navToggle" aria-label="Open menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+    </div>
+  </div>
+</header>
+
+<div class="wrap section">
+  <div class="docs-shell">
+    <aside class="docs-side">
+      <h4>Learn hub</h4>
+      <a href="learn.html#etl-vs-elt">ETL vs ELT</a>
+      <a href="learn.html#cdc">Change data capture</a>
+      <a href="learn.html#local-first">Local-first data</a>
+      <a href="learn.html#rag">Data prep for AI / RAG</a>
+      <a href="learn.html#snowflake-cost">Warehouse cost savings</a>
+      <a href="learn.html#migrate">Migrating to Duckle</a>
+      <h4>Docs</h4>
+      <a href="index.html">Overview</a>
+      <a href="getting-started.html">Install &amp; quickstart</a>
+      <a href="components.html">Component reference</a>
+      <a href="../use-cases.html">Use cases</a>
+      <h4>Project</h4>
+      <a href="https://github.com/SouravRoy-ETL/duckle" target="_blank" rel="noopener">GitHub</a>
+    </aside>
+
+    <main class="docs-main">
+      <span class="eyebrow">Learn hub</span>
+      <h1>Local-first data engineering, explained</h1>
+      <p class="lead">Concepts and practical guides for building pipelines with Duckle and DuckDB. Short, opinionated, and grounded in how the product actually works.</p>
+
+      <h2 id="etl-vs-elt">ETL vs ELT</h2>
+      <p><b>ETL</b> (extract, transform, load) transforms data <i>before</i> it lands in the destination, usually on a separate processing tier. <b>ELT</b> (extract, load, transform) loads raw data first and transforms it <i>inside</i> the destination warehouse with SQL. ELT won as warehouses got cheap and fast, but it has a catch: every transformation, including the cheap ones, bills warehouse compute.</p>
+      <p>Duckle takes a third position. It runs a real columnar engine (<b>DuckDB</b>) <i>on your machine</i>, so you get ELT-style SQL transforms without renting a warehouse to run them. Extract from anywhere, transform locally at native speed, and load only the finished result into the warehouse, the lake, or a file. You read the generated SQL on every node, so it is never a black box.</p>
+      <div class="note"><b>Rule of thumb.</b> Do the heavy joins, filtering and aggregation locally in Duckle; push only the rows you actually need into the expensive system downstream.</div>
+
+      <h2 id="cdc">Change data capture on DuckDB</h2>
+      <p>Reprocessing an entire table every run is slow and expensive. Change data capture (CDC) and incremental patterns move only what changed. Duckle ships several:</p>
+      <ul>
+        <li><b>Watermark incremental load</b> (<code>xf.incremental</code>): pick a monotonic column (an id or a timestamp). Duckle stores the high-water mark in the workspace and, on the next run, reads only rows past it. The watermark advances <i>only on a fully successful run</i>, so a failure or a partial preview never skips data.</li>
+        <li><b>DuckLake change feed</b> (<code>src.ducklake.changes</code>): read the committed changes since the last consumed snapshot of a DuckLake table.</li>
+        <li><b>SCD Type 2</b>: keep history with <code>valid_from</code> / <code>valid_to</code> / <code>is_current</code> columns.</li>
+        <li><b>Universal upsert / MERGE</b> with optional <b>delete propagation</b>: mirror a source into a destination, applying inserts, updates and deletes driven by a change-type column - across embedded, network, warehouse and Mongo sinks.</li>
+      </ul>
+      <p>See it end to end in the <a href="../use-cases.html#cdc">DuckLake CDC mirror use case</a> (100k changes mirrored with upsert + delete in about 1.7 seconds).</p>
+
+      <h2 id="local-first">Why local-first data tooling</h2>
+      <p>Most data tools assume a cluster and a control plane. For a huge amount of real work - dev and debug loops, small-team analytics, one-off cleanups, data prep for AI - that is overkill. Local-first flips three things:</p>
+      <ul>
+        <li><b>Cost.</b> Your laptop is already paid for. No always-on warehouse, no per-row ingestion pricing.</li>
+        <li><b>Privacy.</b> The data never leaves your machine. No telemetry, no third-party processor, works offline.</li>
+        <li><b>Speed.</b> No network round-trips between extract, transform and load. A vectorized engine on local NVMe is astonishingly fast: Duckle incremental-loads <b>5 million rows in about a second</b>.</li>
+      </ul>
+      <p>When you outgrow one machine, point Duckle's output at the system that scales (a warehouse, an object store, a lakehouse). It will not pretend to be a cluster, and that honesty is the point.</p>
+
+      <h2 id="rag">Data prep for AI and RAG</h2>
+      <p>Models inherit the quality of their inputs. RAG indexes quietly fill with duplicates, nulls, mixed encodings and PII. Duckle is built to scrub data before it reaches a vector store, on device:</p>
+      <ul>
+        <li><b>Chunk</b> long text (<code>xf.ai.chunk</code>), <b>redact PII</b> (<code>xf.ai.pii</code> - emails, phones, SSNs, cards), <b>embed</b> (<code>xf.ai.embed</code>, any OpenAI-compatible endpoint), then <b>semantic-dedupe</b> (<code>xf.ai.dedupe</code>).</li>
+        <li><b>Hybrid retrieval, locally:</b> Vector Similarity Search (cosine / L2 / inner product via <code>vss</code>) and Full-Text Search (BM25 via <code>fts</code>) - no model API required.</li>
+        <li><b>Land it</b> in pgvector, Pinecone, Qdrant, Weaviate or Milvus.</li>
+      </ul>
+      <p>The three pure-local transforms (chunk, PII redact, dedupe) need no API at all. Full guide: <a href="ai-duckie.html">Duckie AI &amp; AI transforms</a>.</p>
+
+      <h2 id="snowflake-cost">Cut warehouse spend with local compute</h2>
+      <p>Warehouses bill for compute and storage. If you scan a billion rows to produce a small daily rollup, you pay for the billion-row scan every time. Duckle lets you move that scan off the warehouse:</p>
+      <ol>
+        <li>Read the raw data where it lives (object storage, a database export, a Parquet dump).</li>
+        <li>Join, filter and aggregate locally on DuckDB.</li>
+        <li><b>Upsert only the aggregate</b> into the warehouse.</li>
+      </ol>
+      <p>In the <a href="../use-cases.html#snowflake">Snowflake cost-save use case</a>, a 1-billion-row Parquet file plus SQLite and ADBC dimensions are crunched locally and only the revenue summary is written to Snowflake. The warehouse stores kilobytes, not terabytes.</p>
+
+      <h2 id="migrate">Migrating from Talend, Fivetran or Airbyte</h2>
+      <p>If you know those tools, Duckle maps cleanly:</p>
+      <table>
+        <tr><th>You used</th><th>In Duckle</th></tr>
+        <tr><td>Talend jobs / tMap</td><td>The visual canvas and the <b>Map</b> node (main + up to 3 lookups, typed expressions, inline filter)</td></tr>
+        <tr><td>Fivetran / Airbyte connectors</td><td>329 built-in components; connections are reusable, encrypted credential sets</td></tr>
+        <tr><td>dbt models</td><td>Run dbt directly with the <code>xf.dbt</code> node, or use native transforms</td></tr>
+        <tr><td>A managed control plane</td><td>Plain files in a folder you pick - diff, branch and review in Git; schedule locally or run headless</td></tr>
+        <tr><td>Per-row / per-connector pricing</td><td>Free and open source; you run it on hardware you already own</td></tr>
+      </table>
+      <p>Start with the <a href="getting-started.html">quickstart</a>, then browse the <a href="../use-cases.html">use cases</a> for end-to-end examples.</p>
+
+      <div class="note" style="margin-top:32px;"><b>More guides are on the way.</b> Want a specific topic covered? Open an issue on <a href="https://github.com/SouravRoy-ETL/duckle/issues" target="_blank" rel="noopener">GitHub</a>.</div>
+    </main>
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">
+    <div class="legal">
+      <span>&copy; 2026 Duckle. MIT OR Apache-2.0.</span>
+      <span><a href="../index.html">Home</a> &middot; <a href="https://github.com/SouravRoy-ETL/duckle" target="_blank" rel="noopener">GitHub</a></span>
+    </div>
+  </div>
+</footer>
+<script src="../assets/js/site.js"></script>
+</body>
+</html>

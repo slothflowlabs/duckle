@@ -1,300 +1,351 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Duckle - The local-first data studio, built on DuckDB</title>
-<meta name="description" content="Duckle is an open-source desktop ETL/ELT studio with a built-in local AI assistant. Drag a visual pipeline, run it at native speed on DuckDB. 329 components, a scheduler, and an MCP server. No cloud, no servers, no lock-in." />
-<meta property="og:title" content="Duckle - The local-first data studio, built on DuckDB" />
-<meta property="og:description" content="Open-source desktop ETL/ELT with a local AI assistant. Visual pipelines, 329 components, native DuckDB speed. No cloud, no servers, no lock-in." />
-<meta property="og:type" content="website" />
-<meta name="theme-color" content="#07090f" />
-<link rel="icon" href="assets/img/duckle-logo-dark.svg" />
-<link rel="preconnect" href="https://rsms.me/" />
-<link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+<title>Duckle - Open-source ETL you can see end to end, built on DuckDB</title>
+<meta name="description" content="Duckle is an open-source desktop ETL/ELT studio with a built-in local AI assistant. Build visual pipelines and run them at native DuckDB speed. 329 components, a scheduler, and an MCP server. No cloud, no servers, no lock-in." />
+<meta property="og:title" content="Duckle - Open-source ETL you can see end to end" />
+<meta property="og:description" content="Visual pipelines, 329 connectors and transforms, a local AI assistant, native DuckDB speed. Open source. No cloud, no servers, no lock-in." />
+<meta property="og:image" content="assets/img/screens/pipeline-join.png" />
+<meta name="theme-color" content="#ffffff" />
+<link rel="icon" href="assets/img/duckle-logo-light.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="assets/css/site.css" />
-<script>
-/* Apply saved theme before paint to avoid a flash. */
-(function () {
-    try {
-        var t = localStorage.getItem("duckle-theme");
-        if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
-    } catch (e) {}
-})();
-</script>
+<script>(function(){try{var t=localStorage.getItem("duckle-theme");if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
 </head>
 <body>
 
-<!-- ===== NAV ===== -->
+<div class="announce">
+  Duckle v0.3.0 is out - native multi-source dbt, brand connector icons and a faster local AI assistant.
+  <a href="https://github.com/SouravRoy-ETL/duckle/releases/latest" target="_blank" rel="noopener">Read the release notes <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+</div>
+
 <header class="nav">
   <div class="wrap nav-inner">
     <a class="brand" href="index.html" aria-label="Duckle home">
-      <img class="logo-dark" src="assets/img/duckle-logo-dark.svg" alt="" />
       <img class="logo-light" src="assets/img/duckle-logo-light.svg" alt="" />
+      <img class="logo-dark" src="assets/img/duckle-logo-dark.svg" alt="" />
       <span>Duckle<span class="dot">.</span></span>
     </a>
     <nav class="nav-links" id="navLinks">
-      <a href="#features">Features</a>
+      <div class="nav-item">
+        <a class="top" href="#product">Product <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></a>
+        <div class="mega">
+          <a href="#product"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span><b>Visual canvas</b><span>Drag, wire, run. Compiles to readable SQL.</span></span></a>
+          <a href="#duckie"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="7" width="16" height="12" rx="2"/><path d="M12 7V4M9 13h.01M15 13h.01"/></svg></span><span><b>Duckie AI</b><span>Describe a pipeline; it builds it, locally.</span></span></a>
+          <a href="docs/components.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg></span><span><b>329 components</b><span>Sources, transforms, sinks, quality, control.</span></span></a>
+          <a href="docs/automation.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg></span><span><b>Schedule &amp; deploy</b><span>Cron, headless runner, MCP server.</span></span></a>
+        </div>
+      </div>
+      <div class="nav-item">
+        <a class="top" href="use-cases.html">Use cases <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></a>
+        <div class="mega">
+          <a href="use-cases.html#join"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h6m6 0h6M9 6l-6 6 6 6m6-12 6 6-6 6"/></svg></span><span><b>Cross-system joins</b><span>Join files, DBs and warehouses in one pass.</span></span></a>
+          <a href="use-cases.html#snowflake"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 7l10 5 10-5M2 17l10 5 10-5"/></svg></span><span><b>Warehouse cost savings</b><span>Crunch locally, write only the rollup.</span></span></a>
+          <a href="use-cases.html#cdc"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg></span><span><b>Change data capture</b><span>Upsert + delete propagation, incremental.</span></span></a>
+          <a href="use-cases.html#ai"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 0 1 4 4 4 4 0 0 1 0 8 4 4 0 0 1-8 0 4 4 0 0 1 0-8 4 4 0 0 1 4-4z"/></svg></span><span><b>Data prep for AI</b><span>Chunk, redact, embed, dedupe for RAG.</span></span></a>
+        </div>
+      </div>
       <a href="#integrations">Integrations</a>
-      <a href="#usecases">Use cases</a>
-      <a href="#ecosystem">Ecosystem</a>
       <a href="docs/index.html">Docs</a>
+      <a href="docs/learn.html">Learn</a>
     </nav>
     <div class="nav-right">
       <a class="gh-star" id="ghStar" href="https://github.com/SouravRoy-ETL/duckle" target="_blank" rel="noopener" aria-label="Star Duckle on GitHub">
-        <span class="gh-label">
-          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-          <span>Star</span>
-        </span>
-        <span class="gh-count" id="ghCount">★</span>
+        <span class="gh-label"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span class="hide-sm">Star</span></span>
+        <span class="gh-count" id="ghCount">&#9733;</span>
       </a>
       <button class="icon-btn theme-toggle" id="themeToggle" aria-label="Toggle light/dark theme" title="Toggle theme">
         <svg class="moon" width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         <svg class="sun" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
       </button>
-      <a class="btn btn-primary" href="#download">Download</a>
-      <button class="icon-btn nav-toggle" id="navToggle" aria-label="Open menu">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
-      </button>
+      <a class="btn btn-outline hide-sm" href="docs/getting-started.html">Read the docs</a>
+      <a class="btn btn-primary btn-pill hide-sm" href="#download">Download free</a>
+      <button class="icon-btn nav-toggle" id="navToggle" aria-label="Open menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
     </div>
   </div>
 </header>
 
-<!-- ===== HERO ===== -->
+<!-- 1. HERO -->
 <section class="hero">
   <div class="wrap">
-    <span class="badge-eco"><span class="duckdb-dot"></span> Built on <b>DuckDB</b> &middot; open source &middot; runs offline</span>
-    <h1>The local-first data studio with a <span class="grad">built-in AI assistant</span>.</h1>
-    <p class="lead">Duckle is an open-source desktop ETL / ELT studio. Drag a pipeline onto the canvas, or describe it in plain English to <b>Duckie</b> - the on-device AI - and run it at native columnar speed through DuckDB. 329 components, a scheduler, and an MCP server, in a ~65 MB single-file app.</p>
-    <div class="hero-cta">
-      <a class="btn btn-primary btn-lg" href="#download">Download for free</a>
-      <a class="btn btn-ghost btn-lg" href="https://github.com/SouravRoy-ETL/duckle" target="_blank" rel="noopener">View on GitHub</a>
-      <a class="btn btn-ghost btn-lg" href="docs/index.html">Read the docs</a>
+    <div class="hero-grid">
+      <div>
+        <span class="badge-eco"><span class="dd"></span> Built on <b>DuckDB</b> &middot; 100% open source</span>
+        <h1>Move data from anything,<br />to anywhere, on your machine.</h1>
+        <p class="lead">Duckle is a local-first ETL studio with a built-in AI assistant. Connect 160+ sources and destinations, build pipelines visually or describe them in plain English, and run them at native DuckDB speed. No cloud, no servers, no lock-in.</p>
+        <div class="hero-cta">
+          <a class="btn btn-primary btn-pill btn-lg" href="#download">Download for free</a>
+          <a class="btn btn-outline btn-lg" href="https://github.com/SouravRoy-ETL/duckle" target="_blank" rel="noopener">
+            <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.23.41-2.7-.94-2.7-.94-.36-.93-.9-1.18-.9-1.18-.73-.5.06-.49.06-.49.81.06 1.24.84 1.24.84.72 1.23 1.88.87 2.34.67.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.03 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+            View on GitHub
+          </a>
+        </div>
+        <div class="value-props">
+          <span class="vp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Free &amp; open source</span>
+          <span class="vp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> No account, no telemetry</span>
+          <span class="vp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Runs fully offline</span>
+        </div>
+      </div>
+
+      <div class="hgraph" aria-hidden="true">
+        <div class="gridbg"></div>
+        <svg class="lines" viewBox="0 0 560 560" preserveAspectRatio="xMidYMid meet">
+          <line x1="106" y1="129" x2="280" y2="280" /><circle cx="106" cy="129" r="3.2" />
+          <line x1="90"  y1="280" x2="280" y2="280" /><circle cx="90"  cy="280" r="3.2" />
+          <line x1="112" y1="431" x2="280" y2="280" /><circle cx="112" cy="431" r="3.2" />
+          <line x1="314" y1="67"  x2="280" y2="280" /><circle cx="314" cy="67"  r="3.2" />
+          <line x1="442" y1="118" x2="280" y2="280" /><circle cx="442" cy="118" r="3.2" />
+          <line x1="476" y1="274" x2="280" y2="280" /><circle cx="476" cy="274" r="3.2" />
+          <line x1="437" y1="431" x2="280" y2="280" /><circle cx="437" cy="431" r="3.2" />
+          <line x1="336" y1="498" x2="280" y2="280" /><circle cx="336" cy="498" r="3.2" />
+        </svg>
+
+        <!-- central Duckle mark -->
+        <div class="hg-el hg-center" style="left:50%; top:50%;">
+          <img class="logo-light" src="assets/img/duckle-logo-light.svg" alt="Duckle" />
+          <img class="logo-dark" src="assets/img/duckle-logo-dark.svg" alt="Duckle" />
+        </div>
+
+        <!-- source groups (left) -->
+        <div class="hg-el hg-group hg-float" style="left:19%; top:23%;">
+          <div class="grow">
+            <span class="hg-tile"><img src="https://cdn.simpleicons.org/postgresql" alt="PostgreSQL" loading="lazy" /></span>
+            <span class="hg-tile"><img src="https://cdn.simpleicons.org/mysql" alt="MySQL" loading="lazy" /></span>
+            <span class="hg-tile"><img src="https://cdn.simpleicons.org/mongodb" alt="MongoDB" loading="lazy" /></span>
+          </div>
+          <div class="glbl">Databases</div>
+        </div>
+        <div class="hg-el hg-group hg-float d2" style="left:16%; top:50%;">
+          <div class="grow">
+            <span class="hg-tile"><img src="https://cdn.simpleicons.org/snowflake" alt="Snowflake" loading="lazy" /></span>
+            <span class="hg-tile"><img src="https://cdn.simpleicons.org/googlebigquery" alt="BigQuery" loading="lazy" /></span>
+            <span class="hg-tile"><img src="https://cdn.simpleicons.org/databricks" alt="Databricks" loading="lazy" /></span>
+          </div>
+          <div class="glbl">Warehouses</div>
+        </div>
+        <div class="hg-el hg-group hg-float d4" style="left:20%; top:77%;">
+          <div class="grow">
+            <span class="hg-tile"><img src="https://cdn.simpleicons.org/stripe" alt="Stripe" loading="lazy" /></span>
+            <span class="hg-tile"><img src="https://cdn.simpleicons.org/hubspot" alt="HubSpot" loading="lazy" /></span>
+            <span class="hg-tile"><img src="https://cdn.simpleicons.org/shopify" alt="Shopify" loading="lazy" /></span>
+          </div>
+          <div class="glbl">SaaS &amp; apps</div>
+        </div>
+
+        <!-- destination / streaming nodes (right) -->
+        <div class="hg-el hg-node sm hg-float d3" style="left:56%; top:12%;">
+          <img src="https://cdn.simpleicons.org/apacheparquet" alt="Parquet" loading="lazy" />
+        </div>
+        <div class="hg-el hg-node hg-float d1" style="left:79%; top:21%;">
+          <img src="https://cdn.simpleicons.org/github" alt="GitHub" loading="lazy" />
+        </div>
+        <div class="hg-el hg-node hg-float d3" style="left:85%; top:49%;">
+          <img src="https://cdn.simpleicons.org/apachekafka" alt="Kafka" loading="lazy" />
+        </div>
+        <div class="hg-el hg-node hg-float" style="left:78%; top:77%;">
+          <img src="https://cdn.simpleicons.org/redis" alt="Redis" loading="lazy" />
+        </div>
+        <div class="hg-el hg-node sm hg-float d2" style="left:60%; top:89%;">
+          <img src="https://cdn.simpleicons.org/elasticsearch" alt="Elasticsearch" loading="lazy" />
+        </div>
+      </div>
     </div>
-    <div class="hero-sub">
-      <span><span class="ok">&#10003;</span> Free &amp; open source</span>
-      <span><span class="ok">&#10003;</span> No account, no telemetry</span>
-      <span><span class="ok">&#10003;</span> Your data never leaves your machine</span>
-      <span><span class="ok">&#10003;</span> Windows &middot; macOS &middot; Linux</span>
-    </div>
-    <figure class="hero-art">
-      <img src="assets/img/screens/mega-pipeline-join.png" alt="A Duckle pipeline on the canvas joining a CSV, a Parquet file, a DuckDB table and a SQLite table through a visual Map node" loading="eager" />
-    </figure>
   </div>
 </section>
 
-<!-- ===== STATS ===== -->
-<section class="section-sm">
+<!-- 2. SOCIAL-PROOF STAT BAND -->
+<section class="statband">
   <div class="wrap">
-    <div class="stats">
-      <div class="stat"><b>329</b><span>components in the palette</span></div>
-      <div class="stat"><b>~65 MB</b><span>single-file download</span></div>
-      <div class="stat"><b>0</b><span>servers or cloud accounts</span></div>
-      <div class="stat"><b>60</b><span>UI languages (RTL too)</span></div>
+    <div class="row">
+      <div class="sb"><b>329</b><span>components, all on DuckDB</span></div>
+      <div class="sb"><b>104 / 59</b><span>sources / destinations</span></div>
+      <div class="sb"><b>5M rows</b><span>loaded in about 1 second</span></div>
+      <div class="sb"><b>100%</b><span>local - data never leaves</span></div>
     </div>
   </div>
 </section>
 
-<!-- ===== ECOSYSTEM ===== -->
+<!-- 3. INTEGRATIONS MARQUEE -->
+<section class="section tight" id="integrations">
+  <div class="wrap center" style="margin-bottom:30px;">
+    <span class="eyebrow">Integrations</span>
+    <h2>Move data from 160+ connectors, on day one</h2>
+    <p class="lead center">Files, databases, warehouses, object stores, streaming brokers, SaaS APIs, NoSQL and vector DBs. Every connector is covered by tests, not a coming-soon list.</p>
+  </div>
+  <div class="marquee">
+    <div class="marquee-track">
+      <span class="logo-tile"><span class="d" style="background:var(--maya)"></span>PostgreSQL</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Snowflake</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>MySQL</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>BigQuery</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Amazon S3</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Databricks</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>MongoDB</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Kafka</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Oracle</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>SQL Server</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Redshift</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Iceberg</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Parquet</span>
+      <span class="logo-tile"><span class="d" style="background:var(--maya)"></span>PostgreSQL</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Snowflake</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>MySQL</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>BigQuery</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Amazon S3</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Databricks</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>MongoDB</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Kafka</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Oracle</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>SQL Server</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Redshift</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Iceberg</span><span class="logo-tile"><span class="d" style="background:var(--maya)"></span>Parquet</span>
+    </div>
+  </div>
+  <div class="marquee rtl" style="margin-top:14px;">
+    <div class="marquee-track">
+      <span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Salesforce</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>HubSpot</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Stripe</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Shopify</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Notion</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>GitHub</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Jira</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Slack</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Google Cloud Storage</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Azure Blob</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>pgvector</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Qdrant</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Elasticsearch</span>
+      <span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Salesforce</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>HubSpot</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Stripe</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Shopify</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Notion</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>GitHub</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Jira</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Slack</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Google Cloud Storage</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Azure Blob</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>pgvector</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Qdrant</span><span class="logo-tile"><span class="d" style="background:var(--violet)"></span>Elasticsearch</span>
+    </div>
+  </div>
+  <div class="center" style="margin-top:28px;"><a class="btn btn-ghost" href="docs/integrations.html">View all integrations &rarr;</a></div>
+</section>
+
+<!-- 4. CAPABILITY BLOCK -->
+<section class="section" id="product">
+  <div class="wrap">
+    <div class="feature">
+      <figure class="frame" style="margin:0;"><div class="frame-bar"><i></i><i></i><i></i></div><img src="assets/img/screens/visual-mapper.png" alt="The visual Map editor with a main input, two lookups, typed output expressions and a filter" loading="lazy" /></figure>
+      <div class="feat-text">
+        <span class="eyebrow">Build</span>
+        <h2>Automate pipelines end to end, without writing SQL</h2>
+        <p>Drag sources, transforms, validators and sinks onto a canvas and wire them together. The visual <b>Map</b> editor joins a main input to up to three lookups with per-output typed expressions and an inline filter. Every node still compiles to readable SQL you can inspect in the Plan tab.</p>
+        <ul class="feat-list">
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> 128 transforms: joins, windows, aggregates, CDC/SCD, AI, quality</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Validators route bad rows to a reject port</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Generated SQL on every node - never a black box</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 5. OPERATIONAL VISIBILITY BLOCK -->
+<section class="section" style="padding-top:0;">
+  <div class="wrap">
+    <div class="feature rev">
+      <div class="feat-text">
+        <span class="eyebrow">Run &amp; monitor</span>
+        <h2>Native speed, with live operational visibility</h2>
+        <p>Execution runs through DuckDB - vectorized and columnar. Branches fan out across your CPU cores automatically. Every run reports per-node status, row counts, timings and a live preview, so you see exactly what happened and where.</p>
+        <ul class="feat-list">
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> 16-node, multi-branch runs finish in a few seconds</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Run history, plans and per-node previews built in</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Schedule on cron / interval / file-watch, or run headless</li>
+        </ul>
+      </div>
+      <figure class="frame" style="margin:0;"><div class="frame-bar"><i></i><i></i><i></i></div><img src="assets/img/screens/run-output.png" alt="A run summary showing 16 nodes and 279 rows written in 3006 ms, with a live preview" loading="lazy" /></figure>
+    </div>
+  </div>
+</section>
+
+<!-- 6. SECURITY / TRUST STRIP -->
+<section class="section tight" style="background:var(--bg-soft); border-top:1px solid var(--border); border-bottom:1px solid var(--border);">
+  <div class="wrap">
+    <div class="center" style="margin-bottom:32px;"><span class="eyebrow">Private by design</span><h2>Your data stays on your machine</h2></div>
+    <div class="secstrip">
+      <div class="secitem"><span class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span><b>Encrypted at rest</b><span>AES-256-GCM secrets</span></div>
+      <div class="secitem"><span class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64A9 9 0 1 1 5.64 6.64M12 2v10"/></svg></span><b>Runs offline</b><span>no network required</span></div>
+      <div class="secitem"><span class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg></span><b>No telemetry</b><span>nothing phones home</span></div>
+      <div class="secitem"><span class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 18 22 12 16 6M8 6 2 12l6 6"/></svg></span><b>Open source</b><span>MIT / Apache-2.0, auditable</span></div>
+      <div class="secitem"><span class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span><b>Plain files</b><span>diff, branch, review in Git</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- 7. THREE USE-CASE COLUMNS -->
+<section class="section" id="solutions">
+  <div class="wrap">
+    <div class="center" style="margin-bottom:44px;"><span class="eyebrow">Solutions</span><h2>One studio for every data movement job</h2></div>
+    <div class="usecols">
+      <div class="usecol">
+        <div class="top"><span class="tag">Replication</span><h3>Warehouse loading &amp; CDC</h3><p>Upsert into Snowflake, BigQuery or Postgres on a schedule, with change data capture and delete propagation.</p></div>
+        <div class="shot"><img src="assets/img/screens/cdc.png" alt="DuckLake CDC mirror pipeline" loading="lazy" /></div>
+      </div>
+      <div class="usecol">
+        <div class="top"><span class="tag">SaaS &amp; APIs</span><h3>Pull from apps &amp; services</h3><p>Salesforce, HubSpot, Stripe, GitHub, Jira and generic REST / GraphQL / OData - normalized into rows you can join.</p></div>
+        <div class="shot"><img src="assets/img/screens/duckie.png" alt="Component palette and Duckie assistant" loading="lazy" /></div>
+      </div>
+      <div class="usecol">
+        <div class="top"><span class="tag">Files &amp; storage</span><h3>Lakes, files &amp; object stores</h3><p>Glob S3 / GCS / Azure, read Parquet, Iceberg, Delta and DuckLake, and write Hive-partitioned output at native speed.</p></div>
+        <div class="shot"><img src="assets/img/screens/incremental.png" alt="Incremental load pipeline" loading="lazy" /></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 8. DUCKIE / AI -->
+<section class="section" id="duckie" style="padding-top:0;">
+  <div class="wrap">
+    <div class="feature">
+      <figure class="frame" style="margin:0;"><div class="frame-bar"><i></i><i></i><i></i></div><img src="assets/img/screens/duckie.png" alt="Duckie AI assistant panel beside the canvas" loading="lazy" /></figure>
+      <div class="feat-text">
+        <span class="eyebrow">Local AI</span>
+        <h2>Describe it. Duckie builds it. On device.</h2>
+        <p>The assistant runs Qwen 2.5 Coder locally through llama.cpp - no API key, no cloud. Ask in plain English; Duckie streams a valid pipeline and drops positioned, wired nodes onto the canvas. The same six AI transforms prep data for RAG, all offline.</p>
+        <ul class="feat-list">
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Truly local - prompts and data never leave the machine</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Chunk, redact PII, embed and dedupe for RAG</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Connect Claude or any LLM over the built-in MCP server</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 9. CASE STUDIES (metric cards) -->
+<section class="section" style="background:var(--bg-soft); border-top:1px solid var(--border); border-bottom:1px solid var(--border);">
+  <div class="wrap">
+    <div class="center" style="margin-bottom:44px;"><span class="eyebrow">Proof, not promises</span><h2>Real pipelines, real run results</h2></div>
+    <div class="cases">
+      <a class="case" href="use-cases.html#snowflake" style="text-decoration:none;"><div class="big">1B rows</div><h3>Snowflake cost savings</h3><p>Crunch a billion-row Parquet plus SQLite and ADBC dimensions locally, and upsert only the aggregate into Snowflake.</p></a>
+      <a class="case" href="use-cases.html#cdc" style="text-decoration:none;"><div class="big">1.7 s</div><h3>DuckLake CDC mirror</h3><p>100,000 changes mirrored into DuckDB with upsert and delete propagation, exactly-once on success.</p></a>
+      <a class="case" href="use-cases.html#incremental" style="text-decoration:none;"><div class="big">~1 s</div><h3>Incremental load</h3><p>5 million rows loaded on the first run; later runs read only rows past the saved watermark.</p></a>
+    </div>
+    <div class="center" style="margin-top:36px;"><a class="btn btn-ghost btn-lg" href="use-cases.html">See all use cases, explained &rarr;</a></div>
+  </div>
+</section>
+
+<!-- 10. ECOSYSTEM -->
 <section class="section" id="ecosystem">
   <div class="wrap">
     <div class="eco">
-      <img class="duck-mark logo-dark" src="assets/img/duckle-logo-dark.svg" alt="" />
-      <img class="duck-mark logo-light" src="assets/img/duckle-logo-light.svg" alt="" />
+      <img class="mark logo-light" src="assets/img/duckle-logo-light.svg" alt="" />
+      <img class="mark logo-dark" src="assets/img/duckle-logo-dark.svg" alt="" />
       <span class="eyebrow">Part of the DuckDB ecosystem</span>
-      <h2>Duckle turns DuckDB into a visual, embeddable ETL platform.</h2>
-      <p class="lead" style="margin:0 auto;">Every pipeline compiles to SQL and executes through <b>DuckDB</b> - vectorized, columnar, local. Duckle sits in the ingestion + transformation layer of the DuckDB stack, next to tools like <b>dlt</b>, <b>dbt</b>, <b>SQLMesh</b> and <b>Evidence</b>, and reads the wider DuckDB family natively: <b>DuckLake</b> tables, <b>MotherDuck</b>, the <b>Quack</b> remote protocol, and the community extensions.</p>
-      <blockquote>"See your whole pipeline." Duckle is an independent, open-source member of the DuckDB ecosystem - it matches the DuckDB brand palette and builds on the engine, but is not affiliated with or endorsed by DuckDB Labs or MotherDuck.</blockquote>
-      <div class="eco-row">
+      <h2>Duckle turns DuckDB into a visual ETL platform</h2>
+      <p class="lead center">Every pipeline compiles to SQL and runs through DuckDB. Duckle sits in the ingestion and transformation layer alongside tools like dlt, dbt and Evidence, and reads the wider family natively: DuckLake tables, MotherDuck, the Quack protocol, and the community extensions.</p>
+      <blockquote>An independent, open-source member of the DuckDB ecosystem. Duckle matches the DuckDB brand palette and builds on the engine, but is not affiliated with or endorsed by DuckDB Labs or MotherDuck.</blockquote>
+      <div class="row">
         <a class="btn btn-ghost" href="https://duckdb.org" target="_blank" rel="noopener">DuckDB</a>
         <a class="btn btn-ghost" href="https://duckdb.org/community_extensions/" target="_blank" rel="noopener">Community extensions</a>
         <a class="btn btn-ghost" href="https://github.com/davidgasquez/awesome-duckdb" target="_blank" rel="noopener">awesome-duckdb</a>
-        <a class="btn btn-ghost" href="https://motherduck.com/blog/duckdb-ecosystem-newsletter-june-2026/" target="_blank" rel="noopener">Ecosystem newsletter</a>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ===== FLOW ===== -->
-<section class="section" style="padding-top:0;">
-  <div class="wrap center">
-    <span class="eyebrow">How it works</span>
-    <h2>Source &rarr; transform &rarr; destination. On one canvas.</h2>
-    <p class="lead center">Wire nodes together and press Run. Duckle compiles the graph to SQL, runs it on DuckDB, and shows a live preview and the generated SQL on every node. No black box.</p>
-    <div class="flow" style="margin-top:28px; text-align:left;">
-      <div class="flow-node n-src"><span class="t">Sources</span><b>104 connectors</b><small>Files, DBs, warehouses, SaaS, streaming, NoSQL, vector</small></div>
-      <div class="flow-arrow">&rarr;</div>
-      <div class="flow-node n-xf"><span class="t">Transforms</span><b>128 operations</b><small>Map, join, aggregate, window, CDC/SCD, AI, quality</small></div>
-      <div class="flow-arrow">&rarr;</div>
-      <div class="flow-node n-snk"><span class="t">Destinations</span><b>59 sinks</b><small>Files, databases, warehouses, object stores, vector DBs</small></div>
-    </div>
-  </div>
-</section>
-
-<!-- ===== FEATURES ===== -->
-<section class="section" id="features" style="padding-top:0;">
+<!-- 11. CLOSING CTA -->
+<section class="section" id="download" style="padding-top:0;">
   <div class="wrap">
-    <div class="center">
-      <span class="eyebrow">Why Duckle</span>
-      <h2>Everything a data tool should be. Nothing it shouldn't.</h2>
-    </div>
-    <div class="grid cols-3" style="margin-top:34px;">
-      <div class="card"><span class="ico">&#128301;</span><h3>Visual, never opaque</h3><p>The canvas compiles to readable SQL and every node has a live preview tab. Inspect, tweak, and trust what runs.</p></div>
-      <div class="card"><span class="ico">&#129302;</span><h3>Local AI assistant</h3><p>Describe a pipeline in English; Duckie writes the JSON and drops it on the canvas. Qwen 2.5 Coder runs on your CPU - no API key, no cloud.</p></div>
-      <div class="card"><span class="ico">&#9889;</span><h3>Native speed</h3><p>Execution runs through DuckDB: vectorized, columnar, local. Jobs that crawl in a spreadsheet finish in milliseconds.</p></div>
-      <div class="card"><span class="ico">&#128230;</span><h3>One self-contained binary</h3><p>~65 MB app that embeds the headless runner and MCP server. Engines install on first launch with a guided step.</p></div>
-      <div class="card"><span class="ico">&#129518;</span><h3>Git-friendly by design</h3><p>Pipelines, connections, contexts and routines are plain files in a folder you pick. Diff them, branch them, review them.</p></div>
-      <div class="card"><span class="ico">&#128274;</span><h3>Private &amp; secure</h3><p>Runs fully offline. Connection secrets and the git token are AES-256-GCM encrypted at rest with a per-workspace key.</p></div>
-      <div class="card"><span class="ico">&#128197;</span><h3>Scheduler &amp; triggers</h3><p>Run pipelines on a cron or interval, or on file changes. Watermark incremental loads advance state only on success.</p></div>
-      <div class="card"><span class="ico">&#128279;</span><h3>MCP server built in</h3><p>Connect Claude or any LLM over MCP to list components, generate pipelines, validate, run, and build standalone executables.</p></div>
-      <div class="card"><span class="ico">&#127760;</span><h3>60 languages</h3><p>The full UI - palette, chat, properties, dialogs - ships localized in 60 languages, with RTL support.</p></div>
-    </div>
-  </div>
-</section>
-
-<!-- ===== INTEGRATIONS ===== -->
-<section class="section" id="integrations">
-  <div class="wrap">
-    <div class="center">
-      <span class="eyebrow">Integrations</span>
-      <h2>Connect to almost anything - and it works today.</h2>
-      <p class="lead center">Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP. Each connector is covered by tests, not a coming-soon list.</p>
-    </div>
-    <div class="int-cats" style="margin-top:32px;">
-      <div class="int-cat"><h3 style="color:var(--kind-source)">Files &amp; lakehouse <span class="count">Sources</span></h3><div class="chips"><span class="chip">CSV</span><span class="chip">TSV</span><span class="chip">Parquet</span><span class="chip">JSON / JSONL</span><span class="chip">Excel</span><span class="chip">YAML</span><span class="chip">TOML</span><span class="chip">XML</span><span class="chip">Avro</span><span class="chip">Fixed-width</span><span class="chip">Iceberg</span><span class="chip">Delta Lake</span><span class="chip">DuckLake</span></div></div>
-      <div class="int-cat"><h3 style="color:var(--kind-source)">Databases</h3><div class="chips"><span class="chip">PostgreSQL</span><span class="chip">MySQL</span><span class="chip">MariaDB</span><span class="chip">SQL Server</span><span class="chip">Oracle</span><span class="chip">ClickHouse</span><span class="chip">CockroachDB</span><span class="chip">SQLite</span><span class="chip">DuckDB</span></div></div>
-      <div class="int-cat"><h3 style="color:var(--kind-source)">Warehouses</h3><div class="chips"><span class="chip">Snowflake</span><span class="chip">BigQuery</span><span class="chip">Redshift</span><span class="chip">Databricks</span><span class="chip">MotherDuck</span><span class="chip">Azure Synapse</span><span class="chip">DuckDB Quack</span></div></div>
-      <div class="int-cat"><h3 style="color:var(--kind-source)">Object storage</h3><div class="chips"><span class="chip">Amazon S3</span><span class="chip">Google Cloud Storage</span><span class="chip">Azure Blob</span><span class="chip">MinIO</span><span class="chip">Cloudflare R2</span><span class="chip">Backblaze B2</span><span class="chip">HTTP(S)</span></div></div>
-      <div class="int-cat"><h3 style="color:var(--kind-source)">Streaming</h3><div class="chips"><span class="chip">Apache Kafka</span><span class="chip">Redpanda</span><span class="chip">NATS JetStream</span><span class="chip">GCP Pub/Sub</span><span class="chip">RabbitMQ</span><span class="chip">AWS Kinesis</span></div></div>
-      <div class="int-cat"><h3 style="color:var(--kind-source)">NoSQL &amp; vector</h3><div class="chips"><span class="chip">MongoDB</span><span class="chip">Cassandra</span><span class="chip">Elasticsearch</span><span class="chip">Redis</span><span class="chip">DynamoDB</span><span class="chip">pgvector</span><span class="chip">Qdrant</span><span class="chip">Weaviate</span><span class="chip">Milvus</span></div></div>
-      <div class="int-cat"><h3 style="color:var(--kind-source)">SaaS &amp; APIs</h3><div class="chips"><span class="chip">Salesforce</span><span class="chip">HubSpot</span><span class="chip">Stripe</span><span class="chip">Shopify</span><span class="chip">Notion</span><span class="chip">Airtable</span><span class="chip">GitHub</span><span class="chip">Jira</span><span class="chip">Slack</span><span class="chip">Zendesk</span><span class="chip">REST / GraphQL</span><span class="chip">OData</span><span class="chip">SOAP</span></div></div>
-      <div class="int-cat"><h3 style="color:var(--kind-sink)">Destinations <span class="count">59 sinks</span></h3><div class="chips"><span class="chip">Parquet</span><span class="chip">CSV / JSON</span><span class="chip">Excel</span><span class="chip">Postgres</span><span class="chip">Snowflake</span><span class="chip">BigQuery</span><span class="chip">S3 / GCS / Azure</span><span class="chip">MongoDB</span><span class="chip">pgvector</span><span class="chip">Pinecone</span><span class="chip">Email / FTP</span></div></div>
-      <div class="int-cat"><h3 style="color:var(--kind-transform)">Transfer &amp; more</h3><div class="chips"><span class="chip">FTP / FTPS</span><span class="chip">SFTP</span><span class="chip">IMAP mailbox</span><span class="chip">Webhook listener</span><span class="chip">System clipboard</span><span class="chip">Git repo</span></div></div>
-    </div>
-    <div class="center" style="margin-top:28px;">
-      <a class="btn btn-ghost" href="docs/integrations.html">Browse all 329 components &rarr;</a>
-    </div>
-  </div>
-</section>
-
-<!-- ===== USE CASES ===== -->
-<section class="section" id="usecases">
-  <div class="wrap">
-    <div class="center">
-      <span class="eyebrow">Use cases</span>
-      <h2>From a CSV cleanup to a RAG pipeline - in a few nodes.</h2>
-    </div>
-
-    <div class="usecase" style="margin-top:40px;">
-      <div class="uc-text">
-        <h3>Warehouse loading &amp; replication</h3>
-        <p>Read from a production database and upsert into your warehouse on a schedule, with change-data-capture and delete propagation.</p>
-        <ul class="uc-list"><li>Universal MERGE / upsert across every relational and warehouse sink</li><li>DuckLake CDC change-feed + watermark incremental loads</li><li>Attach a cron schedule to run nightly, unattended</li></ul>
-      </div>
-      <div class="uc-pipe"><span class="muted"># Postgres &rarr; Snowflake nightly upsert</span><br/><span class="n">src.postgres</span> <span class="arr">&rarr;</span> <span class="n">snk.snowflake</span><br/><span class="muted">  mode=upsert, conflict=event_id</span><br/><span class="muted">  schedule: 0 2 * * *</span></div>
-    </div>
-
-    <div class="usecase rev" style="margin-top:44px;">
-      <div class="uc-pipe"><span class="muted"># Chunk, redact, embed, dedupe, store</span><br/><span class="n">src.s3</span> <span class="arr">&rarr;</span> <span class="n">xf.ai.chunk</span> <span class="arr">&rarr;</span> <span class="n">xf.ai.pii</span><br/>  <span class="arr">&rarr;</span> <span class="n">xf.ai.embed</span> <span class="arr">&rarr;</span> <span class="n">xf.ai.dedupe</span><br/>  <span class="arr">&rarr;</span> <span class="n">snk.pgvector</span></div>
-      <div class="uc-text">
-        <h3>Clean data before it reaches your AI</h3>
-        <p>RAG indexes quietly fill with duplicates, nulls and PII. Scrub data before it lands in a vector store - locally.</p>
-        <ul class="uc-list"><li>Chunk &rarr; redact PII &rarr; embed &rarr; semantic-dedupe, all on device</li><li>Hybrid retrieval: vector similarity (VSS) + full-text (BM25), no model API</li><li>Working sinks for pgvector, Qdrant, Weaviate, Milvus, Pinecone</li></ul>
-      </div>
-    </div>
-
-    <div class="usecase" style="margin-top:44px;">
-      <div class="uc-text">
-        <h3>Files &amp; object storage at native speed</h3>
-        <p>Glob thousands of files from S3, parse and reshape, and write Hive-partitioned Parquet - vectorized end to end.</p>
-        <ul class="uc-list"><li>Autodetect formats, including gzipped JSON and globbed paths</li><li>Partition-by writes with a fail-fast guard against file explosions</li><li>A 16-node, multi-branch run finishes in a few seconds</li></ul>
-      </div>
-      <div class="uc-pipe"><span class="muted"># S3 logs &rarr; partitioned Parquet</span><br/><span class="n">src.s3</span> <span class="muted">(glob *.json.gz)</span><br/>  <span class="arr">&rarr;</span> <span class="n">xf.addcol</span> <span class="muted">(event_date)</span><br/>  <span class="arr">&rarr;</span> <span class="n">snk.parquet</span> <span class="muted">(partitionBy=event_date)</span></div>
-    </div>
-  </div>
-</section>
-
-<!-- ===== DUCKIE ===== -->
-<section class="section" id="duckie">
-  <div class="wrap">
-    <div class="usecase">
-      <div class="uc-text">
-        <span class="eyebrow">Meet Duckie</span>
-        <h2>Describe what you need. Duckie writes the pipeline.</h2>
-        <p>The assistant in the right sidebar is powered by <b>Qwen 2.5 Coder 1.5B</b> through <b>llama.cpp</b>, downloaded once (~1.1 GB) and then run entirely on your CPU.</p>
-        <ul class="uc-list">
-          <li><b>Truly local</b> - runs as a subprocess on 127.0.0.1. Disconnect wifi; it keeps working.</li>
-          <li><b>One-click insert</b> - Duckie's JSON populates the canvas with positioned, wired nodes.</li>
-          <li><b>Bring your own model</b> - point it at Ollama, OpenAI, or anything OpenAI-compatible.</li>
-          <li><b>Sandboxed</b> - the model has no filesystem, network, or tool access. It only emits pipeline JSON.</li>
-        </ul>
-      </div>
-      <figure class="shot"><img src="assets/img/screens/duckie.png" alt="Duckie AI assistant panel open beside a pipeline, with a LOCAL badge" /><figcaption>Duckie streams a valid Duckle pipeline; one click drops it on the canvas.</figcaption></figure>
-    </div>
-  </div>
-</section>
-
-<!-- ===== SCREENSHOTS ===== -->
-<section class="section" style="padding-top:0;">
-  <div class="wrap">
-    <div class="center"><span class="eyebrow">Real pipelines, not mockups</span><h2>Built and run in Duckle</h2></div>
-    <div class="shots" style="margin-top:30px;">
-      <figure class="shot wide"><img src="assets/img/screens/mega-pipeline-parallelize.png" alt="A 16-node run finishing in a few seconds across parallel branches" /><figcaption>One run, many branches: 16 nodes finish in a few seconds. Concurrency auto-detects from CPU cores; branches write to Parquet, CSV, DuckDB and SQLite at once.</figcaption></figure>
-      <figure class="shot"><img src="assets/img/screens/visual-mapper.png" alt="The visual Map editor with a main input, two lookups and per-output expressions" /><figcaption>The visual <b>Map</b> editor - main plus lookups, per-output expressions, inline filter.</figcaption></figure>
-      <figure class="shot"><img src="assets/img/screens/cdc-ducklake.png" alt="A DuckLake CDC pipeline mirroring 100k changes with upsert and delete propagation" /><figcaption><b>DuckLake CDC</b> mirrored via upsert + delete propagation (100k rows).</figcaption></figure>
-    </div>
-  </div>
-</section>
-
-<!-- ===== DOWNLOAD / CTA ===== -->
-<section class="section" id="download">
-  <div class="wrap">
-    <div class="cta-band">
+    <div class="cta">
       <span class="eyebrow">Get started</span>
-      <h2>Download Duckle. Build your first pipeline in 60 seconds.</h2>
+      <h2>Build your first pipeline in 60 seconds</h2>
       <p class="lead center">Free and open source, dual-licensed MIT OR Apache-2.0. Windows, macOS and Linux. No account, no telemetry.</p>
       <div class="hero-cta" style="justify-content:center;">
         <a class="btn btn-primary btn-lg" href="https://github.com/SouravRoy-ETL/duckle/releases/latest" target="_blank" rel="noopener">Download latest release</a>
         <a class="btn btn-ghost btn-lg" href="docs/getting-started.html">Quickstart guide</a>
-        <a class="btn btn-ghost btn-lg" href="https://github.com/SouravRoy-ETL/duckle" target="_blank" rel="noopener">Star on GitHub</a>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ===== FOOTER ===== -->
+<!-- 12. FAT FOOTER -->
 <footer class="footer">
   <div class="wrap">
     <div class="footer-grid">
       <div>
         <a class="brand" href="index.html" style="margin-bottom:12px;">
-          <img class="logo-dark" src="assets/img/duckle-logo-dark.svg" alt="" />
           <img class="logo-light" src="assets/img/duckle-logo-light.svg" alt="" />
+          <img class="logo-dark" src="assets/img/duckle-logo-dark.svg" alt="" />
           <span>Duckle<span class="dot">.</span></span>
         </a>
-        <p class="muted" style="max-width:34ch;">The local-first data studio with a built-in AI assistant. Built on DuckDB.</p>
+        <p class="muted" style="max-width:30ch;">The local-first data studio with a built-in AI assistant. Built on DuckDB.</p>
       </div>
-      <div>
-        <h4>Product</h4>
-        <a href="#features">Features</a>
-        <a href="#integrations">Integrations</a>
-        <a href="#usecases">Use cases</a>
-        <a href="#download">Download</a>
-      </div>
-      <div>
-        <h4>Docs</h4>
-        <a href="docs/index.html">Documentation</a>
-        <a href="docs/getting-started.html">Getting started</a>
-        <a href="docs/components.html">Component reference</a>
-        <a href="docs/automation.html">Scheduling &amp; MCP</a>
-      </div>
-      <div>
-        <h4>Project</h4>
-        <a href="https://github.com/SouravRoy-ETL/duckle" target="_blank" rel="noopener">GitHub</a>
-        <a href="https://github.com/SouravRoy-ETL/duckle/releases" target="_blank" rel="noopener">Releases</a>
-        <a href="https://github.com/SouravRoy-ETL/duckle/issues" target="_blank" rel="noopener">Issues</a>
-        <a href="https://duckdb.org" target="_blank" rel="noopener">DuckDB</a>
-      </div>
+      <div><h4>Product</h4><a href="#product">Visual canvas</a><a href="#duckie">Duckie AI</a><a href="docs/components.html">Components</a><a href="#download">Download</a></div>
+      <div><h4>Solutions</h4><a href="use-cases.html#join">Cross-system joins</a><a href="use-cases.html#snowflake">Warehouse savings</a><a href="use-cases.html#cdc">Change data capture</a><a href="use-cases.html#ai">Data prep for AI</a></div>
+      <div><h4>Resources</h4><a href="docs/index.html">Documentation</a><a href="docs/learn.html">Learn hub</a><a href="use-cases.html">Use cases</a><a href="docs/integrations.html">Integrations</a></div>
+      <div><h4>Project</h4><a href="https://github.com/SouravRoy-ETL/duckle" target="_blank" rel="noopener">GitHub</a><a href="https://github.com/SouravRoy-ETL/duckle/releases" target="_blank" rel="noopener">Releases</a><a href="https://github.com/SouravRoy-ETL/duckle/issues" target="_blank" rel="noopener">Issues</a><a href="https://duckdb.org" target="_blank" rel="noopener">DuckDB</a></div>
     </div>
     <div class="legal">
       <span>&copy; 2026 Duckle. MIT OR Apache-2.0.</span>

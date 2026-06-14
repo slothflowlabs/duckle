@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Use cases - Duckle</title>
+<meta name="description" content="Real Duckle pipelines, built and run locally on DuckDB: cross-system joins, visual mapping, Snowflake cost savings, DuckLake CDC mirroring, watermark incremental loads, local AI / RAG prep, and building pipelines from Claude over MCP." />
+<meta property="og:title" content="Duckle use cases" />
+<meta property="og:image" content="assets/img/screens/pipeline-join.png" />
+<link rel="icon" href="assets/img/duckle-logo-light.svg" />
+<link rel="preconnect" href="https://rsms.me/" />
+<link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+<link rel="stylesheet" href="assets/css/site.css" />
+<script>(function(){try{var t=localStorage.getItem("duckle-theme");if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
+</head>
+<body>
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="index.html"><img class="logo-light" src="assets/img/duckle-logo-light.svg" alt="" /><img class="logo-dark" src="assets/img/duckle-logo-dark.svg" alt="" /><span>Duckle<span class="dot">.</span></span></a>
+    <nav class="nav-links" id="navLinks">
+      <a href="index.html#product">Product</a>
+      <a href="use-cases.html">Use cases</a>
+      <a href="docs/integrations.html">Integrations</a>
+      <a href="docs/index.html">Docs</a>
+      <a href="docs/learn.html">Learn</a>
+    </nav>
+    <div class="nav-right">
+      <a class="gh-star" id="ghStar" href="https://github.com/SouravRoy-ETL/duckle" target="_blank" rel="noopener" aria-label="Star Duckle on GitHub">
+        <span class="gh-label"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span class="hide-sm">Star</span></span>
+        <span class="gh-count" id="ghCount">&#9733;</span>
+      </a>
+      <button class="icon-btn theme-toggle" id="themeToggle" aria-label="Toggle theme" title="Toggle theme">
+        <svg class="moon" width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="sun" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+      </button>
+      <a class="btn btn-primary hide-sm" href="index.html#download">Download</a>
+      <button class="icon-btn nav-toggle" id="navToggle" aria-label="Open menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+    </div>
+  </div>
+</header>
+
+<section class="section tight" style="text-align:center; padding-top:64px;">
+  <div class="wrap">
+    <span class="eyebrow">Use cases</span>
+    <h1>Real pipelines, built and run in Duckle</h1>
+    <p class="lead center">Every example below is an actual pipeline on the Duckle canvas, executed locally on DuckDB. The numbers are real run results, not benchmarks on someone else's hardware.</p>
+  </div>
+</section>
+
+<section class="section" style="padding-top:24px;">
+  <div class="wrap">
+
+    <!-- 1. cross-system join -->
+    <div class="uc" id="join">
+      <figure class="frame" style="margin:0;"><div class="frame-bar"><i></i><i></i><i></i><span class="url">mega_enrich_parallel</span></div><img src="assets/img/screens/pipeline-join.png" alt="Four sources joined through a visual Map, filtered, then fanned out by Parallelize" loading="lazy" /></figure>
+      <div class="uc-text">
+        <span class="uc-kicker">Cross-system enrichment</span>
+        <h3>Join four systems in one pass, no warehouse</h3>
+        <p><b>The problem.</b> The data you need lives in different places: customers in a CSV export, orders in Parquet, the product catalog in a DuckDB file, regions in SQLite. Normally you would load all four into a warehouse just to join them.</p>
+        <p><b>In Duckle.</b> Drop all four as source nodes and wire them into one visual <b>Map</b> - a 3-way join with per-output typed expressions (<code>margin</code>, <code>tier</code>, region rollups) and an inline filter <code>status = 'ACTIVE' AND amount &gt; 30</code>. A <b>Filter</b> trims the result, then <b>Parallelize</b> fans it into category- and region-tier aggregates that write to DuckDB (upsert), Parquet and CSV simultaneously.</p>
+        <div class="uc-metrics">
+          <div class="uc-metric"><b>4 systems</b><span>CSV + Parquet + DuckDB + SQLite</span></div>
+          <div class="uc-metric"><b>16 nodes</b><span>one run, parallel branches</span></div>
+          <div class="uc-metric"><b>~3 s</b><span>279 rows written</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. visual mapper -->
+    <div class="uc rev" id="mapper">
+      <div class="uc-text">
+        <span class="uc-kicker">Visual transformation</span>
+        <h3>Map, join and derive columns without writing SQL</h3>
+        <p><b>The problem.</b> Multi-table joins with derived columns are the heart of ETL, and writing them by hand is where bugs hide.</p>
+        <p><b>In Duckle.</b> The <b>Visual Mapper</b> shows the main input and each lookup on the left, every output column with its <b>type</b> and <b>expression</b> in the middle, and a function reference on the right. Drag to map a column, or write an expression like <code>ROUND(main.amount - lookup_1.unit_cost, 2)</code> for a margin. An inline filter applies to the whole join. Every mapping is type-checked live, and the node still emits plain SQL you can read in the Plan tab.</p>
+        <div class="uc-metrics">
+          <div class="uc-metric"><b>1 main + 3 lookups</b><span>inner or left joins</span></div>
+          <div class="uc-metric"><b>Typed</b><span>per-column expressions</span></div>
+          <div class="uc-metric"><b>Inline filter</b><span>on the joined rows</span></div>
+        </div>
+      </div>
+      <figure class="frame" style="margin:0;"><div class="frame-bar"><i></i><i></i><i></i><span class="url">Visual Mapper</span></div><img src="assets/img/screens/visual-mapper.png" alt="The visual Map editor with a main input, two lookups, typed output expressions and a filter" loading="lazy" /></figure>
+    </div>
+
+    <!-- 3. snowflake cost save -->
+    <div class="uc" id="snowflake">
+      <figure class="frame" style="margin:0;"><div class="frame-bar"><i></i><i></i><i></i><span class="url">snowflake_costsave_heavy</span></div><img src="assets/img/screens/snowflake.png" alt="A billion-row Parquet enriched through two Mappers and aggregated into a Snowflake upsert" loading="lazy" /></figure>
+      <div class="uc-text">
+        <span class="uc-kicker">Warehouse cost savings</span>
+        <h3>Crunch a billion rows locally, write only the rollup to Snowflake</h3>
+        <p><b>The problem.</b> Warehouses bill for every scan. Producing a daily revenue summary from a billion-row fact table means paying for a billion-row scan, every day.</p>
+        <p><b>In Duckle.</b> Read a <b>1-billion-row orders Parquet</b> with products from SQLite, accounts over ADBC and regions as dimensions. Two <b>Mappers</b> enrich the orders and join regions; an <b>Aggregate</b> produces the daily revenue summary; the final node <b>upserts only that summary</b> into Snowflake (<code>DEMO_REVENUE_SUMMARY</code>) over the SQL API with PAT/JWT auth. The billion-row scan happens on your machine; Snowflake stores and bills for kilobytes.</p>
+        <div class="uc-metrics">
+          <div class="uc-metric"><b>1B rows</b><span>scanned on DuckDB</span></div>
+          <div class="uc-metric"><b>5 sources</b><span>Parquet, SQLite, ADBC, CSV</span></div>
+          <div class="uc-metric"><b>Aggregate only</b><span>upserted to Snowflake</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. cdc -->
+    <div class="uc rev" id="cdc">
+      <div class="uc-text">
+        <span class="uc-kicker">Change data capture</span>
+        <h3>Mirror a change feed with upsert and delete propagation</h3>
+        <p><b>The problem.</b> Keeping a downstream copy in sync means applying inserts, updates and deletes - and reprocessing everything each run is wasteful.</p>
+        <p><b>In Duckle.</b> Read a <b>DuckLake CDC</b> change feed and a customers feed, keep the <b>latest change per <code>order_id</code></b>, enrich, and mirror into a DuckDB table with a universal <b>MERGE</b>. Deletes in the feed are propagated via the change-type column, so removed rows disappear downstream too. Watermark state advances only on a fully successful run, so the mirror is exactly-once even if a run fails midway.</p>
+        <div class="uc-metrics">
+          <div class="uc-metric"><b>100k rows</b><span>change feed mirrored</span></div>
+          <div class="uc-metric"><b>1.7 s</b><span>upsert + delete</span></div>
+          <div class="uc-metric"><b>Exactly-once</b><span>state on success only</span></div>
+        </div>
+      </div>
+      <figure class="frame" style="margin:0;"><div class="frame-bar"><i></i><i></i><i></i><span class="url">ducklake_cdc_mirror</span></div><img src="assets/img/screens/cdc.png" alt="A DuckLake CDC change feed mirrored into a DuckDB table with upsert and delete propagation" loading="lazy" /></figure>
+    </div>
+
+    <!-- 5. incremental -->
+    <div class="uc" id="incremental">
+      <figure class="frame" style="margin:0;"><div class="frame-bar"><i></i><i></i><i></i><span class="url">incremental_load</span></div><img src="assets/img/screens/incremental.png" alt="A watermark incremental load reading 5 million rows and appending only new rows" loading="lazy" /></figure>
+      <div class="uc-text">
+        <span class="uc-kicker">Incremental loading</span>
+        <h3>Load 5 million rows in about a second, then only the new ones</h3>
+        <p><b>The problem.</b> Re-reading a whole table every run does not scale, and naive incremental logic silently skips rows when a run fails.</p>
+        <p><b>In Duckle.</b> Point the <b>Incremental</b> node at a watermark column (here <code>order_id</code>). The first run loads everything and saves the high-water mark to the workspace; later runs read only rows past it and append to the DuckDB target. Crucially, the watermark advances <b>only on a fully successful run</b> - a crash or a partial preview never moves it, so you never lose rows.</p>
+        <div class="uc-metrics">
+          <div class="uc-metric"><b>5M rows</b><span>first load</span></div>
+          <div class="uc-metric"><b>~1 s</b><span>end to end</span></div>
+          <div class="uc-metric"><b>Safe</b><span>state on success only</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. duckie / AI -->
+    <div class="uc rev" id="ai">
+      <div class="uc-text">
+        <span class="uc-kicker">Local AI</span>
+        <h3>Describe a pipeline, or prep data for RAG, on device</h3>
+        <p><b>The problem.</b> You want an assistant to draft pipelines and to clean data for AI, without shipping your data or prompts to a third party.</p>
+        <p><b>In Duckle.</b> <b>Duckie</b> runs Qwen 2.5 Coder locally through llama.cpp. Describe what you need; it streams a valid pipeline and a click drops it onto the canvas. For AI data prep, chain <code>xf.ai.chunk</code> -&gt; <code>xf.ai.pii</code> -&gt; <code>xf.ai.embed</code> -&gt; <code>xf.ai.dedupe</code> and land vectors in pgvector or Pinecone - three of those transforms run with no API at all. Retrieve with local Vector Similarity Search and BM25 full-text search.</p>
+        <div class="uc-metrics">
+          <div class="uc-metric"><b>0 API keys</b><span>for the assistant</span></div>
+          <div class="uc-metric"><b>On device</b><span>prompts + data stay local</span></div>
+          <div class="uc-metric"><b>Hybrid</b><span>vector + full-text retrieval</span></div>
+        </div>
+      </div>
+      <figure class="frame" style="margin:0;"><div class="frame-bar"><i></i><i></i><i></i><span class="url">Duckie AI</span></div><img src="assets/img/screens/duckie.png" alt="The Duckie AI assistant panel beside the canvas and component palette" loading="lazy" /></figure>
+    </div>
+
+    <!-- 7. mcp -->
+    <div class="uc" id="mcp">
+      <figure class="frame" style="margin:0;"><div class="frame-bar"><i></i><i></i><i></i><span class="url">MCP server</span></div><img src="assets/img/screens/mcp.png" alt="A pipeline with a 4-way join Mapper built through the MCP server" loading="lazy" /></figure>
+      <div class="uc-text">
+        <span class="uc-kicker">Automation &amp; agents</span>
+        <h3>Build and run pipelines from Claude over MCP</h3>
+        <p><b>The problem.</b> You want an LLM agent to author and operate real pipelines, not just talk about them.</p>
+        <p><b>In Duckle.</b> The built-in <b>MCP server</b> connects Claude (or any MCP client) in one click. Over the protocol the model can list components, fetch a component's schema, create a pipeline (validated before it is written), validate, run it headlessly, read run logs, and even build a standalone executable. Secrets stay as <code>${ENV:KEY}</code> placeholders, never hardcoded. The screenshot shows a 4-way-join Mapper pipeline driven through MCP.</p>
+        <div class="uc-metrics">
+          <div class="uc-metric"><b>One click</b><span>connect Claude</span></div>
+          <div class="uc-metric"><b>Create / run</b><span>validated pipelines</span></div>
+          <div class="uc-metric"><b>Build</b><span>standalone executables</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="center" style="margin-top:72px;">
+      <a class="btn btn-primary btn-lg" href="index.html#download">Download Duckle and build your own</a>
+      <a class="btn btn-ghost btn-lg" href="docs/learn.html">Read the Learn hub</a>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="wrap">
+    <div class="legal">
+      <span>&copy; 2026 Duckle. MIT OR Apache-2.0.</span>
+      <span><a href="index.html">Home</a> &middot; <a href="https://github.com/SouravRoy-ETL/duckle" target="_blank" rel="noopener">GitHub</a> &middot; Built on DuckDB</span>
+    </div>
+  </div>
+</footer>
+<script src="assets/js/site.js"></script>
+</body>
+</html>
