@@ -255,7 +255,8 @@ a.card:hover { text-decoration: none; }
 .learn-card .more { margin-top: auto; padding-top: 12px; font-weight: 650; color: var(--accent); font-size: .9rem; }
 
 /* ---- CTA band ---- */
-.cta { text-align: center; border-radius: var(--radius); padding: 64px 28px; background: linear-gradient(135deg, rgba(255, 241, 0, .2), rgba(244, 180, 0, .24)); border: 1px solid var(--border-2); }
+.cta { text-align: center; border-radius: var(--radius); padding: 64px 28px; background: linear-gradient(135deg, rgba(255, 241, 0, .2), rgba(244, 180, 0, .24)); border: 1px solid var(--border-2); display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.cta .hero-cta { margin: 26px 0 0; }
 
 /* ---- footer ---- */
 .footer { border-top: 1px solid var(--border); background: var(--bg-soft); padding: 56px 0 32px; margin-top: 0; }
@@ -263,6 +264,7 @@ a.card:hover { text-decoration: none; }
 .footer h4 { font-size: .76rem; text-transform: uppercase; letter-spacing: .1em; color: var(--ink-3); margin-bottom: 12px; }
 .footer a { display: block; color: var(--ink-2); font-size: .92rem; padding: 4px 0; }
 .footer a:hover { color: var(--accent); text-decoration: none; }
+.footer .brand { display: flex; align-items: center; }
 .footer .legal { margin-top: 34px; padding-top: 22px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; color: var(--ink-3); font-size: .84rem; }
 
 /* ---- docs ---- */
