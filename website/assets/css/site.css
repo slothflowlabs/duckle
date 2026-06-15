@@ -384,6 +384,10 @@ pre code { background: none; border: none; padding: 0; color: var(--code-ink); }
 .intg-name { font-weight: 700; font-size: .96rem; color: var(--ink-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .intg-kind { font-size: .75rem; color: var(--ink-3); }
 .intg-empty { color: var(--ink-3); padding: 40px 0; text-align: center; }
+.intg-cta { margin-top: 4px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.intg-cta h4 { margin: 0 0 5px; font-size: .92rem; color: var(--ink-1); }
+.intg-cta p { margin: 0 0 12px; font-size: .82rem; line-height: 1.5; color: var(--ink-3); }
+.intg-cta .btn { width: 100%; justify-content: center; }
 
 /* Dark mode: dark slate behind the icons instead of bright white squares.
    Near-black brand glyphs ship a light variant via .logo-light/.logo-dark. */

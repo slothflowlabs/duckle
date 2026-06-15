@@ -171,6 +171,68 @@
         });
     }
 
+    /* ---- "Request a connector" modal ----
+       Static site, no backend: a short form that opens the visitor's mail
+       client with a prefilled request to the maintainer, who hand-builds the
+       connector. Injected once, shared by every .js-connector trigger. */
+    var connTriggers = document.querySelectorAll(".js-connector");
+    if (connTriggers.length) {
+        var cOverlay = document.createElement("div");
+        cOverlay.className = "modal-overlay";
+        cOverlay.hidden = true;
+        cOverlay.innerHTML =
+            '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="connTitle">'
+          + '<button class="modal-x" type="button" aria-label="Close">'
+          + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>'
+          + '<h3 id="connTitle">Request a connector</h3>'
+          + '<p class="muted">Tell us the system you need. We build connectors by hand and will follow up by email.</p>'
+          + '<form id="connForm" novalidate>'
+          + '<div class="frow"><label>Connector<input type="text" name="conn" placeholder="e.g. NetSuite, IBM DB2" required></label>'
+          + '<label>Direction<select name="dir"><option value="Source">Source (read from)</option><option value="Destination">Destination (write to)</option><option value="Both">Both</option></select></label></div>'
+          + '<label>Your email<input type="email" name="email" placeholder="you@company.com" required></label>'
+          + '<label>What do you need it for?<textarea name="notes" rows="3" placeholder="Auth method, API docs link, volume, and how you would use it"></textarea></label>'
+          + '<button type="submit" class="btn btn-primary btn-pill">Send request</button>'
+          + '</form></div>';
+        document.body.appendChild(cOverlay);
+
+        var cModal = cOverlay.querySelector(".modal");
+        var cForm = cOverlay.querySelector("#connForm");
+
+        function connOpen(e) {
+            if (e) e.preventDefault();
+            cOverlay.hidden = false;
+            document.body.style.overflow = "hidden";
+        }
+        function connClose() { cOverlay.hidden = true; document.body.style.overflow = ""; }
+
+        connTriggers.forEach(function (b) { b.addEventListener("click", connOpen); });
+        cOverlay.querySelector(".modal-x").addEventListener("click", connClose);
+        cOverlay.addEventListener("click", function (e) { if (e.target === cOverlay) connClose(); });
+        document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !cOverlay.hidden) connClose(); });
+
+        cForm.addEventListener("submit", function (e) {
+            e.preventDefault();
+            if (!cForm.conn.value.trim() || !cForm.email.value) {
+                if (cForm.reportValidity) cForm.reportValidity();
+                return;
+            }
+            var subject = "Duckle connector request: " + cForm.conn.value.trim();
+            var body = "Hi Sourav,%0D%0A%0D%0AI would like to request a Duckle connector."
+                + "%0D%0A%0D%0AConnector: " + encodeURIComponent(cForm.conn.value.trim())
+                + "%0D%0ADirection: " + encodeURIComponent(cForm.dir.value)
+                + "%0D%0AEmail: " + encodeURIComponent(cForm.email.value)
+                + (cForm.notes.value.trim() ? "%0D%0A%0D%0A" + encodeURIComponent(cForm.notes.value.trim()) : "");
+            window.location.href = "mailto:" + HOST + "?subject=" + encodeURIComponent(subject) + "&body=" + body;
+            cModal.innerHTML =
+                '<div class="modal-ok"><span class="chk">'
+              + '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>'
+              + '<h3>Request ready to send</h3>'
+              + '<p class="muted">Your email app opened with the details filled in. Press <b>Send</b> there and we will get back to you.</p>'
+              + '<button type="button" class="btn btn-primary btn-pill" id="connDone">Done</button></div>';
+            cModal.querySelector("#connDone").addEventListener("click", connClose);
+        });
+    }
+
     /* ---- Discord widget: bottom-right floating button + dismissible invite popup ---- */
     (function () {
         var DISCORD = "https://discord.gg/rUeAStJbWb";
