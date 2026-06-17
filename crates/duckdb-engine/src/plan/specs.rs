@@ -1050,8 +1050,12 @@ pub enum RestPagination {
     /// append as `?<param>=<cursor>` until the cursor is empty.
     Cursor { next_path: String, param: String },
     /// Increment `?<offset_param>=N` by `page_size` each call until a
-    /// page returns fewer than `page_size` rows.
-    Offset { offset_param: String, page_size: u64 },
+    /// page returns fewer than `page_size` rows. When `total_path` is set
+    /// (a JSON pointer to a total-row count in the body, e.g. Redmine's
+    /// `/total_count`), also stop once `offset + page_size >= total`, since
+    /// such APIs return HTTP 200 with an empty array past the end and the
+    /// status code cannot signal the end (issue #41).
+    Offset { offset_param: String, page_size: u64, total_path: Option<String> },
     /// Increment `?<page_param>=N` starting at `start_page` (default 1)
     /// until a page returns 0 rows.
     Page { page_param: String, start_page: u64 },

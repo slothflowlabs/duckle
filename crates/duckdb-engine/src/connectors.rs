@@ -6180,15 +6180,34 @@ impl DuckdbEngine {
                         None => false,
                     }
                 }
-                RestPagination::Offset { offset_param, page_size } => {
+                RestPagination::Offset { offset_param, page_size, total_path } => {
                     // A short page means we have reached the end.
                     if (row_count as u64) < *page_size {
                         false
                     } else {
-                        offset = offset.saturating_add(*page_size);
-                        let sep = if spec.url.contains('?') { '&' } else { '?' };
-                        url = format!("{}{}{}={}", spec.url, sep, offset_param, offset);
-                        true
+                        let next_offset = offset.saturating_add(*page_size);
+                        // Body-driven stop (issue #41): an API that reports a
+                        // total row count (e.g. Redmine `total_count`) returns
+                        // HTTP 200 + an empty array past the end, so the status
+                        // code cannot signal the end. Stop once the next offset
+                        // would be at or past the total.
+                        let reached_total = total_path
+                            .as_deref()
+                            .and_then(|p| response.pointer(p))
+                            .and_then(|v| {
+                                v.as_u64()
+                                    .or_else(|| v.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
+                            })
+                            .map(|total| next_offset >= total)
+                            .unwrap_or(false);
+                        if reached_total {
+                            false
+                        } else {
+                            offset = next_offset;
+                            let sep = if spec.url.contains('?') { '&' } else { '?' };
+                            url = format!("{}{}{}={}", spec.url, sep, offset_param, offset);
+                            true
+                        }
                     }
                 }
                 RestPagination::Page { page_param, .. } => {

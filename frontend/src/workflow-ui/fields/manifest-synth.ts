@@ -1875,6 +1875,7 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
                     ],
                 },
                 { key: 'authToken', label: 'Token / API key', kind: 'text', placeholder: '••••••••' },
+                { key: 'authHeader', label: 'API key header', kind: 'text', placeholder: 'X-API-Key', description: 'Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key.' },
             ],
         },
         {
@@ -1935,6 +1936,13 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
                     label: 'Page size (offset style)',
                     kind: 'integer',
                     defaultValue: 100,
+                },
+                {
+                    key: 'totalCountPath',
+                    label: 'Total-count JSON pointer (offset style)',
+                    kind: 'text',
+                    placeholder: '/total_count',
+                    description: 'Optional. JSON pointer to a total-row count in the response (e.g. /total_count for Redmine). When set, offset paging stops once offset + page size reaches the total, instead of relying on a short page.',
                 },
                 {
                     key: 'pageParam',
@@ -2006,6 +2014,7 @@ function synthApiSink(comp: ComponentDef): ComponentManifest {
                         ],
                     },
                     { key: 'authToken', label: 'Token', kind: 'text', placeholder: '••••••••' },
+                    { key: 'authHeader', label: 'API key header', kind: 'text', placeholder: 'X-API-Key', description: 'Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key.' },
                 ],
             },
         ],

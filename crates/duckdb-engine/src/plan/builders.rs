@@ -5665,6 +5665,67 @@ pub(crate) fn headers_from_props(props: &JsonValue) -> Vec<(String, String)> {
     Vec::new()
 }
 
+/// Append the form's `authType` + `authToken` as request headers. Shared by all
+/// REST-shaped sources and sinks (src.rest + vendor aliases, snk.rest/webhook,
+/// GraphQL) so auth behaves identically everywhere.
+///
+/// - `bearer` -> `Authorization: Bearer <token>`
+/// - `apikey` -> `<header>: <token>` (header chosen by `api_key_header`)
+/// - anything else (incl. `none`) adds nothing.
+pub(crate) fn push_rest_auth(headers: &mut Vec<(String, String)>, props: &JsonValue) {
+    let auth_type = string_prop(props, "authType").unwrap_or_else(|| "none".into());
+    let token = string_prop(props, "authToken").unwrap_or_default();
+    if token.is_empty() {
+        return;
+    }
+    match auth_type.as_str() {
+        "bearer" => headers.push(("Authorization".into(), format!("Bearer {}", token))),
+        "apikey" => {
+            let (name, value) = api_key_header(props, &token);
+            headers.push((name, value));
+        }
+        _ => {}
+    }
+}
+
+/// Resolve the `(header-name, value)` to send for API-key auth. Precedence:
+/// 1. an explicit `authHeader` prop (e.g. `X-Redmine-API-Key`);
+/// 2. a token written as `Header-Name: value` - split it, so a key pasted as
+///    `X-Redmine-API-Key: abc` lands in the right header (issue #40) even from
+///    pipelines built before the header field existed;
+/// 3. the default `X-API-Key`.
+fn api_key_header(props: &JsonValue, token: &str) -> (String, String) {
+    if let Some(header) = string_prop(props, "authHeader")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        return (header, token.to_string());
+    }
+    if let Some((name, value)) = split_header_token(token) {
+        return (name, value);
+    }
+    ("X-API-Key".to_string(), token.to_string())
+}
+
+/// If `token` is `Header-Name: value` with a syntactically valid, hyphenated
+/// HTTP header name before the colon, split it into `(name, value)`. Returns
+/// `None` otherwise. The hyphen requirement keeps a real key value that merely
+/// contains a colon (e.g. `id:secret`) from being mistaken for a header line;
+/// custom API-key headers are conventionally hyphenated (`X-...-Key`, `Api-Key`).
+fn split_header_token(token: &str) -> Option<(String, String)> {
+    let (name, value) = token.split_once(':')?;
+    let name = name.trim();
+    let value = value.trim();
+    if name.is_empty()
+        || value.is_empty()
+        || !name.contains('-')
+        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+    Some((name.to_string(), value.to_string()))
+}
+
 pub(crate) fn quote_ident(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
@@ -5684,5 +5745,83 @@ pub(crate) fn duckle_type_to_duckdb(t: &str) -> String {
         "json" => "JSON".into(),
         "binary" | "blob" => "BLOB".into(),
         other => other.to_uppercase(),
+    }
+}
+
+#[cfg(test)]
+mod rest_auth_tests {
+    use super::push_rest_auth;
+    use serde_json::json;
+
+    fn auth(props: serde_json::Value) -> Vec<(String, String)> {
+        let mut h = Vec::new();
+        push_rest_auth(&mut h, &props);
+        h
+    }
+
+    #[test]
+    fn none_or_empty_adds_nothing() {
+        assert!(auth(json!({})).is_empty());
+        assert!(auth(json!({ "authType": "none", "authToken": "x" })).is_empty());
+        assert!(auth(json!({ "authType": "apikey", "authToken": "" })).is_empty());
+    }
+
+    #[test]
+    fn bearer_sets_authorization() {
+        assert_eq!(
+            auth(json!({ "authType": "bearer", "authToken": "abc" })),
+            vec![("Authorization".to_string(), "Bearer abc".to_string())]
+        );
+    }
+
+    #[test]
+    fn apikey_defaults_to_x_api_key() {
+        assert_eq!(
+            auth(json!({ "authType": "apikey", "authToken": "abc" })),
+            vec![("X-API-Key".to_string(), "abc".to_string())]
+        );
+    }
+
+    #[test]
+    fn apikey_explicit_header_wins() {
+        assert_eq!(
+            auth(json!({
+                "authType": "apikey",
+                "authToken": "abc",
+                "authHeader": "X-Redmine-API-Key"
+            })),
+            vec![("X-Redmine-API-Key".to_string(), "abc".to_string())]
+        );
+    }
+
+    #[test]
+    fn apikey_splits_header_value_token() {
+        // Issue #40: a token pasted as "Header: value" lands in the right header.
+        assert_eq!(
+            auth(json!({ "authType": "apikey", "authToken": "X-Redmine-API-Key: secret123" })),
+            vec![("X-Redmine-API-Key".to_string(), "secret123".to_string())]
+        );
+    }
+
+    #[test]
+    fn apikey_does_not_split_colon_value_without_hyphen() {
+        // A real "id:secret" style key must NOT be mistaken for a header line.
+        assert_eq!(
+            auth(json!({ "authType": "apikey", "authToken": "id:secret" })),
+            vec![("X-API-Key".to_string(), "id:secret".to_string())]
+        );
+    }
+
+    #[test]
+    fn explicit_header_overrides_colon_in_token() {
+        // When the header is named explicitly, the token is used verbatim.
+        assert_eq!(
+            auth(json!({
+                "authType": "apikey",
+                "authToken": "a:b:c",
+                "authHeader": "X-Custom"
+            })),
+            vec![("X-Custom".to_string(), "a:b:c".to_string())]
+        );
     }
 }

@@ -655,15 +655,7 @@ fn build_stage(
             .filter(|s| !s.trim().is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: mutation (GraphQL document) required", component_id)))?;
         let mut headers = headers_from_props(&props);
-        let auth_type = string_prop(&props, "authType").unwrap_or_else(|| "none".into());
-        let auth_token = string_prop(&props, "authToken").unwrap_or_default();
-        if !auth_token.is_empty() {
-            match auth_type.as_str() {
-                "bearer" => headers.push(("Authorization".into(), format!("Bearer {}", auth_token))),
-                "apikey" => headers.push(("X-API-Key".into(), auth_token)),
-                _ => {}
-            }
-        }
+        push_rest_auth(&mut headers, &props);
         // body_extras puts the mutation alongside the variables (batch
         // mode wraps the row array as 'variables').
         webhook = Some(WebhookSpec {
@@ -705,18 +697,7 @@ fn build_stage(
         let mut headers = headers_from_props(&props);
         // Translate the form's authType + authToken into a header so
         // the executor doesn't need to know about auth shapes.
-        let auth_type = string_prop(&props, "authType").unwrap_or_else(|| "none".into());
-        let auth_token = string_prop(&props, "authToken").unwrap_or_default();
-        if !auth_token.is_empty() {
-            match auth_type.as_str() {
-                "bearer" => headers.push((
-                    "Authorization".into(),
-                    format!("Bearer {}", auth_token),
-                )),
-                "apikey" => headers.push(("X-API-Key".into(), auth_token)),
-                _ => {}
-            }
-        }
+        push_rest_auth(&mut headers, &props);
         let body_wrap = string_prop(&props, "bodyWrap").filter(|s| !s.is_empty());
         webhook = Some(WebhookSpec {
             from_view: from_view.to_string(),
@@ -2491,15 +2472,7 @@ fn build_stage(
             "variables": variables,
         });
         let mut headers = headers_from_props(&props);
-        let auth_type = string_prop(&props, "authType").unwrap_or_else(|| "none".into());
-        let auth_token = string_prop(&props, "authToken").unwrap_or_default();
-        if !auth_token.is_empty() {
-            match auth_type.as_str() {
-                "bearer" => headers.push(("Authorization".into(), format!("Bearer {}", auth_token))),
-                "apikey" => headers.push(("X-API-Key".into(), auth_token)),
-                _ => {}
-            }
-        }
+        push_rest_auth(&mut headers, &props);
         // responsePath defaults to /data which is the GraphQL convention.
         let response_path = string_prop(&props, "responsePath")
             .filter(|s| !s.is_empty())
@@ -2591,15 +2564,7 @@ fn build_stage(
                 }
             }
         }
-        let auth_type = string_prop(&props, "authType").unwrap_or_else(|| "none".into());
-        let auth_token = string_prop(&props, "authToken").unwrap_or_default();
-        if !auth_token.is_empty() {
-            match auth_type.as_str() {
-                "bearer" => headers.push(("Authorization".into(), format!("Bearer {}", auth_token))),
-                "apikey" => headers.push(("X-API-Key".into(), auth_token)),
-                _ => {}
-            }
-        }
+        push_rest_auth(&mut headers, &props);
         let response_format = if component_id == "src.soap"
             || string_prop(&props, "responseFormat").as_deref() == Some("xml")
         {
@@ -2643,7 +2608,11 @@ fn build_stage(
                     .and_then(|v| v.as_u64())
                     .filter(|n| *n > 0)
                     .unwrap_or(100);
-                RestPagination::Offset { offset_param: param, page_size }
+                let total_path = string_prop(&props, "totalCountPath")
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| if s.starts_with('/') { s } else { format!("/{}", s) });
+                RestPagination::Offset { offset_param: param, page_size, total_path }
             }
             "page" => {
                 let param = string_prop(&props, "pageParam")
