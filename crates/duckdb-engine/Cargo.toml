@@ -94,7 +94,7 @@ async-nats = "0.37"
 # XML reader/writer. Used by src.xml (walks a row path, emits each
 # match as a JSON object) and snk.xml (wraps rows in row elements).
 # Pure Rust.
-quick-xml = "0.36"
+quick-xml = "0.39"
 # RabbitMQ / AMQP 0.9.1 client. Pure Rust, async. Same block_on
 # pattern as Kafka/NATS. Publishes to an exchange + routing key;
 # pulls from a queue with a per-message timeout for batch ETL.

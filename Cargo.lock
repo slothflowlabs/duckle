@@ -2159,7 +2159,7 @@ dependencies = [
  "mongodb",
  "oracle",
  "parquet",
- "quick-xml 0.36.2",
+ "quick-xml",
  "rand 0.8.6",
  "redis",
  "regex",
@@ -5842,7 +5842,7 @@ checksum = "092791278e026273c1b65bbdcfbba3a300f2994c896bd01ab01da613c29c46f1"
 dependencies = [
  "base64 0.22.1",
  "indexmap 2.14.0",
- "quick-xml 0.39.4",
+ "quick-xml",
  "serde",
  "time",
 ]
@@ -6096,15 +6096,6 @@ name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
-
-[[package]]
-name = "quick-xml"
-version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7649a7b4df05aed9ea7ec6f628c67c9953a43869b8bc50929569b2999d443fe"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "quick-xml"
@@ -9395,7 +9386,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c324a910fd86ebdc364a3e61ec1f11737d3b1d6c273c0239ee8ff4bc0d24b4a"
 dependencies = [
  "proc-macro2",
- "quick-xml 0.39.4",
+ "quick-xml",
  "quote",
 ]
 
