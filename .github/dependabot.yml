@@ -1,39 +1,34 @@
 version: 2
+# Quiet config: at most one grouped PR per ecosystem per month. The first run
+# opened ~19 PRs (each major bump is its own PR and weekly is aggressive), so
+# everything below is grouped (major + minor + patch) and the cadence is monthly.
 updates:
-  # Rust crates (the Cargo workspace at the repo root).
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
+      interval: "monthly"
+    open-pull-requests-limit: 2
     groups:
-      # Bundle non-breaking bumps into one PR to keep the noise down; major
-      # bumps still open individually so breaking changes get their own review.
-      cargo-minor-patch:
-        update-types:
-          - "minor"
-          - "patch"
+      cargo:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
 
-  # Frontend npm dependencies (package.json + package-lock.json live in /frontend).
   - package-ecosystem: "npm"
     directory: "/frontend"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
+      interval: "monthly"
+    open-pull-requests-limit: 2
     groups:
-      npm-minor-patch:
-        update-types:
-          - "minor"
-          - "patch"
+      npm:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
 
-  # GitHub Actions used by the workflows in .github/workflows.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    open-pull-requests-limit: 1
     groups:
       actions:
-        update-types:
-          - "minor"
-          - "patch"
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
