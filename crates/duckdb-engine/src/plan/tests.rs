@@ -586,49 +586,75 @@
     }
 
     #[test]
-    fn materialize_view_routes_duck_source_via_parquet() {
-        // issue #76: an explicit View on an ATTACH-backed duck source (here
-        // src.duckdb) must be honored - routed through the safe lazy
-        // read_parquet path - even with multiple consumers, instead of being
-        // silently downgraded to a CREATE TABLE. A control with the default
-        // "auto" + 2 consumers must stay a plain table (no parquet route).
-        let make = |materialize: &str| {
+    fn materialize_view_duck_source_becomes_lazy_view() {
+        // issue #76: an explicit View on a SINGLE-consumer ATTACH-backed duck
+        // source becomes a real lazy VIEW over the live source (so a downstream
+        // WHERE pushes down), with the duckle_src ATTACH kept (no DETACH) so the
+        // view resolves in the batched downstream stage - NOT a CREATE TABLE and
+        // NOT an eager parquet COPY. Controls: a 2-consumer View and a
+        // 2-consumer auto both stay a materialized TABLE (scan once).
+        let make = |materialize: &str, two: bool| {
             let mat = if materialize.is_empty() {
                 String::new()
             } else {
                 format!(",\"materialize\":\"{}\"", materialize)
             };
+            let extra_node = if two {
+                r#",{"id":"k2","position":{"x":0,"y":0},"data":{"label":"B","componentId":"snk.parquet","properties":{"path":"/tmp/b.parquet"}}}"#
+            } else {
+                ""
+            };
+            let extra_edge = if two {
+                r#",{"id":"e2","source":"s1","target":"k2","data":{"connectionType":"main"}}"#
+            } else {
+                ""
+            };
             pipeline_from_json(&format!(
-                r#"{{
-                  "nodes": [
-                    {{"id":"s1","position":{{"x":0,"y":0}},"data":{{
-                      "label":"Duck","componentId":"src.duckdb",
-                      "properties":{{"database":"/tmp/src.duckdb","tableName":"orders"{}}}}}}},
-                    {{"id":"k1","position":{{"x":0,"y":0}},"data":{{
-                      "label":"A","componentId":"snk.parquet","properties":{{"path":"/tmp/a.parquet"}}}}}},
-                    {{"id":"k2","position":{{"x":0,"y":0}},"data":{{
-                      "label":"B","componentId":"snk.parquet","properties":{{"path":"/tmp/b.parquet"}}}}}}
-                  ],
-                  "edges": [
-                    {{"id":"e1","source":"s1","target":"k1","data":{{"connectionType":"main"}}}},
-                    {{"id":"e2","source":"s1","target":"k2","data":{{"connectionType":"main"}}}}
-                  ]
-                }}"#,
-                mat
+                r#"{{"nodes":[
+                    {{"id":"s1","position":{{"x":0,"y":0}},"data":{{"label":"Duck","componentId":"src.duckdb","properties":{{"database":"/tmp/src.duckdb","tableName":"orders"{}}}}}}},
+                    {{"id":"k1","position":{{"x":0,"y":0}},"data":{{"label":"A","componentId":"snk.parquet","properties":{{"path":"/tmp/a.parquet"}}}}}}{}
+                  ],"edges":[
+                    {{"id":"e1","source":"s1","target":"k1","data":{{"connectionType":"main"}}}}{}
+                  ]}}"#,
+                mat, extra_node, extra_edge
             ))
         };
-        let view_c = compile(&make("view")).unwrap();
-        let view_src = view_c.stages.iter().find(|s| s.node_id == "s1").expect("src stage");
+        // single-consumer View -> real lazy VIEW, ATTACH kept (no DETACH), pure SQL.
+        let c = compile(&make("view", false)).unwrap();
+        let s = c.stages.iter().find(|s| s.node_id == "s1").expect("src stage");
+        assert!(s.sql.contains("CREATE OR REPLACE VIEW"), "view src must be a VIEW, got: {}", s.sql);
+        assert!(!s.sql.contains("CREATE OR REPLACE TABLE"), "view src must not be a TABLE: {}", s.sql);
+        assert!(!s.sql.contains("DETACH"), "view src must keep duckle_src attached: {}", s.sql);
+        assert!(s.runtime.is_none(), "view src must stay pure-SQL (so the pipeline batches), got a runtime spec");
+        // 2-consumer View -> materialized TABLE (scan once), not a re-scanned VIEW.
+        let c2 = compile(&make("view", true)).unwrap();
+        let s2 = c2.stages.iter().find(|s| s.node_id == "s1").expect("src stage");
+        assert!(s2.sql.contains("CREATE OR REPLACE TABLE"), "multi-consumer view stays a TABLE: {}", s2.sql);
+        // 2-consumer auto -> TABLE (no regression).
+        let c3 = compile(&make("", true)).unwrap();
+        let s3 = c3.stages.iter().find(|s| s.node_id == "s1").expect("src stage");
+        assert!(s3.sql.contains("CREATE OR REPLACE TABLE"), "auto multi-consumer stays a TABLE: {}", s3.sql);
+    }
+
+    #[test]
+    fn relational_source_infers_custom_sql_without_mode() {
+        // issue #77: a filled SQL box wins even when the Read-mode dropdown is
+        // left at its default (no "mode" prop), mirroring src.duckdb. A
+        // table-only read still works; empty everything still errors loudly.
+        use serde_json::json;
+        let sql = build_relational_source(
+            "src.ducklake",
+            &json!({"path":"/tmp/x.ducklake","sql":"SELECT 1 AS a"}),
+        )
+        .unwrap();
+        assert_eq!(sql, "(SELECT 1 AS a)");
+        let mduck = build_relational_source("src.motherduck", &json!({"sql":"SELECT 2"})).unwrap();
+        assert_eq!(mduck, "(SELECT 2)");
+        let tbl = build_relational_source("src.quack", &json!({"tableName":"orders","schemaName":"main"})).unwrap();
+        assert!(tbl.starts_with("SELECT * FROM"), "table read still works: {}", tbl);
         assert!(
-            matches!(view_src.runtime.as_ref(), Some(RuntimeSpec::AttachParquetSource(_))),
-            "materialize=view on a duck source must route through the parquet path, got sql: {}",
-            view_src.sql
-        );
-        let auto_c = compile(&make("")).unwrap();
-        let auto_src = auto_c.stages.iter().find(|s| s.node_id == "s1").expect("src stage");
-        assert!(
-            !matches!(auto_src.runtime.as_ref(), Some(RuntimeSpec::AttachParquetSource(_))),
-            "auto with 2 consumers must stay a table for a local-file duck source (no regression)"
+            build_relational_source("src.quack", &json!({})).is_err(),
+            "no table and no sql must still error"
         );
     }
 

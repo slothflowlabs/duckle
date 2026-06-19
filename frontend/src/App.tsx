@@ -36,6 +36,8 @@ import ScheduleEditorModal from './workflow-ui/ScheduleEditorModal';
 import BackfillModal from './workflow-ui/BackfillModal';
 import BuildPipelineModal from './workflow-ui/BuildPipelineModal';
 import { McpModal } from './workflow-ui/McpModal';
+import { SettingsModal } from './workflow-ui/SettingsModal';
+import { Settings as SettingsIcon } from 'lucide-react';
 import { ClaudeIcon } from './workflow-ui/ClaudeIcon';
 import { DuckleLogo } from './workflow-ui/DuckleLogo';
 import EngineSetupModal from './workflow-ui/EngineSetupModal';
@@ -524,6 +526,7 @@ export default function App() {
 
     const [buildModalPipelineId, setBuildModalPipelineId] = useState<string | null>(null);
     const [showMcpModal, setShowMcpModal] = useState(false);
+    const [showSettings, setShowSettings] = useState(false);
     const handleBuildPipeline = useCallback((pipelineId: string) => {
         setBuildModalPipelineId(pipelineId);
     }, []);
@@ -1862,6 +1865,15 @@ export default function App() {
                 <button
                     type="button"
                     className="topbar-theme-toggle"
+                    onClick={() => setShowSettings(true)}
+                    title="Settings (proxy)"
+                    aria-label="Open settings"
+                >
+                    <SettingsIcon size={14} />
+                </button>
+                <button
+                    type="button"
+                    className="topbar-theme-toggle"
                     onClick={() => setShowGitPanel(s => !s)}
                     title={t('topbar.git')}
                     aria-label={t('topbar.gitAriaToggle')}
@@ -2129,6 +2141,9 @@ export default function App() {
             ) : null}
 
             {showMcpModal ? <McpModal onClose={() => setShowMcpModal(false)} /> : null}
+            {showSettings ? (
+                <SettingsModal workspace={workspacePathState} onClose={() => setShowSettings(false)} />
+            ) : null}
 
             {repoEditor?.kind === 'connection' ? (
                 <ConnectionEditorModal

@@ -3367,17 +3367,21 @@ pub(crate) fn db_attach(props: &JsonValue, extension: &str, default_port: u64, r
 /// catalog.table (the database is selected at ATTACH time).
 pub(crate) fn build_relational_source(component_id: &str, props: &JsonValue) -> Result<String, String> {
     let mode = string_prop(props, "mode").unwrap_or_else(|| "table".into());
-    if mode == "sql" {
-        let sql = string_prop(props, "sql")
-            .filter(|s| !s.trim().is_empty())
-            .ok_or_else(|| format!("{}: SQL query is empty", component_id))?;
-        return Ok(format!("({})", sql));
-    }
     if mode == "incremental" {
         return Err(format!(
             "{}: incremental read mode isn't implemented yet",
             component_id
         ));
+    }
+    // A custom SQL query wins whenever one is provided, the same way
+    // build_duckdb_source infers intent from the filled field. So leaving the
+    // Read mode dropdown at its default "Whole table" while typing into the SQL
+    // box still runs the query instead of demanding a table name - the duck
+    // sources (ducklake / motherduck / quack) now match src.duckdb (#77).
+    let sql = string_prop(props, "sql").filter(|s| !s.trim().is_empty());
+    if mode == "sql" || sql.is_some() {
+        let sql = sql.ok_or_else(|| format!("{}: SQL query is empty", component_id))?;
+        return Ok(format!("({})", sql));
     }
     let table = string_prop(props, "tableName")
         .filter(|s| !s.is_empty())

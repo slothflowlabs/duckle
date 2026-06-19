@@ -53,6 +53,12 @@ pub struct Stage {
     /// PRAGMA memory_limit prepended to the stage SQL when set. Lets a
     /// user cap a heavy aggregation without touching the whole pipeline.
     pub memory_limit_mb: Option<u32>,
+    /// True when this is a duck-family source the user set to Materialize=View.
+    /// compile() upgrades it from the safe materialized TABLE to a real lazy
+    /// VIEW (so a downstream WHERE / projection pushes down into the source
+    /// scan) when the whole pipeline runs in one batched session and it is the
+    /// sole `duckle_src` ATTACH; otherwise it stays a TABLE (#76).
+    pub attach_view: bool,
 }
 
 impl Stage {
@@ -469,6 +475,52 @@ pub fn compile(pipeline: &PipelineDoc) -> Result<CompiledPipeline, EngineError> 
         stages.push(stage);
     }
 
+    // #76: a duck-family source set to Materialize=View becomes a real lazy
+    // VIEW so a downstream WHERE / projection pushes down into the source scan
+    // (the whole point of choosing View) instead of being materialized.
+    //
+    // A VIEW over the process-local `duckle_src` alias only survives when (a)
+    // every stage runs in one batched single-session invocation and (b) the
+    // alias is not detached/reused between stages. So upgrade ONLY when the
+    // pipeline is provably batchable AND this is the sole duckle_src ATTACH;
+    // otherwise the source stays the safe materialized TABLE it was built as.
+    // The batchable condition here is a strict subset of the executor's
+    // `batchable` check (compile() is the no-target path), so whenever we
+    // upgrade, the executor is guaranteed to take the single-session path.
+    if stages.iter().any(|s| s.attach_view) {
+        let would_batch = stages.len() >= 2
+            && stages.iter().all(|s| {
+                s.is_pure_sql()
+                    && s.retry_attempts <= 1
+                    && s.wait_ms.is_none()
+                    && s.memory_limit_mb.is_none()
+                    && s.sink_mode.as_deref() != Some("error")
+            });
+        let duckle_src_sources = stages
+            .iter()
+            .filter(|s| s.sql.contains("AS duckle_src"))
+            .count();
+        if would_batch && duckle_src_sources == 1 {
+            for s in stages.iter_mut().filter(|s| s.attach_view) {
+                // TABLE -> VIEW so the consumer inlines it and pushes predicates
+                // into the ducklake / duckdb / postgres scan.
+                if let Some(p) = s.sql.find("CREATE OR REPLACE TABLE ") {
+                    s.sql
+                        .replace_range(p..p + "CREATE OR REPLACE TABLE ".len(), "CREATE OR REPLACE VIEW ");
+                }
+                // Keep duckle_src ATTACHed for the downstream stage: drop the
+                // trailing "DETACH duckle_src;" the source appended, or the view
+                // would dangle when the consumer reads it.
+                if let Some(d) = s.sql.rfind("DETACH duckle_src") {
+                    s.sql.truncate(d);
+                    while s.sql.ends_with(' ') || s.sql.ends_with(';') {
+                        s.sql.pop();
+                    }
+                }
+            }
+        }
+    }
+
     // Leaves = data-flow nodes that nothing else (still in the plan) consumes
     // from. Edges into excluded parallelize-branch nodes don't count, so a
     // parallelize node whose only consumers are its branches stays a leaf.
@@ -642,6 +694,10 @@ fn build_stage(
     } else {
         None
     };
+    // #76: set by the generic source/view branch below when this is a
+    // single-consumer attach-backed source the user marked Materialize=View,
+    // making it eligible for the lazy-VIEW upgrade in compile().
+    let mut attach_view = false;
     let (mut sql, kind, from) = if component_id == "snk.graphql" {
         // GraphQL mutation: POST one request per row with the row's
         // JSON as `variables`. Rides the WebhookSpec pipeline.
@@ -3154,9 +3210,16 @@ fn build_stage(
         // reject-split components never take this branch.
         // ATTACH_PARQUET_SOURCES is defined at module scope (the consumer-count
         // pass also reads it to avoid double-counting these sources).
+        // The auto fast-path: a single-consumer remote / catalog source COPYs
+        // once to a temp parquet and exposes a read_parquet VIEW. Skipped when
+        // the user explicitly chose Materialize=View - that intent is handled
+        // as a real lazy VIEW over the live source in compile() (issue #76),
+        // which gives true predicate pushdown into the source scan rather than
+        // the eager full COPY this fast path performs.
         if attach_backed
             && main_consumers <= 1
             && reject_sql.is_none()
+            && materialize != "view"
             && ATTACH_PARQUET_SOURCES.contains(&component_id)
         {
             attach_parquet_source = Some(AttachParquetSourceSpec {
@@ -3165,28 +3228,18 @@ fn build_stage(
                 body: body.to_string(),
             });
         }
-        // Explicit "view" on an ATTACH-backed source (the duck family:
-        // duckdb / ducklake / motherduck / quack / iceberg / delta plus the
-        // relational DBs). A true lazy VIEW over the process-local duckle_src
-        // alias (or a scan-fn that needs an extension LOAD) breaks in a
-        // downstream stage that never ran the ATTACH/LOAD, so view_ok forces
-        // these to a TABLE and the explicit choice was silently dropped
-        // (issue #76). Honor it with the only process-safe lazy form: COPY
-        // once to a temp parquet and expose a read_parquet VIEW (which also
-        // gives the downstream projection / predicate pushdown the user wants),
-        // at ANY consumer count and even for the local-file attaches the
-        // single-consumer fast path above deliberately skips.
-        if materialize == "view"
+        // Materialize=View on an attach-backed source is deliberately NOT routed
+        // to a parquet COPY (that eagerly reads the whole table - the opposite
+        // of the pushdown the user asked for). It stays a plain TABLE here, and
+        // compile() upgrades it to a real lazy VIEW over the live source when
+        // the pipeline batches into a single session and it is the sole
+        // duckle_src ATTACH (issue #76). Only single-consumer sources qualify:
+        // a multi-consumer VIEW would re-scan the source once per consumer, so
+        // those stay a materialized TABLE (scan once).
+        attach_view = materialize == "view"
             && attach_backed
-            && attach_parquet_source.is_none()
-            && reject_sql.is_none()
-        {
-            attach_parquet_source = Some(AttachParquetSourceSpec {
-                node_id: node.id.clone(),
-                attach: attach.to_string(),
-                body: body.to_string(),
-            });
-        }
+            && main_consumers <= 1
+            && reject_sql.is_none();
         // Materialize = "disk": stream this stage through a temp parquet file
         // (COPY ... TO parquet, then a read_parquet VIEW) instead of inserting
         // into the run-db table - minimal RAM, built for huge intermediates.
@@ -3362,6 +3415,7 @@ fn build_stage(
         retry_attempts,
         retry_backoff_ms,
         memory_limit_mb,
+        attach_view,
     })
 }
 

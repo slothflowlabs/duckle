@@ -17,7 +17,7 @@
 //! The OS store and env bundle are best-effort - a missing or unreadable
 //! source just leaves the bundled roots in place.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 /// Assemble the union root store: bundled Mozilla roots, the OS native store,
 /// and an optional `DUCKLE_CA_CERT` PEM bundle.
@@ -97,26 +97,62 @@ pub fn proxy_url_from_env() -> Option<String> {
     None
 }
 
-/// A process-wide ureq agent using the merged trust config above. The agent
-/// is internally reference-counted, so cloning it per request is cheap; we
-/// build it once and hand out clones.
+/// A process-global proxy override set from the desktop Settings, so a user on a
+/// locked-down corporate machine who cannot set a system environment variable
+/// can still point Duckle at a proxy (#80). Preferred over the environment.
+static PROXY_OVERRIDE: RwLock<Option<String>> = RwLock::new(None);
+/// The cached ureq agent paired with the proxy it was built for. Keying the
+/// cache on the resolved proxy means a proxy set AFTER startup rebuilds the
+/// agent, instead of being frozen no-proxy at first use (the old OnceLock bug:
+/// the startup update-check built the agent before any proxy was known, #80).
+static AGENT_CACHE: Mutex<Option<(Option<String>, ureq::Agent)>> = Mutex::new(None);
+
+/// Set (or clear) the HTTP/HTTPS proxy at run time, from the desktop Settings.
+/// Mirrors the value into HTTPS_PROXY / HTTP_PROXY so the reqwest clients (engine
+/// + model downloads, the in-app updater) pick it up too, and invalidates the
+/// cached ureq agent so the next REST / cloud call rebuilds with the proxy.
+pub fn set_proxy(url: Option<String>) {
+    let url = url.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    *PROXY_OVERRIDE.write().unwrap() = url.clone();
+    if let Some(u) = &url {
+        std::env::set_var("HTTPS_PROXY", u);
+        std::env::set_var("HTTP_PROXY", u);
+    }
+    *AGENT_CACHE.lock().unwrap() = None;
+}
+
+/// The proxy URL in effect: the Settings override first, then the environment.
+pub fn current_proxy() -> Option<String> {
+    if let Some(u) = PROXY_OVERRIDE.read().unwrap().clone() {
+        return Some(u);
+    }
+    proxy_url_from_env()
+}
+
+/// A process-wide ureq agent using the merged trust config above, honoring any
+/// configured proxy (#80). The agent is internally reference-counted, so cloning
+/// it per request is cheap. It is cached keyed by the resolved proxy, so a proxy
+/// set after startup rebuilds it rather than being frozen at first use.
 pub fn http_agent() -> ureq::Agent {
-    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
-    AGENT
-        .get_or_init(|| {
-            let mut builder =
-                ureq::AgentBuilder::new().tls_config(Arc::new(build_client_config()));
-            // Honor a configured proxy so REST / cloud connectors work behind a
-            // corporate proxy instead of timing out on a direct connect (#80).
-            if let Some(url) = proxy_url_from_env() {
-                match ureq::Proxy::new(&url) {
-                    Ok(p) => builder = builder.proxy(p),
-                    Err(e) => eprintln!("duckle: ignoring invalid proxy '{url}': {e}"),
-                }
+    let want = current_proxy();
+    {
+        let cache = AGENT_CACHE.lock().unwrap();
+        if let Some((have, agent)) = cache.as_ref() {
+            if *have == want {
+                return agent.clone();
             }
-            builder.build()
-        })
-        .clone()
+        }
+    }
+    let mut builder = ureq::AgentBuilder::new().tls_config(Arc::new(build_client_config()));
+    if let Some(url) = &want {
+        match ureq::Proxy::new(url) {
+            Ok(p) => builder = builder.proxy(p),
+            Err(e) => eprintln!("duckle: ignoring invalid proxy '{url}': {e}"),
+        }
+    }
+    let agent = builder.build();
+    *AGENT_CACHE.lock().unwrap() = Some((want, agent.clone()));
+    agent
 }
 
 #[cfg(test)]

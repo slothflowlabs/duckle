@@ -19,6 +19,7 @@ use tauri::ipc::Channel;
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
+mod app_settings;
 mod ci_status;
 mod dbt_engine;
 mod engine_manager;
@@ -169,6 +170,8 @@ pub fn run() {
             workspace_git_clear_pat,
             secrets::connection_encrypt_payload,
             secrets::connection_decrypt_payload,
+            app_settings::settings_get_proxy,
+            app_settings::settings_set_proxy,
             workspace_ci_status,
             check_for_update,
             build_pipeline_bundle,
@@ -471,6 +474,10 @@ fn schedule_set_workspace(path: String) -> Result<(), String> {
         // Universal, component-level run logging lands in the user's chosen
         // workspace under logs/ (NDJSON) for Splunk / Dynatrace ingestion.
         std::env::set_var("DUCKLE_LOG_DIR", PathBuf::from(&path).join("logs"));
+        // Apply this workspace's saved HTTP proxy (if any) to the engine HTTP
+        // layer so REST / cloud connectors and the updater route through it
+        // without the user setting a system env var (#80).
+        app_settings::apply_for_workspace(&path);
     }
     let p = if path.is_empty() {
         None

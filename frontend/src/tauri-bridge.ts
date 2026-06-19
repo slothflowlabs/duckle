@@ -657,3 +657,19 @@ export type McpClient = 'claude_desktop' | 'cursor';
 export async function mcpInjectConfig(client: McpClient): Promise<string> {
     return await invoke<string>('mcp_inject_config', { client });
 }
+
+/**
+ * Read the workspace's saved HTTP/HTTPS proxy (issue #80). Null = direct.
+ */
+export async function settingsGetProxy(workspace: string): Promise<string | null> {
+    return (await invoke<string | null>('settings_get_proxy', { workspace })) ?? null;
+}
+
+/**
+ * Persist and immediately apply the workspace's HTTP/HTTPS proxy (no system env
+ * var needed). Pass null to clear. Routes REST / cloud connectors and the
+ * in-app updater through the proxy.
+ */
+export async function settingsSetProxy(workspace: string, url: string | null): Promise<void> {
+    await invoke('settings_set_proxy', { workspace, url });
+}
