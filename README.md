@@ -41,7 +41,7 @@
 **Get started**
 
 - [What is Duckle?](#what-is-duckle)
-- [What's new in v0.4.1](#whats-new-in-v041)
+- [What's new in v0.4.2](#whats-new-in-v042)
 - [Quickstart (60 s)](#quickstart-60-seconds)
 - [Download / Install](#download--install)
 - [Build from source](#build-from-source)
@@ -121,19 +121,15 @@ Three things make Duckle different from the heavyweights and the toy ETL tools:
 
 ---
 
-## What's new in v0.4.1
+## What's new in v0.4.2
 
-- **DuckDB 1.5.4.** The bundled engine pins DuckDB 1.5.4, installs are version-aware (a `.installed-version` stamp means a bump re-fetches instead of leaving a stale binary), and the ARM64 Linux engine download is fixed.
-- **Upgrade in place, not reinstall.** An out-of-date engine keeps running and offers a one-click in-place upgrade from a dismissible banner instead of the blocking setup modal.
-- **In-app self-update.** "Update now" downloads the latest build for your OS, verifies it against the release `SHA256SUMS.txt`, swaps it over the running app, and restarts - no more hand-downloading new files. The banner's secondary action is now "View Changelog".
-- **Custom SQL read mode for more duck sources (#77).** DuckLake, MotherDuck, and Quack sources gain a Read mode choice of Whole table or Custom SQL (query the attached catalog as `duckle_src`), matching the DuckDB source.
-- **View materialize honored on duck-family sources (#76).** Materialize = View on an attach-backed source (DuckDB, DuckLake, MotherDuck, Quack, Iceberg, Delta) now sticks via a lazy path instead of silently becoming a table.
-- **Merge write mode in the app (#39).** The DuckDB-native Merge mode is now selectable for the DuckDB and SQLite sinks, matching the engine.
-- **Inline SQL routine fix (#78).** Picking a saved SQL routine now sticks and runs instead of reverting.
-- **Proxy support (#80).** REST and cloud-API connectors and the updater honor `DUCKLE_HTTPS_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`, fixing direct-connect timeouts (os error 10060) on proxied networks. The run Output panel also scrolls now.
-- **Brand refresh.** A new orange accent (dark and light), a pixel-art "D" sloth logo and app icon, and a "Duckle by SlothFlowLabs" signature. The README and website clarify that Duckle is an independent, open-source project that is not affiliated with or endorsed by DuckDB Labs or MotherDuck.
+v0.4.2 makes the v0.4.1 fixes for #76, #77, and #80 work end to end.
 
-Full notes: see the [v0.4.1 release](https://github.com/ducklelabs/duckle/releases/tag/v0.4.1).
+- **Materialize = View pushes down on duck sources (#76).** A single-consumer DuckDB / DuckLake / MotherDuck / Quack source set to View now compiles to a real lazy `CREATE VIEW` over the live source, so a downstream `WHERE` pushes into the source scan instead of loading the whole table (confirmed via `EXPLAIN`). Multi-consumer or non-batchable pipelines keep a materialized table (scanned once).
+- **Custom SQL respected on DuckLake / MotherDuck / Quack (#77).** A query typed into the SQL box now runs even with the Read mode left at its default, matching the DuckDB source - no table name required.
+- **Proxy you can set in the app (#80).** A new Settings panel (gear icon in the toolbar) sets an HTTP / HTTPS proxy per workspace, saved to `.duckle/settings.json` and applied immediately - no system environment variable needed. REST / cloud connectors and the updater route through it.
+
+Full notes: see the [v0.4.2 release](https://github.com/ducklelabs/duckle/releases/tag/v0.4.2). Earlier highlights (DuckDB 1.5.4, in-app updates, brand refresh) are in the [v0.4.1 release](https://github.com/ducklelabs/duckle/releases/tag/v0.4.1).
 
 ---
 
@@ -419,7 +415,7 @@ When the installer downloads the DuckDB CLI it also pre-fetches the extensions D
 
 ## Download / Install
 
-Pick the binary for your OS from the [latest release](https://github.com/ducklelabs/duckle/releases/tag/v0.4.1):
+Pick the binary for your OS from the [latest release](https://github.com/ducklelabs/duckle/releases/tag/v0.4.2):
 
 | OS | Asset | How to run |
 |---|---|---|
