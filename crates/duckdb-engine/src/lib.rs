@@ -328,9 +328,10 @@ impl DuckdbEngine {
                 ));
             }
         }
-        // DuckLake autodetect: ATTACH the catalog read-only as duckle_src so
-        // the inspect SELECT (build_relational_source) resolves (issue #18).
-        if format == "ducklake" {
+        // DuckLake autodetect + snapshot inspector: ATTACH the catalog read-only
+        // as duckle_src so the inspect SELECT (build_relational_source) or the
+        // ducklake_snapshots() listing resolves (issue #18; Data Diff feature).
+        if format == "ducklake" || format == "ducklake_snapshots" {
             p.push_str(&plan::ducklake_attach(options, true));
         }
         p

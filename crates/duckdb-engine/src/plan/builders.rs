@@ -28,6 +28,12 @@ pub fn source_select_for_format(format: &str, props: &JsonValue) -> Option<Strin
         // the inspect prelude (see source_prelude), so the SELECT is identical
         // to the run path.
         "ducklake" => return build_relational_source("src.ducklake", props).ok(),
+        // DuckLake snapshot inspector: list the catalog's snapshots (newest
+        // first) so the UI can show a timeline and let the user pick an AS OF
+        // version. The catalog is ATTACHed as duckle_src by source_prelude.
+        "ducklake_snapshots" => {
+            "SELECT snapshot_id, snapshot_time FROM ducklake_snapshots('duckle_src') ORDER BY snapshot_id DESC".to_string()
+        }
         "s3" | "gcs" | "azureblob" | "http" | "https" => {
             return build_cloud_source(format, props, None).ok()
         }
