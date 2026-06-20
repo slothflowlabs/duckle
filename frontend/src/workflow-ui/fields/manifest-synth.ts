@@ -3904,6 +3904,31 @@ function synthQualityCleanse(comp: ComponentDef): ComponentManifest {
             },
         ], 'upstream');
     }
+    if (id === 'qa.mask') {
+        return base(comp, [
+            {
+                label: 'Mask / Anonymize',
+                fields: [
+                    { key: 'column', label: 'Column', kind: 'column', required: true },
+                    {
+                        key: 'mode',
+                        label: 'Mode',
+                        kind: 'select',
+                        defaultValue: 'hash',
+                        options: [
+                            { label: 'Hash (deterministic pseudonym)', value: 'hash' },
+                            { label: 'Partial (show last N)', value: 'partial' },
+                            { label: 'Null out', value: 'null' },
+                            { label: 'Constant', value: 'constant' },
+                        ],
+                    },
+                    { key: 'salt', label: 'Salt (hash mode)', kind: 'text', description: 'Optional secret mixed in before hashing; the same value maps to the same token, and a shared salt keeps masked datasets joinable.' },
+                    { key: 'showLast', label: 'Show last N (partial mode)', kind: 'integer', defaultValue: 4 },
+                    { key: 'value', label: 'Replacement (constant mode)', kind: 'text', placeholder: 'REDACTED' },
+                ],
+            },
+        ], 'upstream');
+    }
     if (id === 'qa.dedupe' || id === 'qa.match') {
         const isMatch = id === 'qa.match';
         return base(comp, [

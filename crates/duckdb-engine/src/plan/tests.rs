@@ -1094,6 +1094,33 @@
     }
 
     #[test]
+    fn mask_builds_replace_per_mode() {
+        // qa.mask: SELECT * REPLACE with a per-column masking expression.
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["up".into()]);
+        let sql = build_mask(
+            &ni,
+            &serde_json::json!({"masks":[
+                {"column":"ssn","mode":"partial","showLast":4},
+                {"column":"email","mode":"hash","salt":"s7"},
+                {"column":"name","mode":"null"},
+                {"column":"note","mode":"constant","value":"X"}
+            ]}),
+        )
+        .unwrap();
+        assert!(sql.starts_with("SELECT * REPLACE ("), "got: {}", sql);
+        assert!(sql.contains("right(CAST(\"ssn\" AS VARCHAR), 4)"), "got: {}", sql);
+        assert!(sql.contains("md5('s7' || CAST(\"email\" AS VARCHAR)) AS \"email\""), "got: {}", sql);
+        assert!(sql.contains("NULL AS \"name\""), "got: {}", sql);
+        assert!(sql.contains("'X' AS \"note\""), "got: {}", sql);
+        assert!(sql.contains("FROM \"up\""), "got: {}", sql);
+        // hash without salt is unsalted md5; unknown mode is a loud error.
+        let nosalt = build_mask(&ni, &serde_json::json!({"column":"x","mode":"hash"})).unwrap();
+        assert!(nosalt.contains("md5(CAST(\"x\" AS VARCHAR))"), "got: {}", nosalt);
+        assert!(build_mask(&ni, &serde_json::json!({"column":"x","mode":"bogus"})).is_err());
+    }
+
+    #[test]
     fn csv_declared_schema_overrides_autodetect() {
         // Regression for issue #3: when the user sets a column to
         // VARCHAR in the Schema panel (typical fix for dd/mm/yy dates

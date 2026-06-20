@@ -143,6 +143,7 @@ pub(crate) fn build_view_sql(
         "qa.describe" => build_describe(inputs),
         "qa.histogram" => build_histogram(inputs, props),
         "qa.standardize" => build_standardize(inputs, props),
+        "qa.mask" => build_mask(inputs, props),
         "qa.dedupe" => build_fuzzy_dedupe(inputs, props),
         "qa.match" => build_record_match(inputs, props),
         "xf.reorder" => build_reorder(inputs, props),
@@ -1890,6 +1891,69 @@ pub(crate) fn build_histogram(inputs: &NodeInputs, props: &JsonValue) -> Result<
 
 /// Standardize: trim, case-normalize, and collapse internal whitespace in
 /// the chosen text columns, in place.
+/// The `SELECT * REPLACE` clause masking one column. hash = deterministic
+/// pseudonym md5(['salt' ||] value) - same input maps to the same token (with a
+/// shared salt, joinable across masked datasets); partial = keep the last N
+/// chars and star the rest; null = drop the value; constant = a fixed
+/// replacement. NULL inputs stay NULL.
+fn mask_replacement(column: &str, mode: &str, salt: Option<&str>, show_last: i64, value: Option<&str>) -> Result<String, String> {
+    let q = quote_ident(column);
+    let cv = format!("CAST({} AS VARCHAR)", q);
+    let expr = match mode {
+        "null" => "NULL".to_string(),
+        "constant" => format!("'{}'", sql_escape(value.unwrap_or(""))),
+        "hash" => match salt.filter(|s| !s.trim().is_empty()) {
+            Some(s) => format!("md5('{}' || {})", sql_escape(s), cv),
+            None => format!("md5({})", cv),
+        },
+        "partial" => {
+            let n = show_last.max(0);
+            format!(
+                "CASE WHEN {cv} IS NULL THEN NULL WHEN length({cv}) <= {n} THEN repeat('*', length({cv})) ELSE repeat('*', length({cv}) - {n}) || right({cv}, {n}) END",
+                cv = cv,
+                n = n
+            )
+        }
+        other => return Err(format!("mask: unknown mode '{}' (use hash | partial | null | constant)", other)),
+    };
+    Ok(format!("{} AS {}", expr, q))
+}
+
+/// qa.mask: irreversibly mask / anonymize selected columns in place via a
+/// `SELECT * REPLACE (...)`. Per-column rules (a `masks` array, or the single
+/// column/mode form): hash (salted pseudonym), partial (show last N), null,
+/// constant. Pure SQL; for GDPR/PCI-style governance without moving data.
+pub(crate) fn build_mask(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("qa.mask"))?;
+    let mut repl: Vec<String> = Vec::new();
+    if let Some(masks) = props.get("masks").and_then(JsonValue::as_array) {
+        for m in masks {
+            let column = m.get("column").and_then(JsonValue::as_str).unwrap_or("").trim();
+            if column.is_empty() {
+                continue;
+            }
+            let mode = m.get("mode").and_then(JsonValue::as_str).unwrap_or("hash");
+            let salt = m.get("salt").and_then(JsonValue::as_str);
+            let show_last = m.get("showLast").and_then(JsonValue::as_i64).unwrap_or(4);
+            let value = m.get("value").and_then(JsonValue::as_str);
+            repl.push(mask_replacement(column, mode, salt, show_last, value)?);
+        }
+    }
+    if repl.is_empty() {
+        if let Some(column) = string_prop(props, "column").filter(|s| !s.trim().is_empty()) {
+            let mode = string_prop(props, "mode").unwrap_or_else(|| "hash".into());
+            let salt = string_prop(props, "salt");
+            let show_last = props.get("showLast").and_then(JsonValue::as_i64).unwrap_or(4);
+            let value = string_prop(props, "value");
+            repl.push(mask_replacement(column.trim(), &mode, salt.as_deref(), show_last, value.as_deref())?);
+        }
+    }
+    if repl.is_empty() {
+        return Err("mask: select at least one column to mask".to_string());
+    }
+    Ok(format!("SELECT * REPLACE ({}) FROM {}", repl.join(", "), quote_ident(upstream)))
+}
+
 pub(crate) fn build_standardize(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
     let upstream = inputs.main().ok_or_else(|| missing_input_msg("qa.standardize"))?;
     let cols = columns_list(props, "columns");

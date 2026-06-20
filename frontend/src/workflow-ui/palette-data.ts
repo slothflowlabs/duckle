@@ -660,6 +660,7 @@ export const PALETTE: Category[] = [
                 label: 'Cleansing',
                 components: [
                     qa('standardize', 'Standardize', 'available', 'Trim, case-normalize, and collapse whitespace'),
+                    qa('mask', 'Mask / Anonymize', 'available', 'Irreversibly mask a column in place for governance/compliance: deterministic salted-hash pseudonym (joinable across datasets), partial mask (show last N), null-out, or a constant. Pure in-engine, no data leaves your machine.'),
                     qa('dedupe', 'Fuzzy Deduplicate', 'available', 'Drop near-duplicate rows by string similarity'),
                     qa('match', 'Record Match', 'available', 'Find matching record pairs by similarity, with a score'),
                     qa('addressclean', 'Address Cleanse', 'planned'),

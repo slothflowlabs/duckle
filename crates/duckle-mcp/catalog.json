@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 332,
+  "componentCount": 333,
   "components": [
     {
       "id": "src.csv",
@@ -33595,6 +33595,117 @@
                 "label": "Collapse inner whitespace",
                 "kind": "bool",
                 "defaultValue": true
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "pass",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "reject",
+              "type": "reject"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "qa.mask",
+      "label": "Mask / Anonymize",
+      "kind": "quality",
+      "availability": "available",
+      "summary": "Irreversibly mask a column in place for governance/compliance: deterministic salted-hash pseudonym (joinable across datasets), partial mask (show last N), null-out, or a constant. Pure in-engine, no data leaves your machine.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "pass",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "reject",
+            "type": "reject"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "qa.mask",
+        "kind": "transform",
+        "label": "Mask / Anonymize",
+        "description": "Irreversibly mask a column in place for governance/compliance: deterministic salted-hash pseudonym (joinable across datasets), partial mask (show last N), null-out, or a constant. Pure in-engine, no data leaves your machine.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Mask / Anonymize",
+            "fields": [
+              {
+                "key": "column",
+                "label": "Column",
+                "kind": "column",
+                "required": true
+              },
+              {
+                "key": "mode",
+                "label": "Mode",
+                "kind": "select",
+                "defaultValue": "hash",
+                "options": [
+                  {
+                    "label": "Hash (deterministic pseudonym)",
+                    "value": "hash"
+                  },
+                  {
+                    "label": "Partial (show last N)",
+                    "value": "partial"
+                  },
+                  {
+                    "label": "Null out",
+                    "value": "null"
+                  },
+                  {
+                    "label": "Constant",
+                    "value": "constant"
+                  }
+                ]
+              },
+              {
+                "key": "salt",
+                "label": "Salt (hash mode)",
+                "kind": "text",
+                "description": "Optional secret mixed in before hashing; the same value maps to the same token, and a shared salt keeps masked datasets joinable."
+              },
+              {
+                "key": "showLast",
+                "label": "Show last N (partial mode)",
+                "kind": "integer",
+                "defaultValue": 4
+              },
+              {
+                "key": "value",
+                "label": "Replacement (constant mode)",
+                "kind": "text",
+                "placeholder": "REDACTED"
               }
             ]
           }

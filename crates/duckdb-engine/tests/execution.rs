@@ -8285,6 +8285,36 @@ fn column_lineage_resolves_sources_live() {
     assert!(by("a").is_some(), "expected an 'a' output column: {:?}", lin);
 }
 
+/// qa.mask: partial-mask + deterministic salted-hash anonymization, end to end.
+#[test]
+fn mask_anonymizes_columns_live() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,ssn,email\n1,123456789,a@x.com\n2,123456789,b@x.com\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("m", "qa.mask", json!({ "masks": [
+                { "column": "ssn", "mode": "partial", "showLast": 4 },
+                { "column": "email", "mode": "hash", "salt": "pepper" }
+            ]})),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "m"), main_edge("e2", "m", "k")]),
+    );
+    let r = engine.execute_pipeline(&d);
+    assert_eq!(r.status, "ok", "qa.mask failed: {:?}", r.error);
+    // ssn shows only the last 4 digits.
+    let ssn = scalar_string(&format!("SELECT ssn FROM read_csv_auto('{}') WHERE id = 1", out));
+    assert_eq!(ssn, "*****6789", "ssn should be partially masked, got {}", ssn);
+    // email is hashed (no plaintext) and deterministic: both rows have the same
+    // value '123...'? no - emails differ, but the SAME email would hash equal.
+    let e1 = scalar_string(&format!("SELECT email FROM read_csv_auto('{}') WHERE id = 1", out));
+    assert!(!e1.contains('@'), "email should be hashed, got {}", e1);
+    assert_eq!(e1.len(), 32, "md5 hex is 32 chars, got {}", e1);
+}
+
 /// Whole-pipeline lineage: a projected column traces across stages back to its
 /// root source column. src.csv(a,b,c) -> xf.project(a,b) -> snk.csv.
 #[test]
