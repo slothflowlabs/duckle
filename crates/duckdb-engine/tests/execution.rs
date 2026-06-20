@@ -8259,6 +8259,32 @@ fn code_javascript_preserves_bigint_ids() {
     assert_eq!(id, "1350000000000000001", "64-bit id must survive the JS bridge exactly");
 }
 
+/// Column lineage end-to-end: real json_serialize_sql AST -> resolved sources.
+/// Exercises the run_rows path + AST emission shape, not just the pure walker.
+#[test]
+fn column_lineage_resolves_sources_live() {
+    let engine = engine_or_skip!();
+    let lin = engine
+        .column_lineage("SELECT a, b + c AS total, sum(amount) AS amt FROM t GROUP BY a, b, c")
+        .expect("column_lineage");
+    let by = |name: &str| lin.iter().find(|c| c.name == name).cloned();
+    // total derives from b and c
+    let total = by("total").expect("total column");
+    let mut tcols: Vec<String> = total.sources.iter().map(|s| s.column.clone()).collect();
+    tcols.sort();
+    assert_eq!(tcols, vec!["b".to_string(), "c".to_string()], "total <- b,c; got {:?}", total);
+    // amt derives from amount (through the aggregate)
+    let amt = by("amt").expect("amt column");
+    assert_eq!(
+        amt.sources.iter().map(|s| s.column.as_str()).collect::<Vec<_>>(),
+        vec!["amount"],
+        "amt <- amount; got {:?}",
+        amt
+    );
+    // a is a passthrough of a
+    assert!(by("a").is_some(), "expected an 'a' output column: {:?}", lin);
+}
+
 #[test]
 fn code_javascript_undefined_return_errors_not_panics() {
     // Regression: a transform that returns nothing (undefined) used to

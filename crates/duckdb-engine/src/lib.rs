@@ -26,6 +26,7 @@ use thiserror::Error;
 pub mod context;
 pub mod error_category;
 pub mod history;
+pub mod lineage;
 pub mod plan;
 pub mod tls;
 pub mod watermark;
@@ -307,6 +308,33 @@ impl DuckdbEngine {
             schema,
             sample_rows: rows,
         })
+    }
+
+    /// Column-level lineage for a single SQL query: which source columns feed
+    /// each projected column. Asks DuckDB to serialize the SQL to its AST
+    /// (json_serialize_sql, a core function - no extension) and resolves the
+    /// lineage from it. Foundation for impact analysis / breaking-change diff /
+    /// data contracts.
+    pub fn column_lineage(&self, sql: &str) -> Result<Vec<lineage::OutputColumn>, EngineError> {
+        let q = format!("SELECT json_serialize_sql('{}') AS ast", sql_escape(sql));
+        let rows = self.run_rows(None, &q)?;
+        let ast = rows
+            .into_iter()
+            .next()
+            .and_then(|r| r.get("ast").cloned())
+            .ok_or_else(|| EngineError::Query("lineage: no AST returned".into()))?;
+        // A JSON-typed column may come back as a nested object or as a string.
+        let ast = match ast {
+            JsonValue::String(s) => serde_json::from_str(&s)
+                .map_err(|e| EngineError::Query(format!("lineage: parse AST: {}", e)))?,
+            other => other,
+        };
+        if ast.get("error").and_then(|e| e.as_bool()) == Some(true) {
+            return Err(EngineError::Query(
+                "lineage: the SQL could not be parsed".into(),
+            ));
+        }
+        Ok(lineage::lineage_from_serialized_sql(&ast))
     }
 
     /// Statements that must run before a source query: cloud credentials,
