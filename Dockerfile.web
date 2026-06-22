@@ -1,0 +1,42 @@
+# Duckle Web Editor (#75 phase 2) - the full Duckle studio as a self-hosted web
+# app. Single-tenant, no auth: bind behind a reverse proxy or on a trusted
+# network. Local-first: your data + pipelines stay in the mounted workspace; the
+# engine runs in the container, nothing is sent to any Duckle-hosted service.
+#
+#   docker build -f Dockerfile.web -t duckle-web .
+#   docker run -p 8080:8080 -v /path/to/workspace:/workspace duckle-web
+#   open http://localhost:8080
+
+# 1) Build the browser edition of the frontend (DUCKLE_WEB aliases invoke() to
+#    the HTTP command bridge and outputs to dist-web).
+FROM node:22-bookworm AS frontend
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci || npm install
+COPY frontend/ ./
+RUN DUCKLE_WEB=1 npm run build
+
+# 2) Build the headless runner that serves the editor + runs the engine.
+#    The engine shells out to the DuckDB CLI, so no libduckdb is needed here.
+FROM rust:1-bookworm AS runner
+WORKDIR /app
+COPY . .
+RUN cargo build --release -p duckle-runner
+
+# 3) Runtime: runner + the built frontend + the DuckDB CLI.
+FROM debian:bookworm-slim
+ARG DUCKDB_VERSION=1.5.4
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl unzip \
+    && curl -fsSL -o /tmp/duckdb.zip "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" \
+    && unzip /tmp/duckdb.zip -d /usr/local/bin \
+    && rm /tmp/duckdb.zip \
+    && apt-get purge -y unzip && apt-get autoremove -y && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=runner /app/target/release/duckle-runner /usr/local/bin/duckle-runner
+COPY --from=frontend /app/frontend/dist-web /app/dist-web
+ENV DUCKLE_DUCKDB_BIN=/usr/local/bin/duckdb
+VOLUME ["/workspace"]
+EXPOSE 8080
+ENTRYPOINT ["duckle-runner", "web", "--host", "0.0.0.0", "--port", "8080", \
+            "--dist", "/app/dist-web", "--workspace", "/workspace"]

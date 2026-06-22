@@ -1,0 +1,16 @@
+# Duckle Web Editor (#75) - self-hosted, single-tenant, no auth.
+#   docker compose -f docker-compose.web.yml up --build
+#   open http://localhost:8080
+#
+# Your pipelines + data live in ./workspace on the host (local-first). Bind to a
+# trusted network / put a reverse proxy with auth in front before exposing it.
+services:
+  duckle-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./workspace:/workspace
+    restart: unless-stopped

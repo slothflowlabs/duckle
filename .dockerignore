@@ -1,0 +1,9 @@
+# Keep the Docker build context lean (esp. for Dockerfile.web).
+target/
+**/node_modules/
+frontend/dist/
+frontend/dist-web/
+test-duckleproject/
+.git/
+*.log
+apps/desktop/bin/
