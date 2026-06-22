@@ -82,6 +82,73 @@ export type PipelineEvent =
     | { type: 'log'; node_id: string; level: 'info' | 'warn' | 'error'; message: string }
     | { type: 'finished'; status: 'ok' | 'error' | 'cancelled'; duration_ms: number };
 
+/**
+ * Web edition run transport: POST the pipeline to /api/run_stream and read the
+ * Server-Sent Events the runner emits - each `data:` line is a PipelineEvent
+ * (fed to onEvent for the live per-node animation), the final `event: result`
+ * line carries the RunResult. Mirrors the desktop Channel without Tauri.
+ */
+async function runViaSse(
+    pipeline: { nodes: Node<DuckleNodeData>[]; edges: Edge[] },
+    onEvent?: (evt: PipelineEvent) => void,
+    pipelineId?: string,
+    pipelineName?: string | null,
+    workspacePath?: string | null,
+): Promise<RunResult | null> {
+    const fail = (error: string): RunResult => ({
+        status: 'error',
+        duration_ms: 0,
+        nodes: {},
+        preview: [],
+        error,
+    });
+    try {
+        const res = await fetch('/api/run_stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                pipeline,
+                pipelineId: pipelineId ?? null,
+                pipelineName: pipelineName ?? null,
+                workspacePath: workspacePath ?? null,
+            }),
+        });
+        if (!res.ok || !res.body) return fail('run failed: HTTP ' + res.status);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        let result: RunResult | null = null;
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            // SSE frames are separated by a blank line.
+            let sep: number;
+            while ((sep = buf.indexOf('\n\n')) >= 0) {
+                const frame = buf.slice(0, sep);
+                buf = buf.slice(sep + 2);
+                let isResult = false;
+                let data = '';
+                for (const line of frame.split('\n')) {
+                    if (line.startsWith('event:')) isResult = line.slice(6).trim() === 'result';
+                    else if (line.startsWith('data:')) data += line.slice(5).trim();
+                }
+                if (!data) continue;
+                try {
+                    const obj = JSON.parse(data);
+                    if (isResult) result = obj as RunResult;
+                    else onEvent?.(obj as PipelineEvent);
+                } catch {
+                    // ignore a malformed frame
+                }
+            }
+        }
+        return result ?? fail('run produced no result');
+    } catch (err) {
+        return fail(String(err));
+    }
+}
+
 export async function runPipeline(
     nodes: Node<DuckleNodeData>[],
     edges: Edge[],
@@ -90,10 +157,12 @@ export async function runPipeline(
     workspacePath?: string | null,
     pipelineName?: string | null,
 ): Promise<RunResult | null> {
-    // Web edition runs on the server engine over HTTP; the Channel arg is
-    // ignored there (no live per-stage events yet), and the final RunResult
-    // comes back from the invoke return.
     if (!isTauri() && !isWebBackend()) return null;
+    // Web edition streams progress over SSE so the live per-node animation works
+    // just like the desktop Channel.
+    if (isWebBackend()) {
+        return runViaSse({ nodes, edges }, onEvent, pipelineId, pipelineName, workspacePath);
+    }
     const channel = new Channel<PipelineEvent>();
     if (onEvent) channel.onmessage = onEvent;
     try {

@@ -233,6 +233,9 @@ fn handle_web(mut stream: TcpStream, state: &WebState) -> Result<(), String> {
         let op = req.path.trim_start_matches("/api/fs/").to_string();
         return dispatch_fs(&mut stream, state, &op, &req.body);
     }
+    if req.method == "POST" && req.path == "/api/run_stream" {
+        return run_stream(&mut stream, state, &req.body);
+    }
     // Static frontend: map the URL path into the dist dir; unknown non-asset
     // paths fall back to index.html (SPA routing).
     serve_static(&mut stream, state, &req.path)
@@ -402,6 +405,41 @@ fn dispatch_cmd(stream: &mut TcpStream, state: &WebState, cmd: &str, body: &[u8]
         // backend failures) keeps booting. Real handlers land in the MVP.
         _ => respond_json(stream, &Value::Null),
     }
+}
+
+/// Run a pipeline and STREAM its progress to the browser as Server-Sent Events:
+/// each engine PipelineEvent is a `data:` line; the final RunResult is an
+/// `event: result` line. The frontend turns these back into the same live
+/// per-node animation the desktop gets from the Tauri Channel.
+fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(), String> {
+    let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let doc: PipelineDoc = match serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)) {
+        Ok(d) => d,
+        Err(e) => return respond_err(stream, "400 Bad Request", &format!("bad pipeline: {}", e)),
+    };
+    let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
+    // SSE response head (no Content-Length; we stream until the run ends).
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
+    stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
+    stream.flush().map_err(|e| e.to_string())?;
+
+    let _guard = state.run_lock.lock().unwrap_or_else(|p| p.into_inner());
+    // A second handle to the same socket for the event callback (the run is
+    // synchronous, so events stream first, the result line follows).
+    let mut ev = stream.try_clone().map_err(|e| e.to_string())?;
+    let engine = DuckdbEngine::new(state.duckdb.clone());
+    let result = engine.execute_pipeline_with_events(&doc, None, Some(&name), |evt| {
+        if let Ok(j) = serde_json::to_string(&evt) {
+            let _ = ev.write_all(format!("data: {}\n\n", j).as_bytes());
+            let _ = ev.flush();
+        }
+    });
+    let rj = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
+    stream
+        .write_all(format!("event: result\ndata: {}\n\n", rj).as_bytes())
+        .map_err(|e| e.to_string())?;
+    stream.flush().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn serve_static(stream: &mut TcpStream, state: &WebState, url_path: &str) -> Result<(), String> {
