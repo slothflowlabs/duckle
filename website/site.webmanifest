@@ -8,6 +8,6 @@
   "background_color": "#07090f",
   "theme_color": "#07090f",
   "icons": [
-    { "src": "assets/img/duckle-logo-light.v2.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+    { "src": "assets/img/duckle-mark.v4.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]
 }
