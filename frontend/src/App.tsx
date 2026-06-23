@@ -1977,9 +1977,6 @@ export default function App() {
                 >
                     {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
                 </button>
-                <div className="status" data-state={runtime}>
-                    <span className="status-dot" /> {t('topbar.runtime', { name: runtime })}
-                </div>
                 <WindowControls />
             </header>
 
