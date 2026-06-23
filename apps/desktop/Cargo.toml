@@ -35,7 +35,7 @@ serde_json = { workspace = true }
 # (secrets.rs). Same AES-256-GCM scheme the duckle-runner bundle uses.
 aes-gcm = "0.10"
 base64 = "0.22"
-getrandom = "0.2"
+getrandom = "0.4"
 # Parse the GitHub release asset's RFC3339 upload time + format the embedded
 # build time for the update-available check (update_check.rs).
 chrono = { workspace = true }
@@ -49,8 +49,8 @@ duckle-connectors = { workspace = true }
 duckle-duckdb-engine = { workspace = true }
 duckle-scheduler = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
-sha2 = "0.10"
-zip = "2"
+sha2 = "0.11"
+zip = "8"
 # tar + gzip for the llama.cpp archives on Linux/macOS - they ship
 # as .tar.gz where Windows ships as .zip.
 tar = "0.4"

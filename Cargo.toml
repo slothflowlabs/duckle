@@ -45,7 +45,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 
 # Errors
-thiserror = "1.0"
+thiserror = "2.0"
 anyhow = "1.0"
 
 # Async
@@ -63,9 +63,9 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Arrow / columnar
 arrow = "53"
-arrow-array = "53"
-arrow-schema = "53"
-parquet = "53"
+arrow-array = "59"
+arrow-schema = "59"
+parquet = "59"
 
 # Storage
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -73,7 +73,7 @@ duckdb = "1.1"
 encoding_rs = "0.8"
 
 # Scheduling
-cron = "0.15"
+cron = "0.17"
 
 # Tauri (used by apps/desktop)
 tauri = { version = "2", features = [] }

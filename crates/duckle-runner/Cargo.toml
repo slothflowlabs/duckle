@@ -19,9 +19,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 regex = "1"
 aes-gcm = "0.10"
-sha2 = "0.10"
+sha2 = "0.11"
 base64 = "0.22"
-getrandom = "0.2"
+getrandom = "0.4"
 # Self-extracting artifact payload (single-file build output). deflate-only
 # (drops aes/zstd/bzip2/lzma/xz); pulls flate2 rust_backend already in the lock.
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }

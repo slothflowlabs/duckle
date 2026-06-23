@@ -31,20 +31,20 @@ ureq = { version = "2.10", default-features = false, features = ["tls", "json", 
 # store. Pinned to the same versions/provider ureq already resolves (ring),
 # so this adds no new crypto backend and no extra build cost. See src/tls.rs.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
-webpki-roots = "0.26"
-rustls-native-certs = "0.7"
+webpki-roots = "1.0"
+rustls-native-certs = "0.8"
 rustls-pemfile = "2"
 # Snowflake JWT RS256 auth path. Reads a PEM-encoded private key,
 # derives the public-key fingerprint, and signs the standard
 # Snowflake claims (iss / sub / iat / exp). PAT bearer auth is also
 # supported and doesn't pull these in.
-jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["use_pem"] }
 rsa = { version = "0.9", features = ["pem", "sha2"] }
-sha2 = "0.10"
+sha2 = "0.11"
 # HMAC-SHA256 for AWS SigV4 signing in src.dynamodb (and any future
 # AWS services we add via direct HTTP). Avoids the aws-sdk-rust
 # dep tree (300+ services we don't need).
-hmac = "0.12"
+hmac = "0.13"
 base64 = "0.22"
 # MongoDB. The official driver is async-only; we use a minimal tokio
 # rt feature and call .block_on() from the synchronous executor.
@@ -61,7 +61,7 @@ tokio-util = { version = "0.7", features = ["compat"] }
 futures-util = "0.3"
 # Cassandra / ScyllaDB via the pure-Rust scylla driver (also speaks
 # CQL to Cassandra). Async; same block_on pattern as mongo + sqlserver.
-scylla = "0.13"
+scylla = "1.7"
 # Oracle support. The `oracle` crate uses ODPI-C (statically compiled
 # from C source at build time) which dynamically loads Oracle Instant
 # Client at RUNTIME via dlopen. Build is self-contained on every OS;
@@ -72,37 +72,37 @@ oracle = { version = "0.6", optional = true }
 # Redis sync client. Tokio-async is optional and off; we use the blocking
 # Connection / Pipeline API to fit the per-stage CLI shell-out model.
 # Small dep (~300kb).
-redis = { version = "0.27", default-features = false }
+redis = { version = "1.2", default-features = false }
 # YAML and TOML format readers/writers. Small pure-Rust deps. Used by
 # src.yaml / snk.yaml / src.toml / snk.toml - we parse to serde_json::Value
 # then either materialize as a DuckDB JSON table or write the JSON back
 # out as YAML/TOML. Avoids needing DuckDB extensions for either format.
 serde_yaml = "0.9"
-toml = "0.8"
+toml = "1.1"
 # Kafka (and Redpanda) producer + consumer via the pure-Rust rskafka
 # crate (InfluxDB IOx in production). Async-only - wrapped in tokio
 # block_on like mongo + tiberius + scylla. Avoids the C-lib rdkafka
 # build dance entirely, at the cost of fewer broker-protocol features
 # (good enough for batch produce + batch consume, no admin client).
-rskafka = "0.5"
+rskafka = "0.6"
 # Apache Avro container-file reader/writer. Pure Rust. Pairs with
 # Kafka topics that publish Avro-encoded payloads, and reads the
 # .avro / .ocf files that exporters drop on object storage.
-apache-avro = "0.17"
+apache-avro = "0.21"
 # NATS / JetStream. Pure-Rust client by the NATS team.
-async-nats = "0.37"
+async-nats = "0.49"
 # XML reader/writer. Used by src.xml (walks a row path, emits each
 # match as a JSON object) and snk.xml (wraps rows in row elements).
 # Pure Rust.
-quick-xml = "0.36"
+quick-xml = "0.39"
 # RabbitMQ / AMQP 0.9.1 client. Pure Rust, async. Same block_on
 # pattern as Kafka/NATS. Publishes to an exchange + routing key;
 # pulls from a queue with a per-message timeout for batch ETL.
-lapin = { version = "2", default-features = false, features = ["rustls"] }
+lapin = { version = "4", default-features = false, features = ["rustls"] }
 # FTP / FTPS client. Pure Rust, synchronous API (fits the per-stage
 # blocking model - no block_on dance). Rustls-backed TLS keeps the
 # build self-contained on every OS.
-suppaftp = { version = "8", default-features = false, features = ["rustls-ring"] }
+suppaftp = { version = "9", default-features = false, features = ["rustls-ring"] }
 # SFTP (SSH-based) source, src.sftp. russh + russh-sftp on the `ring`
 # crypto backend (default-features=false drops aws-lc-rs, so NO NASM and
 # NO C toolchain - the same ring 0.17 stack the rest of our TLS already
@@ -110,7 +110,7 @@ suppaftp = { version = "8", default-features = false, features = ["rustls-ring"]
 # async; run_sftp_source wraps it in block_on like the mongo / tiberius
 # sources to stay synchronous. Host-key/fingerprint is enforced in russh's
 # check_server_key callback.
-russh = { version = "0.54", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh = { version = "0.60", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.3"
 # System clipboard reader (src.clipboard). Text-only - image-data is
 # off because we never round-trip images through pipelines. arboard
@@ -122,13 +122,13 @@ arboard = { version = "3", default-features = false }
 # no cranelift - far smaller than wasmtime. Trade-off: slower
 # execution, but per-row ETL transforms aren't throughput-critical.
 # The wasm module runs in a sandbox - no fs, no network, no env vars.
-wasmi = "0.40"
+wasmi = "1.1"
 # Pure-Rust JavaScript engine for code.javascript. Boa is an
 # interpreter (no JIT), sandboxed by default - no DOM, no fetch, no
 # fs. The user supplies a transform(row) -> object function and the
 # engine calls it per row, marshalling JSON in / out via the boa
 # JsValue<->serde_json bridge.
-boa_engine = "0.19"
+boa_engine = "0.20"
 # Used by xf.ai.pii for regex-based PII detection (emails, phones,
 # SSNs, credit cards). Already in our dep graph transitively but
 # pinned explicitly here so it's stable across upstream churn.
@@ -139,7 +139,7 @@ regex = "1"
 # accompanying mail-parser decodes RFC 822 envelopes + MIME bodies.
 imap = { version = "=3.0.0-alpha.15", default-features = false, features = ["rustls-tls"] }
 mail-parser = "0.11"
-rustls-connector = { version = "0.21", default-features = false, features = ["rustls--ring"] }
+rustls-connector = { version = "0.23", default-features = false, features = ["rustls--ring"] }
 # SMTP client for snk.email. Pure Rust with rustls-tls. Symmetric
 # to src.email (the IMAP reader). Builder + smtp-transport features;
 # default native-tls disabled so we don't drag OpenSSL on Linux.
@@ -151,7 +151,7 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "s
 # workspace arrow/parquet pins so the driver's RecordBatch and the parquet
 # writer share one arrow version. The driver .dll/.so/.dylib is bundled
 # per-OS (conda-forge) and located at runtime; absent driver -> clear error.
-adbc_core = { version = "0.16", features = ["driver_manager"] }
+adbc_core = { version = "0.19", features = ["driver_manager"] }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 parquet = { workspace = true }
@@ -162,9 +162,9 @@ parquet = { workspace = true }
 # build against chrono >= 0.4.42, which russh-sftp pins us above). arrow-flight 53
 # unifies with the workspace arrow pins; do_get RecordBatches stream to a Parquet
 # temp file + materialize via DuckDB read_parquet, like the ADBC source.
-arrow-flight = { version = "53", features = ["tls"] }
+arrow-flight = { version = "55", features = ["tls"] }
 tonic = { version = "0.12", features = ["tls", "tls-roots"] }
-prost = "0.13"
+prost = "0.14"
 
 [features]
 default = ["oracle"]
@@ -180,11 +180,11 @@ required-features = ["oracle"]
 
 [dev-dependencies]
 tempfile = "3.10"
-rand = "0.8"
+rand = "0.10"
 # Re-imported as a dev-dep so the integration tests can call its
 # Writer to build a small .avro file inline before reading it back
 # through src.avro. Same version as the lib dep above.
-apache-avro = "0.17"
+apache-avro = "0.21"
 # Re-imported so src.clipboard tests can write a known payload to the
 # system clipboard before running the pipeline. Same backend as the
 # lib dep -> writer and reader agree on the OS clipboard format.
