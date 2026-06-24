@@ -20,6 +20,7 @@ type Props = {
     onNewDocument: (parentId: string) => void;
     onNewRoutine: (parentId: string) => void;
     onNewDive: (parentId: string) => void;
+    onNewDashboard: (parentId: string) => void;
     onRenameRepoItem: (id: string, newName: string) => void;
     onDuplicateRepoItem: (id: string) => void;
     onDeleteRepoItem: (id: string) => void;
@@ -42,6 +43,7 @@ export default function LeftSidebar({
     onNewDocument,
     onNewRoutine,
     onNewDive,
+    onNewDashboard,
     onRenameRepoItem,
     onDuplicateRepoItem,
     onDeleteRepoItem,
@@ -94,6 +96,7 @@ export default function LeftSidebar({
                         onNewDocument={onNewDocument}
                         onNewRoutine={onNewRoutine}
                         onNewDive={onNewDive}
+                        onNewDashboard={onNewDashboard}
                         onRename={onRenameRepoItem}
                         onDuplicate={onDuplicateRepoItem}
                         onDelete={onDeleteRepoItem}

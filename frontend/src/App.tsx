@@ -109,6 +109,8 @@ import { useUndoRedo, type CanvasSnapshot } from './useUndoRedo';
 import type { RepoItem } from './repo-types';
 import { DiveModal } from './dives/DiveModal';
 import type { Dive } from './dives/dive-types';
+import { DashboardModal } from './dives/DashboardModal';
+import type { Dashboard } from './dives/dashboard-types';
 
 type RuntimeState = 'connecting' | 'ready' | 'offline';
 
@@ -188,6 +190,7 @@ const INITIAL_REPO: RepoItem[] = [
     { id: 'routines', name: 'Routines', type: 'folder', parentId: 'root' },
     { id: 'docs', name: 'Documentation', type: 'folder', parentId: 'root' },
     { id: 'dives', name: 'Dives', type: 'folder', parentId: 'root' },
+    { id: 'dashboards', name: 'Dashboards', type: 'folder', parentId: 'root' },
     { id: 'j1', name: 'orders_etl', type: 'pipeline', parentId: 'pipelines' },
 ];
 
@@ -1727,6 +1730,7 @@ export default function App() {
         | { kind: 'document'; itemId: string | null; parentId: string }
         | { kind: 'routine'; itemId: string | null; parentId: string }
         | { kind: 'dive'; itemId: string | null; parentId: string }
+        | { kind: 'dashboard'; itemId: string | null; parentId: string }
         | null;
     const [repoEditor, setRepoEditor] = useState<EditorState>(null);
 
@@ -1748,6 +1752,10 @@ export default function App() {
     );
     const handleNewDive = useCallback(
         (parentId: string) => setRepoEditor({ kind: 'dive', itemId: null, parentId }),
+        [],
+    );
+    const handleNewDashboard = useCallback(
+        (parentId: string) => setRepoEditor({ kind: 'dashboard', itemId: null, parentId }),
         [],
     );
 
@@ -1782,6 +1790,12 @@ export default function App() {
                 itemId: item.id,
                 parentId: item.parentId ?? 'dives',
             });
+        else if (item.type === 'dashboard')
+            setRepoEditor({
+                kind: 'dashboard',
+                itemId: item.id,
+                parentId: item.parentId ?? 'dashboards',
+            });
     }, []);
 
     const editingRepoItem = useMemo(
@@ -1791,7 +1805,7 @@ export default function App() {
 
     const upsertRepoItem = useCallback(
         (
-            type: 'connection' | 'context' | 'doc' | 'routine' | 'dive',
+            type: 'connection' | 'context' | 'doc' | 'routine' | 'dive' | 'dashboard',
             name: string,
             payload: unknown,
         ) => {
@@ -1847,6 +1861,11 @@ export default function App() {
         (name: string, payload: Dive) => upsertRepoItem('dive', name, payload),
         [upsertRepoItem],
     );
+    const handleSaveDashboard = useCallback(
+        (name: string, payload: Dashboard) => upsertRepoItem('dashboard', name, payload),
+        [upsertRepoItem],
+    );
+    const diveItems = useMemo(() => repo.filter((r) => r.type === 'dive'), [repo]);
 
     const openJobIds = useMemo(() => new Set(jobs.map(j => j.id)), [jobs]);
 
@@ -2063,6 +2082,7 @@ export default function App() {
                     onNewDocument={handleNewDocument}
                     onNewRoutine={handleNewRoutine}
                     onNewDive={handleNewDive}
+                    onNewDashboard={handleNewDashboard}
                     onRenameRepoItem={handleRenameRepoItem}
                     onDuplicateRepoItem={handleDuplicateRepoItem}
                     onDeleteRepoItem={handleDeleteRepoItem}
@@ -2263,6 +2283,16 @@ export default function App() {
                     workspacePath={workspacePathState}
                     theme={theme === 'light' ? 'light' : 'dark'}
                     onSave={handleSaveDive}
+                    onClose={() => setRepoEditor(null)}
+                />
+            ) : null}
+            {repoEditor?.kind === 'dashboard' ? (
+                <DashboardModal
+                    item={editingRepoItem}
+                    diveItems={diveItems}
+                    workspacePath={workspacePathState}
+                    theme={theme === 'light' ? 'light' : 'dark'}
+                    onSave={handleSaveDashboard}
                     onClose={() => setRepoEditor(null)}
                 />
             ) : null}

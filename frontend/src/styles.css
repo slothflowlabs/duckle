@@ -7882,3 +7882,10 @@ html[dir='rtl'] .topbar-lang {
 /* Dive AI generation */
 .dive-gen { border: 1px solid var(--border); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; background: var(--bg-2); }
 .dive-gen-title { font-size: 12px; font-weight: 600; color: var(--text-2); }
+
+/* Dashboards */
+.dash-modal { width: min(1100px, 95vw); height: min(720px, 92vh); }
+.dash-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 12px; padding: 12px; }
+.dash-cell { border: 1px solid var(--border); border-radius: 10px; overflow: auto; min-height: 280px; background: var(--bg-1); }
+.dash-picker { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
+.dash-pick-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-1); cursor: pointer; }

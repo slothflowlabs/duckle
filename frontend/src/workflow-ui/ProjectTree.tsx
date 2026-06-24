@@ -39,6 +39,7 @@ type Props = {
     onNewDocument: (parentId: string) => void;
     onNewRoutine: (parentId: string) => void;
     onNewDive: (parentId: string) => void;
+    onNewDashboard: (parentId: string) => void;
     onRename: (id: string, newName: string) => void;
     onDuplicate: (id: string) => void;
     onDelete: (id: string) => void;
@@ -50,7 +51,7 @@ type Props = {
 
 // Built-in top-level containers. They anchor the tree, so they cannot be
 // dragged (they stay put), but they are still valid drop targets.
-const SYSTEM_IDS = new Set(['root', 'pipelines', 'connections', 'contexts', 'routines', 'docs', 'dives']);
+const SYSTEM_IDS = new Set(['root', 'pipelines', 'connections', 'contexts', 'routines', 'docs', 'dives', 'dashboards']);
 
 // MIME used to carry the dragged repo-item id for a tree reparent. Distinct
 // from `application/duckle-context` (drag a context onto the canvas), so both
@@ -66,6 +67,7 @@ const TYPE_LABEL: Record<RepoItemType, string> = {
     routine: 'Routine',
     doc: 'Document',
     dive: 'Dive',
+    dashboard: 'Dashboard',
 };
 
 function TypeIcon({ type, isOpen }: { type: RepoItemType; isOpen: boolean }) {
@@ -102,6 +104,7 @@ export default function ProjectTree(props: Props) {
         onNewDocument,
         onNewRoutine,
         onNewDive,
+        onNewDashboard,
         onRename,
         onDuplicate,
         onDelete,
@@ -212,6 +215,7 @@ export default function ProjectTree(props: Props) {
         const isRoutinesScope = item.id === 'routines' || root === 'routines';
         const isDocsScope = item.id === 'docs' || root === 'docs';
         const isDivesScope = item.id === 'dives' || root === 'dives';
+        const isDashboardsScope = item.id === 'dashboards' || root === 'dashboards';
 
         const newItems: MenuItem[] = [];
         if (item.type === 'project' || isPipelinesScope) {
@@ -266,6 +270,15 @@ export default function ProjectTree(props: Props) {
                 label: 'New dive…',
                 icon: <FileCog size={ICON_SIZE} />,
                 onClick: () => onNewDive(item.id),
+            });
+        }
+        if (item.type === 'project' || isDashboardsScope) {
+            newItems.push({
+                kind: 'item',
+                key: 'new-dashboard',
+                label: 'New dashboard…',
+                icon: <FileCog size={ICON_SIZE} />,
+                onClick: () => onNewDashboard(item.id),
             });
         }
         newItems.push({

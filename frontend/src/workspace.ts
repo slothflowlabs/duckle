@@ -22,6 +22,7 @@ const CONTEXTS_DIR = 'contexts';
 const ROUTINES_DIR = 'routines';
 const DOCS_DIR = 'docs';
 const DIVES_DIR = 'dives';
+const DASHBOARDS_DIR = 'dashboards';
 
 const PAYLOAD_DIR_BY_TYPE: Record<string, string> = {
     pipeline: PIPELINES_DIR,
@@ -30,6 +31,7 @@ const PAYLOAD_DIR_BY_TYPE: Record<string, string> = {
     routine: ROUTINES_DIR,
     doc: DOCS_DIR,
     dive: DIVES_DIR,
+    dashboard: DASHBOARDS_DIR,
 };
 
 export type WorkspaceState = {
