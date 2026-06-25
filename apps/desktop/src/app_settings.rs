@@ -27,6 +27,11 @@ struct AppSettings {
     /// every run in this workspace (batched and per-stage). None = DuckDB
     /// default (~80% of RAM). Stages run sequentially, so this caps peak RAM.
     memory_limit_mb: Option<u32>,
+    /// Path to a key/value file (.env / .properties / .csv / .json) whose
+    /// entries auto-load into the global context for every run in this
+    /// workspace, so ${KEY} resolves without wiring a node. Relative paths
+    /// resolve against the workspace root.
+    context_file: Option<String>,
 }
 
 /// The external-AI config returned to the Settings UI. camelCase for JS.
@@ -126,6 +131,39 @@ pub fn settings_set_memory_limit(workspace: String, mb: Option<u32>) -> Result<(
         None => std::env::remove_var("DUCKLE_MEMORY_LIMIT"),
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn settings_get_context_file(workspace: String) -> Option<String> {
+    if workspace.is_empty() {
+        return None;
+    }
+    load(Path::new(&workspace))
+        .context_file
+        .filter(|s| !s.trim().is_empty())
+}
+
+#[tauri::command]
+pub fn settings_set_context_file(workspace: String, path: Option<String>) -> Result<(), String> {
+    if workspace.is_empty() {
+        return Err("no workspace is open".into());
+    }
+    let path = path.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let mut s = load(Path::new(&workspace));
+    s.context_file = path;
+    store(Path::new(&workspace), &s)
+}
+
+/// Resolve the global-context key/value file into a flat var map for the
+/// desktop run path (the frontend pre-substitutes ${...} before the engine
+/// sees the pipeline; the headless runner / web server resolve it engine-side
+/// via context_vars_for_workspace).
+#[tauri::command]
+pub fn settings_load_context_vars(workspace: String) -> std::collections::HashMap<String, String> {
+    if workspace.is_empty() {
+        return std::collections::HashMap::new();
+    }
+    duckle_duckdb_engine::context::context_file_vars(Path::new(&workspace))
 }
 
 #[tauri::command]

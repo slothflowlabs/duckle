@@ -158,6 +158,85 @@ pub fn apply_workspace_context(doc: &mut PipelineDoc, workspace: &Path) {
     }
 }
 
+/// Global context file: a workspace setting (`.duckle/settings.json`
+/// "context_file") can point at a key/value file whose entries load
+/// into the global context for every run, so `${KEY}` resolves everywhere
+/// without wiring a node. Formats by extension: `.json` (a flat object), `.csv`
+/// (two columns key,value), otherwise `KEY=VALUE` / `KEY: VALUE` lines (e.g.
+/// .env / .properties; `#` and `;` lines are comments). A relative path resolves
+/// against the workspace root. These OVERRIDE the static context defaults
+/// (runtime values win). Best-effort: a missing/unreadable file yields no vars.
+pub fn context_file_vars(workspace: &Path) -> HashMap<String, String> {
+    let settings: JsonValue = match std::fs::read_to_string(
+        workspace.join(".duckle").join("settings.json"),
+    )
+    .ok()
+    .and_then(|t| serde_json::from_str(&t).ok())
+    {
+        Some(v) => v,
+        None => return HashMap::new(),
+    };
+    let file = match settings
+        .get("context_file")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(f) => f,
+        None => return HashMap::new(),
+    };
+    let p = Path::new(file);
+    let path = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        workspace.join(file)
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(text) => parse_kv(&path, &text),
+        Err(_) => HashMap::new(),
+    }
+}
+
+fn parse_kv(path: &Path, text: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext == "json" {
+        if let Ok(JsonValue::Object(m)) = serde_json::from_str::<JsonValue>(text) {
+            for (k, v) in m {
+                let val = match v {
+                    JsonValue::String(s) => s,
+                    other => other.to_string(),
+                };
+                out.insert(k, val);
+            }
+        }
+        return out;
+    }
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        let pair = if ext == "csv" {
+            line.split_once(',')
+        } else {
+            line.split_once('=').or_else(|| line.split_once(':'))
+        };
+        if let Some((k, v)) = pair {
+            let k = k.trim().trim_matches('"');
+            let v = v.trim().trim_matches('"');
+            if !k.is_empty() {
+                out.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// Build the context-var map (bare + `<contextName>.key`) and capture the
 /// raw values of secret:true vars. Port of buildContextVars plus secret
 /// capture. When `context` is Some, only that named context is loaded.
@@ -397,6 +476,34 @@ mod tests {
     fn write(path: &std::path::Path, content: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn context_file_loads_kv_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        write(&ws.join(".duckle/settings.json"), r#"{"context_file":"ctx.env"}"#);
+        write(&ws.join("ctx.env"), "# comment\nGREETING=hello\nNUM = 42\n");
+        let vars = super::context_file_vars(ws);
+        assert_eq!(vars.get("GREETING").map(String::as_str), Some("hello"));
+        assert_eq!(vars.get("NUM").map(String::as_str), Some("42"));
+    }
+
+    #[test]
+    fn context_file_loads_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        write(&ws.join(".duckle/settings.json"), r#"{"context_file":"ctx.json"}"#);
+        write(&ws.join("ctx.json"), r#"{"A":"1","B":"two"}"#);
+        let vars = super::context_file_vars(ws);
+        assert_eq!(vars.get("A").map(String::as_str), Some("1"));
+        assert_eq!(vars.get("B").map(String::as_str), Some("two"));
+    }
+
+    #[test]
+    fn context_file_absent_when_unconfigured() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(super::context_file_vars(dir.path()).is_empty());
     }
 
     #[test]

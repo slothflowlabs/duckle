@@ -30,6 +30,7 @@ import {
     runPipeline,
     runPipelinePartial,
     scheduleSetWorkspace,
+    settingsLoadContextVars,
     type PipelineEvent,
     type RunResult,
 } from './tauri-bridge';
@@ -1110,10 +1111,14 @@ export default function App() {
         setRunResult(null);
         const start = performance.now();
         // Inline SQL routines + substitute ${context.var} before running;
-        // the canvas keeps the editable, un-substituted values.
-        const runNodes = resolveForRun(nodes, repo, workspacePathState);
+        // the canvas keeps the editable, un-substituted values. Global-context
+        // file vars load fresh each run so a runtime KEY=VALUE file resolves too.
         const pipelineName = repo.find(r => r.id === activeJobId)?.name ?? activeJobId;
-        void runPipeline(runNodes, edges, handleEvent, activeJobId, workspacePathState, pipelineName)
+        void settingsLoadContextVars(workspacePathState ?? '')
+            .then(extra => {
+                const runNodes = resolveForRun(nodes, repo, workspacePathState, extra);
+                return runPipeline(runNodes, edges, handleEvent, activeJobId, workspacePathState, pipelineName);
+            })
             .then(result => finishRun(start, result))
             .finally(() => setIsRunning(false));
     }, [nodes, edges, repo, handleEvent, finishRun, activeJobId, workspacePathState, validation.errorCount]);
@@ -1127,17 +1132,19 @@ export default function App() {
             setIsRunning(true);
             setRunResult(null);
             const start = performance.now();
-            const runNodes = resolveForRun(nodes, repo, workspacePathState);
             const pipelineName = repo.find(r => r.id === activeJobId)?.name ?? activeJobId;
-            void runPipelinePartial(
-                runNodes,
-                edges,
-                nodeId,
-                handleEvent,
-                activeJobId,
-                workspacePathState,
-                pipelineName,
-            )
+            void settingsLoadContextVars(workspacePathState ?? '')
+                .then(extra =>
+                    runPipelinePartial(
+                        resolveForRun(nodes, repo, workspacePathState, extra),
+                        edges,
+                        nodeId,
+                        handleEvent,
+                        activeJobId,
+                        workspacePathState,
+                        pipelineName,
+                    ),
+                )
                 .then(result => finishRun(start, result))
                 .finally(() => setIsRunning(false));
         },
@@ -1878,6 +1885,14 @@ export default function App() {
     const diveItems = useMemo(() => repo.filter((r) => r.type === 'dive'), [repo]);
     const dashboardItems = useMemo(() => repo.filter((r) => r.type === 'dashboard'), [repo]);
     const [showDivesGallery, setShowDivesGallery] = useState(false);
+    // Settings toggle to hide the top-bar Dives button. Persisted locally and
+    // applied live via a window event when changed in the Settings modal.
+    const [hideDivesButton, setHideDivesButton] = useState(() => loadPersisted('hideDivesButton', false));
+    useEffect(() => {
+        const onChange = () => setHideDivesButton(loadPersisted('hideDivesButton', false));
+        window.addEventListener('duckle:dives-visibility', onChange);
+        return () => window.removeEventListener('duckle:dives-visibility', onChange);
+    }, []);
     const [showLineage, setShowLineage] = useState(false);
 
     const openJobIds = useMemo(() => new Set(jobs.map(j => j.id)), [jobs]);
@@ -1968,15 +1983,17 @@ export default function App() {
                         <LayoutDashboard size={14} className="dashboard-icon-glow" />
                     </button>
                 ) : null}
-                <button
-                    type="button"
-                    className="topbar-theme-toggle"
-                    onClick={() => setShowDivesGallery(true)}
-                    title="Dives - live data views & dashboards"
-                    aria-label="Open dives"
-                >
-                    <BarChart3 size={14} />
-                </button>
+                {!hideDivesButton ? (
+                    <button
+                        type="button"
+                        className="topbar-theme-toggle"
+                        onClick={() => setShowDivesGallery(true)}
+                        title="Dives - live data views & dashboards"
+                        aria-label="Open dives"
+                    >
+                        <BarChart3 size={14} />
+                    </button>
+                ) : null}
                 <button
                     type="button"
                     className="topbar-theme-toggle"

@@ -113,10 +113,12 @@ export function resolveForRun(
     nodes: Node<DuckleNodeData>[],
     repo: RepoItem[],
     workspacePath?: string | null,
+    extraVars?: Record<string, string>,
 ): Node<DuckleNodeData>[] {
     // Built-in workspace placeholders first, so an explicit context variable of
-    // the same name (unusual) still wins.
-    const vars = { ...builtinVars(workspacePath), ...buildContextVars(repo) };
+    // the same name (unusual) still wins. Global-context (extraVars) is merged
+    // last so its runtime values override the static context defaults.
+    const vars = { ...builtinVars(workspacePath), ...buildContextVars(repo), ...(extraVars ?? {}) };
     const sqlRoutines = new Map<string, string>();
     // Map a workspace pipeline id (or name) to its on-disk file path so a
     // dropdown-stored id resolves to something the engine can read.

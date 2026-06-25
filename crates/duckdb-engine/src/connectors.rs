@@ -7770,13 +7770,10 @@ pub(crate) fn context_vars_for_workspace(ws: &Path) -> std::collections::HashMap
     // Dynamic date/time builtins so foreach / runjob children resolve
     // ${date}/${datetime}/... in their paths just like the top-level run.
     crate::context::insert_time_builtins(&mut out);
-    let repo: serde_json::Value = match std::fs::read_to_string(ws.join("repository.json"))
+    let repo: serde_json::Value = std::fs::read_to_string(ws.join("repository.json"))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
-    {
-        Some(v) => v,
-        None => return out,
-    };
+        .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
     for it in repo.as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
         if it.get("type").and_then(|v| v.as_str()) != Some("context") {
             continue;
@@ -7806,6 +7803,11 @@ pub(crate) fn context_vars_for_workspace(ws: &Path) -> std::collections::HashMap
                 }
             }
         }
+    }
+    // Global context file: workspace-configured key/value file, applied last so
+    // these runtime values override the static context defaults.
+    for (k, v) in crate::context::context_file_vars(ws) {
+        out.insert(k, v);
     }
     out
 }

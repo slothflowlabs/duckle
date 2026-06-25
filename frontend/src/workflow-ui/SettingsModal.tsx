@@ -8,7 +8,10 @@ import {
     settingsSetAi,
     settingsGetMemoryLimit,
     settingsSetMemoryLimit,
+    settingsGetContextFile,
+    settingsSetContextFile,
 } from '../tauri-bridge';
+import { loadPersisted, savePersisted } from '../persistence';
 
 /**
  * App settings. Currently a single HTTP/HTTPS proxy field, persisted per
@@ -30,6 +33,10 @@ export function SettingsModal({
     const [aiKey, setAiKey] = useState('');
     // #102: per-workspace total memory cap in MB (empty = engine default).
     const [memLimit, setMemLimit] = useState('');
+    // Global context file: a key/value file auto-merged into the global context.
+    const [contextFile, setContextFile] = useState('');
+    // Local UI pref: show/hide the top-bar Dives button.
+    const [showDives, setShowDives] = useState(() => !loadPersisted('hideDivesButton', false));
     const [loaded, setLoaded] = useState(false);
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
@@ -41,14 +48,20 @@ export function SettingsModal({
             setLoaded(true);
             return;
         }
-        Promise.all([settingsGetProxy(workspace), settingsGetAi(workspace), settingsGetMemoryLimit(workspace)])
-            .then(([p, ai, mem]) => {
+        Promise.all([
+            settingsGetProxy(workspace),
+            settingsGetAi(workspace),
+            settingsGetMemoryLimit(workspace),
+            settingsGetContextFile(workspace),
+        ])
+            .then(([p, ai, mem, ic]) => {
                 if (!alive) return;
                 setProxy(p ?? '');
                 setAiBaseUrl(ai.baseUrl ?? '');
                 setAiModel(ai.model ?? '');
                 setAiKey(ai.apiKey ?? '');
                 setMemLimit(mem != null ? String(mem) : '');
+                setContextFile(ic ?? '');
                 setLoaded(true);
             })
             .catch(e => {
@@ -76,6 +89,7 @@ export function SettingsModal({
             });
             const mb = parseInt(memLimit.trim(), 10);
             await settingsSetMemoryLimit(workspace, Number.isFinite(mb) && mb > 0 ? mb : null);
+            await settingsSetContextFile(workspace, contextFile.trim() || null);
             setSaved(true);
             setTimeout(() => setSaved(false), 1500);
         } catch (e) {
@@ -83,6 +97,13 @@ export function SettingsModal({
         } finally {
             setSaving(false);
         }
+    };
+
+    // Local UI pref - applies immediately (no Save), broadcast so App re-reads.
+    const toggleDives = (next: boolean) => {
+        setShowDives(next);
+        savePersisted('hideDivesButton', !next);
+        window.dispatchEvent(new Event('duckle:dives-visibility'));
     };
 
     const handleBackdrop = (e: React.MouseEvent) => {
@@ -200,6 +221,27 @@ export function SettingsModal({
                         }}
                     />
                     <div style={{ borderTop: '1px solid var(--border-2, #2a2a2a)', margin: '16px 0 12px' }} />
+                    <label htmlFor="settings-context-file" style={{ display: 'block', fontWeight: 600, marginBottom: 6 }}>
+                        Global context file
+                    </label>
+                    <p style={{ marginTop: 0, marginBottom: 8, fontSize: 12, opacity: 0.7 }}>
+                        Auto-load context variables from a key/value file before every run, so{' '}
+                        <code>{'${KEY}'}</code> resolves everywhere without wiring a node. Supports .env /
+                        .properties (KEY=VALUE), .csv (key,value) and .json. A relative path is resolved
+                        against the workspace root.
+                    </p>
+                    <input
+                        id="settings-context-file"
+                        type="text"
+                        value={contextFile}
+                        onChange={e => setContextFile(e.target.value)}
+                        placeholder="config/context.env  (or an absolute path)"
+                        disabled={!loaded || !workspace}
+                        spellCheck={false}
+                        autoComplete="off"
+                        style={aiInput}
+                    />
+                    <div style={{ borderTop: '1px solid var(--border-2, #2a2a2a)', margin: '16px 0 12px' }} />
                     <label style={{ display: 'block', fontWeight: 600, marginBottom: 6 }}>
                         AI assistant endpoint
                     </label>
@@ -238,6 +280,12 @@ export function SettingsModal({
                         autoComplete="off"
                         style={{ ...aiInput, marginTop: 8 }}
                     />
+                    <div style={{ borderTop: '1px solid var(--border-2, #2a2a2a)', margin: '16px 0 12px' }} />
+                    <label style={{ display: 'block', fontWeight: 600, marginBottom: 6 }}>Toolbar</label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', marginBottom: 4 }}>
+                        <input type="checkbox" checked={showDives} onChange={e => toggleDives(e.target.checked)} />
+                        Show the Dives button (live data views &amp; dashboards) in the toolbar
+                    </label>
                     <div style={{ borderTop: '1px solid var(--border-2, #2a2a2a)', margin: '16px 0 12px' }} />
                     <label style={{ display: 'block', fontWeight: 600, marginBottom: 6 }}>Guided tour</label>
                     <p style={{ marginTop: 0, marginBottom: 8, fontSize: 12, opacity: 0.7 }}>

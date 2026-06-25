@@ -796,6 +796,37 @@ export async function settingsSetMemoryLimit(workspace: string, mb: number | nul
     await invoke('settings_set_memory_limit', { workspace, mb });
 }
 
+// ---- Global context file (key/value file -> global ${context}) ---------
+
+/** Read the configured global-context file path (null = none). */
+export async function settingsGetContextFile(workspace: string): Promise<string | null> {
+    if (!workspace) return null;
+    try {
+        return (await invoke<string | null>('settings_get_context_file', { workspace })) ?? null;
+    } catch {
+        return null;
+    }
+}
+
+/** Persist the global-context file path. Pass null to clear. */
+export async function settingsSetContextFile(workspace: string, path: string | null): Promise<void> {
+    await invoke('settings_set_context_file', { workspace, path });
+}
+
+/**
+ * Resolve the global-context file into a flat var map for the desktop run path
+ * (the headless runner / web server resolve it engine-side). Empty on any error
+ * or when no file is configured.
+ */
+export async function settingsLoadContextVars(workspace: string): Promise<Record<string, string>> {
+    if (!workspace) return {};
+    try {
+        return (await invoke<Record<string, string>>('settings_load_context_vars', { workspace })) ?? {};
+    } catch {
+        return {};
+    }
+}
+
 // ---- External AI endpoint for the Duckie assistant (#92) ----------------
 
 export type AiConfig = { baseUrl: string | null; model: string | null; apiKey: string | null };
