@@ -398,7 +398,6 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
         ports: {
             inputs: [
                 { id: 'main', label: 'main', type: 'main' },
-                { id: 'reject', label: 'reject', type: 'reject', optional: true },
             ],
             outputs: [],
         },

@@ -327,7 +327,7 @@ const duckReadFields = (): Field[] => [
         kind: 'expression',
         rows: 5,
         placeholder: 'SELECT * FROM duckle_src.main.orders WHERE status = $1',
-        description: 'Used when Read mode is Custom SQL. Reference the attached source as duckle_src.',
+        description: 'Used when Read mode is Custom SQL. Reference the attached source as duckle_src. Note: a custom query is materialized through a parquet file, so predicate / projection pushdown into the source does not apply - put any filtering in this SQL rather than relying on a downstream Filter to limit the scan.',
     },
 ];
 
@@ -412,13 +412,6 @@ const REJECT_OUT: NodePorts['outputs'][number] = {
     type: 'reject',
     optional: true,
 };
-const REJECT_IN: NodePorts['inputs'][number] = {
-    id: 'reject',
-    label: 'reject',
-    type: 'reject',
-    optional: true,
-};
-
 export function portsForComponent(comp: ComponentDef): NodePorts {
     const id = comp.id;
 
@@ -622,10 +615,14 @@ export function portsForComponent(comp: ComponentDef): NodePorts {
         };
     }
 
-    // Sinks: inputs only
+    // Sinks: inputs only. A single `main` input - the reject INPUT was
+    // vestigial (nothing in the engine reads a node's reject input; a sink
+    // always reads its main upstream), so it is not exposed (issue #119).
+    // To persist rejected rows, wire a filter/validator's reject OUTPUT
+    // into a sink's main input.
     if (comp.kind === 'sink') {
         return {
-            inputs: [MAIN_IN, REJECT_IN],
+            inputs: [MAIN_IN],
             outputs: [],
         };
     }
