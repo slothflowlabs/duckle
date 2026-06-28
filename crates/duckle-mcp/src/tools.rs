@@ -101,6 +101,15 @@ pub fn list_tools() -> Value {
                 "path": { "type": "string", "description": "Path to a pipeline .json (use instead of 'pipeline')." },
                 "duckdb": { "type": "string", "description": "DuckDB CLI path - lets lineage cover transform/sink columns too. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb' on PATH." }
             }})),
+        tool("pipeline_impact",
+            "Blast-radius / impact analysis: inverts column lineage to show, for each source column, which downstream node columns derive from it - so you can see what breaks before changing or dropping a column. Scope to one column with 'column' (plus optional 'node'). Read-only; needs a DuckDB binary.",
+            json!({ "type": "object", "properties": {
+                "pipeline": { "type": "object", "description": "Inline pipeline object." },
+                "path": { "type": "string", "description": "Path to a pipeline .json (use instead of 'pipeline')." },
+                "node": { "type": "string", "description": "Optional source node id to scope the query to." },
+                "column": { "type": "string", "description": "Optional source column name; returns only its downstream dependents." },
+                "duckdb": { "type": "string", "description": "Path to the DuckDB CLI. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb' on PATH." }
+            }})),
         tool("list_pipelines",
             "List pipeline .json files in a directory with their node/edge counts.",
             json!({ "type": "object", "properties": {
@@ -169,6 +178,7 @@ pub fn call_tool(params: Value) -> Result<Value, (i64, String)> {
         "pipeline_lineage" => t_pipeline_lineage(&args),
         "verify_pipeline" => t_verify_pipeline(&args),
         "suggest_contracts" => t_suggest_contracts(&args),
+        "pipeline_impact" => t_pipeline_impact(&args),
         "list_pipelines" => t_list_pipelines(&args),
         "read_pipeline" => t_read_pipeline(&args),
         "read_run_logs" => t_read_run_logs(&args),
@@ -253,6 +263,78 @@ fn t_pipeline_lineage(args: &Value) -> Result<Value, String> {
         .pipeline_column_lineage(&doc)
         .map_err(|e| e.to_string())?;
     Ok(json!({ "ok": true, "lineage": lineage_to_json(lineage) }))
+}
+
+/// The engine's per-node column lineage: node id -> [(output column, root source columns)].
+type Lineage =
+    std::collections::HashMap<String, Vec<(String, Vec<duckle_duckdb_engine::lineage::RootColumn>)>>;
+
+/// Invert lineage into a forward blast-radius map: for each root source column
+/// `(node, column)`, the set of downstream `(node, column)` that derive from it.
+/// A column's own identity entry is skipped so dependents are strictly downstream.
+fn impact_from_lineage(
+    lineage: &Lineage,
+) -> std::collections::BTreeMap<(String, String), std::collections::BTreeSet<(String, String)>> {
+    let mut map: std::collections::BTreeMap<
+        (String, String),
+        std::collections::BTreeSet<(String, String)>,
+    > = std::collections::BTreeMap::new();
+    for (node_id, cols) in lineage {
+        for (col, roots) in cols {
+            for r in roots {
+                if &r.node == node_id && &r.column == col {
+                    continue;
+                }
+                map.entry((r.node.clone(), r.column.clone()))
+                    .or_default()
+                    .insert((node_id.clone(), col.clone()));
+            }
+        }
+    }
+    map
+}
+
+fn t_pipeline_impact(args: &Value) -> Result<Value, String> {
+    let (v, _name) = load_pipeline_value(args)?;
+    let doc = to_doc(&v)?;
+    let duckdb = resolve_duckdb(arg_str(args, "duckdb"))
+        .ok_or("no DuckDB binary found (set DUCKLE_DUCKDB_BIN or pass 'duckdb')")?;
+    let engine = DuckdbEngine::new(duckdb);
+    let lineage = engine
+        .pipeline_column_lineage(&doc)
+        .map_err(|e| e.to_string())?;
+    let map = impact_from_lineage(&lineage);
+
+    let want_node = arg_str(args, "node");
+    let want_col = arg_str(args, "column");
+
+    let roots: Vec<Value> = map
+        .iter()
+        .filter(|((rn, rc), _)| {
+            want_node.map(|n| n == rn).unwrap_or(true) && want_col.map(|c| c == rc).unwrap_or(true)
+        })
+        .map(|((rn, rc), deps)| {
+            json!({
+                "rootNode": rn,
+                "rootColumn": rc,
+                "dependents": deps
+                    .iter()
+                    .map(|(n, c)| json!({ "node": n, "column": c }))
+                    .collect::<Vec<_>>(),
+                "dependentCount": deps.len(),
+            })
+        })
+        .collect();
+
+    if want_col.is_some() && roots.is_empty() {
+        return Ok(json!({
+            "ok": true,
+            "query": { "node": want_node, "column": want_col },
+            "roots": [],
+            "note": "no source column matched, or it has no downstream dependents"
+        }));
+    }
+    Ok(json!({ "ok": true, "roots": roots }))
 }
 
 /// Cheap, deterministic graph checks that do not require execution. Reads the
@@ -1345,6 +1427,31 @@ mod verify_tests {
         assert_eq!(looks_like_pii("order_id"), None);
         assert_eq!(looks_like_pii("amount"), None);
         assert_eq!(looks_like_pii("created_at"), None);
+    }
+
+    #[test]
+    fn impact_inverts_lineage_and_excludes_self() {
+        use duckle_duckdb_engine::lineage::RootColumn;
+        let root = |n: &str, c: &str| RootColumn { node: n.to_string(), column: c.to_string() };
+        let mut lineage: Lineage = std::collections::HashMap::new();
+        // s.email flows through to k.email; s.email also feeds k.email_hash.
+        lineage.insert("s".into(), vec![("email".into(), vec![root("s", "email")])]);
+        lineage.insert(
+            "k".into(),
+            vec![
+                ("email".into(), vec![root("s", "email")]),
+                ("email_hash".into(), vec![root("s", "email")]),
+            ],
+        );
+        let map = impact_from_lineage(&lineage);
+        let deps = map
+            .get(&("s".to_string(), "email".to_string()))
+            .expect("s.email has dependents");
+        // The source's own identity entry is excluded; both sink columns remain.
+        assert_eq!(deps.len(), 2, "{deps:?}");
+        assert!(deps.contains(&("k".to_string(), "email".to_string())));
+        assert!(deps.contains(&("k".to_string(), "email_hash".to_string())));
+        assert!(!deps.contains(&("s".to_string(), "email".to_string())));
     }
 
     #[test]
