@@ -629,16 +629,21 @@ OPTIONS:
                            row counts). Sinks are stripped before running, so no
                            destination is written; sources are read and
                            transforms run. Needs a DuckDB binary.
-    --duckdb <path>        DuckDB CLI for --data (else DUCKLE_DUCKDB_BIN / PATH).
-    --workspace <dir>      Workspace root for --data placeholder/secret
+    --drift                Also check the --after version's sources for schema
+                           drift: read each source's live schema and compare it
+                           to the declared one. Needs a DuckDB binary.
+    --duckdb <path>        DuckDB CLI for --data/--drift (else DUCKLE_DUCKDB_BIN
+                           / PATH).
+    --workspace <dir>      Workspace root for --data/--drift placeholder/secret
                            resolution (default: the --before file's directory).
 
-Without --data the review is static and read-only (nothing is executed, no
-DuckDB binary needed): it reports nodes added/removed/changed, edges, whether
+Without --data/--drift the review is static and read-only (nothing is executed,
+no DuckDB binary needed): it reports nodes added/removed/changed, edges, whether
 the compiled SQL changed, and whether each version still compiles.
 
 Exit code: 0 reviewed, 1 the --after version fails to compile (or, with --data,
-fails to run), 2 usage/IO error.";
+fails to run; with --drift, a source drifted in a breaking way), 2 usage/IO
+error.";
 
 /// Fingerprint each local-file source the run read, for the provenance manifest.
 /// Files at or under the cap are content-hashed; larger ones record size only.
@@ -704,6 +709,24 @@ fn run_side_for_review(
     Ok(res.nodes.iter().map(|(k, s)| (k.clone(), s.rows)).collect())
 }
 
+/// Run schema-drift detection on the AFTER pipeline for `review --drift`:
+/// resolve placeholders the same way a run does, then read each source's live
+/// schema and diff it against the declared one. Returns the engine drift report.
+fn drift_after(
+    av: &serde_json::Value,
+    ws: &Path,
+    engine: &DuckdbEngine,
+) -> Result<serde_json::Value, String> {
+    let mut adoc: PipelineDoc =
+        serde_json::from_value(av.clone()).map_err(|e| format!("invalid pipeline: {e}"))?;
+    let env_file = ws.join("secrets.env");
+    apply_env_pass(&mut adoc, ws, &env_file)?;
+    context::apply_time_builtins(&mut adoc);
+    context::apply_workspace_context(&mut adoc, ws);
+    std::env::set_var("DUCKLE_WORKSPACE", ws);
+    Ok(duckle_duckdb_engine::drift::schema_drift(engine, &adoc))
+}
+
 /// `duckle-runner review`: static review of a pipeline change. Compares two
 /// versions and reports the diff plus each side's compile status. Returns the
 /// process exit code.
@@ -712,6 +735,7 @@ fn run_review() -> Result<i32, String> {
     let mut after: Option<PathBuf> = None;
     let mut as_json = false;
     let mut as_data = false;
+    let mut as_drift = false;
     let mut duckdb_arg: Option<PathBuf> = None;
     let mut workspace_arg: Option<PathBuf> = None;
     let mut it = std::env::args().skip(2); // skip the exe and the "review" verb
@@ -721,6 +745,7 @@ fn run_review() -> Result<i32, String> {
             "--after" => after = Some(PathBuf::from(it.next().ok_or("--after needs a value")?)),
             "--json" => as_json = true,
             "--data" => as_data = true,
+            "--drift" => as_drift = true,
             "--duckdb" => duckdb_arg = Some(PathBuf::from(it.next().ok_or("--duckdb needs a value")?)),
             "--workspace" => {
                 workspace_arg = Some(PathBuf::from(it.next().ok_or("--workspace needs a value")?))
@@ -759,11 +784,14 @@ fn run_review() -> Result<i32, String> {
 
     let report = duckle_duckdb_engine::review::diff_pipelines(&bv, &av);
 
-    // Optional live data comparison: run both versions sink-safe and diff
-    // per-node row counts. Opt-in via --data; needs a DuckDB binary.
+    // Optional live checks (need a DuckDB binary): --data diffs per-node row
+    // counts by running both versions sink-safe; --drift reads the AFTER
+    // version's source schemas and flags drift from their declared schemas.
     let mut data_section: Option<serde_json::Value> = None;
     let mut after_run_failed = false;
-    if as_data {
+    let mut drift_section: Option<serde_json::Value> = None;
+    let mut after_drift_breaking = false;
+    if as_data || as_drift {
         let duckdb = resolve_duckdb(duckdb_arg)?;
         std::env::set_var("DUCKLE_DUCKDB_BIN", &duckdb);
         let ws = workspace_arg
@@ -771,41 +799,52 @@ fn run_review() -> Result<i32, String> {
             .or_else(|| before.parent().map(|p| p.to_path_buf()))
             .unwrap_or_else(|| PathBuf::from("."));
         let engine = DuckdbEngine::new(duckdb);
-        let br = run_side_for_review(&before, &ws, &engine);
-        let ar = run_side_for_review(&after, &ws, &engine);
-        after_run_failed = ar.is_err();
-        let mut changed_rows: Vec<serde_json::Value> = Vec::new();
-        if let (Ok(b), Ok(a)) = (&br, &ar) {
-            let mut ids: std::collections::BTreeSet<String> = b.keys().cloned().collect();
-            ids.extend(a.keys().cloned());
-            for id in ids {
-                let brows = b.get(&id).copied().flatten();
-                let arows = a.get(&id).copied().flatten();
-                if brows != arows {
-                    let delta = match (brows, arows) {
-                        (Some(x), Some(y)) => Some(y as i64 - x as i64),
-                        _ => None,
-                    };
-                    changed_rows.push(serde_json::json!({
-                        "node": id, "beforeRows": brows, "afterRows": arows, "delta": delta
-                    }));
+        if as_data {
+            let br = run_side_for_review(&before, &ws, &engine);
+            let ar = run_side_for_review(&after, &ws, &engine);
+            after_run_failed = ar.is_err();
+            let mut changed_rows: Vec<serde_json::Value> = Vec::new();
+            if let (Ok(b), Ok(a)) = (&br, &ar) {
+                let mut ids: std::collections::BTreeSet<String> = b.keys().cloned().collect();
+                ids.extend(a.keys().cloned());
+                for id in ids {
+                    let brows = b.get(&id).copied().flatten();
+                    let arows = a.get(&id).copied().flatten();
+                    if brows != arows {
+                        let delta = match (brows, arows) {
+                            (Some(x), Some(y)) => Some(y as i64 - x as i64),
+                            _ => None,
+                        };
+                        changed_rows.push(serde_json::json!({
+                            "node": id, "beforeRows": brows, "afterRows": arows, "delta": delta
+                        }));
+                    }
                 }
             }
+            let before_side = match &br {
+                Ok(_) => serde_json::json!({ "ok": true }),
+                Err(e) => serde_json::json!({ "ok": false, "error": e }),
+            };
+            let after_side = match &ar {
+                Ok(_) => serde_json::json!({ "ok": true }),
+                Err(e) => serde_json::json!({ "ok": false, "error": e }),
+            };
+            data_section = Some(serde_json::json!({
+                "before": before_side,
+                "after": after_side,
+                "changedRows": changed_rows,
+                "note": "sinks skipped (no destination written); sources read and transforms run",
+            }));
         }
-        let before_side = match &br {
-            Ok(_) => serde_json::json!({ "ok": true }),
-            Err(e) => serde_json::json!({ "ok": false, "error": e }),
-        };
-        let after_side = match &ar {
-            Ok(_) => serde_json::json!({ "ok": true }),
-            Err(e) => serde_json::json!({ "ok": false, "error": e }),
-        };
-        data_section = Some(serde_json::json!({
-            "before": before_side,
-            "after": after_side,
-            "changedRows": changed_rows,
-            "note": "sinks skipped (no destination written); sources read and transforms run",
-        }));
+        if as_drift {
+            match drift_after(&av, &ws, &engine) {
+                Ok(report) => {
+                    after_drift_breaking = report["hasBreaking"] == serde_json::json!(true);
+                    drift_section = Some(report);
+                }
+                Err(e) => drift_section = Some(serde_json::json!({ "ok": false, "error": e })),
+            }
+        }
     }
 
     if as_json {
@@ -818,6 +857,7 @@ fn run_review() -> Result<i32, String> {
                 "error": after_compiles.as_ref().err() },
             "diff": report,
             "dataDiff": data_section,
+            "schemaDrift": drift_section,
         });
         println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
     } else {
@@ -894,11 +934,49 @@ fn run_review() -> Result<i32, String> {
                 );
             }
         }
+        if let Some(d) = &drift_section {
+            println!("  schema drift (after sources):");
+            if d["ok"] == serde_json::json!(false) {
+                println!("    failed ({})", d["error"].as_str().unwrap_or(""));
+            } else {
+                let srcs = d["sources"].as_array().cloned().unwrap_or_default();
+                let drifted: Vec<&serde_json::Value> =
+                    srcs.iter().filter(|s| s["status"] == serde_json::json!("drift")).collect();
+                if drifted.is_empty() {
+                    println!("    no source drift");
+                }
+                for s in drifted {
+                    let cols = |k: &str| {
+                        s[k].as_array()
+                            .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
+                            .unwrap_or_default()
+                    };
+                    println!("    ~ {} [{}]", s["nodeId"].as_str().unwrap_or(""), s["componentId"].as_str().unwrap_or(""));
+                    let missing = cols("missingColumns");
+                    let added = cols("addedColumns");
+                    if !missing.is_empty() {
+                        println!("        - missing: {missing}");
+                    }
+                    if !added.is_empty() {
+                        println!("        + added:   {added}");
+                    }
+                    for c in s["typeChanges"].as_array().cloned().unwrap_or_default() {
+                        println!(
+                            "        ~ type:    {} {} -> {}",
+                            c["column"].as_str().unwrap_or(""),
+                            c["declared"].as_str().unwrap_or(""),
+                            c["live"].as_str().unwrap_or("")
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // Fail the gate when the proposed (after) version no longer compiles, or
-    // (with --data) fails to run.
-    Ok(if after_compiles.is_err() || after_run_failed { 1 } else { 0 })
+    // (with --data) fails to run, or (with --drift) a source drifted in a
+    // breaking way.
+    Ok(if after_compiles.is_err() || after_run_failed || after_drift_breaking { 1 } else { 0 })
 }
 
 fn main() -> ExitCode {

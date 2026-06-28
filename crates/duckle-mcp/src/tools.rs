@@ -119,10 +119,13 @@ pub fn list_tools() -> Value {
                 "afterPath": { "type": "string", "description": "Path to the changed pipeline .json (use instead of 'after')." }
             }})),
         tool("trust_report",
-            "Score a pipeline's trustworthiness from static checks and explain every deduction: compile status, structural risks (joins without keys, orphan nodes, no sink), and columns that look like PII but are neither contract-tagged nor masked. Returns a 0-100 score, a letter grade, and the findings each lost point came from. Read-only; no DuckDB binary needed.",
+            "Score a pipeline's trustworthiness and explain every deduction: compile status, structural risks (joins without keys, orphan nodes, no sink), and columns that look like PII but are neither contract-tagged nor masked. Returns a 0-100 score, a letter grade, and the findings each lost point came from. Static by default (no DuckDB binary needed); pass checkDrift:true to also read each source's live schema and deduct for sources that drifted from their declared schema.",
             json!({ "type": "object", "properties": {
                 "pipeline": { "type": "object", "description": "Inline pipeline object." },
-                "path": { "type": "string", "description": "Path to a pipeline .json (use instead of 'pipeline')." }
+                "path": { "type": "string", "description": "Path to a pipeline .json (use instead of 'pipeline')." },
+                "checkDrift": { "type": "boolean", "description": "Also check live schema drift on the sources (needs a DuckDB binary). Default false keeps the report fully static." },
+                "workspace": { "type": "string", "description": "Workspace root to resolve ${workspace}/${date} in source paths (used with checkDrift)." },
+                "duckdb": { "type": "string", "description": "DuckDB CLI path for checkDrift. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb' on PATH." }
             }})),
         tool("schema_drift",
             "Detect schema drift in a pipeline's sources: for each source node that declares a schema, read the source's LIVE schema from the real data and compare it. Reports missing columns (the source no longer provides a declared column), added columns, and type changes, with a breaking/non-breaking verdict. Read-only; needs a DuckDB binary. Pass 'workspace' to resolve ${workspace}/${date} placeholders in source paths.",
@@ -465,6 +468,54 @@ fn t_trust_report(args: &Value) -> Result<Value, String> {
         }));
     }
 
+    // 4. Opt-in: live schema drift on the sources (needs a DuckDB binary). Off
+    // by default so the report stays static and deterministic; when on, each
+    // source that drifted from its declared schema costs points.
+    let mut drift_report: Value = Value::Null;
+    if arg_bool(args, "checkDrift", false) {
+        match resolve_duckdb(arg_str(args, "duckdb")) {
+            Some(duckdb) => {
+                std::env::set_var("DUCKLE_DUCKDB_BIN", &duckdb);
+                let mut ddoc = to_doc(&v)?;
+                if let Some(ws) = arg_str(args, "workspace") {
+                    let wsp = std::path::Path::new(ws);
+                    duckle_duckdb_engine::context::apply_time_builtins(&mut ddoc);
+                    duckle_duckdb_engine::context::apply_workspace_context(&mut ddoc, wsp);
+                }
+                let engine = DuckdbEngine::new(duckdb);
+                let report = duckle_duckdb_engine::drift::schema_drift(&engine, &ddoc);
+                let breaking = report["summary"]["breakingSources"].as_u64().unwrap_or(0);
+                if breaking > 0 {
+                    let d = (breaking as i64 * 12).min(36);
+                    deduction += d;
+                    let drifted: Vec<String> = report["sources"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter(|s| s["breaking"] == json!(true))
+                                .filter_map(|s| s["nodeId"].as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    findings.push(json!({
+                        "code": "schema_drift", "severity": "error", "deduction": d,
+                        "message": format!(
+                            "source(s) {:?} drifted from their declared schema (missing columns or type changes); run schema_drift for details",
+                            drifted
+                        )
+                    }));
+                }
+                drift_report = report;
+            }
+            None => {
+                findings.push(json!({
+                    "code": "drift_check_unavailable", "severity": "info", "deduction": 0,
+                    "message": "checkDrift requested but no DuckDB binary found (set DUCKLE_DUCKDB_BIN or pass 'duckdb')"
+                }));
+            }
+        }
+    }
+
     let mut score = (100 - deduction).max(0);
     // A pipeline that does not even compile cannot score as "fine".
     if !compiles {
@@ -484,6 +535,7 @@ fn t_trust_report(args: &Value) -> Result<Value, String> {
         "grade": grade,
         "compiles": compiles,
         "findings": findings,
+        "drift": drift_report,
         "summary": format!("{score}/100 ({grade}) from {} finding(s)", findings.len()),
     }))
 }
@@ -1696,6 +1748,41 @@ mod verify_tests {
         assert_eq!(out["hasBreaking"], json!(false));
         assert_eq!(out["sources"][0]["status"], json!("not_introspectable"));
         assert_eq!(out["summary"]["notIntrospectable"], json!(1));
+    }
+
+    #[test]
+    fn trust_report_check_drift_includes_drift_report() {
+        // checkDrift on a relational source: inspect() returns Unsupported
+        // before spawning, so the drift report is present, not-introspectable,
+        // and adds no deduction (score stays at the static value).
+        let pipeline = json!({
+            "nodes": [
+                { "id": "s", "position": { "x": 0, "y": 0 }, "data": { "componentId": "src.postgres", "label": "PG",
+                    "properties": { "host": "localhost", "table": "t" },
+                    "schema": [ { "name": "id", "type": "int64" } ] } },
+                { "id": "k", "position": { "x": 1, "y": 0 }, "data": { "componentId": "snk.csv", "label": "Out",
+                    "properties": { "path": "out.csv" } } }
+            ],
+            "edges": [ { "id": "e1", "source": "s", "target": "k" } ]
+        });
+        let out = t_trust_report(&json!({ "pipeline": pipeline, "checkDrift": true })).unwrap();
+        assert_eq!(out["drift"]["summary"]["notIntrospectable"], json!(1));
+        // No breaking drift -> no schema_drift finding.
+        let findings = out["findings"].as_array().unwrap();
+        assert!(!findings.iter().any(|f| f["code"] == "schema_drift"), "{findings:?}");
+    }
+
+    #[test]
+    fn trust_report_static_by_default_has_null_drift() {
+        let pipeline = json!({
+            "nodes": [
+                { "id": "s", "position": { "x": 0, "y": 0 }, "data": { "componentId": "src.csv", "label": "A",
+                    "properties": { "path": "in.csv" } } }
+            ],
+            "edges": []
+        });
+        let out = t_trust_report(&json!({ "pipeline": pipeline })).unwrap();
+        assert_eq!(out["drift"], json!(null), "drift must stay null when checkDrift is off");
     }
 
     #[test]
