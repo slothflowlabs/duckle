@@ -615,13 +615,58 @@ const REVIEW_USAGE: &str = "\
 duckle-runner review - review a pipeline change before merging it
 
 USAGE:
-    duckle-runner review --before <old.json> --after <new.json> [--json]
+    duckle-runner review --before <old.json> --after <new.json> [options]
 
-Reports what changed between two pipeline versions (nodes added/removed/changed,
-edges, and whether the compiled SQL changed) and whether each version still
-compiles. Static and read-only: nothing is executed, no DuckDB binary needed.
+OPTIONS:
+    --json                 Emit the full report as JSON.
+    --data                 Also run both versions and diff the data (per-node
+                           row counts). Sinks are stripped before running, so no
+                           destination is written; sources are read and
+                           transforms run. Needs a DuckDB binary.
+    --duckdb <path>        DuckDB CLI for --data (else DUCKLE_DUCKDB_BIN / PATH).
+    --workspace <dir>      Workspace root for --data placeholder/secret
+                           resolution (default: the --before file's directory).
 
-Exit code: 0 reviewed, 1 the --after version fails to compile, 2 usage/IO error.";
+Without --data the review is static and read-only (nothing is executed, no
+DuckDB binary needed): it reports nodes added/removed/changed, edges, whether
+the compiled SQL changed, and whether each version still compiles.
+
+Exit code: 0 reviewed, 1 the --after version fails to compile (or, with --data,
+fails to run), 2 usage/IO error.";
+
+/// Run one side of a `review --data` comparison sink-safely: every sink node is
+/// removed before execution, so sources are read and transforms run but no
+/// destination is ever written. Returns each surviving node's row count.
+fn run_side_for_review(
+    path: &Path,
+    workspace: &Path,
+    engine: &DuckdbEngine,
+) -> Result<std::collections::BTreeMap<String, Option<u64>>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let mut doc: PipelineDoc =
+        serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    // Sink-safety: drop every sink node (and any edge touching it) so the run
+    // cannot write to a destination.
+    let sink_ids: std::collections::HashSet<String> = doc
+        .nodes
+        .iter()
+        .filter(|n| n.data.component_id.as_deref().unwrap_or("").starts_with("snk."))
+        .map(|n| n.id.clone())
+        .collect();
+    doc.nodes.retain(|n| !sink_ids.contains(&n.id));
+    doc.edges.retain(|e| !sink_ids.contains(&e.source) && !sink_ids.contains(&e.target));
+    // Resolve placeholders the same way a normal headless run does.
+    let env_file = workspace.join("secrets.env");
+    apply_env_pass(&mut doc, workspace, &env_file)?;
+    context::apply_time_builtins(&mut doc);
+    context::apply_workspace_context(&mut doc, workspace);
+    std::env::set_var("DUCKLE_WORKSPACE", workspace);
+    let res = engine.execute_pipeline(&doc);
+    if res.status != "ok" {
+        return Err(res.error.unwrap_or_else(|| "run failed".to_string()));
+    }
+    Ok(res.nodes.iter().map(|(k, s)| (k.clone(), s.rows)).collect())
+}
 
 /// `duckle-runner review`: static review of a pipeline change. Compares two
 /// versions and reports the diff plus each side's compile status. Returns the
@@ -630,12 +675,20 @@ fn run_review() -> Result<i32, String> {
     let mut before: Option<PathBuf> = None;
     let mut after: Option<PathBuf> = None;
     let mut as_json = false;
+    let mut as_data = false;
+    let mut duckdb_arg: Option<PathBuf> = None;
+    let mut workspace_arg: Option<PathBuf> = None;
     let mut it = std::env::args().skip(2); // skip the exe and the "review" verb
     while let Some(a) = it.next() {
         match a.as_str() {
             "--before" => before = Some(PathBuf::from(it.next().ok_or("--before needs a value")?)),
             "--after" => after = Some(PathBuf::from(it.next().ok_or("--after needs a value")?)),
             "--json" => as_json = true,
+            "--data" => as_data = true,
+            "--duckdb" => duckdb_arg = Some(PathBuf::from(it.next().ok_or("--duckdb needs a value")?)),
+            "--workspace" => {
+                workspace_arg = Some(PathBuf::from(it.next().ok_or("--workspace needs a value")?))
+            }
             "-h" | "--help" => {
                 println!("{REVIEW_USAGE}");
                 return Ok(0);
@@ -670,6 +723,55 @@ fn run_review() -> Result<i32, String> {
 
     let report = duckle_duckdb_engine::review::diff_pipelines(&bv, &av);
 
+    // Optional live data comparison: run both versions sink-safe and diff
+    // per-node row counts. Opt-in via --data; needs a DuckDB binary.
+    let mut data_section: Option<serde_json::Value> = None;
+    let mut after_run_failed = false;
+    if as_data {
+        let duckdb = resolve_duckdb(duckdb_arg)?;
+        std::env::set_var("DUCKLE_DUCKDB_BIN", &duckdb);
+        let ws = workspace_arg
+            .clone()
+            .or_else(|| before.parent().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| PathBuf::from("."));
+        let engine = DuckdbEngine::new(duckdb);
+        let br = run_side_for_review(&before, &ws, &engine);
+        let ar = run_side_for_review(&after, &ws, &engine);
+        after_run_failed = ar.is_err();
+        let mut changed_rows: Vec<serde_json::Value> = Vec::new();
+        if let (Ok(b), Ok(a)) = (&br, &ar) {
+            let mut ids: std::collections::BTreeSet<String> = b.keys().cloned().collect();
+            ids.extend(a.keys().cloned());
+            for id in ids {
+                let brows = b.get(&id).copied().flatten();
+                let arows = a.get(&id).copied().flatten();
+                if brows != arows {
+                    let delta = match (brows, arows) {
+                        (Some(x), Some(y)) => Some(y as i64 - x as i64),
+                        _ => None,
+                    };
+                    changed_rows.push(serde_json::json!({
+                        "node": id, "beforeRows": brows, "afterRows": arows, "delta": delta
+                    }));
+                }
+            }
+        }
+        let before_side = match &br {
+            Ok(_) => serde_json::json!({ "ok": true }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e }),
+        };
+        let after_side = match &ar {
+            Ok(_) => serde_json::json!({ "ok": true }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e }),
+        };
+        data_section = Some(serde_json::json!({
+            "before": before_side,
+            "after": after_side,
+            "changedRows": changed_rows,
+            "note": "sinks skipped (no destination written); sources read and transforms run",
+        }));
+    }
+
     if as_json {
         let out = serde_json::json!({
             "before": { "path": before.display().to_string(),
@@ -679,6 +781,7 @@ fn run_review() -> Result<i32, String> {
                 "compiles": after_compiles.is_ok(),
                 "error": after_compiles.as_ref().err() },
             "diff": report,
+            "dataDiff": data_section,
         });
         println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
     } else {
@@ -728,10 +831,38 @@ fn run_review() -> Result<i32, String> {
                 tags.join(", ")
             );
         }
+        if let Some(d) = &data_section {
+            let side = |k: &str| {
+                if d[k]["ok"] == serde_json::json!(true) {
+                    "ok".to_string()
+                } else {
+                    format!("failed ({})", d[k]["error"].as_str().unwrap_or(""))
+                }
+            };
+            println!("  data diff (sinks skipped, sources read):");
+            println!("    before run : {}", side("before"));
+            println!("    after run  : {}", side("after"));
+            let rows = d["changedRows"].as_array().cloned().unwrap_or_default();
+            if rows.is_empty() && d["before"]["ok"] == serde_json::json!(true) && d["after"]["ok"] == serde_json::json!(true) {
+                println!("    no per-node row-count changes");
+            }
+            let cell = |v: &serde_json::Value| v.as_u64().map(|n| n.to_string()).unwrap_or_else(|| "-".to_string());
+            for r in rows {
+                let delta = r["delta"].as_i64().map(|d| format!("  ({d:+})")).unwrap_or_default();
+                println!(
+                    "    ~ {}: {} -> {}{}",
+                    r["node"].as_str().unwrap_or(""),
+                    cell(&r["beforeRows"]),
+                    cell(&r["afterRows"]),
+                    delta
+                );
+            }
+        }
     }
 
-    // Fail the gate when the proposed (after) version no longer compiles.
-    Ok(if after_compiles.is_err() { 1 } else { 0 })
+    // Fail the gate when the proposed (after) version no longer compiles, or
+    // (with --data) fails to run.
+    Ok(if after_compiles.is_err() || after_run_failed { 1 } else { 0 })
 }
 
 fn main() -> ExitCode {
