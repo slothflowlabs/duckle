@@ -27,10 +27,13 @@ ed25519-dalek = "2"
 # (drops aes/zstd/bzip2/lzma/xz); pulls flate2 rust_backend already in the lock.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
-# Teradata (ODBC via odbc-api) is enabled everywhere except macOS, whose
-# cross-arch ODBC driver manager is awkward to link in the release build. On
-# macOS the engine falls back to a clear "compiled without teradata" error.
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+# Teradata (ODBC via odbc-api) is enabled on gnu Linux and Windows, where a
+# dynamic libodbc driver manager is available to link and load. It is excluded
+# on macOS (awkward cross-arch ODBC link) and on the static musl build of the
+# runner: musl has no static libodbc to link against, and Teradata needs a
+# dynamic ODBC driver manager at runtime anyway. The engine returns a clear
+# "compiled without teradata" error on those targets.
+[target.'cfg(all(not(target_os = "macos"), not(target_env = "musl")))'.dependencies]
 duckle-duckdb-engine = { workspace = true, features = ["teradata"] }
 
 [dev-dependencies]
