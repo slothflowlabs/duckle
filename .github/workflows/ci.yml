@@ -10,8 +10,8 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -28,7 +28,7 @@ jobs:
         os: [ubuntu-24.04, windows-latest, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The full workspace (engine + duckle-runner + duckle-mcp + apps/desktop
       # with two embedded binaries) plus test artifacts can exceed the ~14 GB
       # free on a GitHub Linux runner ("No space left on device"). Drop large
@@ -132,7 +132,7 @@ jobs:
   desktop-release-build:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Free disk space
         shell: bash
         run: |
@@ -141,7 +141,7 @@ jobs:
             /usr/local/share/powershell /usr/share/swift || true
           sudo docker image prune --all --force || true
           df -h /
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -205,7 +205,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install DuckDB CLI
@@ -243,7 +243,7 @@ jobs:
           --health-timeout 5s
           --health-retries 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install DuckDB CLI
@@ -271,7 +271,7 @@ jobs:
   minio-integration:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Start MinIO + create bucket
