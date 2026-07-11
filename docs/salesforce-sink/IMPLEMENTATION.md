@@ -81,6 +81,11 @@ Response: array of `{ "id", "success", "errors": [{statusCode, message, fields}]
 
 ## Remaining work
 
+_Items 1–4 below are complete (see Status above): the sink compiles, has passing
+integration tests, is validated end-to-end against a live org (incl. via the
+desktop UI), and the docs are updated (README Sinks table, `docs/roadmap.md`,
+CONTRIBUTING.md). Items 5–6 (Tier 2/3) remain._
+
 1. **Compile + fix** — install the Rust toolchain, `cargo build -p duckle-duckdb-engine`, resolve any signature drift (helper names, `ureq` request builder, `EngineError` variants).
 2. **Unit/integration test** — add a `TcpListener::bind("127.0.0.1:0")` mock in `crates/duckdb-engine/tests/execution.rs` (mirror the `snk.snowflake` tests ~line 1964/2316 and the mock-server sinks ~line 3446+). Point `instanceUrl` at the mock; assert the request envelope (per-record `attributes.type`, `allOrNone`), the ≤200 chunking, and that a `success:false` record fails the run when `failOnError`. Sketch:
    ```
@@ -90,9 +95,10 @@ Response: array of `{ "id", "success", "errors": [{statusCode, message, fields}]
    // then run pipeline: src.json (2 rows) -> snk.salesforce(insert) and assert "2 succeeded"
    ```
 3. **Live-org validation** — a Salesforce dev org + Connected App; run insert/update/upsert/delete against a real object; confirm error-payload shapes, field-type coercion (dates, checkboxes, references), and API-version behaviour.
-4. **Docs** — README connector table + a short usage snippet.
-5. **Tier 2 (Bulk API 2.0)** — new `RuntimeSpec` path with a poll loop; the `SalesforceWriteApi::Bulk` variant is already reserved and rejected at plan time.
-6. **Tier 3** — reject/error output stream, ID remapping, compound fields, retry/backoff.
+4. **Docs** — ✅ done: README capability table (Sinks row + count bump), `docs/roadmap.md`, and the CONTRIBUTING.md connector/transform recipe corrected.
+5. **Tier 2 — Bulk API 2.0** — new `RuntimeSpec` path with a poll loop; the `SalesforceWriteApi::Bulk` variant is already reserved and rejected at plan time.
+6. **Tier 2 — Salesforce auth Connection** — both `src.salesforce` and this sink are Bearer-token-only (no minting or refresh; the token expires ~2h). A first-class Salesforce Connection that stores Client-Credentials (key/secret) or a JWT cert and mints + refreshes the token would upgrade the source and the sink at once. Duckle already has a Connection concept (`create_connection`/`list_connections`).
+7. **Tier 3** — reject/error output stream, parent→child ID remapping, external-Id relationship resolution, compound fields (Address/Location), API-limit retry/backoff.
 
 ## Contribution checklist (per CONTRIBUTING.md)
 

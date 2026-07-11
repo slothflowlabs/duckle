@@ -183,12 +183,18 @@ The fastest path for a new connector is to:
 1. Read an existing one as a template - `snk.pinecone` (~40 lines) for a
    vendor HTTP sink, `src.mongodb` (~60 lines + a tokio block_on
    pattern) for an async-driver source.
-2. Add an OR-arm to the planner branch in `crates/duckdb-engine/src/plan.rs`.
-3. Add an executor branch in `crates/duckdb-engine/src/lib.rs`.
-4. Add a palette tile in `frontend/src/workflow-ui/palette-data.ts`.
+2. Define the spec in `crates/duckdb-engine/src/plan/specs.rs` and add a
+   `RuntimeSpec` variant + a routing OR-arm in
+   `crates/duckdb-engine/src/plan/mod.rs`.
+3. Add the executor in `crates/duckdb-engine/src/connectors.rs` and a dispatch
+   arm in `crates/duckdb-engine/src/lib.rs`.
+4. Add a palette tile in `frontend/src/workflow-ui/palette-data.ts` (plus a field
+   manifest in `frontend/src/workflow-ui/fields/manifest-synth.ts` when the node
+   needs a custom property panel), then regenerate the catalog:
+   `node frontend/scripts/build-catalog.mjs`.
 5. Add an integration test in `crates/duckdb-engine/tests/execution.rs` -
    real network tests should be `env-gated` (skip unless the relevant
-   `DUCKLE_*_URI` env var is set).
+   `DUCKLE_*` env var is set); a mock HTTP server keeps a connector test in CI.
 6. Update the README capability table and this roadmap.
 
 See `CONTRIBUTING.md` for the broader project conventions.

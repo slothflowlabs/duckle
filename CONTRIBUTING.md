@@ -54,20 +54,34 @@ There is no required-reviewer gate, so a maintainer will merge once it looks goo
 - **Integration tests** for crates that need them live under `crates/<name>/tests/`.
 - Run everything with `cargo test --workspace`.
 
-## Adding a connector
+## Adding a connector or transform
 
-1. Add a new module under `crates/connectors/src/`.
-2. Implement the `Connector` trait from `plugin-sdk`.
-3. Register the connector in `crates/connectors/src/lib.rs`.
-4. Add an integration test under `crates/connectors/tests/`.
-5. Add a corresponding node type in `frontend/src/canvas/nodes/`.
+Connectors (sources and sinks) and transforms are implemented in the
+`duckle-duckdb-engine` crate - not via a `plugin-sdk` trait. (The `plugin-sdk`,
+`crates/connectors`, and `crates/transform-engine` crates are legacy scaffolding
+and are not how components ship today.) The steps are the same for a source,
+sink, or transform:
 
-## Adding a transform
+1. Read an existing one as a template - e.g. `snk.snowflake` / `snk.clickhouse`
+   for a vendor HTTP sink, `src.mongodb` for an async-driver source.
+2. Define the spec struct in `crates/duckdb-engine/src/plan/specs.rs` and add a
+   `RuntimeSpec` variant in `crates/duckdb-engine/src/plan/mod.rs`.
+3. Add a routing OR-arm (parse the node's properties into the spec) in
+   `crates/duckdb-engine/src/plan/mod.rs`.
+4. Add the executor in `crates/duckdb-engine/src/connectors.rs` and a dispatch
+   arm in `crates/duckdb-engine/src/lib.rs`.
+5. Add a palette tile in `frontend/src/workflow-ui/palette-data.ts`, and - if the
+   node needs a custom property panel - a field manifest in
+   `frontend/src/workflow-ui/fields/manifest-synth.ts`. Regenerate the component
+   catalog: `node frontend/scripts/build-catalog.mjs` (writes
+   `crates/duckle-mcp/catalog.json`).
+6. Add an integration test in `crates/duckdb-engine/tests/execution.rs`. Use a
+   mock server for HTTP connectors; env-gate any real-network test so it skips
+   unless the relevant `DUCKLE_*` env var is set.
+7. Update the README capability table and `docs/roadmap.md`.
 
-1. Add a new module under `crates/transform-engine/src/ops/`.
-2. Implement the `Transform` trait from `plugin-sdk`.
-3. Register in the transform registry.
-4. Add a node type and properties panel in the frontend.
+See `docs/roadmap.md` ("Contributing a connector") for the same checklist
+alongside the roadmap of what is and isn't shipped.
 
 ## Legal
 
