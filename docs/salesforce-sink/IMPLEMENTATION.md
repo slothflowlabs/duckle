@@ -7,7 +7,7 @@ Salesforce, not just out of it.
 
 ## Status
 
-**Tier 1 (sObject Collections) — compiles; not yet tested against a live org.**
+**Tier 1 (sObject Collections) — complete: compiles, unit-tested, and validated end-to-end against a live org (including via the desktop UI).**
 
 - `cargo check -p duckle-duckdb-engine` — **passes** (rustc 1.97.0, stable-msvc).
 - `cargo clippy -p duckle-duckdb-engine` — the Salesforce code adds **zero**
@@ -35,7 +35,7 @@ Salesforce, not just out of it.
 
 | Tier | Scope | State |
 |------|-------|-------|
-| 1 | sObject Collections API (`/composite/sobjects`), ≤200 records/request: insert / update / upsert (by external Id) / delete, Bearer auth, per-record error aggregation | **scaffolded** |
+| 1 | sObject Collections API (`/composite/sobjects`), ≤200 records/request: insert / update / upsert (by external Id) / delete, Bearer auth, per-record error aggregation | **complete** (live-org + mock tests) |
 | 2 | Bulk API 2.0 (`/jobs/ingest`): create → upload CSV → close → poll → fetch success/failed result sets. Migration-scale volume. | planner rejects `api:"bulk"` with a clear message; not built |
 | 3 | Migration-grade: first-class reject/error output stream, parent→child ID remapping, external-Id relationship resolution, compound-field (Address/Location) handling, API-limit retry/backoff | not started |
 
@@ -81,24 +81,13 @@ Response: array of `{ "id", "success", "errors": [{statusCode, message, fields}]
 
 ## Remaining work
 
-_Items 1–4 below are complete (see Status above): the sink compiles, has passing
-integration tests, is validated end-to-end against a live org (incl. via the
-desktop UI), and the docs are updated (README Sinks table, `docs/roadmap.md`,
-CONTRIBUTING.md). Items 5–6 (Tier 2/3) remain._
+Tier 1 is complete (see Status) and shipped in this PR — sink implemented,
+unit-tested, validated end-to-end against a live org, and docs updated (README
+Sinks table, `docs/roadmap.md`, `CONTRIBUTING.md`). What's left is follow-up:
 
-1. **Compile + fix** — install the Rust toolchain, `cargo build -p duckle-duckdb-engine`, resolve any signature drift (helper names, `ureq` request builder, `EngineError` variants).
-2. **Unit/integration test** — add a `TcpListener::bind("127.0.0.1:0")` mock in `crates/duckdb-engine/tests/execution.rs` (mirror the `snk.snowflake` tests ~line 1964/2316 and the mock-server sinks ~line 3446+). Point `instanceUrl` at the mock; assert the request envelope (per-record `attributes.type`, `allOrNone`), the ≤200 chunking, and that a `success:false` record fails the run when `failOnError`. Sketch:
-   ```
-   // POST /services/data/v60.0/composite/sobjects
-   //   assert body.records[0].attributes.type == "Account"
-   //   respond [{ "id":"001...", "success":true, "errors":[] }]
-   // then run pipeline: src.json (2 rows) -> snk.salesforce(insert) and assert "2 succeeded"
-   ```
-3. **Live-org validation** — a Salesforce dev org + Connected App; run insert/update/upsert/delete against a real object; confirm error-payload shapes, field-type coercion (dates, checkboxes, references), and API-version behaviour.
-4. **Docs** — ✅ done: README capability table (Sinks row + count bump), `docs/roadmap.md`, and the CONTRIBUTING.md connector/transform recipe corrected.
-5. **Tier 2 — Bulk API 2.0** — new `RuntimeSpec` path with a poll loop; the `SalesforceWriteApi::Bulk` variant is already reserved and rejected at plan time.
-6. **Tier 2 — Salesforce auth Connection** — both `src.salesforce` and this sink are Bearer-token-only (no minting or refresh; the token expires ~2h). A first-class Salesforce Connection that stores Client-Credentials (key/secret) or a JWT cert and mints + refreshes the token would upgrade the source and the sink at once. Duckle already has a Connection concept (`create_connection`/`list_connections`).
-7. **Tier 3** — reject/error output stream, parent→child ID remapping, external-Id relationship resolution, compound fields (Address/Location), API-limit retry/backoff.
+1. **Tier 2 — Bulk API 2.0** — new `RuntimeSpec` path with a poll loop (create → upload CSV → close → poll → fetch success/failed results); the `SalesforceWriteApi::Bulk` variant is already reserved and rejected at plan time.
+2. **Tier 2 — Salesforce auth Connection** — both `src.salesforce` and this sink are Bearer-token-only (no minting or refresh; the token expires ~2h). A first-class Salesforce Connection that stores Client-Credentials (key/secret) or a JWT cert and mints + refreshes the token would upgrade the source and the sink at once. Duckle already has a Connection concept (`create_connection`/`list_connections`).
+3. **Tier 3** — reject/error output stream, parent→child ID remapping, external-Id relationship resolution, compound fields (Address/Location), API-limit retry/backoff.
 
 ## Contribution checklist (per CONTRIBUTING.md)
 
@@ -122,14 +111,14 @@ Linux/macOS/Windows; no required-reviewer gate):
 - [x] Written from scratch, no incompatibly-licensed code (dual MIT/Apache-2.0);
       no CLA/DCO sign-off required
 
-**Note — CONTRIBUTING.md "Adding a connector" is stale.** It says add a module
-under `crates/connectors/src/`, implement a `Connector` trait from `plugin-sdk`,
-and add a node under `frontend/src/canvas/nodes/`. None of that matches reality:
-`crates/connectors/src/` holds only `csv.rs` + `lib.rs`, and every actual sink
-(Snowflake, Databricks, ClickHouse, Mongo, Kafka, …) lives in
+**Note — this PR also corrects two stale contributor guides.** `CONTRIBUTING.md`
+previously said to add a module under `crates/connectors/src/`, implement a
+`Connector`/`Transform` trait from `plugin-sdk`, and add a node under
+`frontend/src/canvas/nodes/` — none of which matches reality (`crates/connectors`
+and `crates/transform-engine` are legacy stubs; every actual component lives in
 `crates/duckdb-engine/` with the frontend wired via `palette-data.ts` +
-`manifest-synth.ts`. This scaffold follows the **real** pattern. Worth a small
-separate PR/issue to fix the doc.
+`manifest-synth.ts`). `docs/roadmap.md` still referenced `plan.rs`. Both were
+rewritten to the real pattern this sink follows.
 
 ## Build / regenerate
 
