@@ -11036,3 +11036,220 @@ fn inspect_parquet_regression_still_selects() {
         names
     );
 }
+
+// --- snk.salesforce (sObject Collections) ------------------------------------
+//
+// These drive the real executor against a mock HTTP server standing in for the
+// org (instanceUrl points at 127.0.0.1). They assert the request shape generic
+// snk.rest cannot produce - the per-record `attributes.type` envelope and the
+// `allOrNone` wrapper - plus the upsert URL and per-record error handling. The
+// live-org behaviour (insert/update/upsert/delete) is validated manually; see
+// docs/salesforce-sink/IMPLEMENTATION.md.
+
+/// Spawn a one-shot mock HTTP server that records the first request's raw bytes
+/// and replies with `resp_body` as application/json. Returns (port, rx, join).
+#[allow(clippy::type_complexity)]
+fn sf_mock_server(
+    resp_body: &'static str,
+) -> (
+    u16,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+    std::thread::JoinHandle<()>,
+) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind sf mock");
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        for stream in listener.incoming().take(1) {
+            let mut stream = match stream {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_millis(250)))
+                .ok();
+            stream.set_nodelay(true).ok();
+            let mut buf = Vec::with_capacity(8192);
+            let mut chunk = [0u8; 4096];
+            for _ in 0..16 {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+            }
+            let _ = tx.send(buf);
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                resp_body.len(),
+                resp_body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+    (port, rx, handle)
+}
+
+#[test]
+fn snk_salesforce_insert_posts_collections_envelope() {
+    use std::time::Duration;
+    let engine = engine_or_skip!();
+    let (port, rx, handle) = sf_mock_server(
+        r#"[{"id":"001000000000001","success":true,"errors":[]},{"id":"001000000000002","success":true,"errors":[]}]"#,
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "Name\nAcme\nGlobex\n");
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "f",
+                "snk.salesforce",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "apiVersion": "v60.0",
+                    "object": "Account",
+                    "operation": "insert"
+                }),
+            ),
+        ]),
+        json!([main_edge("e", "s", "f")]),
+    ));
+    assert_eq!(r.status, "ok", "salesforce insert failed: {:?}", r.error);
+
+    let req = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("expected 1 SF request");
+    let _ = handle.join();
+    let raw = String::from_utf8_lossy(&req);
+    let line0 = raw.lines().next().unwrap_or("");
+    assert!(line0.starts_with("POST "), "expected POST, got: {}", line0);
+    assert!(
+        line0.contains("/services/data/v60.0/composite/sobjects"),
+        "endpoint path missing: {}",
+        line0
+    );
+    assert!(
+        raw.contains("Authorization: Bearer tok-123"),
+        "bearer auth header missing"
+    );
+    let body = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+    let v: Value = serde_json::from_str(body).expect("body should be JSON");
+    assert_eq!(v["allOrNone"], json!(false));
+    let recs = v["records"].as_array().expect("records array");
+    assert_eq!(recs.len(), 2);
+    // The per-record type envelope is the whole point of a dedicated sink.
+    assert_eq!(recs[0]["attributes"]["type"], json!("Account"));
+    let names: Vec<&str> = recs
+        .iter()
+        .map(|r| r["Name"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        names.contains(&"Acme") && names.contains(&"Globex"),
+        "row data missing: {:?}",
+        names
+    );
+}
+
+#[test]
+fn snk_salesforce_upsert_targets_external_id_url() {
+    use std::time::Duration;
+    let engine = engine_or_skip!();
+    let (port, rx, handle) = sf_mock_server(
+        r#"[{"id":"001000000000001","success":true,"errors":[]},{"id":"001000000000002","success":true,"errors":[]}]"#,
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(
+        tmp.path(),
+        "in.csv",
+        "External_ID__c,Name\nDKL-1,Acme\nDKL-2,Globex\n",
+    );
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "f",
+                "snk.salesforce",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "apiVersion": "v60.0",
+                    "object": "Account",
+                    "operation": "upsert",
+                    "externalIdField": "External_ID__c"
+                }),
+            ),
+        ]),
+        json!([main_edge("e", "s", "f")]),
+    ));
+    assert_eq!(r.status, "ok", "salesforce upsert failed: {:?}", r.error);
+
+    let req = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("expected 1 SF request");
+    let _ = handle.join();
+    let raw = String::from_utf8_lossy(&req);
+    let line0 = raw.lines().next().unwrap_or("");
+    // Upsert routes through PATCH .../composite/sobjects/{object}/{extIdField}.
+    assert!(line0.starts_with("PATCH "), "expected PATCH, got: {}", line0);
+    assert!(
+        line0.contains("/services/data/v60.0/composite/sobjects/Account/External_ID__c"),
+        "upsert URL missing external-id path: {}",
+        line0
+    );
+}
+
+#[test]
+fn snk_salesforce_record_error_fails_run() {
+    use std::time::Duration;
+    let engine = engine_or_skip!();
+    // One record fails; with failOnError (default true) the run must error.
+    let (port, rx, handle) = sf_mock_server(
+        r#"[{"success":false,"errors":[{"statusCode":"REQUIRED_FIELD_MISSING","message":"Required fields are missing: [Name]"}]},{"id":"001000000000002","success":true,"errors":[]}]"#,
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "Name\nAcme\nGlobex\n");
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "f",
+                "snk.salesforce",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "object": "Account",
+                    "operation": "insert"
+                }),
+            ),
+        ]),
+        json!([main_edge("e", "s", "f")]),
+    ));
+    let _ = rx.recv_timeout(Duration::from_secs(5));
+    let _ = handle.join();
+    assert_eq!(
+        r.status, "error",
+        "a failing record must fail the run when failOnError"
+    );
+    let err = r.error.unwrap_or_default();
+    assert!(
+        err.contains("REQUIRED_FIELD_MISSING"),
+        "error should surface the Salesforce statusCode, got: {}",
+        err
+    );
+}
