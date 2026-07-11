@@ -1379,6 +1379,61 @@ pub struct WebhookSpec {
     pub text_template: Option<String>,
 }
 
+/// Which Salesforce write API a SalesforceSinkSpec uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SalesforceWriteApi {
+    /// sObject Collections / Composite: up to 200 records per request via a
+    /// single synchronous round-trip. Tier 1 - fits the existing ureq
+    /// per-stage model. `/composite/sobjects` (insert/update/delete) and
+    /// `/composite/sobjects/{sobject}/{extIdField}` (upsert).
+    Collections,
+    /// Bulk API 2.0: async job lifecycle (create job -> upload CSV -> close ->
+    /// poll -> fetch success/failed result sets). Tier 2 - NOT yet wired; the
+    /// planner rejects it with a clear "not yet implemented" error so the
+    /// config is at least diagnosable. See docs/salesforce-sink/IMPLEMENTATION.md.
+    Bulk,
+}
+
+/// snk.salesforce: write upstream rows into a Salesforce object via the REST
+/// write APIs. Tier 1 targets the sObject Collections API (<=200 records per
+/// request). Auth is a Bearer OAuth access token, same token flow as
+/// src.salesforce; supply it via `${ENV:SF_TOKEN}` so no secret lands in the
+/// pipeline JSON. `instance_url` is the org base (e.g.
+/// https://acme.my.salesforce.com) and doubles as the endpoint override tests
+/// point at a mock server.
+#[derive(Debug, Clone)]
+pub struct SalesforceSinkSpec {
+    pub from_view: String,
+    /// Org base URL, e.g. https://acme.my.salesforce.com. No trailing slash.
+    pub instance_url: String,
+    /// REST API version segment, e.g. "v60.0".
+    pub api_version: String,
+    /// Bearer OAuth access token.
+    pub access_token: String,
+    /// sObject API name, e.g. "Account", "Contact", "MyObject__c".
+    pub object: String,
+    /// "insert" | "update" | "upsert" | "delete".
+    pub operation: String,
+    /// Required when operation == "upsert": the external-id field the upsert
+    /// keys on (e.g. "External_Id__c"). Ignored otherwise.
+    pub external_id_field: Option<String>,
+    /// For operation == "update"/"delete": the row column holding the
+    /// Salesforce record Id (default "Id").
+    pub id_field: String,
+    /// Records per request. Salesforce caps sObject Collections at 200; the
+    /// planner clamps to that.
+    pub batch_size: usize,
+    /// allOrNone flag sent to Salesforce. When true, any failing record rolls
+    /// back the whole request (Salesforce-side). When false, partial success.
+    pub all_or_none: bool,
+    /// When true, the stage errors if any record fails; when false it logs the
+    /// per-record errors and continues. A first-class reject/error output
+    /// stream is Tier 2 work (see IMPLEMENTATION.md).
+    pub fail_on_error: bool,
+    /// Which write API to use (Tier 1 = Collections).
+    pub api: SalesforceWriteApi,
+}
+
 /// snk.execsource "Execute in Source" (#115 in-database processing v1b): run a
 /// statement (typically CREATE TABLE ... AS SELECT) directly on the attached
 /// remote server via the scanner extension's passthrough (postgres_execute /

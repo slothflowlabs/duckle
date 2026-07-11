@@ -338,6 +338,148 @@ impl DuckdbEngine {
         }
     }
 
+    /// Salesforce REST write sink (Tier 1: sObject Collections API).
+    ///
+    /// Reads the upstream view as JSON, chunks rows into <=200-record groups,
+    /// and issues one request per chunk against the org's composite/sobjects
+    /// endpoint. Auth is a Bearer OAuth access token. The response is an array
+    /// of per-record `{id, success, errors}` results; failures are aggregated
+    /// and, when `fail_on_error`, surfaced as a single Err. A first-class
+    /// reject/error output stream is Tier 2 (see docs/salesforce-sink).
+    ///
+    /// Endpoints by operation:
+    ///   insert  POST   {instance}/services/data/{ver}/composite/sobjects
+    ///   update  PATCH  {instance}/services/data/{ver}/composite/sobjects
+    ///   upsert  PATCH  {instance}/services/data/{ver}/composite/sobjects/{obj}/{extIdField}
+    ///   delete  DELETE {instance}/services/data/{ver}/composite/sobjects?ids=..&allOrNone=..
+    pub(crate) fn run_salesforce_sink(
+        &self,
+        db: &Path,
+        secret_prefix: &str,
+        spec: &SalesforceSinkSpec,
+    ) -> Result<String, EngineError> {
+        let select = format!(
+            "{}SELECT * FROM {}",
+            secret_prefix,
+            plan::quote_ident(&spec.from_view)
+        );
+        let rows = self.run_rows(Some(db), &select)?;
+        if rows.is_empty() {
+            return Ok(format!("salesforce: 0 rows to {} {}", spec.operation, spec.object));
+        }
+
+        let base = format!(
+            "{}/services/data/{}/composite/sobjects",
+            spec.instance_url, spec.api_version
+        );
+        let auth_header = format!("Bearer {}", spec.access_token);
+        let all_or_none = spec.all_or_none;
+
+        // Build the (method, url, body) for one chunk of upstream rows.
+        // `records` carries the per-record `attributes.type` envelope that the
+        // Collections API requires and generic snk.rest cannot emit.
+        let build_request = |chunk: &[JsonValue]| -> Result<(String, String, Option<String>), EngineError> {
+            match spec.operation.as_str() {
+                "delete" => {
+                    // DELETE takes ids as a query param, no body.
+                    let ids: Vec<String> = chunk
+                        .iter()
+                        .map(|r| {
+                            r.get(&spec.id_field)
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                                .ok_or_else(|| EngineError::Query(format!(
+                                    "salesforce delete: row missing id field '{}'", spec.id_field
+                                )))
+                        })
+                        .collect::<Result<_, _>>()?;
+                    let url = format!("{}?ids={}&allOrNone={}", base, ids.join(","), all_or_none);
+                    Ok(("DELETE".into(), url, None))
+                }
+                op => {
+                    // insert / update / upsert share the records-array body.
+                    let records: Vec<JsonValue> = chunk
+                        .iter()
+                        .map(|row| salesforce_record_envelope(row, &spec.object))
+                        .collect();
+                    let mut body = serde_json::Map::new();
+                    body.insert("allOrNone".into(), JsonValue::Bool(all_or_none));
+                    body.insert("records".into(), JsonValue::Array(records));
+                    let body_str = serde_json::to_string(&JsonValue::Object(body))
+                        .unwrap_or_else(|_| "{}".into());
+                    let (method, url) = match op {
+                        "insert" => ("POST".to_string(), base.clone()),
+                        "update" => ("PATCH".to_string(), base.clone()),
+                        "upsert" => {
+                            let ext = spec.external_id_field.as_deref().unwrap_or_default();
+                            ("PATCH".to_string(), format!("{}/{}/{}", base, spec.object, ext))
+                        }
+                        other => return Err(EngineError::Query(format!(
+                            "salesforce: unsupported operation '{}'", other
+                        ))),
+                    };
+                    Ok((method, url, Some(body_str)))
+                }
+            }
+        };
+
+        let mut ok_count = 0_usize;
+        let mut fail_count = 0_usize;
+        let mut first_errors: Vec<String> = Vec::new();
+
+        for chunk in rows.chunks(spec.batch_size) {
+            self.check_cancelled()?;
+            let (method, url, body) = build_request(chunk)?;
+            let req = crate::tls::http_agent()
+                .request(&method, &url)
+                .set("Authorization", &auth_header)
+                .set("Content-Type", "application/json")
+                .set("Accept", "application/json");
+            let send = match body {
+                Some(b) => req.send_string(&b),
+                None => req.call(),
+            };
+            match send {
+                Ok(resp) => {
+                    let txt = resp.into_string().unwrap_or_default();
+                    let (ok, fail, errs) = parse_salesforce_results(&txt);
+                    ok_count += ok;
+                    fail_count += fail;
+                    for e in errs {
+                        if first_errors.len() < 5 {
+                            first_errors.push(e);
+                        }
+                    }
+                }
+                Err(ureq::Error::Status(code, response)) => {
+                    let b = response.into_string().unwrap_or_default();
+                    return Err(EngineError::Query(format!(
+                        "Salesforce HTTP {} from {}: {}",
+                        code,
+                        url,
+                        b.chars().take(300).collect::<String>()
+                    )));
+                }
+                Err(e) => {
+                    return Err(EngineError::Query(format!(
+                        "Salesforce HTTP transport to {}: {}", url, e
+                    )));
+                }
+            }
+        }
+
+        if fail_count > 0 && spec.fail_on_error {
+            return Err(EngineError::Query(format!(
+                "salesforce {} {}: {} succeeded, {} failed. First errors: {}",
+                spec.operation, spec.object, ok_count, fail_count, first_errors.join("; ")
+            )));
+        }
+        Ok(format!(
+            "salesforce {} {}: {} succeeded, {} failed",
+            spec.operation, spec.object, ok_count, fail_count
+        ))
+    }
+
     /// Snowflake SQL API sink. Reads the upstream view as JSON,
     /// chunks rows into spec.batch_size groups, builds one multi-row
     /// INSERT per chunk, and POSTs to /api/v2/statements with Bearer
@@ -8928,6 +9070,75 @@ fn snowflake_body_error(body: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Wrap one upstream row as a Salesforce sObject Collections record: prepend
+/// the mandatory `attributes: {type: <object>}` envelope, then copy the row's
+/// fields. Null cells are kept (Salesforce treats an explicit null as a field
+/// clear on update/upsert). Nested object/array cells are passed through as-is;
+/// compound-field handling (Address, Location) is Tier 2.
+fn salesforce_record_envelope(row: &JsonValue, object: &str) -> JsonValue {
+    let mut rec = serde_json::Map::new();
+    let mut attrs = serde_json::Map::new();
+    attrs.insert("type".into(), JsonValue::String(object.to_string()));
+    rec.insert("attributes".into(), JsonValue::Object(attrs));
+    if let Some(obj) = row.as_object() {
+        for (k, v) in obj {
+            // Guard against a stray upstream "attributes" column shadowing ours.
+            if k == "attributes" {
+                continue;
+            }
+            rec.insert(k.clone(), v.clone());
+        }
+    }
+    JsonValue::Object(rec)
+}
+
+/// Parse a Salesforce composite/sobjects response body - an array of
+/// `{id, success, errors: [{statusCode, message, fields}]}` - into
+/// (success_count, failure_count, error_messages). A non-array body (e.g. an
+/// API-level error object) counts as a single failure carrying its message so
+/// the caller doesn't silently treat a broken batch as success.
+fn parse_salesforce_results(body: &str) -> (usize, usize, Vec<String>) {
+    let parsed: JsonValue = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return (0, 0, vec![format!("unparseable response: {}", tail_chars(body, 200))]),
+    };
+    let arr = match parsed.as_array() {
+        Some(a) => a,
+        None => {
+            // API-level error shape: [{message, errorCode}] is an array, so a
+            // bare object here is an unexpected/error envelope.
+            let msg = parsed
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unexpected non-array response");
+            return (0, 1, vec![msg.to_string()]);
+        }
+    };
+    let mut ok = 0_usize;
+    let mut fail = 0_usize;
+    let mut errs = Vec::new();
+    for item in arr {
+        let success = item.get("success").and_then(|s| s.as_bool()).unwrap_or(false);
+        if success {
+            ok += 1;
+        } else {
+            fail += 1;
+            let msg = item
+                .get("errors")
+                .and_then(|e| e.as_array())
+                .and_then(|a| a.first())
+                .map(|e| {
+                    let code = e.get("statusCode").and_then(|c| c.as_str()).unwrap_or("");
+                    let m = e.get("message").and_then(|m| m.as_str()).unwrap_or("");
+                    format!("{}: {}", code, m)
+                })
+                .unwrap_or_else(|| "unknown error".into());
+            errs.push(msg);
+        }
+    }
+    (ok, fail, errs)
 }
 
 /// Build the SELECT expression that casts a Snowflake SQL-API cell (always a

@@ -1823,6 +1823,58 @@ function synthWarehouseSink(comp: ComponentDef): ComponentManifest {
             },
         ], 'upstream');
     }
+    if (comp.id === 'snk.salesforce') {
+        return base(comp, [
+            {
+                label: 'Salesforce org',
+                fields: [
+                    { key: 'instanceUrl', label: 'Instance URL', kind: 'text', required: true, placeholder: 'https://acme.my.salesforce.com', description: 'Org base URL (no trailing slash).' },
+                    { key: 'accessToken', label: 'Access token (Bearer)', kind: 'text', required: true, placeholder: '${ENV:SF_TOKEN}', description: 'OAuth access token, same token flow as src.salesforce. Use ${ENV:...} so no secret lands in the pipeline JSON.' },
+                    { key: 'apiVersion', label: 'API version', kind: 'text', defaultValue: 'v60.0' },
+                ],
+            },
+            {
+                label: 'Destination',
+                fields: [
+                    { key: 'object', label: 'sObject', kind: 'text', required: true, placeholder: 'Account', description: 'Salesforce object API name, e.g. Account, Contact, MyObject__c.' },
+                    {
+                        key: 'operation',
+                        label: 'Operation',
+                        kind: 'select',
+                        defaultValue: 'insert',
+                        options: [
+                            { label: 'Insert', value: 'insert' },
+                            { label: 'Update (by Id)', value: 'update' },
+                            { label: 'Upsert (by external Id)', value: 'upsert' },
+                            { label: 'Delete (by Id)', value: 'delete' },
+                        ],
+                    },
+                    { key: 'externalIdField', label: 'External Id field (upsert)', kind: 'text', placeholder: 'External_Id__c', description: 'Required when Operation is Upsert.' },
+                    { key: 'idField', label: 'Id column (update/delete)', kind: 'text', defaultValue: 'Id', description: 'Upstream column holding the Salesforce record Id.' },
+                    {
+                        key: 'api',
+                        label: 'Write API',
+                        kind: 'select',
+                        defaultValue: 'collections',
+                        options: [
+                            { label: 'sObject Collections (<=200/req)', value: 'collections' },
+                            { label: 'Bulk API 2.0 (not yet implemented)', value: 'bulk' },
+                        ],
+                        description: 'Collections is Tier 1. Bulk API 2.0 is planned - see docs/salesforce-sink.',
+                    },
+                    {
+                        key: 'batchSize',
+                        label: 'Records per request',
+                        kind: 'integer',
+                        defaultValue: 200,
+                        description: 'Salesforce caps sObject Collections at 200; higher values are clamped.',
+                    },
+                    { key: 'allOrNone', label: 'All-or-none', kind: 'bool', defaultValue: false, description: 'When on, any failing record rolls back the whole request (Salesforce-side).' },
+                    { key: 'failOnError', label: 'Fail the run on record errors', kind: 'bool', defaultValue: true, description: 'When off, per-record errors are logged and the stage continues (a reject output stream is planned).' },
+                ],
+            },
+        ], 'upstream');
+    }
     if (comp.id === 'snk.redshift') {
         return base(comp, [
             { label: 'Redshift connection', fields: dbConnectionFields(comp.id) },
@@ -5624,6 +5676,9 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
     // Sinks
     if (groupId === 'snk.files') return synthFileSink(comp);
     if (comp.id === 'snk.execsource') return synthExecSource(comp);
+    // snk.salesforce lives in the new snk.saas palette group; its field synth
+    // sits alongside the other id-specific sink branches in synthWarehouseSink.
+    if (comp.id === 'snk.salesforce') return synthWarehouseSink(comp);
     if (groupId === 'snk.databases') return synthDbSink(comp);
     if (groupId === 'snk.warehouses') return synthWarehouseSink(comp);
     if (groupId === 'snk.storage') return synthStorageSink(comp);

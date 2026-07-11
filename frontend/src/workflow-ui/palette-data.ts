@@ -541,6 +541,13 @@ export const PALETTE: Category[] = [
                 ],
             },
             {
+                id: 'snk.saas',
+                label: 'SaaS Connectors',
+                components: [
+                    snk('salesforce', 'Salesforce', 'available', 'Write rows into a Salesforce object via the REST sObject Collections API (<=200 records/request). insert / update / upsert (by external Id) / delete; Bearer OAuth token, same auth as src.salesforce. Bulk API 2.0 for migration-scale loads is planned (see docs/salesforce-sink).'),
+                ],
+            },
+            {
                 id: 'snk.storage',
                 label: 'Object Storage',
                 components: [
