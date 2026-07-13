@@ -36,10 +36,9 @@ tauri-plugin-opener = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 # Encryption at rest for saved connection secrets + the cached git PAT
-# (secrets.rs). Same AES-256-GCM scheme the duckle-runner bundle uses.
-aes-gcm = "0.10"
-base64 = "0.22"
-getrandom = "0.2"
+# (secrets.rs). The AES-256-GCM scheme lives in the shared duckle-secrets
+# crate so the headless runner decrypts saved connections the same way (#166).
+duckle-secrets = { workspace = true }
 # Parse the GitHub release asset's RFC3339 upload time + format the embedded
 # build time for the update-available check (update_check.rs).
 chrono = { workspace = true }

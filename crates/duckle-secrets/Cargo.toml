@@ -1,0 +1,16 @@
+[package]
+name = "duckle-secrets"
+description = "Workspace secret encryption and saved-connection resolution shared by the desktop app and the headless runner."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aes-gcm = "0.10"
+base64 = "0.22"
+getrandom = "0.2"
+serde_json = { workspace = true }
+duckle-metadata = { workspace = true }

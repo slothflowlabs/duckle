@@ -16,6 +16,7 @@ members = [
     "crates/plugin-sdk",
     "crates/metadata",
     "crates/scheduler",
+    "crates/duckle-secrets",
 ]
 
 [workspace.package]
@@ -40,6 +41,7 @@ duckle-execution-core = { path = "crates/execution-core", version = "0.0.1" }
 duckle-plugin-sdk = { path = "crates/plugin-sdk", version = "0.0.1" }
 duckle-metadata = { path = "crates/metadata", version = "0.0.1" }
 duckle-scheduler = { path = "crates/scheduler", version = "0.0.1" }
+duckle-secrets = { path = "crates/duckle-secrets", version = "0.0.1" }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

@@ -1206,6 +1206,8 @@ fn is_secret_key(lower_key: &str) -> bool {
     const KEYS: &[&str] = &[
         "password", "secretkey", "accesskey", "accountkey", "accountname",
         "sessiontoken", "pat", "token", "apikey", "passphrase", "secret",
+        // Salesforce saved connection (#166 stage 2).
+        "clientsecret", "accesstoken",
     ];
     KEYS.contains(&lower_key)
 }

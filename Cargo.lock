@@ -4004,8 +4004,6 @@ dependencies = [
 name = "duckle-desktop"
 version = "0.0.1"
 dependencies = [
- "aes-gcm",
- "base64 0.22.1",
  "chrono",
  "duckle-connectors",
  "duckle-duckdb-engine",
@@ -4013,8 +4011,8 @@ dependencies = [
  "duckle-plugin-sdk",
  "duckle-runtime",
  "duckle-scheduler",
+ "duckle-secrets",
  "flate2",
- "getrandom 0.2.17",
  "include_dir",
  "reqwest 0.12.28",
  "serde",
@@ -4160,6 +4158,7 @@ dependencies = [
  "chrono",
  "cron",
  "duckle-duckdb-engine",
+ "duckle-secrets",
  "ed25519-dalek",
  "getrandom 0.2.17",
  "regex",
@@ -4188,6 +4187,7 @@ dependencies = [
  "chrono",
  "cron",
  "duckle-duckdb-engine",
+ "duckle-secrets",
  "notify",
  "notify-debouncer-mini",
  "serde",
@@ -4197,6 +4197,17 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "duckle-secrets"
+version = "0.0.1"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "duckle-metadata",
+ "getrandom 0.2.17",
+ "serde_json",
 ]
 
 [[package]]
