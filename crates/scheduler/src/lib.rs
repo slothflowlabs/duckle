@@ -269,6 +269,10 @@ impl Scheduler {
         // Stamp the dynamic date/time builtins (${date}/${datetime}/...) at fire
         // time, so a recurring schedule writes a fresh-dated path on every run.
         duckle_duckdb_engine::context::apply_time_builtins(&mut pipeline);
+        // Expand saved Salesforce connection refs into node auth props (#166
+        // stage 2) BEFORE the env pass, so a connection field stored as
+        // ${ENV:...} still resolves below.
+        duckle_secrets::resolve_connection_refs(&workspace, &mut pipeline.nodes)?;
         // Resolve ${ENV:NAME} from the process environment so scheduled runs see
         // OS env vars just like the headless runner does (issue #137).
         duckle_duckdb_engine::context::apply_env(&mut pipeline);

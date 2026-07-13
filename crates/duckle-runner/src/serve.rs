@@ -414,6 +414,11 @@ fn dispatch_cmd(stream: &mut TcpStream, state: &WebState, cmd: &str, body: &[u8]
                 Ok(d) => d,
                 Err(e) => return respond_err(stream, "400 Bad Request", &format!("bad pipeline: {}", e)),
             };
+            // Saved Salesforce connection refs resolve server-side against this
+            // workspace (#166 stage 2) - the browser never sees the secret.
+            if let Err(e) = duckle_secrets::resolve_connection_refs(&state.workspace, &mut doc.nodes) {
+                return respond_err(stream, "400 Bad Request", &e);
+            }
             duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
             let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
             let _guard = state.run_lock.lock().unwrap_or_else(|p| p.into_inner());
@@ -521,6 +526,11 @@ fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(
         Ok(d) => d,
         Err(e) => return respond_err(stream, "400 Bad Request", &format!("bad pipeline: {}", e)),
     };
+    // Saved Salesforce connection refs resolve server-side against this
+    // workspace (#166 stage 2) - the browser never sees the secret.
+    if let Err(e) = duckle_secrets::resolve_connection_refs(&state.workspace, &mut doc.nodes) {
+        return respond_err(stream, "400 Bad Request", &e);
+    }
     duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
     let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
     // Optional run-to-here target: when set, the engine runs only the subgraph
@@ -1264,8 +1274,11 @@ fn execute_one(
     }
     let _running = RunningGuard { set: &state.running, id: id.clone() };
 
-    // Same placeholder resolution as `duckle-runner run`: ${ENV:KEY} secrets,
-    // then the dynamic ${date}/${datetime}/... builtins.
+    // Same placeholder resolution as `duckle-runner run`: saved Salesforce
+    // connection refs first (#166 stage 2, so a connection field stored as
+    // ${ENV:...} still expands), then ${ENV:KEY} secrets, then the dynamic
+    // ${date}/${datetime}/... builtins.
+    duckle_secrets::resolve_connection_refs(&state.workspace, &mut doc.nodes)?;
     let env_file = state.workspace.join("secrets.env");
     crate::apply_env_pass(&mut doc, &state.workspace, &env_file)?;
     duckle_duckdb_engine::context::apply_time_builtins(&mut doc);

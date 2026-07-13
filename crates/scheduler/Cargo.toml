@@ -20,6 +20,7 @@ tracing = { workspace = true }
 notify = "8"
 notify-debouncer-mini = "0.6"
 duckle-duckdb-engine = { workspace = true }
+duckle-secrets = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.10"

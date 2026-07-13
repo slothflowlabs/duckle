@@ -300,6 +300,11 @@ fn run() -> Result<bool, String> {
         .or_else(|| pipeline.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."));
 
+    // Expand saved Salesforce connection refs into node auth props (#166
+    // stage 2) BEFORE the env pass, decrypting connections/<id>.json with the
+    // workspace key - same shared crate the desktop app uses, so a
+    // connection field stored as ${ENV:...} still resolves below.
+    duckle_secrets::resolve_connection_refs(&workspace, &mut doc.nodes)?;
     // Runtime ${ENV:KEY} substitution. A built bundle ships ${ENV:KEY}
     // placeholders in place of secrets; resolve them now from the
     // environment, then secrets.env, then a decrypted secrets.enc.
@@ -589,6 +594,15 @@ fn run_artifact(payload: Vec<u8>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Saved Salesforce connection refs resolve against the run-host workspace
+    // (#166 stage 2); artifacts normally ship ${ENV:} placeholders instead,
+    // but a ref-only pipeline run with DUCKLE_WORKSPACE pointed at a real
+    // workspace works, and an unresolvable ref fails with a clear error here
+    // rather than a downstream auth failure.
+    if let Err(e) = duckle_secrets::resolve_connection_refs(&ws_root, &mut doc.nodes) {
+        eprintln!("duckle-runner: {e}");
+        return ExitCode::from(2);
+    }
     if let Err(e) = apply_env_pass(&mut doc, &root, &env_file) {
         eprintln!("duckle-runner: {e}");
         return ExitCode::from(2);

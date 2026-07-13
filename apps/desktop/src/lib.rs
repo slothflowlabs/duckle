@@ -330,7 +330,10 @@ async fn run_pipeline(
     // Resolve ${ENV:NAME} from the OS environment before running, so canvas runs
     // see process env vars like the headless runner does (issue #137). The
     // frontend already resolved ${workspace}/${context}/date builtins.
+    // Saved Salesforce connections resolve first (#166 stage 2) so a
+    // connection field stored as ${ENV:...} still expands below.
     let mut pipeline = pipeline;
+    resolve_saved_connections(&mut pipeline, &workspace_path)?;
     duckle_duckdb_engine::context::apply_env(&mut pipeline);
     let name = pipeline_name.clone();
     let joined = tokio::task::spawn_blocking(move || {
@@ -343,6 +346,27 @@ async fn run_pipeline(
     let result = joined.map_err(|e| e.to_string())?;
     record_history(&pipeline_id, &workspace_path, &result, "manual");
     Ok(result)
+}
+
+/// #166 stage 2: expand saved Salesforce connection refs into node auth props
+/// before the `${ENV:}` pass, so the node stores only a `connectionRef` and
+/// secrets never land in the pipeline file. A ref without a workspace to
+/// resolve it from is a clear error rather than a downstream auth failure.
+fn resolve_saved_connections(
+    pipeline: &mut PipelineDoc,
+    workspace_path: &Option<String>,
+) -> Result<(), String> {
+    match workspace_path {
+        Some(ws) => {
+            duckle_secrets::resolve_connection_refs(std::path::Path::new(ws), &mut pipeline.nodes)
+        }
+        None if duckle_secrets::has_connection_refs(&pipeline.nodes) => Err(
+            "this pipeline uses a saved Salesforce connection; run it from a workspace \
+             so the connection can be resolved"
+            .into(),
+        ),
+        None => Ok(()),
+    }
 }
 
 fn record_history(
@@ -373,8 +397,10 @@ async fn run_pipeline_partial(
 ) -> Result<RunResult, String> {
     let engine = engine()?.for_new_run();
     *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = Some(engine.clone());
-    // Resolve ${ENV:NAME} from the OS environment before running (issue #137).
+    // Resolve ${ENV:NAME} from the OS environment before running (issue #137);
+    // saved Salesforce connections resolve first (#166 stage 2).
     let mut pipeline = pipeline;
+    resolve_saved_connections(&mut pipeline, &workspace_path)?;
     duckle_duckdb_engine::context::apply_env(&mut pipeline);
     let target = target_node_id;
     let name = pipeline_name.clone();
