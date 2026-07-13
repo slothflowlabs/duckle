@@ -110,7 +110,9 @@ pub fn encrypt_value(key: &[u8; 32], plaintext: &str) -> Result<String, String> 
 
 /// Decrypt an `enc:v1:` token back to plaintext.
 pub fn decrypt_value(key: &[u8; 32], blob: &str) -> Result<String, String> {
-    let b64 = blob.strip_prefix(ENC_PREFIX).ok_or("not an encrypted value")?;
+    let b64 = blob
+        .strip_prefix(ENC_PREFIX)
+        .ok_or("not an encrypted value")?;
     let raw = base64::engine::general_purpose::STANDARD
         .decode(b64)
         .map_err(|e| format!("base64: {}", e))?;
@@ -241,7 +243,9 @@ pub fn load_connection(workspace: &Path, id: &str) -> Result<JsonValue, String> 
 
 /// The payload holds a connection JSON object; read a non-empty string field.
 fn conn_str<'a>(conn: &'a JsonValue, key: &str) -> Option<&'a str> {
-    conn.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+    conn.get(key)
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
 }
 
 /// Expand a `connectionRef` on a Salesforce node's properties into the auth
@@ -277,7 +281,9 @@ pub fn resolve_connection_ref_props(
     }
     // Same aliases the engine's salesforce_oauth_from_props accepts.
     let client_credentials = matches!(
-        conn.get("authMode").and_then(|v| v.as_str()).unwrap_or("bearer"),
+        conn.get("authMode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("bearer"),
         "clientCredentials" | "client_credentials" | "oauth" | "oauth_client_credentials"
     );
     let map = props
@@ -288,13 +294,25 @@ pub fn resolve_connection_ref_props(
     if is_sink {
         map.insert(
             "authMode".into(),
-            JsonValue::String(if client_credentials { "clientCredentials" } else { "bearer" }.into()),
+            JsonValue::String(
+                if client_credentials {
+                    "clientCredentials"
+                } else {
+                    "bearer"
+                }
+                .into(),
+            ),
         );
     } else {
         map.insert(
             "authType".into(),
             JsonValue::String(
-                if client_credentials { "oauth_client_credentials" } else { "bearer" }.into(),
+                if client_credentials {
+                    "oauth_client_credentials"
+                } else {
+                    "bearer"
+                }
+                .into(),
             ),
         );
     }
@@ -328,10 +346,7 @@ pub fn resolve_connection_ref_props(
 /// Resolve saved-connection references on every Salesforce node in a pipeline
 /// document, in place. Call BEFORE the `${ENV:...}` pass so a connection field
 /// stored as a placeholder still expands afterwards.
-pub fn resolve_connection_refs(
-    workspace: &Path,
-    nodes: &mut [PipelineNode],
-) -> Result<(), String> {
+pub fn resolve_connection_refs(workspace: &Path, nodes: &mut [PipelineNode]) -> Result<(), String> {
     for node in nodes.iter_mut() {
         let Some(component_id) = node.data.component_id.clone() else {
             continue;
@@ -398,9 +413,21 @@ mod tests {
         let payload = r#"{"kind":"postgres","host":"db.local","username":"u","password":"s3cr3t","port":5432}"#;
         let enc = encrypt_payload_json(&ws, payload).unwrap();
         // Non-secret fields stay readable; the password becomes ciphertext.
-        assert!(enc.contains("\"host\":\"db.local\""), "host should be plaintext: {}", enc);
-        assert!(enc.contains("\"username\":\"u\""), "username should be plaintext: {}", enc);
-        assert!(enc.contains("enc:v1:"), "password should be encrypted: {}", enc);
+        assert!(
+            enc.contains("\"host\":\"db.local\""),
+            "host should be plaintext: {}",
+            enc
+        );
+        assert!(
+            enc.contains("\"username\":\"u\""),
+            "username should be plaintext: {}",
+            enc
+        );
+        assert!(
+            enc.contains("enc:v1:"),
+            "password should be encrypted: {}",
+            enc
+        );
         assert!(!enc.contains("s3cr3t"), "plaintext secret leaked: {}", enc);
 
         let dec = decrypt_payload_json(&ws, &enc).unwrap();
@@ -415,7 +442,11 @@ mod tests {
         let ws = temp_ws("env");
         let payload = r#"{"password":"${ENV:PGPASSWORD}"}"#;
         let enc = encrypt_payload_json(&ws, payload).unwrap();
-        assert!(enc.contains("${ENV:PGPASSWORD}"), "placeholder must survive: {}", enc);
+        assert!(
+            enc.contains("${ENV:PGPASSWORD}"),
+            "placeholder must survive: {}",
+            enc
+        );
         let _ = std::fs::remove_dir_all(&ws);
     }
 
@@ -426,7 +457,11 @@ mod tests {
         let enc = encrypt_payload_json(&ws, payload).unwrap();
         assert!(!enc.contains("csecret"), "clientSecret leaked: {}", enc);
         assert!(!enc.contains("atok"), "accessToken leaked: {}", enc);
-        assert!(enc.contains("\"clientId\":\"cid\""), "clientId is not a secret: {}", enc);
+        assert!(
+            enc.contains("\"clientId\":\"cid\""),
+            "clientId is not a secret: {}",
+            enc
+        );
         let _ = std::fs::remove_dir_all(&ws);
     }
 
@@ -466,20 +501,29 @@ mod tests {
         .unwrap();
         write_connection(&ws, "sf-b", &enc);
 
-        let mut sink = sf_node("snk.salesforce", serde_json::json!({"connectionRef": "sf-b"}));
+        let mut sink = sf_node(
+            "snk.salesforce",
+            serde_json::json!({"connectionRef": "sf-b"}),
+        );
         resolve_connection_refs(&ws, std::slice::from_mut(&mut sink)).unwrap();
         let props = sink.data.properties.unwrap();
         assert_eq!(props["authMode"], "bearer");
         assert_eq!(props["instanceUrl"], "https://acme.my.salesforce.com");
         assert_eq!(props["accessToken"], "tok123");
 
-        let mut src = sf_node("src.salesforce", serde_json::json!({"connectionRef": "sf-b"}));
+        let mut src = sf_node(
+            "src.salesforce",
+            serde_json::json!({"connectionRef": "sf-b"}),
+        );
         resolve_connection_refs(&ws, std::slice::from_mut(&mut src)).unwrap();
         let props = src.data.properties.unwrap();
         assert_eq!(props["authType"], "bearer");
         // The REST-shaped source reads the token as authToken.
         assert_eq!(props["authToken"], "tok123");
-        assert!(props.get("instanceUrl").is_none(), "source url is user-authored");
+        assert!(
+            props.get("instanceUrl").is_none(),
+            "source url is user-authored"
+        );
         let _ = std::fs::remove_dir_all(&ws);
     }
 
@@ -492,7 +536,10 @@ mod tests {
         )
         .unwrap();
         write_connection(&ws, "sf-env", &enc);
-        let mut node = sf_node("snk.salesforce", serde_json::json!({"connectionRef": "sf-env"}));
+        let mut node = sf_node(
+            "snk.salesforce",
+            serde_json::json!({"connectionRef": "sf-env"}),
+        );
         resolve_connection_refs(&ws, std::slice::from_mut(&mut node)).unwrap();
         let props = node.data.properties.unwrap();
         // Injected verbatim; the host's ${ENV:} pass runs after resolution.
@@ -503,9 +550,16 @@ mod tests {
     #[test]
     fn missing_connection_errors_with_id() {
         let ws = temp_ws("missing");
-        let mut node = sf_node("snk.salesforce", serde_json::json!({"connectionRef": "nope"}));
+        let mut node = sf_node(
+            "snk.salesforce",
+            serde_json::json!({"connectionRef": "nope"}),
+        );
         let err = resolve_connection_refs(&ws, std::slice::from_mut(&mut node)).unwrap_err();
-        assert!(err.contains("'nope'"), "error should name the connection: {}", err);
+        assert!(
+            err.contains("'nope'"),
+            "error should name the connection: {}",
+            err
+        );
         let _ = std::fs::remove_dir_all(&ws);
     }
 
@@ -522,23 +576,40 @@ mod tests {
         std::fs::remove_file(ws.join(".duckle").join("keys").join("secret.key")).unwrap();
 
         let err = load_connection(&ws, "sf-s").unwrap_err();
-        assert!(err.contains("secret.key"), "run-time load must be strict: {}", err);
+        assert!(
+            err.contains("secret.key"),
+            "run-time load must be strict: {}",
+            err
+        );
         // Editor load stays lenient: ciphertext passes through unchanged.
         let out = decrypt_payload_json(&ws, &enc).unwrap();
-        assert!(out.contains("enc:v1:"), "editor load stays lenient: {}", out);
+        assert!(
+            out.contains("enc:v1:"),
+            "editor load stays lenient: {}",
+            out
+        );
         let _ = std::fs::remove_dir_all(&ws);
     }
 
     #[test]
     fn non_salesforce_nodes_and_refless_nodes_are_untouched() {
         let ws = temp_ws("noop");
-        let mut pg = sf_node("src.postgres", serde_json::json!({"connectionRef": "some-pg"}));
+        let mut pg = sf_node(
+            "src.postgres",
+            serde_json::json!({"connectionRef": "some-pg"}),
+        );
         resolve_connection_refs(&ws, std::slice::from_mut(&mut pg)).unwrap();
-        assert_eq!(pg.data.properties.unwrap(), serde_json::json!({"connectionRef": "some-pg"}));
+        assert_eq!(
+            pg.data.properties.unwrap(),
+            serde_json::json!({"connectionRef": "some-pg"})
+        );
 
         let mut sf = sf_node("snk.salesforce", serde_json::json!({"object": "Account"}));
         resolve_connection_refs(&ws, std::slice::from_mut(&mut sf)).unwrap();
-        assert_eq!(sf.data.properties.unwrap(), serde_json::json!({"object": "Account"}));
+        assert_eq!(
+            sf.data.properties.unwrap(),
+            serde_json::json!({"object": "Account"})
+        );
         let _ = std::fs::remove_dir_all(&ws);
     }
 
@@ -548,7 +619,11 @@ mod tests {
         write_connection(&ws, "pg", r#"{"kind":"postgres","host":"db"}"#);
         let mut node = sf_node("snk.salesforce", serde_json::json!({"connectionRef": "pg"}));
         let err = resolve_connection_refs(&ws, std::slice::from_mut(&mut node)).unwrap_err();
-        assert!(err.contains("kind 'postgres'"), "error should name the kind: {}", err);
+        assert!(
+            err.contains("kind 'postgres'"),
+            "error should name the kind: {}",
+            err
+        );
         let _ = std::fs::remove_dir_all(&ws);
     }
 

@@ -338,3 +338,39 @@ jobs:
           DUCKLE_MINIO_ACCESS_KEY: minioadmin
           DUCKLE_MINIO_SECRET_KEY: minioadmin
         run: cargo test -p duckle-duckdb-engine --test execution -- minio_
+
+  # Live Salesforce integration (#166): runs the credential-free lifecycle
+  # suite in docs/salesforce-sink/live-suite against a REAL org - insert ->
+  # retrieve -> update (remapped idField) -> upsert -> retrieve -> delete via a
+  # saved connection, plus bearer back-compat and failure modes. There is no
+  # container for a Salesforce org, so unlike the jobs above this one is
+  # OPT-IN: set the repository variable SF_LIVE_TESTS=true and the secrets
+  # SF_INSTANCE_URL / SF_CLIENT_ID / SF_CLIENT_SECRET (a dev org with an
+  # External_ID__c external-Id field on Account and a client-credentials app -
+  # see the suite README). Skipped otherwise, including on fork PRs, which
+  # never see repository secrets. Suite records are keyed SUITE-* and
+  # self-clean. Mock-level Salesforce coverage runs unconditionally in the
+  # rust matrix (engine execution tests + duckle-secrets' connection_e2e).
+  salesforce-integration:
+    if: vars.SF_LIVE_TESTS == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install DuckDB CLI
+        run: |
+          set -e
+          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.4/duckdb_cli-linux-amd64.zip
+          mkdir -p "$RUNNER_TEMP/duckdb"
+          unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
+          echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
+      - name: Build duckle-runner
+        run: cargo build -p duckle-runner
+      - name: Run Salesforce live suite
+        env:
+          SF_INSTANCE_URL: ${{ secrets.SF_INSTANCE_URL }}
+          SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          SF_CLIENT_SECRET: ${{ secrets.SF_CLIENT_SECRET }}
+          DUCKLE_RUNNER: ${{ github.workspace }}/target/debug/duckle-runner
+        run: bash docs/salesforce-sink/live-suite/run-suite.sh

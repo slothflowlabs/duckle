@@ -55,8 +55,18 @@ bash run-suite.sh
 ```
 
 Prints a PASS/FAIL line per assertion and exits non-zero on any failure.
-This suite talks to a live org, so it is a manual harness, not part of
-`cargo test`.
+This suite talks to a live org, so it is not part of `cargo test`.
+
+## CI
+
+The `salesforce-integration` job in `.github/workflows/ci.yml` runs this suite,
+but only when opted in: set the repository **variable** `SF_LIVE_TESTS=true`
+and the **secrets** `SF_INSTANCE_URL` / `SF_CLIENT_ID` / `SF_CLIENT_SECRET`.
+Without them the job is skipped (fork PRs never see repository secrets, so it
+cannot leak into external contributions). Mock-level Salesforce coverage —
+including the encrypted-connection → resolution → mint chain
+(`crates/duckle-secrets/tests/connection_e2e.rs`) — runs unconditionally in
+the main rust matrix.
 
 Note: the post-delete emptiness check treats the source's `ok (0 rows)` as the
 clean signal because a query returning 0 records currently materializes a bare

@@ -14,3 +14,7 @@ base64 = "0.22"
 getrandom = "0.2"
 serde_json = { workspace = true }
 duckle-metadata = { workspace = true }
+
+[dev-dependencies]
+duckle-duckdb-engine = { workspace = true }
+tempfile = "3.10"

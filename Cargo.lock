@@ -4205,9 +4205,11 @@ version = "0.0.1"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
+ "duckle-duckdb-engine",
  "duckle-metadata",
  "getrandom 0.2.17",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
