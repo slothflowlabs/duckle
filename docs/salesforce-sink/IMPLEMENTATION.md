@@ -88,6 +88,11 @@ migrations work with a connection each side.
 `instanceUrl` doubles as the endpoint base a mock server points at in tests
 (same trick as the Snowflake sink's `endpoint`).
 
+A runnable **live test suite** (insert → retrieve → update with a remapped
+idField → upsert → retrieve → delete, plus auth-matrix and failure-mode
+checks, all against a real org via the headless runner) lives in
+[`live-suite/`](live-suite/README.md) - credential-free, `${ENV:}`-driven.
+
 ## Remaining work
 
 Tier 1 is complete (see Status) and shipped in this PR - sink implemented,

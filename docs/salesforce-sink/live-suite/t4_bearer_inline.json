@@ -1,0 +1,11 @@
+{
+  "name": "t4_bearer_inline",
+  "nodes": [
+    { "id": "n1", "type": "source", "position": {"x":0,"y":0},
+      "data": { "label": "csv", "componentId": "src.csv",
+        "properties": { "path": "${workspace}/data/bearer_inline.csv", "hasHeader": true } } },
+    { "id": "n2", "type": "sink", "position": {"x":300,"y":0},
+      "data": { "label": "Salesforce", "componentId": "snk.salesforce", "properties": { "instanceUrl": "${ENV:SF_INSTANCE_URL}", "accessToken": "${ENV:SF_TOKEN}", "apiVersion": "v60.0", "object": "Account", "operation": "upsert", "externalIdField": "External_ID__c", "failOnError": true } } }
+  ],
+  "edges": [ { "id": "e1", "source": "n1", "target": "n2", "sourceHandle": "main", "targetHandle": "main", "data": {"connectionType": "main"} } ]
+}

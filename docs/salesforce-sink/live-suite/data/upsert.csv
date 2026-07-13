@@ -1,0 +1,3 @@
+External_ID__c,Name
+SUITE-101,Suite Upsert Overwrite A
+SUITE-201,Suite Upsert New

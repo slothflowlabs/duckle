@@ -1,0 +1,16 @@
+{
+  "name": "s3_update",
+  "nodes": [
+    { "id": "n1", "type": "source", "position": {"x":0,"y":0},
+      "data": { "label": "SF query", "componentId": "src.salesforce",
+        "properties": { "connectionRef": "sf-live", "url": "${ENV:SF_INSTANCE_URL}/services/data/v60.0/query?q=SELECT+Id,Name,External_ID__c+FROM+Account+WHERE+External_ID__c+LIKE+%27SUITE-%25%27+ORDER+BY+External_ID__c", "method": "GET", "responsePath": "/records" } } },
+    { "id": "n2", "type": "transform", "position": {"x":300,"y":0},
+      "data": { "label": "shape", "componentId": "code.sql", "properties": { "sql": "SELECT Id AS RecId, 'Updated ' || Name AS Name FROM input" } } },
+    { "id": "n3", "type": "sink", "position": {"x":600,"y":0},
+      "data": { "label": "out", "componentId": "snk.salesforce", "properties": { "connectionRef": "sf-live", "apiVersion": "v60.0", "object": "Account", "operation": "update", "idField": "RecId", "failOnError": true } } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "n1", "target": "n2", "sourceHandle": "main", "targetHandle": "main", "data": {"connectionType": "main"} },
+    { "id": "e2", "source": "n2", "target": "n3", "sourceHandle": "main", "targetHandle": "main", "data": {"connectionType": "main"} }
+  ]
+}

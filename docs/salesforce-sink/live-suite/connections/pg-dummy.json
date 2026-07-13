@@ -1,0 +1,1 @@
+{ "kind": "postgres", "host": "db.example", "username": "u", "password": "not-a-real-password" }

@@ -1,0 +1,7 @@
+{
+  "kind": "salesforce",
+  "authMode": "clientCredentials",
+  "loginUrl": "${ENV:SF_INSTANCE_URL}",
+  "clientId": "${ENV:SF_CLIENT_ID}",
+  "clientSecret": "${ENV:SF_CLIENT_SECRET}"
+}
