@@ -113,6 +113,13 @@ const CONNECTION_TYPES: ConnectionType[] = [
     },
     { kind: 'kafka', label: 'Kafka', fields: ['brokers', 'username', 'password'] },
     { kind: 'rest', label: 'REST API', fields: ['url'] },
+    {
+        // #166 stage 2: field names match what the engine's Salesforce
+        // connectors read, so run-time resolution injects them verbatim.
+        kind: 'salesforce',
+        label: 'Salesforce',
+        fields: ['authMode', 'loginUrl', 'instanceUrl', 'clientId', 'clientSecret', 'accessToken'],
+    },
 ];
 
 const FIELD_LABELS: Partial<Record<keyof ConnectionPayload, string>> = {
@@ -138,9 +145,21 @@ const FIELD_LABELS: Partial<Record<keyof ConnectionPayload, string>> = {
     connectTimeout: 'Connect timeout (s)',
     options: 'Session options',
     connParams: 'Extra parameters',
+    authMode: 'Auth mode',
+    loginUrl: 'Login URL (Client Credentials)',
+    instanceUrl: 'Instance URL (Bearer mode)',
+    clientId: 'Client ID (Client Credentials)',
+    clientSecret: 'Client secret (Client Credentials)',
+    accessToken: 'Access token (Bearer mode)',
 };
 
-const SECRET_FIELDS = new Set<keyof ConnectionPayload>(['password', 'secretKey', 'accountKey']);
+const SECRET_FIELDS = new Set<keyof ConnectionPayload>([
+    'password',
+    'secretKey',
+    'accountKey',
+    'clientSecret',
+    'accessToken',
+]);
 
 export default function ConnectionEditorModal({ item, onSave, onCancel }: Props) {
     const initial = (item?.payload as ConnectionPayload | undefined) ?? null;
@@ -264,6 +283,26 @@ export default function ConnectionEditorModal({ item, onSave, onCancel }: Props)
                                             <option value="require">require</option>
                                             <option value="verify-ca">verify-ca</option>
                                             <option value="verify-full">verify-full</option>
+                                        </select>
+                                    </div>
+                                );
+                            }
+                            if (field === 'authMode') {
+                                // The values MUST match what the run-time
+                                // resolver maps onto the node's authMode /
+                                // authType props (#166 stage 2).
+                                return (
+                                    <div className="modal-field" key={field}>
+                                        <label className="modal-field-label">
+                                            {FIELD_LABELS[field] ?? field}
+                                        </label>
+                                        <select
+                                            className="modal-input"
+                                            value={(values.authMode as string | undefined) ?? 'bearer'}
+                                            onChange={e => setField('authMode', e.target.value)}
+                                        >
+                                            <option value="bearer">Bearer token (paste / refresh manually)</option>
+                                            <option value="clientCredentials">OAuth 2.0 Client Credentials (mint per run)</option>
                                         </select>
                                     </div>
                                 );

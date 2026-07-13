@@ -30,7 +30,8 @@ export type ConnectionKind =
     | 'gcs'
     | 'azure-blob'
     | 'kafka'
-    | 'rest';
+    | 'rest'
+    | 'salesforce';
 
 export type ConnectionPayload = {
     kind: ConnectionKind;
@@ -60,6 +61,15 @@ export type ConnectionPayload = {
     connectTimeout?: number;
     options?: string;
     connParams?: string;
+    // Salesforce OAuth (#166 stage 2). The node stores only a connectionRef;
+    // the host resolves + decrypts these at run time, so the secret never
+    // lands in the pipeline JSON. Field names match what the engine reads.
+    authMode?: string;
+    loginUrl?: string;
+    instanceUrl?: string;
+    clientId?: string;
+    clientSecret?: string;
+    accessToken?: string;
     extra?: Record<string, string>;
     notes?: string;
 };

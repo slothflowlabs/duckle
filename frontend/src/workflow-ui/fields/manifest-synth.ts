@@ -207,7 +207,21 @@ const CONNECTION_KIND_FOR: Record<string, string> = {
     'src.elastic': 'elastic', 'snk.elastic': 'elastic',
     'src.opensearch': 'elastic', 'snk.opensearch': 'elastic',
     'src.kafka': 'kafka', 'snk.kafka': 'kafka',
+    'src.salesforce': 'salesforce', 'snk.salesforce': 'salesforce',
 };
+
+// #166 stage 2: unlike every other kind, a Salesforce saved connection is
+// NOT copied into the node - the node keeps only this ref and the host
+// resolves + decrypts it at run time, so the secret never lands in the
+// pipeline JSON. Hence the different description.
+const salesforceConnectionRefField = (): Field => ({
+    key: 'connectionRef',
+    label: 'Saved connection',
+    kind: 'connection-ref',
+    accepts: ['salesforce'],
+    description:
+        'Pick a saved Salesforce connection (Connections folder). Resolved and decrypted at run time; the auth fields below are ignored when set.',
+});
 
 // "Pick a saved connection" dropdown. Placed at the TOP of a credential block
 // so it reads as the primary way to fill the fields below (issue #30).
@@ -1828,6 +1842,7 @@ function synthWarehouseSink(comp: ComponentDef): ComponentManifest {
             {
                 label: 'Salesforce org',
                 fields: [
+                    salesforceConnectionRefField(),
                     {
                         key: 'authMode',
                         label: 'Auth mode',
@@ -2437,6 +2452,7 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
         {
             label: 'Auth',
             fields: [
+                ...(isSalesforce ? [salesforceConnectionRefField()] : []),
                 {
                     key: 'authType',
                     label: 'Auth type',

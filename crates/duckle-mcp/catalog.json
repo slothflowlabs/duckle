@@ -30243,6 +30243,15 @@
             "label": "Salesforce org",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "salesforce"
+                ],
+                "description": "Pick a saved Salesforce connection (Connections folder). Resolved and decrypted at run time; the auth fields below are ignored when set."
+              },
+              {
                 "key": "authMode",
                 "label": "Auth mode",
                 "kind": "select",
@@ -39177,6 +39186,15 @@
           {
             "label": "Auth",
             "fields": [
+              {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "salesforce"
+                ],
+                "description": "Pick a saved Salesforce connection (Connections folder). Resolved and decrypted at run time; the auth fields below are ignored when set."
+              },
               {
                 "key": "authType",
                 "label": "Auth type",

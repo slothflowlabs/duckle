@@ -389,6 +389,12 @@ export default function PropertiesPanel({
                     nodeProps: props,
                     onPickConnection: (payload: ConnectionPayload) => {
                         if (!selected) return;
+                        // #166 stage 2: Salesforce connections are ref-only.
+                        // ConnectionRefField already stored the picked id as
+                        // the node's connectionRef; the host resolves +
+                        // decrypts it at RUN time, so credentials are never
+                        // copied into the node props / pipeline JSON.
+                        if (payload.kind === 'salesforce') return;
                         const next = { ...(selected.data.properties ?? {}) };
                         const keys: (keyof ConnectionPayload)[] = [
                             'host',
