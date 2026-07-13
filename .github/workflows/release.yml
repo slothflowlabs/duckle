@@ -55,11 +55,11 @@ jobs:
     needs: prepare-release
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build the static Linux duckle-runner (musl, in Docker)
         run: bash scripts/build-runner-linux.sh
       - name: Upload as a workflow artifact (not a release asset)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: duckle-runner-linux-x64
           path: apps/desktop/bin/duckle-runner-linux-x64
@@ -97,7 +97,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Reclaim ~20 GB on Linux runners so the full workspace + embedded
       # binaries build does not hit "No space left on device".
       - name: Free disk space (Linux)
@@ -109,7 +109,7 @@ jobs:
             /usr/local/share/powershell /usr/share/swift || true
           sudo docker image prune --all --force || true
           df -h /
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -164,7 +164,7 @@ jobs:
       # desktop binary, enabling Build Pipeline -> Linux from any OS. This is a
       # workflow artifact from the build-linux-runner job, never a release asset.
       - name: Stage the embedded Linux runner
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: duckle-runner-linux-x64
           path: apps/desktop/bin
