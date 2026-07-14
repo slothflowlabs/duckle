@@ -2,6 +2,7 @@ import { PALETTE, type ComponentDef } from '../palette-data';
 import type {
     ComponentManifest,
     Field,
+    FieldCondition,
     FormSection,
     NodePorts,
     SchemaSource,
@@ -220,8 +221,13 @@ const salesforceConnectionRefField = (): Field => ({
     kind: 'connection-ref',
     accepts: ['salesforce'],
     description:
-        'Pick a saved Salesforce connection (Connections folder). Resolved and decrypted at run time; the auth fields below are ignored when set.',
+        'Pick a saved Salesforce connection (Connections folder). Resolved and decrypted at run time; inline auth fields hide while one is set.',
 });
+
+// visibleWhen building block: show an inline auth field only while NO saved
+// connection is picked (a cleared picker stores '', which counts as empty).
+// Salesforce-only for now; the mechanism is generic (fields/visibility.ts).
+const whenNoConnection = (): FieldCondition => ({ key: 'connectionRef', empty: true });
 
 // "Pick a saved connection" dropdown. Placed at the TOP of a credential block
 // so it reads as the primary way to fill the fields below (issue #30).
@@ -1853,12 +1859,13 @@ function synthWarehouseSink(comp: ComponentDef): ComponentManifest {
                             { label: 'OAuth 2.0 Client Credentials (mint per run)', value: 'clientCredentials' },
                         ],
                         description: 'Client Credentials mints a fresh short-lived token each run from a connected app, so you stop pasting an expiring token (#166).',
+                        visibleWhen: [whenNoConnection()],
                     },
-                    { key: 'instanceUrl', label: 'Instance URL (Bearer mode)', kind: 'text', placeholder: 'https://acme.my.salesforce.com', description: 'Org base URL (no trailing slash). Required in Bearer mode; in Client Credentials mode the token response supplies it.' },
-                    { key: 'accessToken', label: 'Access token (Bearer mode)', kind: 'text', secret: true, placeholder: '${ENV:SF_TOKEN}', description: 'Required in Bearer mode. Use ${ENV:...} so no secret lands in the pipeline JSON.' },
-                    { key: 'loginUrl', label: 'Login URL (Client Credentials)', kind: 'text', placeholder: 'https://acme.my.salesforce.com', description: 'Your My Domain base. POSTs the client-credentials grant to {loginUrl}/services/oauth2/token. Defaults to Instance URL when blank.' },
-                    { key: 'clientId', label: 'Client ID (Client Credentials)', kind: 'text', placeholder: 'Connected app consumer key', description: 'Required in Client Credentials mode.' },
-                    { key: 'clientSecret', label: 'Client secret (Client Credentials)', kind: 'text', secret: true, placeholder: '${ENV:SF_CLIENT_SECRET}', description: 'Required in Client Credentials mode. Use ${ENV:...} so no secret lands in the pipeline JSON.' },
+                    { key: 'instanceUrl', label: 'Instance URL', kind: 'text', placeholder: 'https://acme.my.salesforce.com', description: 'Org base URL (no trailing slash).', visibleWhen: [whenNoConnection(), { key: 'authMode', equals: 'bearer' }] },
+                    { key: 'accessToken', label: 'Access token', kind: 'text', secret: true, placeholder: '${ENV:SF_TOKEN}', description: 'Use ${ENV:...} so no secret lands in the pipeline JSON.', visibleWhen: [whenNoConnection(), { key: 'authMode', equals: 'bearer' }] },
+                    { key: 'loginUrl', label: 'Login URL', kind: 'text', placeholder: 'https://acme.my.salesforce.com', description: 'Your My Domain base. POSTs the client-credentials grant to {loginUrl}/services/oauth2/token.', visibleWhen: [whenNoConnection(), { key: 'authMode', equals: 'clientCredentials' }] },
+                    { key: 'clientId', label: 'Client ID', kind: 'text', placeholder: 'Connected app consumer key', visibleWhen: [whenNoConnection(), { key: 'authMode', equals: 'clientCredentials' }] },
+                    { key: 'clientSecret', label: 'Client secret', kind: 'text', secret: true, placeholder: '${ENV:SF_CLIENT_SECRET}', description: 'Use ${ENV:...} so no secret lands in the pipeline JSON.', visibleWhen: [whenNoConnection(), { key: 'authMode', equals: 'clientCredentials' }] },
                     { key: 'apiVersion', label: 'API version', kind: 'text', defaultValue: 'v60.0' },
                 ],
             },
@@ -2457,23 +2464,49 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
                     key: 'authType',
                     label: 'Auth type',
                     kind: 'select',
-                    defaultValue: 'none',
-                    options: [
-                        { label: 'None', value: 'none' },
-                        { label: 'Bearer token', value: 'bearer' },
-                        { label: 'API key (header)', value: 'apikey' },
-                        ...(isSalesforce
-                            ? [{ label: 'OAuth 2.0 Client Credentials (mint per run)', value: 'oauth_client_credentials' }]
-                            : []),
-                    ],
+                    // Salesforce only accepts OAuth bearer tokens - no API-key
+                    // header and no anonymous access - so its tile offers just
+                    // Bearer / Client Credentials (default bearer, like the
+                    // sink). Every other REST alias keeps the generic set.
+                    defaultValue: isSalesforce ? 'bearer' : 'none',
+                    options: isSalesforce
+                        ? [
+                              { label: 'Bearer token', value: 'bearer' },
+                              { label: 'OAuth 2.0 Client Credentials (mint per run)', value: 'oauth_client_credentials' },
+                          ]
+                        : [
+                              { label: 'None', value: 'none' },
+                              { label: 'Bearer token', value: 'bearer' },
+                              { label: 'API key (header)', value: 'apikey' },
+                          ],
+                    // visibleWhen stays Salesforce-only for now: on other API
+                    // sources these fields keep rendering unconditionally.
+                    ...(isSalesforce ? { visibleWhen: [whenNoConnection()] } : {}),
                 },
-                { key: 'authToken', label: 'Token / API key', kind: 'text', placeholder: '••••••••' },
-                { key: 'authHeader', label: 'API key header', kind: 'text', placeholder: 'X-API-Key', description: 'Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key.' },
+                {
+                    key: 'authToken',
+                    label: 'Token / API key',
+                    kind: 'text',
+                    placeholder: '••••••••',
+                    ...(isSalesforce
+                        ? { visibleWhen: [whenNoConnection(), { key: 'authType', equals: 'bearer' }] }
+                        : {}),
+                },
+                {
+                    key: 'authHeader',
+                    label: 'API key header',
+                    kind: 'text',
+                    placeholder: 'X-API-Key',
+                    description: 'Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key.',
+                    ...(isSalesforce
+                        ? { visibleWhen: [whenNoConnection(), { key: 'authType', equals: 'apikey' }] }
+                        : {}),
+                },
                 ...(isSalesforce
                     ? [
-                          { key: 'loginUrl', label: 'Login URL (Client Credentials)', kind: 'text' as const, placeholder: 'https://acme.my.salesforce.com', description: 'Your My Domain base. Mints a fresh token per run at {loginUrl}/services/oauth2/token so you stop pasting an expiring token (#166). Used only when Auth type is OAuth Client Credentials.' },
-                          { key: 'clientId', label: 'Client ID (Client Credentials)', kind: 'text' as const, placeholder: 'Connected app consumer key' },
-                          { key: 'clientSecret', label: 'Client secret (Client Credentials)', kind: 'text' as const, secret: true, placeholder: '${ENV:SF_CLIENT_SECRET}', description: 'Use ${ENV:...} so no secret lands in the pipeline JSON.' },
+                          { key: 'loginUrl', label: 'Login URL', kind: 'text' as const, placeholder: 'https://acme.my.salesforce.com', description: 'Your My Domain base. Mints a fresh token per run at {loginUrl}/services/oauth2/token so you stop pasting an expiring token (#166).', visibleWhen: [whenNoConnection(), { key: 'authType', equals: 'oauth_client_credentials' }] },
+                          { key: 'clientId', label: 'Client ID', kind: 'text' as const, placeholder: 'Connected app consumer key', visibleWhen: [whenNoConnection(), { key: 'authType', equals: 'oauth_client_credentials' }] },
+                          { key: 'clientSecret', label: 'Client secret', kind: 'text' as const, secret: true, placeholder: '${ENV:SF_CLIENT_SECRET}', description: 'Use ${ENV:...} so no secret lands in the pipeline JSON.', visibleWhen: [whenNoConnection(), { key: 'authType', equals: 'oauth_client_credentials' }] },
                       ]
                     : []),
             ],
