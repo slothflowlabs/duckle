@@ -26,6 +26,20 @@ export type FieldKind =
 
 export type SelectOption = { label: string; value: string };
 
+/**
+ * One visibility condition on another field's EFFECTIVE value (the stored
+ * prop, falling back to that field's defaultValue when unset) - see
+ * visibility.ts (#166 follow-up).
+ */
+export type FieldCondition = {
+    /** Key of the controlling field/prop in the same manifest. */
+    key: string;
+    /** Visible when the effective value equals this (or one of these). */
+    equals?: string | string[];
+    /** Visible when the effective value is unset, null, or ''. */
+    empty?: boolean;
+};
+
 export type Field = {
     key: string;
     label: string;
@@ -42,6 +56,12 @@ export type Field = {
     accepts?: string[];
     /** Render a `text` field as a masked secret input (with show/hide). */
     secret?: boolean;
+    /**
+     * Hide this field unless every condition matches (array = AND). Absent =
+     * always visible. Hidden fields keep their stored prop value - the engine
+     * ignores inapplicable props, so nothing is cleared on hide.
+     */
+    visibleWhen?: FieldCondition | FieldCondition[];
 };
 
 export type FormSection = {

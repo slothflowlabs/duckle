@@ -15,6 +15,7 @@ import SchemaEditor from './SchemaEditor';
 import FieldRenderer from './fields/FieldRenderer';
 import { FieldContext, type ActiveContext } from './fields/FieldContext';
 import { getManifest } from './fields/component-manifests';
+import { isFieldVisible } from './fields/visibility';
 import type { Field } from './fields/types';
 
 type TabId = 'basic' | 'schema' | 'preview' | 'advanced' | 'validation';
@@ -519,7 +520,15 @@ export default function PropertiesPanel({
                             ) : null}
                             {manifest ? (
                                 manifest.sections.map(section => {
-                                    const fields = section.fields.map(field => (
+                                    // visibleWhen (#166 follow-up): drop fields whose
+                                    // conditions don't match the current props, and skip
+                                    // the whole section when nothing remains so no
+                                    // orphan header renders.
+                                    const visibleFields = section.fields.filter(f =>
+                                        isFieldVisible(f, manifest, props),
+                                    );
+                                    if (visibleFields.length === 0) return null;
+                                    const fields = visibleFields.map(field => (
                                         <FieldRenderer
                                             key={field.key}
                                             field={field}
@@ -535,7 +544,7 @@ export default function PropertiesPanel({
                                     // render as a native disclosure so the common case stays
                                     // clean. Open by default if any field already has a value.
                                     if (section.collapsible) {
-                                        const hasValue = section.fields.some(
+                                        const hasValue = visibleFields.some(
                                             f =>
                                                 props[f.key] !== undefined &&
                                                 props[f.key] !== '' &&
