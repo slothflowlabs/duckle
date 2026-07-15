@@ -11558,6 +11558,165 @@ fn snk_salesforce_record_error_fails_run() {
 }
 
 #[test]
+fn snk_salesforce_results_files_written() {
+    // #166 resultsPath: a mixed batch splits into Data-Loader-style
+    // success.csv (input cols + sf__Id) and error.csv (input cols +
+    // sf__StatusCode + sf__Message) under the configured directory.
+    use std::time::Duration;
+    let engine = engine_or_skip!();
+    let (port, rx, handle) = sf_mock_server(
+        r#"[{"id":"001000000000001","success":true,"errors":[]},{"success":false,"errors":[{"statusCode":"REQUIRED_FIELD_MISSING","message":"Required fields are missing: [Industry]"}]},{"id":"001000000000003","success":true,"errors":[]}]"#,
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "Name\nAcme\nGlobex\nInitech\n");
+    let results_dir = out_path(tmp.path(), "sf-results");
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "f",
+                "snk.salesforce",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "object": "Account",
+                    "operation": "insert",
+                    "failOnError": false,
+                    "resultsPath": results_dir
+                }),
+            ),
+        ]),
+        json!([main_edge("e", "s", "f")]),
+    ));
+    let _ = rx.recv_timeout(Duration::from_secs(5));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "failOnError=false run failed: {:?}", r.error);
+
+    // Filenames are stamped with the job + run time so repeat runs
+    // accumulate: {object}_{operation}_{utc}_success.csv / _error.csv.
+    let names: Vec<String> = std::fs::read_dir(tmp.path().join("sf-results"))
+        .expect("results dir exists")
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 2, "one success + one error file: {:?}", names);
+    assert!(
+        names.iter().all(|n| n.starts_with("Account_insert_"))
+            && names.iter().any(|n| n.ends_with("_success.csv"))
+            && names.iter().any(|n| n.ends_with("_error.csv")),
+        "stamped filenames expected: {:?}",
+        names
+    );
+
+    let success = format!("read_csv_auto('{}/*_success.csv')", results_dir);
+    let error = format!("read_csv_auto('{}/*_error.csv')", results_dir);
+    assert_eq!(count(&success), 2, "2 records succeeded");
+    assert_eq!(
+        scalar_string(&format!("SELECT sf__Id FROM {} WHERE Name = 'Acme'", success)),
+        "001000000000001",
+        "success.csv should carry the created record Id"
+    );
+    assert_eq!(count(&error), 1, "1 record failed");
+    assert_eq!(
+        scalar_string(&format!("SELECT Name FROM {}", error)),
+        "Globex",
+        "error.csv should carry the failing input row"
+    );
+    assert_eq!(
+        scalar_string(&format!("SELECT sf__StatusCode FROM {}", error)),
+        "REQUIRED_FIELD_MISSING"
+    );
+    assert!(
+        scalar_string(&format!("SELECT sf__Message FROM {}", error)).contains("Industry"),
+        "error.csv should carry the Salesforce message"
+    );
+}
+
+#[test]
+fn snk_salesforce_results_files_written_on_fail() {
+    // The core resultsPath guarantee: files land even when failOnError (the
+    // default) aborts the stage, so the reject stream survives a failed run.
+    use std::time::Duration;
+    let engine = engine_or_skip!();
+    let (port, rx, handle) = sf_mock_server(
+        r#"[{"success":false,"errors":[{"statusCode":"REQUIRED_FIELD_MISSING","message":"Required fields are missing: [Name]"}]},{"id":"001000000000002","success":true,"errors":[]}]"#,
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "Name\nAcme\nGlobex\n");
+    let results_dir = out_path(tmp.path(), "sf-results");
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "f",
+                "snk.salesforce",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "object": "Account",
+                    "operation": "insert",
+                    "resultsPath": results_dir
+                }),
+            ),
+        ]),
+        json!([main_edge("e", "s", "f")]),
+    ));
+    let _ = rx.recv_timeout(Duration::from_secs(5));
+    let _ = handle.join();
+    assert_eq!(r.status, "error", "failOnError default must abort the run");
+
+    let success = format!("read_csv_auto('{}/*_success.csv')", results_dir);
+    let error = format!("read_csv_auto('{}/*_error.csv')", results_dir);
+    assert_eq!(count(&success), 1, "success.csv written despite the abort");
+    assert_eq!(count(&error), 1, "error.csv written despite the abort");
+    assert_eq!(
+        scalar_string(&format!("SELECT sf__StatusCode FROM {}", error)),
+        "REQUIRED_FIELD_MISSING"
+    );
+}
+
+#[test]
+fn snk_salesforce_no_results_path_writes_nothing() {
+    use std::time::Duration;
+    let engine = engine_or_skip!();
+    let (port, rx, handle) = sf_mock_server(
+        r#"[{"id":"001000000000001","success":true,"errors":[]},{"id":"001000000000002","success":true,"errors":[]}]"#,
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "Name\nAcme\nGlobex\n");
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "f",
+                "snk.salesforce",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "object": "Account",
+                    "operation": "insert"
+                }),
+            ),
+        ]),
+        json!([main_edge("e", "s", "f")]),
+    ));
+    let _ = rx.recv_timeout(Duration::from_secs(5));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "run failed: {:?}", r.error);
+    assert!(
+        !tmp.path().join("sf-results").exists()
+            && !tmp.path().join("success.csv").exists()
+            && !tmp.path().join("error.csv").exists(),
+        "no result files without resultsPath"
+    );
+}
+
+#[test]
 fn snk_salesforce_update_remaps_idfield() {
     // A non-default idField ("CrmId") must be mapped onto the record's `Id`
     // key; sObject Collections update rejects records with no Id.

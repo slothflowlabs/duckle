@@ -1479,6 +1479,16 @@ pub struct SalesforceSinkSpec {
     /// `instance_url` from the token response overrides `instance_url` when the
     /// latter is empty.
     pub oauth: Option<SalesforceOAuth>,
+    /// When set, a directory that receives Data-Loader-style per-record result
+    /// files after every run (#166), stamped with the job + run time so runs
+    /// accumulate: `{object}_{operation}_{utc}_success.csv` (input columns +
+    /// `sf__Id`) and `..._error.csv` (input columns + `sf__StatusCode` +
+    /// `sf__Message`). Both files are always written - header-only when a side
+    /// is empty - and they land even when the stage errors (failOnError or an
+    /// HTTP failure), so the reject stream survives an aborted run. Records in
+    /// chunks that were never attempted (a preceding chunk aborted the run)
+    /// appear in neither file.
+    pub results_path: Option<String>,
 }
 
 /// snk.execsource "Execute in Source" (#115 in-database processing v1b): run a

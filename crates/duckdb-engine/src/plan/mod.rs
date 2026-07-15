@@ -1770,6 +1770,7 @@ fn build_stage(
             fail_on_error: props.get("failOnError").and_then(|v| v.as_bool()).unwrap_or(true),
             api,
             oauth,
+            results_path: string_prop(&props, "resultsPath").filter(|s| !s.is_empty()),
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.elastic" || component_id == "snk.opensearch" {

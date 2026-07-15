@@ -538,52 +538,94 @@ impl DuckdbEngine {
             }
         };
 
-        let mut ok_count = 0_usize;
-        let mut fail_count = 0_usize;
-        let mut first_errors: Vec<String> = Vec::new();
-
-        for chunk in rows.chunks(spec.batch_size) {
-            self.check_cancelled()?;
-            let (method, url, body) = build_request(chunk)?;
-            let req = crate::tls::http_agent()
-                .request(&method, &url)
-                .set("Authorization", &auth_header)
-                .set("Content-Type", "application/json")
-                .set("Accept", "application/json");
-            let send = match body {
-                Some(b) => req.send_string(&b),
-                None => req.call(),
-            };
-            match send {
-                Ok(resp) => {
-                    let txt = resp.into_string().unwrap_or_default();
-                    let (ok, fail, errs) = parse_salesforce_results(&txt);
-                    ok_count += ok;
-                    fail_count += fail;
-                    for e in errs {
-                        if first_errors.len() < 5 {
-                            first_errors.push(e);
+        // One SfRecordResult per attempted input row, positionally aligned
+        // with `rows`. The chunk loop lives in a closure so every exit path
+        // (per-record failures, HTTP status, transport error, cancel) funnels
+        // through the single results-file-writing point below - resultsPath
+        // files must land even when the run aborts (#166).
+        let mut record_results: Vec<SfRecordResult> = Vec::with_capacity(rows.len());
+        let run_chunks = |record_results: &mut Vec<SfRecordResult>| -> Result<(), EngineError> {
+            for chunk in rows.chunks(spec.batch_size) {
+                self.check_cancelled()?;
+                let (method, url, body) = build_request(chunk)?;
+                let req = crate::tls::http_agent()
+                    .request(&method, &url)
+                    .set("Authorization", &auth_header)
+                    .set("Content-Type", "application/json")
+                    .set("Accept", "application/json");
+                let send = match body {
+                    Some(b) => req.send_string(&b),
+                    None => req.call(),
+                };
+                match send {
+                    Ok(resp) => {
+                        let txt = resp.into_string().unwrap_or_default();
+                        record_results.extend(parse_salesforce_results(&txt, chunk.len()));
+                    }
+                    Err(ureq::Error::Status(code, response)) => {
+                        let b = response.into_string().unwrap_or_default();
+                        let msg = format!(
+                            "Salesforce HTTP {} from {}: {}",
+                            code,
+                            url,
+                            b.chars().take(300).collect::<String>()
+                        );
+                        // The whole chunk was rejected: give each of its rows
+                        // an error-file entry before aborting.
+                        for _ in 0..chunk.len() {
+                            record_results
+                                .push(SfRecordResult::failure(&format!("HTTP_{}", code), msg.clone()));
                         }
+                        return Err(EngineError::Query(msg));
+                    }
+                    Err(e) => {
+                        let msg = format!("Salesforce HTTP transport to {}: {}", url, e);
+                        for _ in 0..chunk.len() {
+                            record_results
+                                .push(SfRecordResult::failure("HTTP_TRANSPORT", msg.clone()));
+                        }
+                        return Err(EngineError::Query(msg));
                     }
                 }
-                Err(ureq::Error::Status(code, response)) => {
-                    let b = response.into_string().unwrap_or_default();
-                    return Err(EngineError::Query(format!(
-                        "Salesforce HTTP {} from {}: {}",
-                        code,
-                        url,
-                        b.chars().take(300).collect::<String>()
-                    )));
-                }
-                Err(e) => {
-                    return Err(EngineError::Query(format!(
-                        "Salesforce HTTP transport to {}: {}", url, e
-                    )));
+            }
+            Ok(())
+        };
+        let loop_result = run_chunks(&mut record_results);
+
+        let ok_count = record_results.iter().filter(|r| r.success).count();
+        let fail_count = record_results.len() - ok_count;
+        if let Some(dir) = spec.results_path.as_deref() {
+            // Stamp the files with the job + run time so repeat runs
+            // accumulate side by side (Data Loader parity).
+            let stem = format!(
+                "{}_{}_{}",
+                spec.object,
+                spec.operation,
+                chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
+            );
+            let write_result = write_salesforce_results_files(
+                std::path::Path::new(dir),
+                &stem,
+                &rows,
+                &record_results,
+            );
+            // A loop error is the more useful diagnosis, so it wins over a
+            // write error; both failing surfaces the loop error below.
+            if let Err(e) = write_result {
+                if loop_result.is_ok() {
+                    return Err(e);
                 }
             }
         }
+        loop_result?;
 
         if fail_count > 0 && spec.fail_on_error {
+            let first_errors: Vec<String> = record_results
+                .iter()
+                .filter(|r| !r.success)
+                .take(5)
+                .map(SfRecordResult::error_line)
+                .collect();
             return Err(EngineError::Query(format!(
                 "salesforce {} {}: {} succeeded, {} failed. First errors: {}",
                 spec.operation, spec.object, ok_count, fail_count, first_errors.join("; ")
@@ -9378,15 +9420,58 @@ fn salesforce_record_envelope(row: &JsonValue, object: &str) -> JsonValue {
     JsonValue::Object(rec)
 }
 
+/// Per-record outcome of one Salesforce Collections request (#166
+/// resultsPath). `status_code` / `message` stay empty on success; `id` is the
+/// created/updated record Id when Salesforce returned one.
+struct SfRecordResult {
+    success: bool,
+    id: Option<String>,
+    status_code: String,
+    message: String,
+}
+
+impl SfRecordResult {
+    fn failure(status_code: &str, message: String) -> Self {
+        SfRecordResult {
+            success: false,
+            id: None,
+            status_code: status_code.into(),
+            message,
+        }
+    }
+
+    /// "CODE: message" for run feedback, or just the message when there is no
+    /// statusCode (API-level / transport failures).
+    fn error_line(&self) -> String {
+        if self.status_code.is_empty() {
+            self.message.clone()
+        } else {
+            format!("{}: {}", self.status_code, self.message)
+        }
+    }
+}
+
 /// Parse a Salesforce composite/sobjects response body - an array of
-/// `{id, success, errors: [{statusCode, message, fields}]}` - into
-/// (success_count, failure_count, error_messages). A non-array body (e.g. an
-/// API-level error object) counts as a single failure carrying its message so
-/// the caller doesn't silently treat a broken batch as success.
-fn parse_salesforce_results(body: &str) -> (usize, usize, Vec<String>) {
+/// `{id, success, errors: [{statusCode, message, fields}]}` - into one
+/// SfRecordResult per submitted record, positionally aligned with the request
+/// chunk. A non-array / unparseable body (e.g. an API-level error object)
+/// fails all `expected` records with its message, so the caller doesn't
+/// silently treat a broken batch as success; a short array pads the tail with
+/// MISSING_RESULT failures.
+fn parse_salesforce_results(body: &str, expected: usize) -> Vec<SfRecordResult> {
+    let all_failed = |code: &str, msg: String| -> Vec<SfRecordResult> {
+        (0..expected)
+            .map(|_| SfRecordResult::failure(code, msg.clone()))
+            .collect()
+    };
     let parsed: JsonValue = match serde_json::from_str(body) {
         Ok(v) => v,
-        Err(_) => return (0, 0, vec![format!("unparseable response: {}", tail_chars(body, 200))]),
+        Err(_) => {
+            return all_failed(
+                "UNPARSEABLE_RESPONSE",
+                format!("unparseable response: {}", tail_chars(body, 200)),
+            )
+        }
     };
     let arr = match parsed.as_array() {
         Some(a) => a,
@@ -9397,32 +9482,135 @@ fn parse_salesforce_results(body: &str) -> (usize, usize, Vec<String>) {
                 .get("message")
                 .and_then(|m| m.as_str())
                 .unwrap_or("unexpected non-array response");
-            return (0, 1, vec![msg.to_string()]);
+            return all_failed("API_ERROR", msg.to_string());
         }
     };
-    let mut ok = 0_usize;
-    let mut fail = 0_usize;
-    let mut errs = Vec::new();
-    for item in arr {
-        let success = item.get("success").and_then(|s| s.as_bool()).unwrap_or(false);
-        if success {
-            ok += 1;
-        } else {
-            fail += 1;
-            let msg = item
+    let mut out: Vec<SfRecordResult> = arr
+        .iter()
+        .map(|item| {
+            let success = item.get("success").and_then(|s| s.as_bool()).unwrap_or(false);
+            let id = item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            if success {
+                return SfRecordResult {
+                    success: true,
+                    id,
+                    status_code: String::new(),
+                    message: String::new(),
+                };
+            }
+            let (status_code, message) = item
                 .get("errors")
                 .and_then(|e| e.as_array())
                 .and_then(|a| a.first())
                 .map(|e| {
-                    let code = e.get("statusCode").and_then(|c| c.as_str()).unwrap_or("");
-                    let m = e.get("message").and_then(|m| m.as_str()).unwrap_or("");
-                    format!("{}: {}", code, m)
+                    (
+                        e.get("statusCode").and_then(|c| c.as_str()).unwrap_or("").to_string(),
+                        e.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string(),
+                    )
                 })
-                .unwrap_or_else(|| "unknown error".into());
-            errs.push(msg);
+                .unwrap_or_else(|| (String::new(), "unknown error".into()));
+            SfRecordResult { success: false, id, status_code, message }
+        })
+        .collect();
+    while out.len() < expected {
+        out.push(SfRecordResult::failure(
+            "MISSING_RESULT",
+            "no result entry returned for this record".into(),
+        ));
+    }
+    out
+}
+
+/// RFC 4180 field escaping: quote when the cell contains a comma, quote, CR
+/// or LF; embedded quotes are doubled.
+fn csv_escape(cell: &str) -> String {
+    if cell.contains([',', '"', '\r', '\n']) {
+        format!("\"{}\"", cell.replace('"', "\"\""))
+    } else {
+        cell.to_string()
+    }
+}
+
+/// One input cell for the results CSVs: strings verbatim, null/absent empty,
+/// other scalars and nested values in their compact JSON form (same policy as
+/// the record envelope, which passes nested cells through as-is).
+fn salesforce_result_cell(v: Option<&JsonValue>) -> String {
+    match v {
+        None | Some(JsonValue::Null) => String::new(),
+        Some(JsonValue::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+    }
+}
+
+/// Write the Data-Loader-style result files for a snk.salesforce run (#166
+/// resultsPath): `<stem>_success.csv` = input columns + `sf__Id`,
+/// `<stem>_error.csv` = input columns + `sf__StatusCode` + `sf__Message`.
+/// The caller stamps `stem` with the job details + run time
+/// (`{object}_{operation}_{utc}`) so repeat runs accumulate instead of
+/// overwriting, like Data Loader's per-run files. Both files are always
+/// written, header-only when a side is empty. The header takes the first
+/// row's column order, union-extended with later rows' extras in first-seen
+/// order; input columns that collide with the sf__ report names are skipped
+/// so the report values win. `results` may be shorter than `rows` when the
+/// run aborted mid-loop - unattempted rows land in neither file.
+fn write_salesforce_results_files(
+    dir: &std::path::Path,
+    stem: &str,
+    rows: &[JsonValue],
+    results: &[SfRecordResult],
+) -> Result<(), EngineError> {
+    const REPORT_COLS: [&str; 3] = ["sf__Id", "sf__StatusCode", "sf__Message"];
+    let mut cols: Vec<&str> = Vec::new();
+    for row in rows {
+        if let Some(obj) = row.as_object() {
+            for k in obj.keys() {
+                if REPORT_COLS.contains(&k.as_str()) {
+                    continue;
+                }
+                if !cols.contains(&k.as_str()) {
+                    cols.push(k);
+                }
+            }
         }
     }
-    (ok, fail, errs)
+    let quoted: Vec<String> = cols.iter().map(|c| csv_escape(c)).collect();
+    let header = |extra: &[&str]| -> String {
+        let mut h = quoted.clone();
+        h.extend(extra.iter().map(|s| s.to_string()));
+        h.join(",") + "\n"
+    };
+    let mut success_buf = header(&["sf__Id"]);
+    let mut error_buf = header(&["sf__StatusCode", "sf__Message"]);
+    for (row, res) in rows.iter().zip(results) {
+        let mut cells: Vec<String> = cols
+            .iter()
+            .map(|c| csv_escape(&salesforce_result_cell(row.get(c))))
+            .collect();
+        if res.success {
+            cells.push(csv_escape(res.id.as_deref().unwrap_or("")));
+            success_buf.push_str(&cells.join(","));
+            success_buf.push('\n');
+        } else {
+            cells.push(csv_escape(&res.status_code));
+            cells.push(csv_escape(&res.message));
+            error_buf.push_str(&cells.join(","));
+            error_buf.push('\n');
+        }
+    }
+    std::fs::create_dir_all(dir).map_err(|e| {
+        EngineError::Query(format!("salesforce results: create {}: {}", dir.display(), e))
+    })?;
+    for (suffix, buf) in [("success.csv", success_buf), ("error.csv", error_buf)] {
+        let path = dir.join(format!("{}_{}", stem, suffix));
+        std::fs::write(&path, buf).map_err(|e| {
+            EngineError::Query(format!("salesforce results: write {}: {}", path.display(), e))
+        })?;
+    }
+    Ok(())
 }
 
 /// Build the SELECT expression that casts a Snowflake SQL-API cell (always a
@@ -9672,6 +9860,128 @@ mod connector_helper_tests {
         assert!(!bson_flag_matches(Some(&Bson::Boolean(false)), "true"));
         assert!(!bson_flag_matches(Some(&Bson::String("keep".into())), "delete"));
         assert!(!bson_flag_matches(None, "delete"));
+    }
+}
+
+#[cfg(test)]
+mod salesforce_results_tests {
+    use super::{
+        csv_escape, parse_salesforce_results, salesforce_result_cell,
+        write_salesforce_results_files, SfRecordResult,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn csv_escape_quotes_only_when_needed() {
+        assert_eq!(csv_escape("plain"), "plain");
+        assert_eq!(csv_escape(""), "");
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+        assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
+        assert_eq!(csv_escape("line\nbreak"), "\"line\nbreak\"");
+    }
+
+    #[test]
+    fn result_cell_formats_by_json_type() {
+        assert_eq!(salesforce_result_cell(Some(&json!("text"))), "text");
+        assert_eq!(salesforce_result_cell(Some(&json!(null))), "");
+        assert_eq!(salesforce_result_cell(None), "");
+        assert_eq!(salesforce_result_cell(Some(&json!(42))), "42");
+        assert_eq!(salesforce_result_cell(Some(&json!(true))), "true");
+        // Nested values keep their compact JSON form.
+        assert_eq!(salesforce_result_cell(Some(&json!({"a":1}))), "{\"a\":1}");
+    }
+
+    #[test]
+    fn parse_walks_records_positionally() {
+        let body = r#"[
+            {"id":"001A","success":true,"errors":[]},
+            {"success":false,"errors":[{"statusCode":"REQUIRED_FIELD_MISSING","message":"Name missing"}]}
+        ]"#;
+        let r = parse_salesforce_results(body, 2);
+        assert_eq!(r.len(), 2);
+        assert!(r[0].success);
+        assert_eq!(r[0].id.as_deref(), Some("001A"));
+        assert!(!r[1].success);
+        assert_eq!(r[1].status_code, "REQUIRED_FIELD_MISSING");
+        assert_eq!(r[1].message, "Name missing");
+    }
+
+    #[test]
+    fn parse_non_array_fails_every_expected_record() {
+        // An API-level error envelope must not leave later records looking
+        // successful - every submitted record failed.
+        let r = parse_salesforce_results(r#"{"message":"Session expired"}"#, 3);
+        assert_eq!(r.len(), 3);
+        assert!(r.iter().all(|x| !x.success && x.status_code == "API_ERROR"));
+        assert_eq!(r[0].message, "Session expired");
+
+        let u = parse_salesforce_results("<html>gateway error</html>", 2);
+        assert_eq!(u.len(), 2);
+        assert!(u.iter().all(|x| x.status_code == "UNPARSEABLE_RESPONSE"));
+    }
+
+    #[test]
+    fn parse_short_array_pads_missing_results() {
+        let r = parse_salesforce_results(r#"[{"id":"001A","success":true,"errors":[]}]"#, 3);
+        assert_eq!(r.len(), 3);
+        assert!(r[0].success);
+        assert_eq!(r[1].status_code, "MISSING_RESULT");
+        assert_eq!(r[2].status_code, "MISSING_RESULT");
+    }
+
+    #[test]
+    fn results_files_split_rows_and_union_headers() {
+        let dir = tempfile::tempdir().unwrap();
+        // Second row carries an extra column -> header union, first-seen order;
+        // a stray input sf__Id column is skipped so the report value wins.
+        let rows = vec![
+            json!({"Name":"Acme","sf__Id":"stale"}),
+            json!({"Name":"Glo,bex","Region":"EMEA"}),
+        ];
+        let results = vec![
+            SfRecordResult { success: true, id: Some("001A".into()), status_code: String::new(), message: String::new() },
+            SfRecordResult::failure("REQUIRED_FIELD_MISSING", "Industry missing".into()),
+        ];
+        write_salesforce_results_files(dir.path(), "Account_insert_20260715T000000Z", &rows, &results).unwrap();
+        let s = std::fs::read_to_string(dir.path().join("Account_insert_20260715T000000Z_success.csv")).unwrap();
+        let e = std::fs::read_to_string(dir.path().join("Account_insert_20260715T000000Z_error.csv")).unwrap();
+        assert_eq!(s, "Name,Region,sf__Id\nAcme,,001A\n");
+        assert_eq!(
+            e,
+            "Name,Region,sf__StatusCode,sf__Message\n\"Glo,bex\",EMEA,REQUIRED_FIELD_MISSING,Industry missing\n"
+        );
+    }
+
+    #[test]
+    fn results_files_write_header_only_when_side_empty() {
+        // Data Loader parity: both files always exist after a run.
+        let dir = tempfile::tempdir().unwrap();
+        let rows = vec![json!({"Name":"Acme"})];
+        let results = vec![SfRecordResult {
+            success: true,
+            id: Some("001A".into()),
+            status_code: String::new(),
+            message: String::new(),
+        }];
+        write_salesforce_results_files(dir.path(), "Account_insert_20260715T000000Z", &rows, &results).unwrap();
+        let e = std::fs::read_to_string(dir.path().join("Account_insert_20260715T000000Z_error.csv")).unwrap();
+        assert_eq!(e, "Name,sf__StatusCode,sf__Message\n");
+    }
+
+    #[test]
+    fn results_files_skip_unattempted_rows() {
+        // results shorter than rows (a chunk aborted the run): the tail rows
+        // land in neither file.
+        let dir = tempfile::tempdir().unwrap();
+        let rows = vec![json!({"Name":"Acme"}), json!({"Name":"Globex"})];
+        let results = vec![SfRecordResult::failure("HTTP_401", "Salesforce HTTP 401".into())];
+        write_salesforce_results_files(dir.path(), "Account_insert_20260715T000000Z", &rows, &results).unwrap();
+        let s = std::fs::read_to_string(dir.path().join("Account_insert_20260715T000000Z_success.csv")).unwrap();
+        let e = std::fs::read_to_string(dir.path().join("Account_insert_20260715T000000Z_error.csv")).unwrap();
+        assert_eq!(s, "Name,sf__Id\n");
+        assert_eq!(e.matches('\n').count(), 2, "header + exactly one error row: {}", e);
+        assert!(e.contains("Acme,HTTP_401,"));
+        assert!(!e.contains("Globex"));
     }
 }
 
