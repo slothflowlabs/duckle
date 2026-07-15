@@ -1,2 +1,3 @@
 out/*.csv
 logs/
+out/sf-results/

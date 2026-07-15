@@ -76,7 +76,41 @@ mode - use `${ENV:SF_TOKEN}`), `loginUrl` / `clientId` / `clientSecret`
 `object` (required), `operation` (insert|update|upsert|delete),
 `externalIdField` (required for upsert), `idField` (default `Id`, for
 update/delete), `api` (collections|bulk), `batchSize` (clamped to 200),
-`allOrNone` (default false), `failOnError` (default true).
+`allOrNone` (default false), `failOnError` (default true),
+`resultsPath` (optional directory - #166).
+
+### Per-record result files (`resultsPath`)
+
+When `resultsPath` is set, every run writes two Data-Loader-style files into
+that directory (created if missing), stamped with the job and UTC run time so
+repeat runs accumulate side by side instead of overwriting:
+
+- `{object}_{operation}_{yyyymmddThhmmssZ}_success.csv` - input columns +
+  `sf__Id` (the created/updated record Id)
+- `{object}_{operation}_{yyyymmddThhmmssZ}_error.csv` - input columns +
+  `sf__StatusCode` + `sf__Message`
+
+(e.g. `Account_insert_20260715T033801Z_success.csv`)
+
+Semantics:
+
+- **Both files are always written**, header-only when a side is empty (Data
+  Loader parity), and they land **even when the stage errors** - `failOnError`
+  aborts, an HTTP error, a cancel - so the reject stream survives a failed run.
+- Rows appear positionally: the header is the first row's column order,
+  union-extended with later rows' extra columns in first-seen order; input
+  columns named `sf__Id`/`sf__StatusCode`/`sf__Message` are skipped so the
+  report values win.
+- A chunk rejected wholesale (HTTP status/transport error) fails every one of
+  its rows with `HTTP_<code>` / `HTTP_TRANSPORT`; an API-level error body
+  fails the whole chunk with `API_ERROR` (previously such a body counted as a
+  single failure regardless of chunk size). Chunks never attempted because an
+  earlier chunk aborted the run appear in **neither** file.
+- Cells: strings verbatim, nulls empty, other scalars/nested values in compact
+  JSON form; RFC 4180 quoting.
+
+`resultsPath` resolves `${workspace}`/`${ENV:...}` on the host like other path
+props (e.g. `${workspace}/out/sf-results`).
 
 In Client-Credentials mode the engine POSTs `grant_type=client_credentials` to
 `{loginUrl}/services/oauth2/token` once per run and uses the returned
@@ -101,7 +135,7 @@ Sinks table, `docs/roadmap.md`, `CONTRIBUTING.md`). What's left is follow-up:
 
 1. **Tier 2 - Bulk API 2.0** - new `RuntimeSpec` path with a poll loop (create → upload CSV → close → poll → fetch success/failed results); the `SalesforceWriteApi::Bulk` variant is already reserved and rejected at plan time.
 2. **Salesforce auth: OAuth Client-Credentials** - *shipped (#166).* Both `src.salesforce` and this sink now offer a client-credentials `authMode`: the engine mints a fresh short-lived token per run from `clientId`/`clientSecret`/`loginUrl` (`{loginUrl}/services/oauth2/token`) instead of a pasted ~2h Bearer token. Follow-ups: (a) a first-class *saved, encrypted* Salesforce Connection kind so the node stores a connection-ref rather than inline `${ENV:}` credentials (Duckle already has `create_connection`/`list_connections`); (b) JWT-bearer + 401-retry/refresh.
-3. **Tier 3** - reject/error output stream, parent→child ID remapping, external-Id relationship resolution, compound fields (Address/Location), API-limit retry/backoff.
+3. **Tier 3** - reject/error output stream (*partially shipped as `resultsPath` success/error files - #166; a first-class reject output port remains*), parent→child ID remapping, external-Id relationship resolution, compound fields (Address/Location), API-limit retry/backoff.
 
 ## Contribution checklist (per CONTRIBUTING.md)
 

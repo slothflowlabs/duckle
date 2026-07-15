@@ -61,8 +61,25 @@ retry_read() { # $1 pipeline, $2 out-file, $3 pattern that must appear
 
 # ---- Part 1: the record lifecycle -----------------------------------------
 
+rm -rf out/sf-results
 out=$(run_pipe s1_insert.json)
 check "s1 insert csv -> salesforce (saved connection)" ok "$out"
+# #166 resultsPath: s1 also writes Data-Loader-style per-record result files,
+# stamped {object}_{operation}_{utc} so repeat runs accumulate.
+s_file=$(ls out/sf-results/Account_insert_*_success.csv 2>/dev/null | head -1)
+s_rows=$(( $( [ -n "$s_file" ] && wc -l < "$s_file" || echo 0 ) - 1 ))
+if [ "$s_rows" -eq 2 ] && grep -q 'sf__Id' "$s_file" 2>/dev/null; then
+  results+=("PASS  s1b stamped success csv: 2 rows + sf__Id column"); ((pass++))
+else
+  results+=("FAIL  s1b stamped success csv: 2 rows + sf__Id column"); ((fail++))
+fi
+e_file=$(ls out/sf-results/Account_insert_*_error.csv 2>/dev/null | head -1)
+e_lines=$(( $( [ -n "$e_file" ] && wc -l < "$e_file" || echo 0 ) ))
+if [ "$e_lines" -eq 1 ]; then
+  results+=("PASS  s1c stamped error csv written header-only"); ((pass++))
+else
+  results+=("FAIL  s1c stamped error csv written header-only"); ((fail++))
+fi
 
 if retry_read s2_retrieve.json out/retrieved.csv 'SUITE-101'; then
   results+=("PASS  s2 retrieve inserted records"); ((pass++))
@@ -92,15 +109,13 @@ assert_file "s5c s3 update intact on SUITE-102" out/retrieved2.csv 'Updated Suit
 
 out=$(run_pipe s6_delete.json)
 check "s6 delete retrieved records" ok "$out"
-# Emptiness check. NOTE: a query returning 0 records currently materializes a
-# bare `json` relation, so the downstream SQL binder-errors (#170) - "n1 ok
-# (0 rows)" in the output is therefore itself the org-clean signal here.
+# Emptiness check: s5's source declares a schema, so a 0-record query flows
+# through as a typed empty relation (#170) and the csv lands header-only.
 clean=""
 for attempt in 1 2 3; do
   sleep 5; rm -f out/retrieved2.csv
   out=$(run_pipe s5_retrieve2.json)
-  if grep -Eq 'n1 +ok \(0 rows\)' <<<"$out"; then clean=yes; break; fi
-  lines=$(wc -l < out/retrieved2.csv 2>/dev/null || echo 99)
+  if [ -f out/retrieved2.csv ]; then lines=$(wc -l < out/retrieved2.csv); else lines=99; fi
   [ "$lines" -le 1 ] && { clean=yes; break; }
 done
 if [ -n "$clean" ]; then results+=("PASS  s6b org clean after delete"); ((pass++));

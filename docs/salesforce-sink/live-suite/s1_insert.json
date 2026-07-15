@@ -5,7 +5,7 @@
       "data": { "label": "csv", "componentId": "src.csv",
         "properties": { "path": "${workspace}/data/insert.csv", "hasHeader": true } } },
     { "id": "n2", "type": "sink", "position": {"x":300,"y":0},
-      "data": { "label": "Salesforce", "componentId": "snk.salesforce", "properties": { "connectionRef": "sf-live", "apiVersion": "v60.0", "object": "Account", "operation": "insert", "batchSize": 200, "failOnError": true } } }
+      "data": { "label": "Salesforce", "componentId": "snk.salesforce", "properties": { "connectionRef": "sf-live", "apiVersion": "v60.0", "object": "Account", "operation": "insert", "batchSize": 200, "failOnError": true, "resultsPath": "${workspace}/out/sf-results" } } }
   ],
   "edges": [ { "id": "e1", "source": "n1", "target": "n2", "sourceHandle": "main", "targetHandle": "main", "data": {"connectionType": "main"} } ]
 }
