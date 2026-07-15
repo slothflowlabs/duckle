@@ -1906,7 +1906,8 @@ function synthWarehouseSink(comp: ComponentDef): ComponentManifest {
                         description: 'Salesforce caps sObject Collections at 200; higher values are clamped.',
                     },
                     { key: 'allOrNone', label: 'All-or-none', kind: 'bool', defaultValue: false, description: 'When on, any failing record rolls back the whole request (Salesforce-side).' },
-                    { key: 'failOnError', label: 'Fail the run on record errors', kind: 'bool', defaultValue: true, description: 'When off, per-record errors are logged and the stage continues (a reject output stream is planned).' },
+                    { key: 'failOnError', label: 'Fail the run on record errors', kind: 'bool', defaultValue: true, description: 'When off, per-record errors are logged and the stage continues. Set Results directory to capture per-record outcomes either way.' },
+                    { key: 'resultsPath', label: 'Results directory', kind: 'text', placeholder: '${workspace}/out/sf-results', description: 'When set, writes Data-Loader-style per-run result files, stamped {object}_{operation}_{runtime}: ..._success.csv (input columns + sf__Id) and ..._error.csv (+ sf__StatusCode, sf__Message) - written even when the run fails.' },
                 ],
             },
         ], 'upstream');
