@@ -24,16 +24,16 @@ regex = "1"
 chrono = { workspace = true }
 cron = { workspace = true }
 aes-gcm = "0.10"
-sha2 = "0.10"
+sha2 = "0.11"
 # Console account tokens. A token can be chosen by a person, so it is hashed
 # as a password rather than as key material. Already in the workspace lock.
 argon2 = "0.5"
-base64 = "0.22"
-getrandom = "0.3"
+base64 = "0.23"
+getrandom = "0.4"
 ed25519-dalek = "2"
 # Self-extracting artifact payload (single-file build output). deflate-only
 # (drops aes/zstd/bzip2/lzma/xz); pulls flate2 rust_backend already in the lock.
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 # Teradata (ODBC via odbc-api) is enabled on gnu Linux and Windows, where a
 # dynamic libodbc driver manager is available to link and load. It is excluded
