@@ -52,8 +52,8 @@ duckle-connectors = { workspace = true }
 duckle-duckdb-engine = { workspace = true }
 duckle-scheduler = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
-sha2 = "0.10"
-zip = "2"
+sha2 = "0.11"
+zip = "8"
 # tar + gzip for the llama.cpp archives on Linux/macOS - they ship
 # as .tar.gz where Windows ships as .zip.
 tar = "0.4"
