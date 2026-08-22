@@ -18,7 +18,7 @@ path = "src/main.rs"
 lancedb = { version = "0.30", default-features = false, features = ["remote", "aws", "gcs", "azure"] }
 # Vortex columnar file format (#111). Uses arrow 58 too (unifies with lancedb +
 # the parquet bridge), needs no protoc, pulls no DataFusion in its file-IO path.
-vortex = { version = "0.75", features = ["tokio"] }
+vortex = { version = "0.84", features = ["tokio"] }
 arrow-array = "59"
 arrow-schema = "59"
 arrow-select = "59"
