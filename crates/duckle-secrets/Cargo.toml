@@ -9,9 +9,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-aes-gcm = "0.10"
-base64 = "0.22"
-getrandom = "0.3"
+aes-gcm = "0.11"
+base64 = "0.23"
+getrandom = "0.4"
 serde_json = { workspace = true }
 duckle-metadata = { workspace = true }
 
