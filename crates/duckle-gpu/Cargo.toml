@@ -24,7 +24,7 @@ wgpu = { version = "30", default-features = false, features = [
 # wgpu's API is async, but pipeline execution is a blocking worker thread. A
 # tiny executor is the honest fit: pulling in tokio here would put an async
 # runtime inside the engine's hot path for no benefit.
-pollster = "0.4"
+pollster = "1.0"
 bytemuck = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
