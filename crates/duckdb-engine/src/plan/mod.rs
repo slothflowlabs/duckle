@@ -110,6 +110,31 @@ impl Stage {
 /// The relation a run variable's value is kept in.
 ///
 /// Prefixed so it cannot be mistaken for, or collide with, a node's own relation.
+/// Kafka transport security from a node's props.
+///
+/// `security` names the protocol the way the Kafka ecosystem does; credentials
+/// come from the sasl* fields. Returns (tls, sasl). Both halves of the form
+/// were read by nothing before this, so a node configured for SASL_SSL
+/// connected in plaintext with no credentials and said nothing about it.
+fn kafka_security(props: &JsonValue) -> (bool, Option<KafkaSasl>) {
+    let protocol = string_prop(props, "security")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let tls = matches!(protocol.as_str(), "ssl" | "sasl_ssl");
+    let user = string_prop(props, "saslUsername").filter(|s| !s.trim().is_empty());
+    // Credentials drive SASL, not the dropdown: someone who fills them in and
+    // leaves the protocol alone meant to authenticate.
+    let sasl = user.map(|username| KafkaSasl {
+        mechanism: string_prop(props, "saslMechanism")
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| "PLAIN".to_string()),
+        username,
+        password: string_prop(props, "saslPassword").unwrap_or_default(),
+    });
+    (tls, sasl)
+}
+
 pub(crate) fn run_var_relation(name: &str) -> String {
     format!("duckle_var__{name}")
 }
@@ -2759,6 +2784,8 @@ fn build_stage(
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: topic required", component_id)))?;
         kafka_sink = Some(KafkaSinkSpec {
+            tls: kafka_security(&props).0,
+            sasl: kafka_security(&props).1,
             from_view: from_view.to_string(),
             bootstrap_servers: bootstrap,
             topic,
@@ -3619,6 +3646,8 @@ fn build_stage(
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: topic required", component_id)))?;
         kafka_source = Some(KafkaSourceSpec {
+            tls: kafka_security(&props).0,
+            sasl: kafka_security(&props).1,
             // Off by default: turning it on changes where a run starts reading,
             // which is not a decision to make on someone's behalf.
             track_offset: props

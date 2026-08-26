@@ -9738,15 +9738,18 @@ impl DuckdbEngine {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
+        // Captured before the async block: `tls` would shadow the crate's tls
+        // module inside it.
+        let use_tls = spec.tls;
+        let sasl = spec.sasl.clone();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| EngineError::Query(format!("kafka: tokio rt: {}", e)))?;
         let total: Result<usize, String> = rt.block_on(async {
             use rskafka::client::partition::{Compression, UnknownTopicHandling};
-            use rskafka::client::ClientBuilder;
             use rskafka::record::Record;
-            let client = ClientBuilder::new(bootstrap)
+            let client = kafka_client_builder(bootstrap, use_tls, sasl.as_ref())?
                 .build()
                 .await
                 .map_err(|e| format!("connect: {}", e))?;
@@ -9827,14 +9830,17 @@ impl DuckdbEngine {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
+        // Captured before the async block: `tls` would shadow the crate's tls
+        // module inside it.
+        let use_tls = spec.tls;
+        let sasl = spec.sasl.clone();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| EngineError::Query(format!("kafka: tokio rt: {}", e)))?;
         let rows: Result<(Vec<JsonValue>, i64), String> = rt.block_on(async {
             use rskafka::client::partition::UnknownTopicHandling;
-            use rskafka::client::ClientBuilder;
-            let client = ClientBuilder::new(bootstrap)
+            let client = kafka_client_builder(bootstrap, use_tls, sasl.as_ref())?
                 .build()
                 .await
                 .map_err(|e| format!("connect: {}", e))?;
@@ -13050,6 +13056,51 @@ fn read_incremental_state(path: &std::path::PathBuf) -> Option<(String, String)>
     Some((value, ty))
 }
 
+/// Turn a mechanism name into the SASL config rskafka wants.
+///
+/// Only the mechanisms rskafka implements are accepted. An unrecognised one is
+/// an error naming what IS supported, rather than a silent downgrade to an
+/// unauthenticated connection - which is what happened while nothing read
+/// these fields at all.
+fn kafka_sasl_config(sasl: &plan::KafkaSasl) -> Result<rskafka::client::SaslConfig, String> {
+    let creds = rskafka::client::Credentials::new(sasl.username.clone(), sasl.password.clone());
+    // Accept the punctuation people actually type: SCRAM-SHA-256, scram_sha_256.
+    let m = sasl
+        .mechanism
+        .to_ascii_uppercase()
+        .replace('_', "-")
+        .replace(' ', "");
+    match m.as_str() {
+        "PLAIN" => Ok(rskafka::client::SaslConfig::Plain(creds)),
+        "SCRAM-SHA-256" => Ok(rskafka::client::SaslConfig::ScramSha256(creds)),
+        "SCRAM-SHA-512" => Ok(rskafka::client::SaslConfig::ScramSha512(creds)),
+        other => Err(format!(
+            "kafka: SASL mechanism '{}' is not supported; use PLAIN, SCRAM-SHA-256 or SCRAM-SHA-512",
+            other
+        )),
+    }
+}
+
+/// Apply a node's transport security to a Kafka client builder.
+///
+/// TLS reuses the engine's shared trust config - the merged OS store plus the
+/// bundled roots - so a broker behind a corporate CA works the same way every
+/// other TLS connection in Duckle does.
+fn kafka_client_builder(
+    bootstrap: Vec<String>,
+    tls: bool,
+    sasl: Option<&plan::KafkaSasl>,
+) -> Result<rskafka::client::ClientBuilder, String> {
+    let mut builder = rskafka::client::ClientBuilder::new(bootstrap);
+    if tls {
+        builder = builder.tls_config(std::sync::Arc::new(crate::tls::build_client_config()));
+    }
+    if let Some(s) = sasl {
+        builder = builder.sasl_config(kafka_sasl_config(s)?);
+    }
+    Ok(builder)
+}
+
 /// Read a saved Kafka resume point.
 ///
 /// The offset is only meaningful for the topic and partition it was written
@@ -15512,6 +15563,33 @@ impl DuckdbEngine {
 
 #[cfg(test)]
 mod incremental_state_tests {
+
+    #[test]
+    fn a_kafka_sasl_mechanism_is_recognised_or_refused() {
+        let creds = |m: &str| crate::plan::KafkaSasl {
+            mechanism: m.to_string(),
+            username: "svc".into(),
+            password: "hunter2".into(),
+        };
+        // The three rskafka implements, in the punctuation people actually type.
+        for m in ["PLAIN", "plain", "SCRAM-SHA-256", "scram_sha_256", "SCRAM-SHA-512"] {
+            assert!(
+                super::kafka_sasl_config(&creds(m)).is_ok(),
+                "{} should be accepted",
+                m
+            );
+        }
+        // Anything else must FAIL rather than quietly connect without
+        // authenticating, which is what happened while nothing read these
+        // fields at all.
+        let err = super::kafka_sasl_config(&creds("GSSAPI")).unwrap_err();
+        assert!(err.contains("GSSAPI"), "the error should name what was asked for: {}", err);
+        assert!(
+            err.contains("PLAIN") && err.contains("SCRAM-SHA-256"),
+            "the error should name what IS supported: {}",
+            err
+        );
+    }
 
     #[test]
     fn a_kafka_resume_point_is_only_used_for_the_stream_it_came_from() {

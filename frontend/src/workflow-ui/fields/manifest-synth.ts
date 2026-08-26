@@ -2740,7 +2740,6 @@ function synthStreamingSource(comp: ComponentDef): ComponentManifest {
                     placeholder: 'broker1:9092,broker2:9092',
                 },
                 { key: 'topic', label: 'Topic', kind: 'text', required: true },
-                { key: 'groupId', label: 'Consumer group', kind: 'text', placeholder: 'duckle-group' },
                 {
                     key: 'offset',
                     // Default earliest: this is a batch ETL connector (capped by
@@ -2780,7 +2779,18 @@ function synthStreamingSource(comp: ComponentDef): ComponentManifest {
                         { label: 'SASL_PLAINTEXT', value: 'sasl_plaintext' },
                     ],
                 },
-                { key: 'saslMechanism', label: 'SASL mechanism', kind: 'text' },
+                {
+                    key: 'saslMechanism',
+                    label: 'SASL mechanism',
+                    kind: 'select',
+                    defaultValue: 'PLAIN',
+                    options: [
+                        { label: 'PLAIN', value: 'PLAIN' },
+                        { label: 'SCRAM-SHA-256', value: 'SCRAM-SHA-256' },
+                        { label: 'SCRAM-SHA-512', value: 'SCRAM-SHA-512' },
+                    ],
+                    description: 'Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated.',
+                },
                 { key: 'saslUsername', label: 'SASL username', kind: 'text' },
                 { key: 'saslPassword', label: 'SASL password', kind: 'text', placeholder: '••••••••' },
             ],

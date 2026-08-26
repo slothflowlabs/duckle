@@ -95,7 +95,10 @@ toml = "0.8"
 # block_on like mongo + tiberius + scylla. Avoids the C-lib rdkafka
 # build dance entirely, at the cost of fewer broker-protocol features
 # (good enough for batch produce + batch consume, no admin client).
-rskafka = "0.6"
+# transport-tls so a Kafka broker reached over SSL/SASL_SSL is actually
+# encrypted. It wants rustls 0.23 with the ring provider, which is exactly
+# what tls::build_client_config already produces, so no second TLS stack.
+rskafka = { version = "0.6", features = ["transport-tls"] }
 # Apache Avro container-file reader/writer. Pure Rust. Pairs with
 # Kafka topics that publish Avro-encoded payloads, and reads the
 # .avro / .ocf files that exporters drop on object storage.

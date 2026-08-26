@@ -401,6 +401,20 @@ pub struct FormatFileSinkSpec {
     pub format: FormatKind,
 }
 
+/// SASL credentials for a Kafka broker.
+///
+/// The GUI has offered these fields since the connector shipped while nothing
+/// read them, so a user who filled them in got an unauthenticated connection
+/// and no indication of it.
+#[derive(Debug, Clone)]
+pub struct KafkaSasl {
+    /// PLAIN, SCRAM-SHA-256 or SCRAM-SHA-512. Anything else is refused at plan
+    /// time rather than silently downgraded.
+    pub mechanism: String,
+    pub username: String,
+    pub password: String,
+}
+
 /// snk.kafka / snk.redpanda: bulk-produce one Kafka record per
 /// upstream row. Record key = optional keyColumn value; record value
 /// = JSON-stringified row. Records are produced into a single
@@ -408,6 +422,10 @@ pub struct FormatFileSinkSpec {
 /// produce is a follow-up.
 #[derive(Debug, Clone)]
 pub struct KafkaSinkSpec {
+    /// Connect over TLS. Set from the Security protocol field (SSL / SASL_SSL).
+    pub tls: bool,
+    /// SASL credentials, when the node supplies them.
+    pub sasl: Option<KafkaSasl>,
     pub from_view: String,
     /// Comma-separated list of "host:port" entries.
     pub bootstrap_servers: String,
@@ -426,6 +444,10 @@ pub struct KafkaSinkSpec {
 /// rows; value is the raw byte string (no schema unpacking, no Avro).
 #[derive(Debug, Clone)]
 pub struct KafkaSourceSpec {
+    /// Connect over TLS. Set from the Security protocol field (SSL / SASL_SSL).
+    pub tls: bool,
+    /// SASL credentials, when the node supplies them.
+    pub sasl: Option<KafkaSasl>,
     pub node_id: String,
     pub bootstrap_servers: String,
     pub topic: String,

@@ -6871,12 +6871,6 @@
                 "required": true
               },
               {
-                "key": "groupId",
-                "label": "Consumer group",
-                "kind": "text",
-                "placeholder": "duckle-group"
-              },
-              {
                 "key": "offset",
                 "label": "Initial offset",
                 "kind": "select",
@@ -6931,7 +6925,23 @@
               {
                 "key": "saslMechanism",
                 "label": "SASL mechanism",
-                "kind": "text"
+                "kind": "select",
+                "defaultValue": "PLAIN",
+                "options": [
+                  {
+                    "label": "PLAIN",
+                    "value": "PLAIN"
+                  },
+                  {
+                    "label": "SCRAM-SHA-256",
+                    "value": "SCRAM-SHA-256"
+                  },
+                  {
+                    "label": "SCRAM-SHA-512",
+                    "value": "SCRAM-SHA-512"
+                  }
+                ],
+                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
               },
               {
                 "key": "saslUsername",
@@ -7045,12 +7055,6 @@
                 "required": true
               },
               {
-                "key": "groupId",
-                "label": "Consumer group",
-                "kind": "text",
-                "placeholder": "duckle-group"
-              },
-              {
                 "key": "offset",
                 "label": "Initial offset",
                 "kind": "select",
@@ -7105,7 +7109,23 @@
               {
                 "key": "saslMechanism",
                 "label": "SASL mechanism",
-                "kind": "text"
+                "kind": "select",
+                "defaultValue": "PLAIN",
+                "options": [
+                  {
+                    "label": "PLAIN",
+                    "value": "PLAIN"
+                  },
+                  {
+                    "label": "SCRAM-SHA-256",
+                    "value": "SCRAM-SHA-256"
+                  },
+                  {
+                    "label": "SCRAM-SHA-512",
+                    "value": "SCRAM-SHA-512"
+                  }
+                ],
+                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
               },
               {
                 "key": "saslUsername",
@@ -7219,12 +7239,6 @@
                 "required": true
               },
               {
-                "key": "groupId",
-                "label": "Consumer group",
-                "kind": "text",
-                "placeholder": "duckle-group"
-              },
-              {
                 "key": "offset",
                 "label": "Initial offset",
                 "kind": "select",
@@ -7279,7 +7293,23 @@
               {
                 "key": "saslMechanism",
                 "label": "SASL mechanism",
-                "kind": "text"
+                "kind": "select",
+                "defaultValue": "PLAIN",
+                "options": [
+                  {
+                    "label": "PLAIN",
+                    "value": "PLAIN"
+                  },
+                  {
+                    "label": "SCRAM-SHA-256",
+                    "value": "SCRAM-SHA-256"
+                  },
+                  {
+                    "label": "SCRAM-SHA-512",
+                    "value": "SCRAM-SHA-512"
+                  }
+                ],
+                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
               },
               {
                 "key": "saslUsername",
@@ -7393,12 +7423,6 @@
                 "required": true
               },
               {
-                "key": "groupId",
-                "label": "Consumer group",
-                "kind": "text",
-                "placeholder": "duckle-group"
-              },
-              {
                 "key": "offset",
                 "label": "Initial offset",
                 "kind": "select",
@@ -7453,7 +7477,23 @@
               {
                 "key": "saslMechanism",
                 "label": "SASL mechanism",
-                "kind": "text"
+                "kind": "select",
+                "defaultValue": "PLAIN",
+                "options": [
+                  {
+                    "label": "PLAIN",
+                    "value": "PLAIN"
+                  },
+                  {
+                    "label": "SCRAM-SHA-256",
+                    "value": "SCRAM-SHA-256"
+                  },
+                  {
+                    "label": "SCRAM-SHA-512",
+                    "value": "SCRAM-SHA-512"
+                  }
+                ],
+                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
               },
               {
                 "key": "saslUsername",
@@ -7567,12 +7607,6 @@
                 "required": true
               },
               {
-                "key": "groupId",
-                "label": "Consumer group",
-                "kind": "text",
-                "placeholder": "duckle-group"
-              },
-              {
                 "key": "offset",
                 "label": "Initial offset",
                 "kind": "select",
@@ -7627,7 +7661,23 @@
               {
                 "key": "saslMechanism",
                 "label": "SASL mechanism",
-                "kind": "text"
+                "kind": "select",
+                "defaultValue": "PLAIN",
+                "options": [
+                  {
+                    "label": "PLAIN",
+                    "value": "PLAIN"
+                  },
+                  {
+                    "label": "SCRAM-SHA-256",
+                    "value": "SCRAM-SHA-256"
+                  },
+                  {
+                    "label": "SCRAM-SHA-512",
+                    "value": "SCRAM-SHA-512"
+                  }
+                ],
+                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
               },
               {
                 "key": "saslUsername",
@@ -7741,12 +7791,6 @@
                 "required": true
               },
               {
-                "key": "groupId",
-                "label": "Consumer group",
-                "kind": "text",
-                "placeholder": "duckle-group"
-              },
-              {
                 "key": "offset",
                 "label": "Initial offset",
                 "kind": "select",
@@ -7801,7 +7845,23 @@
               {
                 "key": "saslMechanism",
                 "label": "SASL mechanism",
-                "kind": "text"
+                "kind": "select",
+                "defaultValue": "PLAIN",
+                "options": [
+                  {
+                    "label": "PLAIN",
+                    "value": "PLAIN"
+                  },
+                  {
+                    "label": "SCRAM-SHA-256",
+                    "value": "SCRAM-SHA-256"
+                  },
+                  {
+                    "label": "SCRAM-SHA-512",
+                    "value": "SCRAM-SHA-512"
+                  }
+                ],
+                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
               },
               {
                 "key": "saslUsername",
@@ -7915,12 +7975,6 @@
                 "required": true
               },
               {
-                "key": "groupId",
-                "label": "Consumer group",
-                "kind": "text",
-                "placeholder": "duckle-group"
-              },
-              {
                 "key": "offset",
                 "label": "Initial offset",
                 "kind": "select",
@@ -7975,7 +8029,23 @@
               {
                 "key": "saslMechanism",
                 "label": "SASL mechanism",
-                "kind": "text"
+                "kind": "select",
+                "defaultValue": "PLAIN",
+                "options": [
+                  {
+                    "label": "PLAIN",
+                    "value": "PLAIN"
+                  },
+                  {
+                    "label": "SCRAM-SHA-256",
+                    "value": "SCRAM-SHA-256"
+                  },
+                  {
+                    "label": "SCRAM-SHA-512",
+                    "value": "SCRAM-SHA-512"
+                  }
+                ],
+                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
               },
               {
                 "key": "saslUsername",
@@ -8089,12 +8159,6 @@
                 "required": true
               },
               {
-                "key": "groupId",
-                "label": "Consumer group",
-                "kind": "text",
-                "placeholder": "duckle-group"
-              },
-              {
                 "key": "offset",
                 "label": "Initial offset",
                 "kind": "select",
@@ -8149,7 +8213,23 @@
               {
                 "key": "saslMechanism",
                 "label": "SASL mechanism",
-                "kind": "text"
+                "kind": "select",
+                "defaultValue": "PLAIN",
+                "options": [
+                  {
+                    "label": "PLAIN",
+                    "value": "PLAIN"
+                  },
+                  {
+                    "label": "SCRAM-SHA-256",
+                    "value": "SCRAM-SHA-256"
+                  },
+                  {
+                    "label": "SCRAM-SHA-512",
+                    "value": "SCRAM-SHA-512"
+                  }
+                ],
+                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
               },
               {
                 "key": "saslUsername",
