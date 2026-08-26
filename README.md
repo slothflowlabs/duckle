@@ -128,7 +128,7 @@ In short: a free, open-source, single-engine alternative to hosted, per-row-pric
 
 Three things set it apart:
 
-1. **An AI assistant that ships in the box.** Describe the pipeline you want in English; Duckie writes the JSON and drops it onto the canvas. The model runs locally - no API key, no telemetry, no cloud round-trip.
+1. **An AI assistant that ships in the box.** Describe the pipeline you want in English; Duckie writes the JSON and drops it onto the canvas. The model runs wherever Duckle does - no API key, no telemetry, no vendor round-trip. Point it at your own OpenAI-compatible endpoint instead if you would rather it did not run in-process.
 2. **360+ components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
 3. **A self-contained binary you can audit.** 73 to 110 MB depending on your platform. Engines install on first launch. Workspaces are plain files in a folder you choose. Diff them, branch them, ship them.
 
@@ -143,7 +143,7 @@ Three things set it apart:
 | | |
 |---|---|
 | **Visual, never opaque** | The canvas compiles to SQL you can read, and every node has a live preview tab. No black box. |
-| **Local-first AI** | An assistant that runs on your laptop without an API key. Your prompts, your data, your machine. |
+| **An assistant with no API key** | Runs in-process by default, or against your own OpenAI-compatible endpoint. Your prompts and your data stay inside your infrastructure either way. |
 | **Single-file binary, no bundled DB** | 73 to 110 MB depending on platform (it embeds the headless runner + MCP server). DuckDB downloads on first launch with a guided step. AI engine is opt-in. |
 | **Native speed** | Execution runs through DuckDB: vectorized, columnar, local. A clean-and-export job that crawls in a spreadsheet finishes in milliseconds. |
 | **Git-friendly by design** | Pipelines, connections, contexts, and routines persist as plain files in a folder you pick. Diff them, branch them, review them. |
@@ -1171,7 +1171,7 @@ Every node has an **Advanced** tab with fields the engine honours at run time:
 | **Run feedback** | Streaming run events light nodes up stage by stage, with per-node row counts, real mid-query cancel, and run history. |
 | **Error traceback** | A failed stage reports the exact compiled SQL plus the underlying DuckDB message, in both the Run view and the NDJSON run log, so any component's failure is debuggable. |
 | **Column lineage** | A top-bar **Lineage** button shows, per node, each output column traced back to the source column(s) it derives from. |
-| **Dives + dashboards** | Local-first, live-querying, shareable data views, stitched into multi-chart dashboards. Generate a chart from a plain-language question, export a dive to a self-contained HTML file, open standalone `/dive/<id>` and `/dash/<id>` share pages, and find everything in the top-bar **Dives** gallery. |
+| **Dives + dashboards** | Live-querying, shareable data views that run where your data already is, stitched into multi-chart dashboards. Generate a chart from a plain-language question, export a dive to a self-contained HTML file, open standalone `/dive/<id>` and `/dash/<id>` share pages, and find everything in the top-bar **Dives** gallery. |
 | **Artifacts** | `src.artifact` gives one row per file described the way a pipeline can reason about it - `uri`, `name`, `media_type`, `size_bytes`, `sha256`, `modified_at` - for PDFs, images, archives, OCR output and model binaries. An artifact is a reference, not the bytes, so it joins, filters and iterates like any other table. Hashing is off by default because it reads every byte |
 | **Python, row or table** | `code.python` takes `process(row)` for a row at a time, or `transform(table)` to be handed the whole table as a pyarrow Table - for polars/pandas work, OCR, entity resolution or ML. The table path goes through Parquet rather than JSON: measured 2.11s -> 0.74s on 200k rows, and it keeps types, where the row path turns every timestamp into a string. Needs pyarrow only when `transform` is used |
 | **A workspace's own Python** | A Python stage is only reproducible if the packages it needs travel with the pipeline rather than being whatever the machine happens to have. Put a virtual environment at `.venv` in the workspace - `uv venv && uv pip install pyarrow polars`, or the stdlib `python -m venv` - and `code.python` uses that interpreter on every machine, laptop, CI and headless runner alike. Nothing is installed at run time, so an air-gapped box stays air-gapped, and `DUCKLE_PYTHON_BIN` still overrides everything |
@@ -1221,7 +1221,7 @@ Duckle ships a thin shell and installs its engines on first launch.
 | Engine | Role | Status |
 |---|---|---|
 | **DuckDB** | Default execution engine: analytics, file formats, cloud reads, SQL pushdown. Tracking **v1.5.3** (latest stable). A lock-free single-SELECT read (`Engine::query`) powers dives. | Working |
-| **Duckie AI Assistant** | Local chat assistant via **llama.cpp** + **Qwen 2.5 Coder 1.5B GGUF**. Downloads ~1.1 GB; runs entirely offline once installed. Managed as a `llama-server` subprocess exposing an OpenAI-compatible API on `127.0.0.1`. | Installable |
+| **Duckie AI Assistant** | Local chat assistant via **llama.cpp** + **Qwen 2.5 Coder 1.5B GGUF**. Downloads ~1.1 GB and needs no network once installed, or point it at your own OpenAI-compatible endpoint and skip the download entirely. Managed as a `llama-server` subprocess exposing an OpenAI-compatible API on `127.0.0.1`. | Installable |
 | **SlothDB** | Alternate embedded analytical engine ([SouravRoy-ETL/slothdb](https://github.com/SouravRoy-ETL/slothdb)), installed the same way and selectable per pipeline. | Installable |
 | **Native** | In-process Rust streaming / incremental engine. | Planned |
 
@@ -1671,7 +1671,7 @@ It covers similar ground - moving data across 190 sources and destinations - but
 <details>
 <summary><b>Can I run ETL pipelines without the cloud or a data warehouse?</b></summary>
 
-Yes. Duckle executes on the embedded DuckDB engine, so there is no external warehouse, no server, and no account. It runs fully offline, which suits air-gapped, on-premise, and compliance-sensitive work. Pipelines can still read from and write to cloud systems when needed - it just is not required to run.
+Yes. Duckle executes on the embedded DuckDB engine, so there is no vendor warehouse to buy, no vendor platform to sign up to, and no account. You run it where you choose: a server or VM you own, a container in your own AWS, Azure or GCP account, or a workstation. It needs no outbound network of its own, which suits air-gapped, on-premise and compliance-sensitive work. Pipelines still read from and write to cloud systems whenever you point them at one.
 
 </details>
 
@@ -1685,9 +1685,9 @@ Airbyte focuses on hosted extract-and-load connectors; dbt focuses on SQL transf
 <details>
 <summary><b>Does Duckle send my data anywhere?</b></summary>
 
-No. The app runs entirely on your machine. The engines (DuckDB, llama.cpp) are downloaded from official upstream releases on first launch and then run locally. The only network calls Duckle makes on your behalf are the ones your pipelines explicitly do (e.g. a `src.s3` reading from your S3 bucket, or `xf.ai.embed` if you configure it to hit OpenAI).
+No. Duckle makes no outbound calls of its own from wherever you run it, laptop or server. The engines (DuckDB, llama.cpp) are downloaded from official upstream releases on first launch and then run in place. The only network calls Duckle makes on your behalf are the ones your pipelines explicitly do (e.g. a `src.s3` reading from your S3 bucket, or `xf.ai.embed` if you configure it to hit OpenAI).
 
-Duckie AI Assistant runs **fully offline** once the model is downloaded.
+Duckie needs no network once its model is downloaded - and if you would rather it did not run in-process at all, point it at your own OpenAI-compatible endpoint.
 
 </details>
 
@@ -1752,7 +1752,7 @@ For 90% of common pipelines (read source -> simple transforms -> sink), yes - th
 <details>
 <summary><b>Does the Duckie panel need internet after install?</b></summary>
 
-No. Once `llama-server` and the Qwen GGUF are downloaded into your app-data directory, Duckie runs fully offline. Tested by killing wifi and asking it for a pipeline - works fine.
+No. Once `llama-server` and the Qwen GGUF are downloaded into your app-data directory, Duckie needs no network at all. Nor does it have to run in-process: point it at your own OpenAI-compatible endpoint and it uses that instead. Tested by killing wifi and asking it for a pipeline - works fine.
 
 </details>
 
@@ -1978,4 +1978,5 @@ Licensed under either of **MIT** or **Apache-2.0** at your option.
 <sub>Built with Rust, Tauri, React, and DuckDB by <a href="https://github.com/slothflowlabs">SlothFlowLabs</a></sub>
 </div>
 
-<!-- Suggested GitHub topics: etl, elt, data-engineering, data-pipeline, duckdb, rust, tauri, react, typescript, local-first, embedded, drag-and-drop, data-cleaning, vector-database, ai, ai-assistant, llm, llama-cpp, qwen, desktop-app, no-code, low-code, sql, pipeline-builder -->
+<!-- GitHub topics, as actually set on the repo. local-first and desktop-app were deliberately removed: they framed Duckle as a laptop tool, which is the read this copy exists to avoid. Keep this list in step with the repo settings.
+     cdc, connectors, data-engineering, data-integration, data-orchestration, data-pipeline, data-quality, data-transformation, dbt, duckdb, elt, etl, kubernetes, lakehouse, low-code, mcp, no-code, open-source, reverse-etl, self-hosted -->
