@@ -36,7 +36,7 @@ rusqlite = { workspace = true }
 # The console's HTTP layer. axum 0.7 is already resolved in the lock (pulled
 # transitively), so this adds the router and the extractor rather than a new
 # dependency tree. `net` is what tokio needs to accept connections.
-axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio", "query"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
 tokio = { workspace = true, features = ["net"] }
 base64 = "0.23"
 getrandom = "0.4"
