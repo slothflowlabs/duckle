@@ -89,7 +89,7 @@ redis = { version = "1.6", default-features = false }
 # then either materialize as a DuckDB JSON table or write the JSON back
 # out as YAML/TOML. Avoids needing DuckDB extensions for either format.
 serde_yaml = "0.9"
-toml = "0.8"
+toml = "1.1"
 # Kafka (and Redpanda) producer + consumer via the pure-Rust rskafka
 # crate (InfluxDB IOx in production). Async-only - wrapped in tokio
 # block_on like mongo + tiberius + scylla. Avoids the C-lib rdkafka
@@ -108,7 +108,7 @@ async-nats = "0.50"
 # XML reader/writer. Used by src.xml (walks a row path, emits each
 # match as a JSON object) and snk.xml (wraps rows in row elements).
 # Pure Rust.
-quick-xml = "0.41"
+quick-xml = "0.42"
 # HTML parsing + CSS selection for src.html (#255). Pure Rust (html5ever +
 # cssparser + selectors), no native toolchain, and already resolved in this
 # workspace's lockfile via tauri-utils and wry, so it adds no new dependency
@@ -119,7 +119,7 @@ dom_query = "0.28"
 # and Info dictionary - so no native toolchain and no rendering engine. OCR is
 # deliberately not here: it would need exactly that.
 pdf-extract = "0.12"
-lopdf = "0.42"
+lopdf = "0.44"
 # Streaming gzip decoder for src.xml, so a .gz (or .xml.gz) XML file is
 # decompressed on the fly and never lands in RAM whole (issue #186). Pure Rust.
 flate2 = "1"
@@ -144,7 +144,7 @@ suppaftp = { version = "10", default-features = false, features = ["rustls-ring"
 # async; run_sftp_source wraps it in block_on like the mongo / tiberius
 # sources to stay synchronous. Host-key/fingerprint is enforced in russh's
 # check_server_key callback.
-russh = { version = "0.62", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh = { version = "0.63", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.3"
 # System clipboard reader (src.clipboard). Text-only - image-data is
 # off because we never round-trip images through pipelines. arboard
