@@ -72,7 +72,7 @@ arrow-schema = "59"
 parquet = "59"
 
 # Storage
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 duckdb = "1.1"
 encoding_rs = "0.8"
 

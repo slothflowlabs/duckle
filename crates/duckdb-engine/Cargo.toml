@@ -38,7 +38,7 @@ rustls-pemfile = "2"
 # derives the public-key fingerprint, and signs the standard
 # Snowflake claims (iss / sub / iat / exp). PAT bearer auth is also
 # supported and doesn't pull these in.
-jsonwebtoken = { version = "10", default-features = false, features = ["use_pem", "rust_crypto"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "rust_crypto"] }
 rsa = { version = "0.9", features = ["pem", "sha2"] }
 sha2 = "0.11"
 # HMAC-SHA256 for AWS SigV4 signing in src.dynamodb (and any future
@@ -75,7 +75,7 @@ oracle = { version = "0.6", optional = true }
 # manager at build time (odbc32 on Windows - always present; unixODBC on
 # Linux/macOS). Off by default so a plain engine build/test needs no ODBC; the
 # shipped binaries (desktop, runner, mcp) turn it on.
-odbc-api = { version = "28", optional = true }
+odbc-api = { version = "29", optional = true }
 # Direct (optional) handle on odbc-api's ODBC FFI crate so the `teradata-static`
 # feature can flip it to static linking. Base entry carries no static features;
 # the Linux override below adds them (see that table + build.rs + issue #131).
@@ -83,40 +83,40 @@ odbc-sys = { version = "0.31", optional = true }
 # Redis sync client. Tokio-async is optional and off; we use the blocking
 # Connection / Pipeline API to fit the per-stage CLI shell-out model.
 # Small dep (~300kb).
-redis = { version = "0.27", default-features = false }
+redis = { version = "1.6", default-features = false }
 # YAML and TOML format readers/writers. Small pure-Rust deps. Used by
 # src.yaml / snk.yaml / src.toml / snk.toml - we parse to serde_json::Value
 # then either materialize as a DuckDB JSON table or write the JSON back
 # out as YAML/TOML. Avoids needing DuckDB extensions for either format.
 serde_yaml = "0.9"
-toml = "0.8"
+toml = "1.1"
 # Kafka (and Redpanda) producer + consumer via the pure-Rust rskafka
 # crate (InfluxDB IOx in production). Async-only - wrapped in tokio
 # block_on like mongo + tiberius + scylla. Avoids the C-lib rdkafka
 # build dance entirely, at the cost of fewer broker-protocol features
 # (good enough for batch produce + batch consume, no admin client).
-rskafka = "0.5"
+rskafka = "0.6"
 # Apache Avro container-file reader/writer. Pure Rust. Pairs with
 # Kafka topics that publish Avro-encoded payloads, and reads the
 # .avro / .ocf files that exporters drop on object storage.
-apache-avro = "0.17"
+apache-avro = "0.22"
 # NATS / JetStream. Pure-Rust client by the NATS team.
 async-nats = "0.50"
 # XML reader/writer. Used by src.xml (walks a row path, emits each
 # match as a JSON object) and snk.xml (wraps rows in row elements).
 # Pure Rust.
-quick-xml = "0.41"
+quick-xml = "0.42"
 # HTML parsing + CSS selection for src.html (#255). Pure Rust (html5ever +
 # cssparser + selectors), no native toolchain, and already resolved in this
 # workspace's lockfile via tauri-utils and wry, so it adds no new dependency
 # tree - only the compile of those crates in the headless runner build.
-dom_query = "0.27"
+dom_query = "0.28"
 # PDF page text + geometry for src.pdf (#248). Both pure Rust - pdf-extract is
 # the font-encoding and character-mapping work, lopdf the page tree, MediaBox
 # and Info dictionary - so no native toolchain and no rendering engine. OCR is
 # deliberately not here: it would need exactly that.
-pdf-extract = "0.9"
-lopdf = "0.36"
+pdf-extract = "0.12"
+lopdf = "0.42"
 # Streaming gzip decoder for src.xml, so a .gz (or .xml.gz) XML file is
 # decompressed on the fly and never lands in RAM whole (issue #186). Pure Rust.
 flate2 = "1"
@@ -125,15 +125,15 @@ flate2 = "1"
 # leading/trailing whitespace from those cells on load. We reopen the written
 # .xlsx (which is a zip), add the attribute, and repack (#141). Deflate only -
 # no need for the bzip2 / zstd / aes backends.
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 # RabbitMQ / AMQP 0.9.1 client. Pure Rust, async. Same block_on
 # pattern as Kafka/NATS. Publishes to an exchange + routing key;
 # pulls from a queue with a per-message timeout for batch ETL.
-lapin = { version = "2", default-features = false, features = ["rustls"] }
+lapin = { version = "4", default-features = false, features = ["rustls"] }
 # FTP / FTPS client. Pure Rust, synchronous API (fits the per-stage
 # blocking model - no block_on dance). Rustls-backed TLS keeps the
 # build self-contained on every OS.
-suppaftp = { version = "8", default-features = false, features = ["rustls-ring"] }
+suppaftp = { version = "10", default-features = false, features = ["rustls-ring"] }
 # SFTP (SSH-based) source, src.sftp. russh + russh-sftp on the `ring`
 # crypto backend (default-features=false drops aws-lc-rs, so NO NASM and
 # NO C toolchain - the same ring 0.17 stack the rest of our TLS already
@@ -141,7 +141,7 @@ suppaftp = { version = "8", default-features = false, features = ["rustls-ring"]
 # async; run_sftp_source wraps it in block_on like the mongo / tiberius
 # sources to stay synchronous. Host-key/fingerprint is enforced in russh's
 # check_server_key callback.
-russh = { version = "0.62", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh = { version = "0.63", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.3"
 # System clipboard reader (src.clipboard). Text-only - image-data is
 # off because we never round-trip images through pipelines. arboard
@@ -179,7 +179,7 @@ glob = "0.3"
 # accompanying mail-parser decodes RFC 822 envelopes + MIME bodies.
 imap = { version = "=3.0.0-alpha.15", default-features = false, features = ["rustls-tls"] }
 mail-parser = "0.11"
-rustls-connector = { version = "0.21", default-features = false, features = ["rustls--ring"] }
+rustls-connector = { version = "0.23", default-features = false, features = ["rustls--ring"] }
 # SMTP client for snk.email. Pure Rust with rustls-tls. Symmetric
 # to src.email (the IMAP reader). Builder + smtp-transport features;
 # default native-tls disabled so we don't drag OpenSSL on Linux.
@@ -205,8 +205,8 @@ parquet = { workspace = true }
 # temp file + materialize via DuckDB read_parquet, like the ADBC source.
 arrow-flight = "59"
 tonic = { version = "0.14", features = ["transport", "tls-ring", "tls-native-roots"] }
-prost = "0.13"
-tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+prost = "0.14"
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 
 # Linux-only: on top of the base odbc-sys above, request its `static` /
 # `static_ltdl` features so the Teradata ODBC driver manager (unixODBC) is
@@ -238,11 +238,11 @@ required-features = ["oracle"]
 
 [dev-dependencies]
 tempfile = "3.10"
-rand = "0.8"
+rand = "0.10"
 # Re-imported as a dev-dep so the integration tests can call its
 # Writer to build a small .avro file inline before reading it back
 # through src.avro. Same version as the lib dep above.
-apache-avro = "0.17"
+apache-avro = "0.22"
 # Re-imported so src.clipboard tests can write a known payload to the
 # system clipboard before running the pipeline. Same backend as the
 # lib dep -> writer and reader agree on the OS clipboard format.
