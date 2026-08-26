@@ -9807,8 +9807,20 @@ impl DuckdbEngine {
         &self,
         db: &Path,
         spec: &KafkaSourceSpec,
+        pipeline_name: Option<&str>,
+        pending: &mut Vec<(std::path::PathBuf, JsonValue)>,
     ) -> Result<String, EngineError> {
         let cancel = self.cancel.clone();
+        // Where the resume point lives, and what it says. Shares the state
+        // folder xf.incremental uses: a node is one or the other, never both.
+        let state_path = if spec.track_offset {
+            incremental_state_path(pipeline_name, &spec.node_id)
+        } else {
+            None
+        };
+        let resume = state_path
+            .as_deref()
+            .and_then(|p| read_kafka_offset_state(p, &spec.topic, spec.partition_id));
         let bootstrap: Vec<String> = spec
             .bootstrap_servers
             .split(',')
@@ -9819,7 +9831,7 @@ impl DuckdbEngine {
             .enable_all()
             .build()
             .map_err(|e| EngineError::Query(format!("kafka: tokio rt: {}", e)))?;
-        let rows: Result<Vec<JsonValue>, String> = rt.block_on(async {
+        let rows: Result<(Vec<JsonValue>, i64), String> = rt.block_on(async {
             use rskafka::client::partition::UnknownTopicHandling;
             use rskafka::client::ClientBuilder;
             let client = ClientBuilder::new(bootstrap)
@@ -9833,7 +9845,13 @@ impl DuckdbEngine {
             // start_offset sentinels: -2 = latest tip (only messages produced
             // after this read starts), any other negative = earliest available,
             // >= 0 = that literal offset.
-            let mut next_offset = if spec.start_offset == -2 {
+            // A committed resume point wins over the configured start. That is
+            // the whole point: `latest` would otherwise jump to the current tip
+            // on every run and skip everything produced in between, while
+            // `earliest` would re-read the entire backlog every time.
+            let mut next_offset = if let Some(o) = resume {
+                o
+            } else if spec.start_offset == -2 {
                 pc.get_offset(rskafka::client::partition::OffsetAt::Latest)
                     .await
                     .map_err(|e| format!("latest offset: {}", e))?
@@ -9886,18 +9904,43 @@ impl DuckdbEngine {
                     }
                 }
             }
-            Ok(out)
+            Ok((out, next_offset))
         });
-        let rows = match rows {
+        let (rows, next_offset) = match rows {
             Ok(r) => r,
             Err(e) if e == "cancelled" => return Err(EngineError::Cancelled),
             Err(e) => return Err(EngineError::Query(format!("kafka source: {}", e))),
         };
         let count = rows.len();
         materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &rows)?;
+        // Queue the resume point rather than writing it: it lands only if the
+        // WHOLE run succeeds, so a failure downstream re-delivers these records
+        // next run instead of losing them. At-least-once, deliberately - the
+        // alternative is committing an offset for rows no sink ever wrote.
+        //
+        // Written even when nothing was read, because that is exactly the case
+        // a `latest` start gets wrong: the first run pins the tip so the next
+        // one resumes from it, instead of jumping to a new tip and skipping
+        // whatever arrived in between.
+        if let Some(path) = state_path {
+            pending.push((
+                path,
+                serde_json::json!({
+                    "topic": spec.topic,
+                    "partition": spec.partition_id,
+                    "next_offset": next_offset,
+                }),
+            ));
+        }
         Ok(format!(
-            "kafka: materialized {} record(s) into {}",
-            count, spec.node_id
+            "kafka: materialized {} record(s) into {}{}",
+            count,
+            spec.node_id,
+            if spec.track_offset {
+                format!(" (resumes at offset {} if this run succeeds)", next_offset)
+            } else {
+                String::new()
+            }
         ))
     }
 
@@ -13007,6 +13050,27 @@ fn read_incremental_state(path: &std::path::PathBuf) -> Option<(String, String)>
     Some((value, ty))
 }
 
+/// Read a saved Kafka resume point.
+///
+/// The offset is only meaningful for the topic and partition it was written
+/// for. Point the node at a different topic, or a different partition, and the
+/// number means something else entirely - so a mismatch reads as "no saved
+/// offset" and the node falls back to its configured start rather than
+/// resuming at a position from another stream.
+fn read_kafka_offset_state(path: &std::path::Path, topic: &str, partition: i32) -> Option<i64> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: JsonValue = serde_json::from_str(&text).ok()?;
+    if v.get("topic").and_then(|x| x.as_str()) != Some(topic) {
+        return None;
+    }
+    if v.get("partition").and_then(|x| x.as_i64()) != Some(partition as i64) {
+        return None;
+    }
+    v.get("next_offset")
+        .and_then(|x| x.as_i64())
+        .filter(|o| *o >= 0)
+}
+
 /// Read a saved DuckLake snapshot id from CDC state. Missing / unreadable
 /// reads as "no prior snapshot".
 fn read_snapshot_state(path: &std::path::PathBuf) -> Option<u64> {
@@ -15448,6 +15512,68 @@ impl DuckdbEngine {
 
 #[cfg(test)]
 mod incremental_state_tests {
+
+    #[test]
+    fn a_kafka_resume_point_is_only_used_for_the_stream_it_came_from() {
+        // The saved offset is a position in ONE topic partition. Re-point the
+        // node and the number means something else entirely, so it must be
+        // ignored rather than resumed from - reading another stream's position
+        // would silently skip or re-read an arbitrary amount of data.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("kafka.json");
+        std::fs::write(
+            &path,
+            r#"{"topic":"orders","partition":0,"next_offset":4200}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            super::read_kafka_offset_state(&path, "orders", 0),
+            Some(4200),
+            "the stream it was written for must resume"
+        );
+        assert_eq!(
+            super::read_kafka_offset_state(&path, "shipments", 0),
+            None,
+            "a different topic must not resume from this offset"
+        );
+        assert_eq!(
+            super::read_kafka_offset_state(&path, "orders", 3),
+            None,
+            "a different partition must not resume from this offset"
+        );
+
+        // Nothing saved yet, and anything unreadable, both mean "start where
+        // the node is configured to start" rather than failing the run.
+        assert_eq!(
+            super::read_kafka_offset_state(&tmp.path().join("absent.json"), "orders", 0),
+            None
+        );
+        let bad = tmp.path().join("bad.json");
+        std::fs::write(&bad, "not json at all").unwrap();
+        assert_eq!(super::read_kafka_offset_state(&bad, "orders", 0), None);
+
+        // A negative offset is not a position; treat it as absent rather than
+        // handing it to the broker as a sentinel and reading the wrong end.
+        let neg = tmp.path().join("neg.json");
+        std::fs::write(
+            &neg,
+            r#"{"topic":"orders","partition":0,"next_offset":-1}"#,
+        )
+        .unwrap();
+        assert_eq!(super::read_kafka_offset_state(&neg, "orders", 0), None);
+
+        // Offset zero IS a valid position - the start of a partition - and must
+        // not be confused with "nothing saved".
+        let zero = tmp.path().join("zero.json");
+        std::fs::write(
+            &zero,
+            r#"{"topic":"orders","partition":0,"next_offset":0}"#,
+        )
+        .unwrap();
+        assert_eq!(super::read_kafka_offset_state(&zero, "orders", 0), Some(0));
+    }
+
     use super::{child_run_name, incremental_state_path, inherited_incremental_state};
 
     /// Serialised: these tests set DUCKLE_WORKSPACE, which is process-global.

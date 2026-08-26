@@ -1785,7 +1785,9 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::FormatSource(spec)) => self.run_format_source(&db_path, spec),
                     Some(RuntimeSpec::FormatSink(spec)) => self.run_format_sink(&db_path, spec),
                     Some(RuntimeSpec::KafkaSink(spec)) => self.run_kafka_sink(&db_path, spec),
-                    Some(RuntimeSpec::KafkaSource(spec)) => self.run_kafka_source(&db_path, spec),
+                    Some(RuntimeSpec::KafkaSource(spec)) => {
+                        self.run_kafka_source(&db_path, spec, pipeline_name, &mut pending_writes)
+                    }
                     Some(RuntimeSpec::AvroSource(spec)) => self.run_avro_source(&db_path, spec),
                     Some(RuntimeSpec::QvdSource(spec)) => self.run_qvd_source(&db_path, spec),
                     Some(RuntimeSpec::NatsSink(spec)) => self.run_nats_sink(&db_path, spec),

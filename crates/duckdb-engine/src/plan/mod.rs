@@ -3619,6 +3619,12 @@ fn build_stage(
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: topic required", component_id)))?;
         kafka_source = Some(KafkaSourceSpec {
+            // Off by default: turning it on changes where a run starts reading,
+            // which is not a decision to make on someone's behalf.
+            track_offset: props
+                .get("trackOffset")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
             node_id: node.id.clone(),
             bootstrap_servers: bootstrap,
             topic,

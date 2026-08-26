@@ -15289,3 +15289,91 @@ fn snk_model_refuses_an_ambiguous_or_unversioned_card() {
         "the error should name the missing column"
     );
 }
+
+/// Kafka offset tracking: two runs must not re-read the same records.
+///
+/// Env-gated exactly like the roundtrip test above - set DUCKLE_KAFKA_BROKERS
+/// and optionally DUCKLE_KAFKA_TOPIC. Also needs DUCKLE_WORKSPACE, since the
+/// resume point is stored under the workspace's state folder.
+///
+/// This is the behaviour that turns a scheduled read into a stream: produce 3,
+/// consume them, produce 3 more, consume again, and the second run must see
+/// ONLY the new three. Without tracking, an `earliest` start re-reads all six.
+#[test]
+fn src_kafka_resumes_where_the_last_successful_run_stopped() {
+    let engine = engine_or_skip!();
+    let brokers = match std::env::var("DUCKLE_KAFKA_BROKERS").ok() {
+        Some(b) if !b.is_empty() => b,
+        _ => {
+            eprintln!("skipping: set DUCKLE_KAFKA_BROKERS to run Kafka tests");
+            return;
+        }
+    };
+    // A fresh topic per run, so a previous run's records cannot make this pass.
+    let topic = format!("duckle-resume-{}", std::process::id());
+
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", ws.to_string_lossy().to_string());
+
+    let produce = |csv_text: &str, name: &str| {
+        let csv = write_file(tmp.path(), name, csv_text);
+        let r = engine.execute_pipeline(&doc(
+            json!([
+                node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                node("k", "snk.kafka", json!({
+                    "brokers": &brokers, "topic": &topic, "valueColumn": "name",
+                })),
+            ]),
+            json!([main_edge("e", "s", "k")]),
+        ));
+        assert_eq!(r.status, "ok", "produce failed: {:?}", r.error);
+    };
+
+    let consume = |out: &str| -> i64 {
+        let r = engine.execute_pipeline_named(
+            &doc(
+                json!([
+                    node("k", "src.kafka", json!({
+                        "brokers": &brokers,
+                        "topic": &topic,
+                        "partitionId": 0,
+                        "startOffset": -1,
+                        "maxRecords": 100,
+                        "trackOffset": true,
+                    })),
+                    node("o", "snk.csv", json!({ "path": out, "hasHeader": true })),
+                ]),
+                json!([main_edge("e", "k", "o")]),
+            ),
+            "resume_demo",
+        );
+        assert_eq!(r.status, "ok", "consume failed: {:?}", r.error);
+        count(&format!("read_csv_auto('{}')", out))
+    };
+
+    produce("id,name\n1,alpha\n2,beta\n3,gamma\n", "a.csv");
+    let out1 = out_path(tmp.path(), "run1.csv");
+    let first = consume(&out1);
+    assert_eq!(first, 3, "first run should read the 3 produced records");
+
+    produce("id,name\n4,delta\n5,epsilon\n6,zeta\n", "b.csv");
+    let out2 = out_path(tmp.path(), "run2.csv");
+    let second = consume(&out2);
+
+    // THE POINT: only the new records. Without offset tracking this is 6,
+    // because startOffset -1 means "earliest" and re-reads the whole partition.
+    assert_eq!(
+        second, 3,
+        "second run should read ONLY the 3 new records, not re-read all 6"
+    );
+
+    // And the resume point is on disk, naming the stream it belongs to.
+    let state = ws.join("state").join("resume_demo").join("k.json");
+    assert!(state.is_file(), "no resume point written at {:?}", state);
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state).unwrap()).unwrap();
+    assert_eq!(v.get("topic").and_then(|x| x.as_str()), Some(topic.as_str()));
+    assert_eq!(v.get("next_offset").and_then(|x| x.as_i64()), Some(6));
+}

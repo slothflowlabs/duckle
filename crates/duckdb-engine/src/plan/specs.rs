@@ -432,6 +432,14 @@ pub struct KafkaSourceSpec {
     pub partition_id: i32,
     pub start_offset: i64,
     pub max_records: u64,
+    /// Remember where this node got to, and resume there next run.
+    ///
+    /// Without it a scheduled read either re-reads the whole backlog (an
+    /// `earliest` start) or skips everything that arrived since the last run (a
+    /// `latest` start), so repeated runs cannot be stitched into a stream. The
+    /// resume point is written only when the whole run succeeded, so a failure
+    /// after the read re-delivers rather than loses: at-least-once.
+    pub track_offset: bool,
 }
 
 /// src.avro: read an Apache Avro container file (.avro / .ocf) via

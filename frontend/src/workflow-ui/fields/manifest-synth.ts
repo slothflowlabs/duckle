@@ -2756,6 +2756,13 @@ function synthStreamingSource(comp: ComponentDef): ComponentManifest {
                         { label: 'Earliest', value: 'earliest' },
                     ],
                 },
+                {
+                    key: 'trackOffset',
+                    label: 'Resume where the last run stopped',
+                    kind: 'bool',
+                    defaultValue: false,
+                    description: 'Remember the offset reached and carry on from it next run, so a scheduled read becomes a continuous one. Without it, Earliest re-reads the whole backlog every run and Latest skips everything that arrived between runs. The position is saved only when the whole run succeeds, so a failure after the read re-delivers those records rather than losing them.',
+                },
             ],
         },
         {
