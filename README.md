@@ -19,7 +19,6 @@
 <img alt="license" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=for-the-badge"/>
 <img alt="platforms" src="https://img.shields.io/badge/platforms-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-2b6cb0?style=for-the-badge"/>
 <img alt="duckdb" src="https://img.shields.io/badge/DuckDB-FFF000?style=for-the-badge&amp;logo=duckdb&amp;logoColor=black"/>
-<a href="https://mcptoplist.com/server/glama%2Fslothflowlabs%2Fduckle"><img src="https://mcptoplist.com/badge/glama%2Fslothflowlabs%2Fduckle.svg" alt="MCP Toplist: Top 1% of 98,291" /></a>
 </p>
 
 </div>
@@ -1543,6 +1542,8 @@ git push -u origin feature/upsert-mode
 ## MCP server (connect Claude or any LLM to Duckle)
 
 <p align="center"><img src="docs/assets/mcp-claude-banner.svg" alt="Connect Duckle to Claude via MCP" width="92%"/></p>
+
+<p align="center"><a href="https://mcptoplist.com/server/glama%2Fslothflowlabs%2Fduckle"><img src="https://mcptoplist.com/badge/glama%2Fslothflowlabs%2Fduckle.svg" alt="MCP Toplist: Top 1% of 98,291" /></a></p>
 
 Duckle ships its own [Model Context Protocol](https://modelcontextprotocol.io)
 server, so Claude (or any MCP client - Claude Desktop, Claude Code, Cursor, or
