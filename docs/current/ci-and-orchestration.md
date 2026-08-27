@@ -208,6 +208,7 @@ It is written atomically, so a scrape never reads a half-written file. Point nod
 | Metric | Type | Meaning |
 | --- | --- | --- |
 | `duckle_run_last_status` | gauge | 1 when the most recent run succeeded, 0 when it failed or was cancelled |
+| `duckle_run_last_unchanged` | gauge | 1 when the most recent run checked its sources, found nothing changed and wrote nothing. Such a run IS a success, so `duckle_run_last_status` is 1 for it too - this is what separates a poll that is working and finding nothing from one that is ingesting. |
 | `duckle_run_last_duration_seconds` | gauge | how long the most recent run took |
 | `duckle_run_last_rows` | gauge | rows the most recent run wrote |
 | `duckle_run_last_timestamp_seconds` | gauge | when the most recent run finished |

@@ -31,6 +31,17 @@ pub struct RunRecord {
     pub trigger: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The run checked its sources, found nothing changed, and wrote nothing.
+    ///
+    /// Persisted because the durable distinction is the point: a recurring
+    /// poll is unchanged hundreds of times between real updates, and later you
+    /// have to be able to tell "the last poll succeeded and the source was
+    /// unchanged" from "the last poll ingested new data". Without it on the
+    /// record, both read as an ordinary ok the moment the run is over.
+    ///
+    /// `default` so records written before this existed still load.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unchanged: bool,
     /// Coarse error bucket (see error_category) - present only on failure.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub category: Option<String>,
@@ -80,6 +91,7 @@ impl RunRecord {
             rows,
             node_count: result.nodes.len(),
             trigger: trigger.to_string(),
+            unchanged: result.unchanged,
             error: result.error.clone(),
             category: result.category.clone(),
             assets: Vec::new(),
@@ -167,6 +179,7 @@ pub fn write_metrics_textfile(workspace: &Path) -> std::io::Result<()> {
     let mut last_duration = String::new();
     let mut last_rows = String::new();
     let mut last_ts = String::new();
+    let mut last_unchanged = String::new();
     let mut window_runs = String::new();
 
     let entries = std::fs::read_dir(&runs_dir)?;
@@ -190,6 +203,15 @@ pub fn write_metrics_textfile(workspace: &Path) -> std::io::Result<()> {
             "duckle_run_last_status{{pipeline=\"{}\"}} {}\n",
             label, ok
         ));
+        // A quiet poll is a success, so last_status alone cannot tell a
+        // pipeline that is working and finding nothing from one that is
+        // ingesting. Freshness alerting needs both.
+        last_unchanged.push_str(&format!(
+            "duckle_run_last_unchanged{{pipeline=\"{}\"}} {}
+",
+            label,
+            if last.unchanged { 1 } else { 0 }
+        ));
         last_duration.push_str(&format!(
             "duckle_run_last_duration_seconds{{pipeline=\"{}\"}} {}\n",
             label,
@@ -207,15 +229,31 @@ pub fn write_metrics_textfile(workspace: &Path) -> std::io::Result<()> {
             ));
         }
         for status in ["ok", "error", "cancelled"] {
-            let n = records.iter().filter(|r| r.status == status).count();
+            // An unchanged run has status "ok", so inside that bucket it would
+            // be indistinguishable. Counting it out keeps "ok" meaning "did
+            // work", and the buckets still sum to the number of runs.
+            let n = records
+                .iter()
+                .filter(|r| r.status == status && !(status == "ok" && r.unchanged))
+                .count();
             window_runs.push_str(&format!(
                 "duckle_runs_window{{pipeline=\"{}\",status=\"{}\"}} {}\n",
                 label, status, n
             ));
         }
+        window_runs.push_str(&format!(
+            "duckle_runs_window{{pipeline=\"{}\",status=\"unchanged\"}} {}
+",
+            label,
+            records.iter().filter(|r| r.unchanged).count()
+        ));
     }
 
     out.push_str(&last_status);
+    out.push_str("# HELP duckle_run_last_unchanged 1 when the most recent run checked its sources, found nothing changed and wrote nothing. Such a run is a success, so duckle_run_last_status is 1 for it too - this is what separates a poll that is working and finding nothing from one that is ingesting.
+# TYPE duckle_run_last_unchanged gauge
+");
+    out.push_str(&last_unchanged);
     out.push_str("# HELP duckle_run_last_duration_seconds Wall-clock duration of the most recent run.\n# TYPE duckle_run_last_duration_seconds gauge\n");
     out.push_str(&last_duration);
     out.push_str("# HELP duckle_run_last_rows Rows written across all sinks in the most recent run.\n# TYPE duckle_run_last_rows gauge\n");
@@ -254,6 +292,7 @@ mod tests {
             error: (status == "error").then(|| "Binder Error: column gone".into()),
             category: (status == "error").then(|| "schema".into()),
             assets: Vec::new(),
+            unchanged: false,
         }
     }
 
@@ -294,4 +333,85 @@ pub fn load_run_history(workspace: &Path, pipeline_id: &str) -> Vec<RunRecord> {
         return Vec::new();
     };
     serde_json::from_str(&content).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod unchanged_persistence_tests {
+    use super::*;
+
+    fn rec(status: &str, unchanged: bool) -> RunRecord {
+        RunRecord {
+            run_id: None,
+            at: Utc::now().to_rfc3339(),
+            status: status.into(),
+            duration_ms: 5,
+            rows: 0,
+            node_count: 1,
+            trigger: "scheduled".into(),
+            unchanged,
+            error: None,
+            category: None,
+            assets: Vec::new(),
+        }
+    }
+
+    /// The whole point of persisting it: once the run is over, "succeeded and
+    /// found nothing" and "succeeded and ingested" are both status ok. If the
+    /// flag does not survive the round trip, that question cannot be answered
+    /// later - which is when it is actually asked.
+    #[test]
+    fn the_flag_survives_being_written_and_read_back() {
+        let r = rec("ok", true);
+        let text = serde_json::to_string(&r).unwrap();
+        assert!(text.contains("\"unchanged\":true"), "{text}");
+        let back: RunRecord = serde_json::from_str(&text).unwrap();
+        assert!(back.unchanged);
+        assert_eq!(back.status, "ok", "an unchanged run is still a success");
+    }
+
+    /// Records written before the flag existed must still load, or upgrading
+    /// loses a pipeline's history.
+    #[test]
+    fn a_record_from_before_this_existed_still_loads() {
+        let old = r#"{"at":"2026-01-01T00:00:00Z","status":"ok","duration_ms":5,
+                      "rows":10,"node_count":2,"trigger":"manual"}"#;
+        let back: RunRecord = serde_json::from_str(old).expect("old records must still parse");
+        assert!(!back.unchanged, "absent means it did work, which is the safe reading");
+    }
+
+    /// An unchanged run is a success, so `last_status` says 1 for it. Only the
+    /// new gauge separates a poll that is working and finding nothing from one
+    /// that is ingesting.
+    #[test]
+    fn the_metrics_separate_a_quiet_poll_from_an_ingesting_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        std::fs::create_dir_all(ws.join("runs")).unwrap();
+        std::fs::write(
+            ws.join("runs").join("quiet.json"),
+            serde_json::to_string(&vec![rec("ok", false), rec("ok", true)]).unwrap(),
+        )
+        .unwrap();
+
+        write_metrics_textfile(ws).expect("write metrics");
+        let text = std::fs::read_to_string(ws.join("logs").join("duckle_metrics.prom"))
+            .expect("metrics file");
+        assert!(
+            text.contains("duckle_run_last_unchanged{pipeline=\"quiet\"} 1"),
+            "the last run was a quiet poll and nothing says so: {text}"
+        );
+        assert!(
+            text.contains("duckle_run_last_status{pipeline=\"quiet\"} 1"),
+            "and it is still a success: {text}"
+        );
+        // Counted out of "ok" so the buckets still sum to the run count.
+        assert!(
+            text.contains("duckle_runs_window{pipeline=\"quiet\",status=\"ok\"} 1"),
+            "only the ingesting run belongs in ok: {text}"
+        );
+        assert!(
+            text.contains("duckle_runs_window{pipeline=\"quiet\",status=\"unchanged\"} 1"),
+            "{text}"
+        );
+    }
 }

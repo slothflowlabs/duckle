@@ -1616,6 +1616,7 @@ mod tests {
             category: None,
             assets: vec![AssetTouch { id: asset.into(), direction: dir.into(), rows }],
             run_id: None,
+            unchanged: false,
         };
 
         std::fs::write(
