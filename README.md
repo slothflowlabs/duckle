@@ -1543,8 +1543,6 @@ git push -u origin feature/upsert-mode
 
 <p align="center"><img src="docs/assets/mcp-claude-banner.svg" alt="Connect Duckle to Claude via MCP" width="92%"/></p>
 
-<p align="center"><a href="https://mcptoplist.com/server/glama%2Fslothflowlabs%2Fduckle"><img src="https://mcptoplist.com/badge/glama%2Fslothflowlabs%2Fduckle.svg" alt="MCP Toplist: Top 1% of 98,291" /></a></p>
-
 Duckle ships its own [Model Context Protocol](https://modelcontextprotocol.io)
 server, so Claude (or any MCP client - Claude Desktop, Claude Code, Cursor, or
 any other LLM agent) can drive Duckle directly: browse the full component catalog
