@@ -1744,6 +1744,82 @@ function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
             },
         ]);
     }
+    if (comp.id === 'xf.artifact.copy') {
+        return base(comp, [
+            {
+                label: 'What to copy',
+                fields: [
+                    { key: 'uriColumn', label: 'URI column', kind: 'column', defaultValue: 'uri',
+                      description: 'The upstream column naming each artifact. src.changed and src.artifact both emit `uri`, so the default already lines up with them.' },
+                    { key: 'destination', label: 'Destination', kind: 'text', required: true,
+                      placeholder: 's3://raw/incoming/  or  /var/lake/raw',
+                      description: 'An s3:// prefix or a local directory. Everything copied lands under it, and a source name can never escape it.' },
+                    {
+                        key: 'naming',
+                        label: 'Name each copy',
+                        kind: 'select',
+                        defaultValue: 'keep',
+                        options: [
+                            { label: 'Keep the source file name', value: 'keep' },
+                            { label: 'Preserve the source path under the prefix', value: 'path' },
+                            { label: 'Content-addressed (sha256)', value: 'hash' },
+                        ],
+                        description: 'Content-addressed names make the store immutable and de-duplicating, at the cost of reading each source TWICE - the hash has to be known before the key is. Keep and path are one pass.',
+                    },
+                    {
+                        key: 'ifExists',
+                        label: 'When it is already there',
+                        kind: 'select',
+                        defaultValue: 'skip',
+                        options: [
+                            { label: 'Skip (leave the existing copy)', value: 'skip' },
+                            { label: 'Replace', value: 'replace' },
+                            { label: 'Fail the run', value: 'error' },
+                        ],
+                        description: 'Skip is what a raw zone wants: re-running a feed does not re-upload what already landed. The row still comes out, with copied = false.',
+                    },
+                    { key: 'partSizeMb', label: 'Part size (MB)', kind: 'integer', defaultValue: 8,
+                      description: 'Bytes held in memory per object while uploading to S3, and the size of each multipart part. Below 5 MB is raised to 5: S3 rejects a smaller non-final part.' },
+                ],
+            },
+            {
+                label: 'Source access',
+                fields: [
+                    { key: 'headers', label: 'HTTP headers', kind: 'key-value',
+                      description: 'Sent when the source is https:// - an API key on a download endpoint, for example.' },
+                    { key: 'user', label: 'SFTP user', kind: 'text' },
+                    { key: 'password', label: 'SFTP password', kind: 'text', placeholder: '••••••••' },
+                    { key: 'privateKey', label: 'SFTP private key (PEM)', kind: 'expression', rows: 3 },
+                    { key: 'keyPassphrase', label: 'Key passphrase', kind: 'text', placeholder: '••••••••' },
+                    { key: 'hostFingerprint', label: 'SFTP host fingerprint', kind: 'text', placeholder: 'SHA256:...' },
+                ],
+            },
+            {
+                label: 'S3 / S3-compatible',
+                fields: [
+                    { key: 'accessKey', label: 'Access key', kind: 'text',
+                      description: 'Used for whichever side is s3://, source or destination. Pick a saved S3 connection instead and these fill from it at run time. One credential set: copying between two different S3 accounts is not supported here.' },
+                    { key: 'secretKey', label: 'Secret key', kind: 'text', placeholder: '••••••••' },
+                    { key: 'sessionToken', label: 'Session token', kind: 'text', placeholder: '••••••••' },
+                    { key: 'region', label: 'Region', kind: 'text', placeholder: 'us-east-1' },
+                    { key: 'endpoint', label: 'Endpoint', kind: 'text', placeholder: 'https://s3.eu-central-003.backblazeb2.com',
+                      description: 'For MinIO, Backblaze B2, Cloudflare R2 and other S3-compatible stores. Leave blank for AWS.' },
+                    { key: 'urlStyle', label: 'URL style', kind: 'select', defaultValue: '',
+                      options: [
+                          { label: 'Default', value: '' },
+                          { label: 'Path (host/bucket/key)', value: 'path' },
+                          { label: 'Virtual host (bucket.host/key)', value: 'vhost' },
+                      ] },
+                    { key: 'useSsl', label: 'Use TLS', kind: 'select', defaultValue: '',
+                      options: [
+                          { label: 'Default (from the endpoint scheme)', value: '' },
+                          { label: 'Yes', value: 'true' },
+                          { label: 'No (local MinIO)', value: 'false' },
+                      ] },
+                ],
+            },
+        ], 'upstream');
+    }
     if (comp.id === 'src.changed') {
         return base(comp, [
             {

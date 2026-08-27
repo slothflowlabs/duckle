@@ -1038,6 +1038,11 @@ impl DuckdbEngine {
         // run succeeds, so a later-stage failure never advances the mark past
         // rows that were never actually delivered. (state file path, json).
         let mut pending_writes: Vec<PendingWrite> = Vec::new();
+        // Remote objects this run reads or writes, for the signed manifest. A
+        // local file source is already pinned by path; an s3:// or https:// one
+        // has no path, so without this the most important boundary in a raw-zone
+        // pipeline records nothing at all.
+        let mut artifacts: Vec<ArtifactRef> = Vec::new();
 
         // Fast path: if every stage is pure-SQL with no per-stage
         // hooks, pipe the whole pipeline as one SQL stream into a
@@ -1721,7 +1726,16 @@ impl DuckdbEngine {
                         self.run_tumble(&db_path, spec, pipeline_name, &mut pending_writes)
                     }
                     Some(RuntimeSpec::ChangedSource(spec)) => {
-                        self.run_changed_source(&db_path, spec, pipeline_name, &mut pending_writes)
+                        self.run_changed_source(
+                            &db_path,
+                            spec,
+                            pipeline_name,
+                            &mut pending_writes,
+                            &mut artifacts,
+                        )
+                    }
+                    Some(RuntimeSpec::ArtifactCopy(spec)) => {
+                        self.run_artifact_copy(&db_path, &secret_prefix, spec, &mut artifacts)
                     }
                     Some(RuntimeSpec::SpoolSource(spec)) => {
                         self.run_spool_source(&db_path, spec, pipeline_name, &mut pending_writes)
@@ -2248,6 +2262,14 @@ impl DuckdbEngine {
             error: overall_error,
             category,
             unchanged,
+            // Capped so one copy of a hundred thousand files cannot put a
+            // hundred thousand entries in a signed manifest. The flag says the
+            // list is partial, so a truncated one never reads as complete.
+            artifacts_truncated: artifacts.len() > ARTIFACT_RECORD_CAP,
+            artifacts: {
+                artifacts.truncate(ARTIFACT_RECORD_CAP);
+                artifacts
+            },
         }
     }
 
@@ -2774,6 +2796,10 @@ impl DuckdbEngine {
             error: overall_error,
             category,
             unchanged,
+            // Nothing here observes an artifact: a stage with a runtime spec is
+            // not pure SQL, so it never reaches the batched path.
+            artifacts: Vec::new(),
+            artifacts_truncated: false,
         }
     }
 
@@ -5337,6 +5363,28 @@ pub(crate) fn run_was_unchanged(
 /// "Failed to delete file" - and the batched path still pointed every run at
 /// the same directory. A second copy of a setting is a second chance to miss
 /// one.
+/// The resource limits this process will actually apply, for the record.
+///
+/// #278: the budget is settable but was nowhere in the signed manifest, so a
+/// run that spilled differently from another could not be told apart from one
+/// that was given different limits. Only what is SET appears: an absent key
+/// means DuckDB's own default, and inventing a value for it would claim a
+/// setting nobody chose.
+pub fn effective_resource_limits() -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    for (env, key) in [
+        ("DUCKLE_MEMORY_LIMIT", "memoryLimit"),
+        ("DUCKLE_THREADS", "threads"),
+        ("DUCKLE_TEMP_DIR", "tempDirectory"),
+        ("DUCKLE_MAX_TEMP_DIR_SIZE", "maxTempDirectorySize"),
+    ] {
+        if let Some(v) = std::env::var(env).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
+            out.insert(key.to_string(), v);
+        }
+    }
+    out
+}
+
 pub(crate) fn resource_pragmas(
     run_db: Option<&std::path::Path>,
     stage_memory_mb: Option<u32>,
@@ -5450,6 +5498,46 @@ pub(crate) fn read_state_snapshot(path: &std::path::Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
+/// One artifact a run read or wrote, as the provenance manifest needs it.
+///
+/// #247: a pipeline whose most important boundary is "we pulled this PDF
+/// bundle out of B2 and parsed it" had that boundary invisible to the signed
+/// manifest, which pinned only local file inputs by path. A remote object has
+/// no path, so it recorded nothing at all.
+///
+/// The fields are what can honestly be known about a remote object, in
+/// descending order of strength: a sha256 when the bytes actually passed
+/// through us, and otherwise the ETag with the size and mtime - none of which
+/// is a content hash, but all of which is comparable to itself across runs.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactRef {
+    pub node: String,
+    /// "input" for something the run read, "output" for something it wrote.
+    pub role: String,
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<i64>,
+    /// Present only when the bytes passed through this run. An artifact that
+    /// was merely OBSERVED has no hash, and claiming one would be a lie.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_at: Option<String>,
+}
+
+/// How many artifacts one run records before it stops. A copy of a hundred
+/// thousand files would otherwise put a hundred thousand entries in a signed
+/// manifest; the count of what was dropped is recorded instead, so a truncated
+/// list never reads as a complete one.
+pub const ARTIFACT_RECORD_CAP: usize = 1000;
+
 #[derive(Debug, Serialize)]
 pub struct RunResult {
     pub status: String,
@@ -5471,6 +5559,13 @@ pub struct RunResult {
     /// opposite meaning (a step an earlier failure stopped from running).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unchanged: bool,
+    /// Remote objects this run read or wrote, for the provenance manifest.
+    /// Capped at ARTIFACT_RECORD_CAP; `artifacts_truncated` says how many more
+    /// there were.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub artifacts_truncated: bool,
 }
 
 impl RunResult {
@@ -5485,6 +5580,8 @@ impl RunResult {
             category: Some(category.into()),
             // A failure is never "nothing to do".
             unchanged: false,
+            artifacts: Vec::new(),
+            artifacts_truncated: false,
         }
     }
 }

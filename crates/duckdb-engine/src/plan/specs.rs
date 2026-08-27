@@ -2204,3 +2204,40 @@ pub struct ChangedSourceSpec {
     /// reporting rather than an anonymous request that 403s.
     pub s3: Option<crate::s3::S3Config>,
 }
+
+/// `xf.artifact.copy`: take artifact rows in, land the BYTES somewhere durable,
+/// and emit a row per landed copy.
+///
+/// This is the piece that turns a change feed into a raw zone. The bytes are
+/// streamed, never held: the whole point of an artifact being a reference is
+/// that a 40GB model file does not become 40GB of memory on the way past.
+#[derive(Debug, Clone)]
+pub struct ArtifactCopySpec {
+    pub node_id: String,
+    /// The relation whose rows name the artifacts to copy.
+    pub from_view: String,
+    /// Column holding the source URI. Defaults to `uri`, which is what
+    /// `src.changed` and `src.artifact` both emit.
+    pub uri_column: String,
+    /// Where the copies land: `s3://bucket/prefix/` or a local directory.
+    pub destination: String,
+    /// "keep" the source's file name, "hash" for a content-addressed name, or
+    /// "path" to preserve the source's directory structure under the prefix.
+    pub naming: String,
+    /// What to do when the destination key already holds something: "skip"
+    /// (the default, and the right one for an immutable raw zone), "replace",
+    /// or "error".
+    pub if_exists: String,
+    /// Bytes per multipart part when writing to S3. Also the ceiling on memory
+    /// used per object, which is why it is a knob at all.
+    pub part_size_bytes: usize,
+    /// Credentials for whichever side is `s3://`.
+    pub s3: Option<crate::s3::S3Config>,
+    // Source auth for the other schemes, matching src.changed.
+    pub user: Option<String>,
+    pub password: Option<String>,
+    pub private_key: Option<String>,
+    pub key_passphrase: Option<String>,
+    pub host_fingerprint: Option<String>,
+    pub headers: Vec<(String, String)>,
+}

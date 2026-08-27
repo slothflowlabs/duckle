@@ -16948,3 +16948,213 @@ fn s3_changed_without_credentials_says_what_is_missing() {
         "the message must name what is missing: {err}"
     );
 }
+
+/// #247: an artifact is a reference until somebody moves the bytes. This is
+/// that step, and the two things it has to get right are that the bytes arrive
+/// intact and that the hash recorded is of the bytes that actually transferred.
+#[test]
+fn artifact_copy_lands_the_bytes_and_records_their_hash() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let src = write_file(tmp.path(), "report.pdf", "hello world");
+    let dest_dir = out_path(tmp.path(), "raw");
+    let out = out_path(tmp.path(), "landed.csv");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": format!("SELECT '{}' AS uri", src) })),
+            node("c", "xf.artifact.copy", json!({ "destination": dest_dir })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+
+    let landed = format!("{}/report.pdf", dest_dir);
+    assert_eq!(
+        std::fs::read_to_string(&landed).unwrap_or_default(),
+        "hello world",
+        "the bytes did not arrive intact"
+    );
+    let row = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(
+        row.contains("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"),
+        "the sha256 of the transferred bytes belongs in the row: {row}"
+    );
+    assert!(row.contains("application/pdf"), "media type from the extension: {row}");
+    assert!(row.contains("11"), "size in bytes: {row}");
+    assert!(row.contains("true"), "this copy did happen: {row}");
+}
+
+/// A raw zone is immutable, so re-running a feed must not re-upload what is
+/// already there. The row still comes out - downstream needs to know the
+/// artifact exists - but it says the copy did not happen.
+#[test]
+fn artifact_copy_skips_what_is_already_there_without_re_reading_it() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let dest_dir = out_path(tmp.path(), "raw");
+    let out = out_path(tmp.path(), "landed.csv");
+
+    // The source is served over HTTP so the stub can COUNT how many times the
+    // bytes were actually fetched. A skip that still downloads is not a skip.
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = match stream {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            stream.set_read_timeout(Some(std::time::Duration::from_millis(300))).ok();
+            let mut buf = [0u8; 2048];
+            let _ = stream.read(&mut buf);
+            let _ = tx.send(());
+            let body = "hello world";
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+
+    let uri = format!("http://127.0.0.1:{}/report.pdf", port);
+    let pipeline = doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": format!("SELECT '{}' AS uri", uri) })),
+            node("c", "xf.artifact.copy", json!({ "destination": dest_dir, "ifExists": "skip" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+    );
+
+    let r = engine.execute_pipeline(&pipeline);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert!(std::fs::read_to_string(&out).unwrap_or_default().contains("true"), "first copy ran");
+    assert_eq!(
+        rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok(),
+        true,
+        "the first run must fetch the object"
+    );
+
+    // Second run: already there.
+    let r = engine.execute_pipeline(&pipeline);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let row = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(row.contains("false"), "the second copy must report that it did not happen: {row}");
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(400)).is_err(),
+        "a skip that still downloads the object is not a skip"
+    );
+}
+
+/// Content-addressed naming makes the store de-duplicating: two different
+/// sources holding the same bytes land on one key, and nothing is transferred
+/// the second time.
+#[test]
+fn artifact_copy_content_addressed_naming_deduplicates() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let a = write_file(tmp.path(), "a.txt", "hello world");
+    let b = write_file(tmp.path(), "b.txt", "hello world");
+    let dest_dir = out_path(tmp.path(), "cas");
+    let out = out_path(tmp.path(), "landed.csv");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({
+                "sql": format!("SELECT '{}' AS uri UNION ALL SELECT '{}'", a, b)
+            })),
+            node("c", "xf.artifact.copy", json!({ "destination": dest_dir, "naming": "hash" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+
+    let sha = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+    assert!(
+        std::path::Path::new(&format!("{}/{}.txt", dest_dir, sha)).exists(),
+        "the key is the content hash"
+    );
+    let files: Vec<_> = std::fs::read_dir(&dest_dir).unwrap().flatten().collect();
+    assert_eq!(files.len(), 1, "identical bytes are one object, not two");
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert_eq!(
+        body.replace("\r\n", "\n").lines().skip(1).filter(|l| !l.trim().is_empty()).count(),
+        2,
+        "both inputs still produce a row - they both refer to that object: {body}"
+    );
+}
+
+/// A destination key is built from a source-controlled name, which is exactly
+/// the shape that writes outside the prefix. A raw zone that can be escaped is
+/// not one.
+///
+/// The source has to actually SUCCEED for this to prove anything: an earlier
+/// version pointed at an unreachable host, so nothing was written either way
+/// and the assertion held with the guard removed.
+#[test]
+fn artifact_copy_cannot_escape_the_destination_prefix() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let dest_dir = out_path(tmp.path(), "raw/zone");
+    std::fs::create_dir_all(&dest_dir).unwrap();
+    let out = out_path(tmp.path(), "landed.csv");
+
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(2) {
+            let mut stream = match stream {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            stream.set_read_timeout(Some(std::time::Duration::from_millis(300))).ok();
+            let mut buf = [0u8; 2048];
+            let _ = stream.read(&mut buf);
+            let body = "pwned";
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+
+    // naming "path" preserves the source's own path under the prefix, and this
+    // source's path climbs out of it. The fetch succeeds, so the only thing
+    // stopping the write is the guard.
+    let sneaky = format!("http://127.0.0.1:{}/../../escaped.txt", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": format!("SELECT '{}' AS uri", sneaky) })),
+            node("c", "xf.artifact.copy", json!({ "destination": dest_dir, "naming": "path" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "the fetch itself must succeed: {:?}", r.error);
+
+    let root = tmp.path();
+    for climbed in ["escaped.txt", "raw/escaped.txt"] {
+        assert!(
+            !root.join(climbed).exists(),
+            "a source path climbed out of the destination prefix to {climbed}"
+        );
+    }
+    assert!(
+        std::path::Path::new(&format!("{}/escaped.txt", dest_dir)).exists(),
+        "it should land INSIDE the prefix, with the climbing segments dropped"
+    );
+}

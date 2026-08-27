@@ -629,6 +629,48 @@ What was processed advances only when the whole run succeeds, and only for
 rows that were actually emitted - so a failure downstream re-offers the same
 files, and a run capped by `maxEntries` does not mark the remainder as done.
 
+### Land the bytes somewhere durable (`xf.artifact.copy`)
+
+An artifact is a reference - a uri, a media type, a size, a hash - so a
+pipeline can carry one around for nothing. At some point the actual bytes have
+to move, and that is this step: between "the feed says there is a new 4GB
+bundle" and "it is in our raw zone, hashed, and we can prove which bytes we
+parsed".
+
+It reads a `uri` column - whatever `src.changed`, `src.artifact` or a query
+produced - and copies from `https://`, `s3://`, `sftp://` or a local path to
+an `s3://` prefix or a local directory.
+
+**Streamed and hashed in one pass.** Memory is bounded by the part size rather
+than by the object, so a 40GB model file does not become 40GB of RSS, and the
+`sha256` recorded is of the bytes that actually transferred. Reading twice -
+once to hash, once to upload - would double the transfer off a remote source;
+hashing first would mean holding the whole thing.
+
+Naming is `keep` (the source's file name), `path` (its layout preserved under
+the prefix) or `hash` (content-addressed, which makes the store immutable and
+de-duplicating at the cost of reading each source twice, because the key is
+the hash). A source-derived name can never climb out of the destination
+prefix.
+
+`ifExists: skip` is the default and is what a raw zone wants: re-running a
+feed does not re-upload what already landed. The row still comes out, with
+`copied = false`, because downstream still needs to know the artifact exists.
+
+Emits `uri`, `source_uri`, `name`, `media_type`, `size_bytes`, `sha256` and
+`copied`.
+
+**Remote artifacts reach the signed run manifest.** `.ducklock` pinned local
+file inputs by path, and a remote object has no path - so the boundary that
+matters most in a raw-zone pipeline, where the bytes came from, was the one
+thing the manifest did not record. Every object a run reads or writes now
+appears in it with its uri, size, media type, and either a `sha256` when the
+bytes actually passed through the run or an ETag and mtime when they did not.
+An object that was merely observed carries no hash, because claiming one would
+be a lie. The manifest also records the resource limits the run was given, so
+two runs that spilled differently can be told apart from two runs handed
+different budgets.
+
 ### Tumbling windows that survive between runs (`xf.tumble`)
 
 Aggregating a stream by time needs a window to stay open across batches, and

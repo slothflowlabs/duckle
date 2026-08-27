@@ -2907,6 +2907,8 @@ fn alerts_notify(state: &State, pipeline_id: &str, status: &str, duration_ms: u6
         status: status.to_string(),
         // Synthesised for an alert about something outside a run.
         unchanged: false,
+        artifacts: Vec::new(),
+        artifacts_truncated: false,
         duration_ms,
         nodes: Default::default(),
         preview: Vec::new(),

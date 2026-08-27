@@ -5397,6 +5397,7 @@ impl DuckdbEngine {
         spec: &plan::ChangedSourceSpec,
         pipeline_name: Option<&str>,
         pending: &mut Vec<crate::PendingWrite>,
+        artifacts: &mut Vec<crate::ArtifactRef>,
     ) -> Result<String, EngineError> {
         let state_path = if spec.track_state {
             incremental_state_path(pipeline_name, &spec.node_id)
@@ -5453,6 +5454,23 @@ impl DuckdbEngine {
             ) {
                 seen.insert(u.to_string(), f.to_string());
             }
+        }
+
+        // What the run OBSERVED, for the provenance manifest. No sha256: the
+        // bytes were deliberately not read, which is the point of the component.
+        // The ETag with the size and mtime is what can honestly be claimed.
+        for e in &entries {
+            artifacts.push(crate::ArtifactRef {
+                node: spec.node_id.clone(),
+                role: "input".into(),
+                uri: e.uri.clone(),
+                name: Some(e.name.clone()),
+                media_type: None,
+                size_bytes: e.size,
+                sha256: None,
+                etag: e.etag.clone(),
+                modified_at: e.modified_at.clone(),
+            });
         }
 
         let emitted = rows.len();
@@ -5661,6 +5679,404 @@ impl DuckdbEngine {
         // a prefix has sub-folders in it.
         out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
+    }
+
+    /// xf.artifact.copy: land the bytes named by the upstream rows somewhere
+    /// durable, and emit a row per landed copy.
+    ///
+    /// An artifact is a reference, so a pipeline can carry one around for free.
+    /// At some point somebody has to move the actual bytes, and that is this:
+    /// the step between "the feed says there is a new 4GB PDF bundle" and "it is
+    /// in our raw zone, hashed, and we can prove which bytes we parsed".
+    ///
+    /// Streamed throughout. The source is read in one pass, hashed on the way
+    /// past, and written straight out, so memory is bounded by the part size and
+    /// not by the object. Reading it twice - once to hash, once to upload -
+    /// would double the transfer off a remote source, and hashing first would
+    /// mean holding the whole thing.
+    pub(crate) fn run_artifact_copy(
+        &self,
+        db: &Path,
+        secret_prefix: &str,
+        spec: &plan::ArtifactCopySpec,
+        artifacts: &mut Vec<crate::ArtifactRef>,
+    ) -> Result<String, EngineError> {
+        let select = format!(
+            "{}SELECT * FROM {}",
+            secret_prefix,
+            plan::quote_ident(&spec.from_view)
+        );
+        let rows = self.run_rows(Some(db), &select)?;
+
+        let mut out: Vec<JsonValue> = Vec::with_capacity(rows.len());
+        let mut copied = 0usize;
+        let mut skipped = 0usize;
+        let mut bytes_total: u64 = 0;
+        for row in &rows {
+            let src = row
+                .get(&spec.uri_column)
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| {
+                    EngineError::Query(format!(
+                        "artifact.copy: row has no '{}' to copy from. Set the URI column to \
+                         whichever column names the artifact.",
+                        spec.uri_column
+                    ))
+                })?;
+            let landed = self.copy_one_artifact(spec, &src)?;
+            if landed.copied {
+                copied += 1;
+                bytes_total += landed.size_bytes.unwrap_or(0) as u64;
+            } else {
+                skipped += 1;
+            }
+            // Both sides of the copy: what was read, and what was written. The
+            // output carries a real sha256 because these bytes DID pass through
+            // this run, which is the strongest provenance an artifact ever gets.
+            artifacts.push(crate::ArtifactRef {
+                node: spec.node_id.clone(),
+                role: "input".into(),
+                uri: src.clone(),
+                name: Some(landed.name.clone()),
+                media_type: Some(landed.media_type.to_string()),
+                size_bytes: landed.size_bytes,
+                sha256: landed.sha256.clone(),
+                etag: None,
+                modified_at: None,
+            });
+            artifacts.push(crate::ArtifactRef {
+                node: spec.node_id.clone(),
+                role: "output".into(),
+                uri: landed.uri.clone(),
+                name: Some(landed.name.clone()),
+                media_type: Some(landed.media_type.to_string()),
+                size_bytes: landed.size_bytes,
+                sha256: landed.sha256.clone(),
+                etag: None,
+                modified_at: None,
+            });
+            out.push(serde_json::json!({
+                "uri": landed.uri,
+                "source_uri": src,
+                "name": landed.name,
+                "media_type": landed.media_type,
+                "size_bytes": landed.size_bytes,
+                "sha256": landed.sha256,
+                "copied": landed.copied,
+            }));
+        }
+
+        if out.is_empty() {
+            // A typed empty relation, so a downstream stage sees the right
+            // columns rather than an error on a run with nothing to copy.
+            self.run(
+                Some(db),
+                &format!(
+                    "CREATE OR REPLACE TABLE {} (uri VARCHAR, source_uri VARCHAR, name VARCHAR, \
+                     media_type VARCHAR, size_bytes BIGINT, sha256 VARCHAR, copied BOOLEAN)",
+                    plan::quote_ident(&spec.node_id)
+                ),
+                false,
+            )?;
+        } else {
+            materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &out)?;
+        }
+
+        let msg = format!(
+            "artifact.copy: {} copied ({}), {} already there, to {}",
+            copied,
+            human_bytes(bytes_total),
+            skipped,
+            spec.destination
+        );
+        // Nothing moved is a real outcome worth telling apart from a broken
+        // copy, the same way an unchanged poll is.
+        Ok(if copied == 0 && !rows.is_empty() {
+            format!("{}{}", crate::UNCHANGED_MARKER, msg)
+        } else {
+            msg
+        })
+    }
+
+    /// Copy one artifact, and describe what landed.
+    fn copy_one_artifact(
+        &self,
+        spec: &plan::ArtifactCopySpec,
+        src: &str,
+    ) -> Result<LandedArtifact, EngineError> {
+        let name = src
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("artifact")
+            .to_string();
+        let media_type = media_type_for(&name);
+
+        // "hash" naming needs the content hash BEFORE choosing the key, which
+        // means reading the object twice. That is the honest cost of a
+        // content-addressed store and it is opt-in for exactly that reason;
+        // "keep" and "path" are one pass.
+        let key_hint = match spec.naming.as_str() {
+            "path" => source_path_of(src),
+            _ => name.clone(),
+        };
+
+        if spec.naming == "hash" {
+            let (sha, size) = self.hash_source(spec, src)?;
+            let ext = name.rsplit_once('.').map(|(_, e)| format!(".{e}")).unwrap_or_default();
+            let dest = join_destination(&spec.destination, &format!("{sha}{ext}"));
+            // A content-addressed key that already exists holds the same bytes
+            // by construction, so the second copy is never worth making.
+            if self.artifact_exists(spec, &dest)? {
+                return Ok(LandedArtifact {
+                    uri: dest,
+                    name,
+                    media_type,
+                    size_bytes: Some(size as i64),
+                    sha256: Some(sha),
+                    copied: false,
+                });
+            }
+            let (sha2, size2) = self.stream_artifact(spec, src, &dest)?;
+            return Ok(LandedArtifact {
+                uri: dest,
+                name,
+                media_type,
+                size_bytes: Some(size2 as i64),
+                sha256: Some(sha2),
+                copied: true,
+            });
+        }
+
+        let dest = join_destination(&spec.destination, &key_hint);
+        match spec.if_exists.as_str() {
+            "error" if self.artifact_exists(spec, &dest)? => {
+                return Err(EngineError::Query(format!(
+                    "artifact.copy: {} already exists and ifExists is 'error'",
+                    dest
+                )))
+            }
+            "skip" if self.artifact_exists(spec, &dest)? => {
+                return Ok(LandedArtifact {
+                    uri: dest,
+                    name,
+                    media_type,
+                    size_bytes: None,
+                    sha256: None,
+                    copied: false,
+                })
+            }
+            _ => {}
+        }
+        let (sha, size) = self.stream_artifact(spec, src, &dest)?;
+        Ok(LandedArtifact {
+            uri: dest,
+            name,
+            media_type,
+            size_bytes: Some(size as i64),
+            sha256: Some(sha),
+            copied: true,
+        })
+    }
+
+    /// Open a source for reading, whatever scheme it is written in.
+    fn open_artifact(
+        &self,
+        spec: &plan::ArtifactCopySpec,
+        src: &str,
+    ) -> Result<Box<dyn std::io::Read + Send>, EngineError> {
+        if src.starts_with("s3://") || src.starts_with("s3a://") {
+            let cfg = spec.s3.as_ref().ok_or_else(|| {
+                EngineError::Config(format!(
+                    "artifact.copy: {} needs S3 credentials - pick a saved S3 connection on \
+                     the node, or set its access key and secret key",
+                    src
+                ))
+            })?;
+            let (bucket, key) = crate::s3::parse_s3_uri(src)?;
+            return cfg.get(&bucket, &key);
+        }
+        if src.starts_with("http://") || src.starts_with("https://") {
+            let mut req = crate::tls::http_agent().get(src);
+            for (k, v) in &spec.headers {
+                req = req.set(k, v);
+            }
+            let resp = req
+                .call()
+                .map_err(|e| EngineError::Query(format!("artifact.copy: fetching {src}: {e}")))?;
+            return Ok(Box::new(resp.into_reader()));
+        }
+        if src.starts_with("sftp://") {
+            // SFTP is read into a temp file first, because the session has to be
+            // driven on its own runtime and cannot be held open behind a plain
+            // Read. The file is streamed out of afterwards, so the destination
+            // upload is still bounded - only the local spool is not.
+            return self.sftp_spool(spec, src);
+        }
+        let f = std::fs::File::open(src)
+            .map_err(|e| EngineError::Query(format!("artifact.copy: opening {src}: {e}")))?;
+        Ok(Box::new(f))
+    }
+
+    /// Read a source once, hashing it, and throw the bytes away. Only used by
+    /// content-addressed naming, which has to know the hash before it knows
+    /// where the object goes.
+    fn hash_source(
+        &self,
+        spec: &plan::ArtifactCopySpec,
+        src: &str,
+    ) -> Result<(String, u64), EngineError> {
+        let reader = self.open_artifact(spec, src)?;
+        let mut hashing = crate::s3::HashingReader::new(reader);
+        std::io::copy(&mut hashing, &mut std::io::sink())
+            .map_err(|e| EngineError::Query(format!("artifact.copy: reading {src}: {e}")))?;
+        Ok(hashing.finish())
+    }
+
+    /// Copy the bytes to the destination, hashing them on the way past.
+    fn stream_artifact(
+        &self,
+        spec: &plan::ArtifactCopySpec,
+        src: &str,
+        dest: &str,
+    ) -> Result<(String, u64), EngineError> {
+        let reader = self.open_artifact(spec, src)?;
+        let mut hashing = crate::s3::HashingReader::new(reader);
+
+        if dest.starts_with("s3://") || dest.starts_with("s3a://") {
+            let cfg = spec.s3.as_ref().ok_or_else(|| {
+                EngineError::Config(format!(
+                    "artifact.copy: writing to {} needs S3 credentials on the node",
+                    dest
+                ))
+            })?;
+            let (bucket, key) = crate::s3::parse_s3_uri(dest)?;
+            // Multipart regardless of size: the source's length is not known
+            // for an HTTP body without a Content-Length, and a plain PUT has to
+            // declare one. Multipart streams in bounded parts either way.
+            cfg.put_multipart(
+                &bucket,
+                &key,
+                &mut hashing,
+                spec.part_size_bytes,
+                Some(media_type_for(dest)),
+            )?;
+            return Ok(hashing.finish());
+        }
+
+        // Local: write beside the target and rename, so a crash mid-copy never
+        // leaves a half file that looks like a complete one. Everything else in
+        // the engine that writes a file does the same.
+        let path = std::path::Path::new(dest);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| {
+                EngineError::Query(format!("artifact.copy: creating {}: {e}", dir.display()))
+            })?;
+        }
+        let tmp = path.with_extension(format!(
+            "{}.duckle-partial",
+            path.extension().and_then(|e| e.to_str()).unwrap_or("tmp")
+        ));
+        {
+            let mut f = std::fs::File::create(&tmp).map_err(|e| {
+                EngineError::Query(format!("artifact.copy: creating {}: {e}", tmp.display()))
+            })?;
+            std::io::copy(&mut hashing, &mut f)
+                .map_err(|e| EngineError::Query(format!("artifact.copy: writing {dest}: {e}")))?;
+        }
+        // Windows will not rename over an existing file, so the old one goes
+        // first. Anything else silently leaves the previous copy in place.
+        let _ = std::fs::remove_file(path);
+        std::fs::rename(&tmp, path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            EngineError::Query(format!("artifact.copy: placing {dest}: {e}"))
+        })?;
+        Ok(hashing.finish())
+    }
+
+    /// Is something already at this destination?
+    fn artifact_exists(
+        &self,
+        spec: &plan::ArtifactCopySpec,
+        dest: &str,
+    ) -> Result<bool, EngineError> {
+        if dest.starts_with("s3://") || dest.starts_with("s3a://") {
+            let Some(cfg) = spec.s3.as_ref() else {
+                return Ok(false);
+            };
+            let (bucket, key) = crate::s3::parse_s3_uri(dest)?;
+            return match cfg.head(&bucket, &key) {
+                Ok(_) => Ok(true),
+                // A 404 is the answer to the question, not a failure. Anything
+                // else is reported: treating a 403 as "not there" would re-copy
+                // on every run and never say why.
+                Err(e) if e.to_string().contains("HTTP 404") => Ok(false),
+                Err(e) => Err(e),
+            };
+        }
+        Ok(std::path::Path::new(dest).exists())
+    }
+
+    /// Read an SFTP object into a temp file, and hand back a reader over it.
+    ///
+    /// The session has to be driven on its own async runtime and cannot be held
+    /// open behind a plain `Read`, so this is the one scheme that touches disk
+    /// on the way past. The upload out of the spool is still streamed, so the
+    /// memory bound holds; it is the local disk that pays.
+    fn sftp_spool(
+        &self,
+        spec: &plan::ArtifactCopySpec,
+        src: &str,
+    ) -> Result<Box<dyn std::io::Read + Send>, EngineError> {
+        let (host, port, user, path) = parse_sftp_uri(src)?;
+        let user = spec.user.clone().or(user).unwrap_or_default();
+        // src.changed's SFTP helpers take a ChangedSourceSpec, so the copy node's
+        // equivalent auth is presented in that shape rather than duplicating the
+        // connect-and-verify path. One implementation, one host-key policy.
+        let as_changed = plan::ChangedSourceSpec {
+            node_id: spec.node_id.clone(),
+            uri: src.to_string(),
+            listing: false,
+            suffix: None,
+            max_entries: 1,
+            track_state: false,
+            user: Some(user.clone()),
+            password: spec.password.clone(),
+            private_key: spec.private_key.clone(),
+            key_passphrase: spec.key_passphrase.clone(),
+            host_fingerprint: spec.host_fingerprint.clone(),
+            headers: Vec::new(),
+            s3: None,
+        };
+        let p = path.clone();
+        let bytes = self.with_sftp(&as_changed, &host, port, &user, move |sftp| {
+            Box::pin(async move {
+                use tokio::io::AsyncReadExt;
+                let mut f = sftp
+                    .open(p.clone())
+                    .await
+                    .map_err(|e| format!("open {}: {}", p, e))?;
+                let mut buf = Vec::new();
+                f.read_to_end(&mut buf)
+                    .await
+                    .map_err(|e| format!("read {}: {}", p, e))?;
+                Ok(buf)
+            })
+        })?;
+        let path = std::env::temp_dir().join(format!(
+            "duckle_artifact_{}_{}.spool",
+            std::process::id(),
+            crate::now_nanos()
+        ));
+        std::fs::write(&path, &bytes)
+            .map_err(|e| EngineError::Query(format!("artifact.copy: spool write: {e}")))?;
+        let file = std::fs::File::open(&path)
+            .map_err(|e| EngineError::Query(format!("artifact.copy: spool reopen: {e}")))?;
+        // The guard removes the file when the reader is dropped, whether the
+        // copy succeeded or not.
+        Ok(Box::new(SpooledArtifact { path, file }))
     }
 
     /// Every entry in a remote directory.
@@ -18314,4 +18730,93 @@ fn page_media_box(doc: &lopdf::Document, page_id: lopdf::ObjectId) -> (Option<f6
         }
     }
     (None, None)
+}
+
+/// What one copy produced.
+struct LandedArtifact {
+    uri: String,
+    name: String,
+    media_type: &'static str,
+    size_bytes: Option<i64>,
+    sha256: Option<String>,
+    /// False when the destination already held it and nothing was transferred.
+    copied: bool,
+}
+
+/// Named from the extension. Enough to route a pipeline - a PDF one way, an
+/// image another - without pretending to sniff content. The same table
+/// `src.artifact` uses, so the two agree about what a file is.
+fn media_type_for(name: &str) -> &'static str {
+    match name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).as_deref() {
+        Some("pdf") => "application/pdf",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("tif") | Some("tiff") => "image/tiff",
+        Some("zip") => "application/zip",
+        Some("gz") => "application/gzip",
+        Some("json") => "application/json",
+        Some("xml") => "application/xml",
+        Some("csv") => "text/csv",
+        Some("txt") => "text/plain",
+        Some("html") | Some("htm") => "text/html",
+        Some("parquet") => "application/vnd.apache.parquet",
+        _ => "application/octet-stream",
+    }
+}
+
+/// The source's path below its host or bucket, for "preserve the layout"
+/// naming. Leading slashes are dropped so joining cannot escape the prefix.
+fn source_path_of(src: &str) -> String {
+    let after_scheme = src.split_once("://").map(|(_, r)| r).unwrap_or(src);
+    let path = after_scheme.split_once('/').map(|(_, r)| r).unwrap_or(after_scheme);
+    path.trim_start_matches('/').replace('\\', "/")
+}
+
+/// Join a destination prefix and a key, without doubling or dropping the slash.
+///
+/// `..` is rejected rather than resolved: a source-derived name reaching a
+/// destination path is exactly the shape that writes outside the prefix, and a
+/// raw zone that can be escaped is not one.
+fn join_destination(prefix: &str, key: &str) -> String {
+    let safe: String = key
+        .split('/')
+        .filter(|seg| !seg.is_empty() && *seg != "." && *seg != "..")
+        .collect::<Vec<_>>()
+        .join("/");
+    format!("{}/{}", prefix.trim_end_matches('/'), safe)
+}
+
+/// Bytes as something a person reads in a run log.
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < UNITS.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{} {}", n, UNITS[0])
+    } else {
+        format!("{:.1} {}", v, UNITS[i])
+    }
+}
+
+/// Keeps an SFTP spool file alive for as long as something is reading it, and
+/// removes it afterwards however the copy ended.
+struct SpooledArtifact {
+    path: std::path::PathBuf,
+    file: std::fs::File,
+}
+
+impl std::io::Read for SpooledArtifact {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.file.read(buf)
+    }
+}
+
+impl Drop for SpooledArtifact {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }

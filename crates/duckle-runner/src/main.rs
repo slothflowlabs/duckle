@@ -516,6 +516,8 @@ fn run() -> Result<bool, String> {
             lineage,
             &outputs,
             &inputs,
+            &result.artifacts,
+            result.artifacts_truncated,
         ) {
             Ok(path) => println!("manifest : {}", path.display()),
             Err(e) => eprintln!("manifest : skipped ({e})"),

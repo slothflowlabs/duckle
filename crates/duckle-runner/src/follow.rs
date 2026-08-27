@@ -379,6 +379,8 @@ mod tests {
         let r = RunResult {
             status: "ok".into(),
             unchanged: false,
+            artifacts: Vec::new(),
+            artifacts_truncated: false,
             duration_ms: 1,
             nodes,
             preview: vec![],

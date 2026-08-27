@@ -320,6 +320,7 @@ pub enum RuntimeSpec {
     TeradataSink(TeradataSinkSpec),
     SpoolSource(SpoolSourceSpec),
     ChangedSource(ChangedSourceSpec),
+    ArtifactCopy(ArtifactCopySpec),
     Tumble(TumbleSpec),
     Neo4jSource(Neo4jSourceSpec),
     Neo4jSink(Neo4jSinkSpec),
@@ -1649,6 +1650,7 @@ fn build_stage(
     let mut teradata_sink: Option<TeradataSinkSpec> = None;
     let mut spool_source: Option<SpoolSourceSpec> = None;
     let mut changed_source: Option<ChangedSourceSpec> = None;
+    let mut artifact_copy: Option<ArtifactCopySpec> = None;
     let mut tumble: Option<TumbleSpec> = None;
     let mut neo4j_source: Option<Neo4jSourceSpec> = None;
     let mut neo4j_sink: Option<Neo4jSinkSpec> = None;
@@ -4719,6 +4721,49 @@ fn build_stage(
             encrypt: props.get("encrypt").and_then(|v| v.as_bool()).unwrap_or(true),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "xf.artifact.copy" {
+        // #247: land the BYTES of the artifacts named upstream somewhere durable
+        // and emit a row per landed copy, so a change feed becomes a raw zone
+        // without a shell stage in the middle.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        artifact_copy = Some(ArtifactCopySpec {
+            node_id: node.id.clone(),
+            from_view: from_view.to_string(),
+            uri_column: string_prop(&props, "uriColumn")
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "uri".to_string()),
+            destination: string_prop(&props, "destination")
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| {
+                    EngineError::Config(format!(
+                        "{}: destination required - an s3:// prefix or a local directory",
+                        component_id
+                    ))
+                })?,
+            naming: string_prop(&props, "naming")
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "keep".to_string()),
+            if_exists: string_prop(&props, "ifExists")
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "skip".to_string()),
+            // 8 MiB: above S3's 5 MiB floor for a non-final part, and the
+            // ceiling on how much of any one object is ever in memory.
+            part_size_bytes: props
+                .get("partSizeMb")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .map(|n| (n as usize) * 1024 * 1024)
+                .unwrap_or(8 * 1024 * 1024)
+                .max(5 * 1024 * 1024),
+            s3: crate::s3::S3Config::from_props(&props),
+            user: string_prop(&props, "user").filter(|s| !s.is_empty()),
+            password: string_prop(&props, "password").filter(|s| !s.is_empty()),
+            private_key: string_prop(&props, "privateKey").filter(|s| !s.is_empty()),
+            key_passphrase: string_prop(&props, "keyPassphrase").filter(|s| !s.is_empty()),
+            host_fingerprint: string_prop(&props, "hostFingerprint").filter(|s| !s.is_empty()),
+            headers: headers_from_props(&props),
+        });
+        (String::new(), StageKind::View, Some(from_view.to_string()))
     } else if component_id == "xf.tumble" {
         let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
         tumble = Some(TumbleSpec {
@@ -6126,6 +6171,7 @@ fn build_stage(
         .or_else(|| teradata_sink.map(RuntimeSpec::TeradataSink))
         .or_else(|| spool_source.map(RuntimeSpec::SpoolSource))
         .or_else(|| changed_source.map(RuntimeSpec::ChangedSource))
+        .or_else(|| artifact_copy.map(RuntimeSpec::ArtifactCopy))
         .or_else(|| tumble.map(RuntimeSpec::Tumble))
         .or_else(|| neo4j_source.map(RuntimeSpec::Neo4jSource))
         .or_else(|| neo4j_sink.map(RuntimeSpec::Neo4jSink))
