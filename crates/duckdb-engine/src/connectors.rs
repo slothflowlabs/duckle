@@ -12795,6 +12795,7 @@ impl DuckdbEngine {
         node_id: &str,
         child: &str,
         per_row: &[(std::collections::HashMap<String, String>, Option<String>)],
+        retry: Option<&crate::batch::RetryPolicy>,
     ) -> Result<String, EngineError> {
         // A batch is a file in the workspace, so without one there is nowhere
         // for the work to live and nothing could ever pick it up. Failing here
@@ -12817,6 +12818,7 @@ impl DuckdbEngine {
                 item: item.clone(),
                 child: child.to_string(),
                 vars: subs.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                retry: retry.cloned(),
             })
             .collect();
         let path = crate::batch::write(ws, &batch_id, &items)?;

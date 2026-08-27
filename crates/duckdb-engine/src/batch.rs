@@ -47,6 +47,62 @@ pub struct WorkItem {
     pub child: String,
     /// The `${ITER_*}` substitutions for this row.
     pub vars: std::collections::BTreeMap<String, String>,
+    /// How often to retry this item, and how long to wait between tries.
+    ///
+    /// Carried per line rather than in a batch header for the reason the rest
+    /// of this line is: a line copied out of the file into a log or a message
+    /// still says everything about the item, including how many tries it gets.
+    /// Absent means unlimited, which is what every batch written before this
+    /// existed meant, so old batches keep their behaviour exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryPolicy>,
+}
+
+/// When a failed item should be tried again, and when to stop trying.
+///
+/// A permanently bad item - a 404 that will always be a 404, a document no
+/// parser here can read - otherwise stays claimable forever and takes a worker
+/// slot on every pass. That is the whole problem this solves: not making
+/// failures succeed, but putting a bound on how long they are chased.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryPolicy {
+    /// Tries in total, the first attempt included. 0 means unlimited.
+    #[serde(default)]
+    pub max_attempts: u32,
+    /// "fixed" or "exponential". Anything else is read as fixed rather than
+    /// rejected: a policy from a newer build must not stop the batch.
+    #[serde(default = "default_backoff")]
+    pub backoff: String,
+    /// The wait after the first failure. Also the whole wait when fixed.
+    #[serde(default)]
+    pub initial_seconds: u64,
+    /// A ceiling on the exponential wait, so it does not run away to days.
+    #[serde(default)]
+    pub max_seconds: u64,
+}
+
+fn default_backoff() -> String {
+    "fixed".to_string()
+}
+
+impl RetryPolicy {
+    /// How long to wait after `attempts` failed tries.
+    pub fn delay_seconds(&self, attempts: u32) -> u64 {
+        if self.initial_seconds == 0 || attempts == 0 {
+            return 0;
+        }
+        if self.backoff != "exponential" {
+            return self.initial_seconds;
+        }
+        // Doubling, capped. The shift is bounded first: 1u64 << 64 is undefined
+        // and 30 doublings is already a third of a year, so anything past it is
+        // the ceiling by definition.
+        let steps = (attempts - 1).min(30);
+        let grown = self.initial_seconds.saturating_mul(1u64 << steps);
+        let cap = if self.max_seconds == 0 { u64::MAX } else { self.max_seconds };
+        grown.min(cap)
+    }
 }
 
 pub fn batches_dir(workspace: &Path) -> PathBuf {
@@ -179,6 +235,187 @@ pub fn finished(workspace: &Path, batch_id: &str) -> std::collections::HashSet<u
         .collect()
 }
 
+/// Where one item stands right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Phase {
+    /// Succeeded. Never claimed again.
+    Done,
+    /// Claimable now.
+    Ready,
+    /// Failed, and its backoff has not elapsed yet.
+    Waiting,
+    /// Out of attempts. Not claimed again until someone resets it, which is
+    /// the point: a permanently bad item stops taking a worker slot on every
+    /// pass, and stays visible instead of disappearing.
+    Dead,
+}
+
+/// One item's history, reduced to what decides whether to run it now.
+///
+/// Derived from the ledger rather than stored, because the ledger already
+/// records every attempt and a second store would be a second truth. The
+/// engine, the CLI and the console all call this, so what a worker skips and
+/// what an operator is shown cannot disagree.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemState {
+    pub index: usize,
+    pub item: Option<String>,
+    pub phase: Phase,
+    /// Tries since the last manual reset. A reset does not erase history, so
+    /// this can be lower than the number of failures in the file.
+    pub attempts: u32,
+    pub last_attempt_at: Option<String>,
+    /// When the backoff elapses. None when there is nothing to wait for.
+    pub next_attempt_at: Option<String>,
+    pub last_error: Option<String>,
+}
+
+/// A ledger line that resets an item's attempt count without deleting what
+/// happened to it.
+///
+/// Appending "start counting again from here" keeps the failures readable,
+/// which rewriting the file to drop them does not. An operator retrying a dead
+/// item wants to know it died four times before, and a support question a month
+/// later needs the errors, not a clean slate.
+pub const RETRY_MARKER: &str = "retry";
+
+/// Every item of a batch, with the state the ledger puts it in.
+pub fn item_states(
+    workspace: &Path,
+    batch_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<ItemState> {
+    let (items, _) = read(&batch_path(workspace, batch_id)).unwrap_or_default();
+    let lines = ledger(workspace, batch_id);
+    items
+        .iter()
+        .map(|it| item_state(it, &lines, now))
+        .collect()
+}
+
+fn item_state(
+    it: &WorkItem,
+    lines: &[LedgerLine],
+    now: chrono::DateTime<chrono::Utc>,
+) -> ItemState {
+    let mine: Vec<&LedgerLine> = lines.iter().filter(|l| l.index == it.index).collect();
+    // Only what happened AFTER the most recent reset counts towards attempts.
+    let from = mine
+        .iter()
+        .rposition(|l| l.status == RETRY_MARKER)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let since = &mine[from..];
+
+    if since.iter().any(|l| l.status == "ok") {
+        return ItemState {
+            index: it.index,
+            item: it.item.clone(),
+            phase: Phase::Done,
+            attempts: since.iter().filter(|l| l.status != RETRY_MARKER).count() as u32,
+            last_attempt_at: since.last().map(|l| l.at.clone()),
+            next_attempt_at: None,
+            last_error: None,
+        };
+    }
+
+    let failures: Vec<&&LedgerLine> = since.iter().filter(|l| l.status != RETRY_MARKER).collect();
+    let attempts = failures.len() as u32;
+    let last = failures.last().copied();
+    let policy = it.retry.as_ref();
+    let out_of_tries = policy
+        .map(|p| p.max_attempts > 0 && attempts >= p.max_attempts)
+        .unwrap_or(false);
+
+    // The wait runs from the last attempt, so a worker that has been down for
+    // an hour finds the backlog ready rather than waiting an hour more.
+    let next = match (last, policy) {
+        (Some(l), Some(p)) if !out_of_tries && p.delay_seconds(attempts) > 0 => {
+            chrono::DateTime::parse_from_rfc3339(&l.at)
+                .ok()
+                .map(|t| t.with_timezone(&chrono::Utc)
+                    + chrono::Duration::seconds(p.delay_seconds(attempts) as i64))
+        }
+        _ => None,
+    };
+
+    let phase = if out_of_tries {
+        Phase::Dead
+    } else if next.map(|t| t > now).unwrap_or(false) {
+        Phase::Waiting
+    } else {
+        Phase::Ready
+    };
+
+    ItemState {
+        index: it.index,
+        item: it.item.clone(),
+        phase,
+        attempts,
+        last_attempt_at: last.map(|l| l.at.clone()),
+        next_attempt_at: next.map(|t| t.to_rfc3339()),
+        last_error: last.and_then(|l| l.error.clone()),
+    }
+}
+
+/// Start an item's attempt count again, keeping its history.
+///
+/// `only_dead` retries just the items that ran out of attempts, which is the
+/// common case after fixing whatever made them fail. Returns how many were
+/// reset.
+pub fn reset_attempts(
+    workspace: &Path,
+    batch_id: &str,
+    only_dead: bool,
+    worker: &str,
+) -> Result<usize, EngineError> {
+    let _guard = crate::runlock::lock_store(workspace, &format!("ledger-{batch_id}"))
+        .map_err(EngineError::Config)?;
+    let now = chrono::Utc::now();
+    let targets: Vec<usize> = item_states(workspace, batch_id, now)
+        .into_iter()
+        .filter(|s| match s.phase {
+            Phase::Dead => true,
+            Phase::Waiting | Phase::Ready => !only_dead && s.attempts > 0,
+            Phase::Done => false,
+        })
+        .map(|s| s.index)
+        .collect();
+    if targets.is_empty() {
+        return Ok(0);
+    }
+    let p = ledger_path(workspace, batch_id);
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| EngineError::Config(e.to_string()))?;
+    }
+    let mut out = String::new();
+    for index in &targets {
+        let line = LedgerLine {
+            v: 1,
+            index: *index,
+            status: RETRY_MARKER.into(),
+            at: now.to_rfc3339(),
+            worker: worker.to_string(),
+            error: None,
+        };
+        out.push_str(
+            &serde_json::to_string(&line).map_err(|e| EngineError::Config(e.to_string()))?,
+        );
+        out.push('\n');
+    }
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&p)
+        .map_err(|e| EngineError::Config(format!("{}: {e}", p.display())))?;
+    f.write_all(out.as_bytes())
+        .map_err(|e| EngineError::Config(format!("{}: {e}", p.display())))?;
+    Ok(targets.len())
+}
+
 /// A batch as an operator needs to see it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -188,6 +425,13 @@ pub struct BatchStatus {
     pub done: usize,
     /// Items whose most recent attempt failed and which are still to be retried.
     pub failed: usize,
+    /// Failed items still inside their backoff, so no worker will take them yet.
+    /// Counted out of `failed` would hide them; they are a subset of it.
+    pub waiting: usize,
+    /// Items that used up their attempts. Nothing will claim these again until
+    /// someone resets them, which is why they are reported separately from
+    /// `failed` - "12 failed" reads as work in progress, "12 dead" does not.
+    pub dead: usize,
     pub pending: usize,
     /// Items being run right now, counted by asking the run lock rather than by
     /// trusting a heartbeat: a worker that died is not "running", and there is
@@ -242,11 +486,14 @@ pub fn status(workspace: &Path, batch_id: &str) -> BatchStatus {
         })
         .count();
     let last_activity = lines.iter().map(|l| l.at.clone()).max();
+    let states = item_states(workspace, batch_id, chrono::Utc::now());
     BatchStatus {
         id: batch_id.to_string(),
         items: items.len(),
         done: done.len(),
         failed: failed.len(),
+        waiting: states.iter().filter(|s| s.phase == Phase::Waiting).count(),
+        dead: states.iter().filter(|s| s.phase == Phase::Dead).count(),
         pending: items.len().saturating_sub(done.len()),
         running,
         last_activity,
@@ -424,6 +671,7 @@ mod tests {
             item: Some(name.into()),
             child: "pipelines/sync-one-table.json".into(),
             vars,
+            retry: None,
         }
     }
 
@@ -571,4 +819,193 @@ mod tests {
         assert!(stray.is_empty(), "a temp batch file was left in the folder");
         assert_eq!(read(&path).unwrap().0.len(), 500);
     }
+
+    // -----------------------------------------------------------------------
+    // #277 - retry policy, backoff and dead-letter state for queued work.
+    // -----------------------------------------------------------------------
+
+    fn with_policy(mut it: WorkItem, p: RetryPolicy) -> WorkItem {
+        it.retry = Some(p);
+        it
+    }
+
+    fn attempt(index: usize, status: &str, at: &str, error: Option<&str>) -> LedgerLine {
+        LedgerLine {
+            v: 1,
+            index,
+            status: status.into(),
+            at: at.into(),
+            worker: "w".into(),
+            error: error.map(str::to_string),
+        }
+    }
+
+    fn t(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&chrono::Utc)
+    }
+
+    /// The whole point: an item that will never succeed has to STOP being
+    /// claimed. Without a bound it is retried on every worker pass forever and
+    /// takes a slot from work that could finish.
+    #[test]
+    fn an_item_out_of_attempts_stops_being_claimable() {
+        let it = with_policy(
+            item(0, "orders"),
+            RetryPolicy {
+                max_attempts: 3,
+                backoff: "fixed".into(),
+                initial_seconds: 0,
+                max_seconds: 0,
+            },
+        );
+        let now = t("2026-08-27T12:00:00Z");
+        let fail = |n: &str| attempt(0, "error", n, Some("permanent 404"));
+
+        let two = vec![fail("2026-08-27T11:00:00Z"), fail("2026-08-27T11:10:00Z")];
+        assert_eq!(item_state(&it, &two, now).phase, Phase::Ready, "2 of 3 tries used");
+
+        let three = vec![
+            fail("2026-08-27T11:00:00Z"),
+            fail("2026-08-27T11:10:00Z"),
+            fail("2026-08-27T11:20:00Z"),
+        ];
+        let st = item_state(&it, &three, now);
+        assert_eq!(st.phase, Phase::Dead);
+        assert_eq!(st.attempts, 3);
+        assert_eq!(st.last_error.as_deref(), Some("permanent 404"));
+    }
+
+    /// No policy has to mean exactly what it meant before this existed, or
+    /// every batch already on disk changes behaviour on upgrade.
+    #[test]
+    fn without_a_policy_an_item_is_retried_forever_as_before() {
+        let it = item(0, "orders");
+        let lines: Vec<LedgerLine> = (0..50)
+            .map(|i| attempt(0, "error", &format!("2026-08-27T10:{:02}:00Z", i), Some("boom")))
+            .collect();
+        let st = item_state(&it, &lines, t("2026-08-27T12:00:00Z"));
+        assert_eq!(st.phase, Phase::Ready, "50 failures and still claimable, as before");
+        assert_eq!(st.attempts, 50);
+    }
+
+    /// A failure inside its backoff must not be handed to a worker yet, and
+    /// must become claimable on its own once the wait elapses - no sweeper, no
+    /// second process to run.
+    #[test]
+    fn a_failure_waits_out_its_backoff_then_becomes_claimable() {
+        let it = with_policy(
+            item(0, "orders"),
+            RetryPolicy {
+                max_attempts: 0,
+                backoff: "fixed".into(),
+                initial_seconds: 300,
+                max_seconds: 0,
+            },
+        );
+        let lines = vec![attempt(0, "error", "2026-08-27T12:00:00Z", Some("429"))];
+
+        let st = item_state(&it, &lines, t("2026-08-27T12:04:00Z"));
+        assert_eq!(st.phase, Phase::Waiting, "4 minutes into a 5 minute wait");
+        assert_eq!(st.next_attempt_at.as_deref(), Some("2026-08-27T12:05:00+00:00"));
+
+        assert_eq!(
+            item_state(&it, &lines, t("2026-08-27T12:05:01Z")).phase,
+            Phase::Ready,
+            "the wait elapsed, so it is claimable again"
+        );
+    }
+
+    /// Exponential backoff doubles and then stops at the ceiling. Getting the
+    /// ceiling wrong is how a retry ends up days away and looks like a hang.
+    #[test]
+    fn exponential_backoff_doubles_up_to_the_ceiling() {
+        let p = RetryPolicy {
+            max_attempts: 0,
+            backoff: "exponential".into(),
+            initial_seconds: 30,
+            max_seconds: 3600,
+        };
+        assert_eq!(p.delay_seconds(1), 30);
+        assert_eq!(p.delay_seconds(2), 60);
+        assert_eq!(p.delay_seconds(3), 120);
+        assert_eq!(p.delay_seconds(8), 3600, "3840 would exceed the ceiling");
+        assert_eq!(p.delay_seconds(60), 3600, "and it stays there rather than overflowing");
+        assert_eq!(p.delay_seconds(0), 0, "nothing has failed yet");
+
+        // Fixed ignores the doubling entirely.
+        let fixed = RetryPolicy { backoff: "fixed".into(), ..p.clone() };
+        assert_eq!(fixed.delay_seconds(5), 30);
+        // A policy shape from a newer build is read as fixed rather than
+        // rejected: refusing it would stop the batch over a spelling.
+        let unknown = RetryPolicy { backoff: "fibonacci".into(), ..p };
+        assert_eq!(unknown.delay_seconds(5), 30);
+    }
+
+    /// A manual retry has to reset the count WITHOUT deleting what happened.
+    /// An operator retrying a dead item needs to know it died four times first.
+    #[test]
+    fn a_reset_starts_the_count_again_and_keeps_the_history() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = "b1";
+        let it = with_policy(
+            item(0, "orders"),
+            RetryPolicy {
+                max_attempts: 2,
+                backoff: "fixed".into(),
+                initial_seconds: 0,
+                max_seconds: 0,
+            },
+        );
+        write(tmp.path(), id, &[it]).unwrap();
+        let p = ledger_path(tmp.path(), id);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let text: String = [
+            attempt(0, "error", "2026-08-27T10:00:00Z", Some("first")),
+            attempt(0, "error", "2026-08-27T10:05:00Z", Some("second")),
+        ]
+        .iter()
+        .map(|l| serde_json::to_string(l).unwrap() + "\n")
+        .collect();
+        std::fs::write(&p, text).unwrap();
+
+        let now = chrono::Utc::now();
+        assert_eq!(item_states(tmp.path(), id, now)[0].phase, Phase::Dead);
+
+        assert_eq!(reset_attempts(tmp.path(), id, true, "operator").unwrap(), 1);
+        let after = &item_states(tmp.path(), id, now)[0];
+        assert_eq!(after.phase, Phase::Ready, "it is claimable again");
+        assert_eq!(after.attempts, 0, "the count starts over");
+
+        // The failures are still readable - that is the difference between this
+        // and rewriting the ledger to drop them.
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(raw.contains("first") && raw.contains("second"), "history was deleted: {raw}");
+
+        // And a second reset with nothing dead does nothing rather than
+        // stacking markers.
+        assert_eq!(reset_attempts(tmp.path(), id, true, "operator").unwrap(), 0);
+    }
+
+    /// A success after failures ends the item. A done item that came back as
+    /// claimable would be duplicated work at best.
+    #[test]
+    fn a_success_ends_an_item_even_after_failures() {
+        let it = with_policy(
+            item(0, "orders"),
+            RetryPolicy {
+                max_attempts: 2,
+                backoff: "fixed".into(),
+                initial_seconds: 600,
+                max_seconds: 0,
+            },
+        );
+        let lines = vec![
+            attempt(0, "error", "2026-08-27T10:00:00Z", Some("transient")),
+            attempt(0, "ok", "2026-08-27T10:05:00Z", None),
+        ];
+        let st = item_state(&it, &lines, t("2026-08-27T10:06:00Z"));
+        assert_eq!(st.phase, Phase::Done);
+        assert_eq!(st.next_attempt_at, None, "nothing is waiting for a done item");
+    }
+
 }

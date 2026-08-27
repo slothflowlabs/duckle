@@ -5351,6 +5351,49 @@ function synthRoutingControl(comp: ComponentDef): ComponentManifest {
                 description:
                     'Run here does the work in this process, bounded by this machine. Queue writes the rows to batches/<id>.ndjson and returns without running anything, so any number of duckle-runner workers can claim an item each and get through the batch together. Queued work does not start on its own: a worker has to pick it up.',
             });
+            // Only meaningful for a queued batch. An inline For Each runs each
+            // row once, in this run - there is no later pass for a retry to
+            // happen on, so these would be controls that do nothing.
+            fields.push({
+                key: 'maxAttempts',
+                label: 'Max attempts per item',
+                kind: 'integer',
+                defaultValue: 0,
+                visibleWhen: { key: 'dispatch', equals: 'queue' },
+                description:
+                    'How many times an item may be tried in total, the first try included. A permanently bad row - a 404 that will always be a 404 - otherwise stays claimable and takes a worker slot on every pass, forever. Past this count the item is left alone and reported as dead by `duckle-runner work status`; `work retry --dead` starts it over. 0 means unlimited, which is what queued batches did before this existed.',
+            });
+            fields.push({
+                key: 'retryBackoff',
+                label: 'Backoff',
+                kind: 'select',
+                defaultValue: 'fixed',
+                options: [
+                    { label: 'Fixed wait', value: 'fixed' },
+                    { label: 'Exponential (doubling)', value: 'exponential' },
+                ],
+                visibleWhen: { key: 'dispatch', equals: 'queue' },
+                description:
+                    'How long a worker waits before trying a failed item again. Fixed waits the same each time. Exponential doubles the wait per failure, up to the ceiling below, which suits a rate-limited API better than hammering it at a constant rate.',
+            });
+            fields.push({
+                key: 'retryInitialSeconds',
+                label: 'Wait before retry (seconds)',
+                kind: 'integer',
+                defaultValue: 0,
+                visibleWhen: { key: 'dispatch', equals: 'queue' },
+                description:
+                    'The wait after the first failure, and the whole wait when the backoff is fixed. The clock runs from the failed attempt, so a worker that has been down for an hour finds the backlog ready rather than waiting another hour. 0 retries immediately, as before.',
+            });
+            fields.push({
+                key: 'retryMaxSeconds',
+                label: 'Longest wait (seconds)',
+                kind: 'integer',
+                defaultValue: 0,
+                visibleWhen: { key: 'dispatch', equals: 'queue' },
+                description:
+                    'A ceiling on the exponential wait, so doubling does not run away to days between tries. 0 means no ceiling.',
+            });
         }
         return base(comp, [{ label: isIterate ? 'Iterate' : 'For each row', fields }], 'upstream');
     }

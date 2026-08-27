@@ -191,7 +191,16 @@ pub fn run() -> Result<i32, String> {
              and another worker repeats it. Make the child idempotent - an upsert sink\n\
              rather than an append - and a repeat costs time, not correctness.\n\n\
              A failed item stays claimable and is retried on a later pass; the ledger\n\
-             keeps the failure so there is something to look at."
+             keeps the failure so there is something to look at. Set a retry policy on\n\
+             the For Each node (max attempts, fixed or exponential backoff) and an item\n\
+             that keeps failing is left alone once it runs out of attempts, instead of\n\
+             taking a worker slot on every pass forever.\n\n\
+             OTHER COMMANDS:\n    \
+             duckle-runner work status [--batch <id>] [--json]\n        \
+                 every batch, and the items waiting or out of attempts\n    \
+             duckle-runner work retry [--dead] [--batch <id>] [--json]\n        \
+                 start failed items over. --dead takes only the ones that ran\n        \
+                 out of attempts. The failures stay in the ledger either way."
         );
         return Ok(0);
     }
@@ -203,9 +212,22 @@ pub fn run() -> Result<i32, String> {
     let mut check_only = false;
     let mut skip_check = false;
     let mut probe: Option<(String, String)> = None;
+    let mut json = false;
+    let mut only_dead = false;
+    // `work status` and `work retry` read and edit the queue instead of
+    // consuming it. Taken as a leading word rather than a flag because they are
+    // different commands, not options on running.
+    let verb = args
+        .first()
+        .filter(|a| !a.starts_with('-'))
+        .cloned()
+        .unwrap_or_default();
+    let args: Vec<String> = if verb.is_empty() { args } else { args[1..].to_vec() };
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
+            "--json" => json = true,
+            "--dead" => only_dead = true,
             "--workspace" => {
                 workspace = PathBuf::from(it.next().ok_or("--workspace needs a value")?)
             }
@@ -228,6 +250,17 @@ pub fn run() -> Result<i32, String> {
     }
     let workspace = std::fs::canonicalize(&workspace)
         .map_err(|e| format!("workspace {}: {e}", workspace.display()))?;
+
+    match verb.as_str() {
+        "" => {}
+        "status" => return show_status(&workspace, only_batch.as_deref(), json),
+        "retry" => return retry(&workspace, only_batch.as_deref(), only_dead, json),
+        other => {
+            return Err(format!(
+                "unknown command `work {other}` - expected `status`, `retry`, or no command to run items"
+            ))
+        }
+    }
 
     // Measure the guarantee before relying on it. Refusing to start is the
     // right answer to a filesystem whose locks do not exclude: the alternative
@@ -274,6 +307,8 @@ pub fn run() -> Result<i32, String> {
     let mut ran = 0usize;
     let mut failed = 0usize;
     let mut skipped_claimed = 0usize;
+    let mut waiting = 0usize;
+    let mut dead = 0usize;
 
     for (batch_id, path) in batches(&workspace) {
         if let Some(want) = &only_batch {
@@ -289,11 +324,31 @@ pub fn run() -> Result<i32, String> {
                 path.display()
             );
         }
-        let done = batch::finished(&workspace, &batch_id);
+        // What each item's history says about it: done, claimable now, still
+        // inside its backoff, or out of attempts. Read once per batch rather
+        // than per item, so one pass over the ledger serves the whole batch.
+        let states: std::collections::HashMap<usize, batch::Phase> =
+            batch::item_states(&workspace, &batch_id, chrono::Utc::now())
+                .into_iter()
+                .map(|s| (s.index, s.phase))
+                .collect();
 
         for item in &items {
-            if done.contains(&item.index) {
-                continue;
+            match states.get(&item.index) {
+                Some(batch::Phase::Done) => continue,
+                // Failed and inside its backoff. Left alone rather than
+                // claimed-and-skipped, so it does not churn the lock.
+                Some(batch::Phase::Waiting) => {
+                    waiting += 1;
+                    continue;
+                }
+                // Out of attempts. Reported once per pass rather than per item:
+                // a batch with 40,000 dead items would otherwise bury the log.
+                Some(batch::Phase::Dead) => {
+                    dead += 1;
+                    continue;
+                }
+                _ => {}
             }
             // Claim it. A key of batch + index, under its own group so no
             // pipeline run can ever name it.
@@ -345,24 +400,167 @@ pub fn run() -> Result<i32, String> {
             drop(claim);
             if once {
                 println!("ran {ran}, failed {failed}");
+                if waiting > 0 {
+                    println!("{waiting} item(s) are waiting out a retry backoff.");
+                }
+                if dead > 0 {
+                    println!("{dead} item(s) are out of attempts.");
+                }
                 return Ok(if failed > 0 { 1 } else { 0 });
             }
         }
     }
 
+    let held_back = |waiting: usize, dead: usize| {
+        if waiting > 0 {
+            println!("{waiting} item(s) are waiting out a retry backoff.");
+        }
+        if dead > 0 {
+            println!(
+                "{dead} item(s) are out of attempts and will not be tried again. `duckle-runner work retry --dead` starts them over."
+            );
+        }
+    };
     if ran == 0 && failed == 0 {
         if skipped_claimed > 0 {
             println!("nothing to do: {skipped_claimed} item(s) are being run by other workers.");
+        } else if waiting > 0 || dead > 0 {
+            println!("nothing to run right now in {}.", workspace.display());
         } else {
             println!("nothing to do: no unfinished items in {}.", workspace.display());
         }
+        held_back(waiting, dead);
         return Ok(0);
     }
     println!("ran {ran}, failed {failed}");
     if skipped_claimed > 0 {
         println!("{skipped_claimed} item(s) were already claimed by other workers.");
     }
+    held_back(waiting, dead);
     Ok(if failed > 0 { 1 } else { 0 })
+}
+
+/// `work status` - what every batch is doing, and why anything is not moving.
+///
+/// The counts a worker acts on, shown the same way the worker reads them: an
+/// item held back by a backoff and an item that is out of attempts are
+/// different problems, and "12 failed" says neither.
+fn show_status(workspace: &Path, only: Option<&str>, json: bool) -> Result<i32, String> {
+    let now = chrono::Utc::now();
+    let ids: Vec<String> = batches(workspace)
+        .into_iter()
+        .map(|(id, _)| id)
+        .filter(|id| only.map(|w| w == id).unwrap_or(true))
+        .collect();
+    if let Some(want) = only {
+        if ids.is_empty() {
+            return Err(format!("no batch `{want}` in {}", workspace.display()));
+        }
+    }
+    if json {
+        let payload: Vec<serde_json::Value> = ids
+            .iter()
+            .map(|id| {
+                serde_json::json!({
+                    "batch": batch::status(workspace, id),
+                    "items": batch::item_states(workspace, id, now),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
+        return Ok(0);
+    }
+    if ids.is_empty() {
+        println!("no batches in {}", workspace.display());
+        return Ok(0);
+    }
+    for id in &ids {
+        let st = batch::status(workspace, id);
+        println!(
+            "{}: {} item(s) - {} done, {} running, {} failed ({} waiting), {} dead",
+            id, st.items, st.done, st.running, st.failed, st.waiting, st.dead
+        );
+        if st.unreadable > 0 {
+            println!("  {} line(s) of the batch could not be read", st.unreadable);
+        }
+        // Only the items that need attention. Listing 400,000 healthy rows
+        // buries the twelve that are stuck.
+        for s in batch::item_states(workspace, id, now) {
+            let label = s.item.clone().unwrap_or_else(|| s.index.to_string());
+            match s.phase {
+                batch::Phase::Dead => println!(
+                    "  DEAD    {label}  {} attempt(s), last: {}",
+                    s.attempts,
+                    s.last_error.as_deref().unwrap_or("(no error recorded)")
+                ),
+                batch::Phase::Waiting => println!(
+                    "  waiting {label}  {} attempt(s), next at {}",
+                    s.attempts,
+                    s.next_attempt_at.as_deref().unwrap_or("?")
+                ),
+                _ => {}
+            }
+        }
+    }
+    Ok(0)
+}
+
+/// `work retry` - start failed items over without losing what happened to them.
+///
+/// Appends a reset marker rather than deleting the failures, so the ledger
+/// still shows that an item died four times before someone fixed the source
+/// and retried it.
+fn retry(
+    workspace: &Path,
+    only: Option<&str>,
+    only_dead: bool,
+    json: bool,
+) -> Result<i32, String> {
+    let who = worker_id();
+    let ids: Vec<String> = batches(workspace)
+        .into_iter()
+        .map(|(id, _)| id)
+        .filter(|id| only.map(|w| w == id).unwrap_or(true))
+        .collect();
+    if ids.is_empty() {
+        return Err(match only {
+            Some(want) => format!("no batch `{want}` in {}", workspace.display()),
+            None => format!("no batches in {}", workspace.display()),
+        });
+    }
+    let mut total = 0usize;
+    let mut per: Vec<(String, usize)> = Vec::new();
+    for id in &ids {
+        let n = batch::reset_attempts(workspace, id, only_dead, &who).map_err(|e| e.to_string())?;
+        total += n;
+        if n > 0 {
+            per.push((id.clone(), n));
+        }
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "reset": total,
+                "batches": per.iter().map(|(id, n)| serde_json::json!({"batch": id, "reset": n}))
+                    .collect::<Vec<_>>(),
+            }))
+            .unwrap_or_default()
+        );
+        return Ok(0);
+    }
+    if total == 0 {
+        println!(
+            "nothing to retry{}.",
+            if only_dead { " - no items are out of attempts" } else { "" }
+        );
+        return Ok(0);
+    }
+    for (id, n) in &per {
+        println!("{id}: {n} item(s) will be tried again");
+    }
+    println!("run `duckle-runner work` to pick them up.");
+    Ok(0)
 }
 
 /// Something a human can recognise in a ledger: the machine, and the process.

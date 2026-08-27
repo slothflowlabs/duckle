@@ -1289,6 +1289,9 @@ Then run workers against it:
 duckle-runner work --workspace /path/to/workspace     # drain every batch
 duckle-runner work --batch fe-20260816T101112123      # just this one
 duckle-runner work --once                             # one item, then exit
+
+duckle-runner work status                             # what is stuck, and why
+duckle-runner work retry --dead                       # start the stuck ones over
 ```
 
 Start it on several machines pointed at one workspace and they share the batch.
@@ -1298,6 +1301,17 @@ to clean up: the kernel drops the lock and the item becomes claimable again.
 There is no lease, no heartbeat and no timeout, because there is nothing to
 expire. Progress is appended to `batches/<id>.ledger.ndjson`, so re-running a
 worker resumes rather than repeats.
+
+**Retries are bounded.** A failed item stays claimable and is tried again on a
+later pass, which is right for a timeout and wrong for a 404 that will always be
+a 404: without a limit that item takes a worker slot on every pass forever. Set
+**Max attempts per item** on the For Each node, with a fixed or exponential
+backoff, and an item that uses them up is left alone and reported as dead rather
+than chased. `work status` lists what is waiting out a backoff and what is dead,
+with the last error; `work retry --dead` starts the dead ones over. A retry
+appends a reset marker rather than rewriting the ledger, so the failures stay
+readable - an item that died four times before someone fixed the source still
+says so. Leave max attempts at 0 and behaviour is exactly what it was.
 
 Items run **at least once, not exactly once.** The ledger is written after an
 item succeeds, so a worker that finishes an item and then dies leaves it

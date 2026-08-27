@@ -1425,7 +1425,13 @@ impl DuckdbEngine {
                 }
                 // ctl.foreach: read upstream rows, run the sub-pipeline
                 // once per row with ${ITER_ITEM_<FIELD>} substitutions.
-                if let Some(RuntimeSpec::Foreach { path: each_path, concurrency, item_key, queue }) =
+                if let Some(RuntimeSpec::Foreach {
+                    path: each_path,
+                    concurrency,
+                    item_key,
+                    queue,
+                    retry,
+                }) =
                     stage.runtime.as_ref()
                 {
                     // Materialize upstream first if it isn't already
@@ -1491,7 +1497,7 @@ impl DuckdbEngine {
                         // run. Skipping that leaves the stage marked as never
                         // executed, which reads as a failure.
                         if let Err(e) = self
-                            .queue_foreach_batch(&stage.node_id, each_path, &per_row)
+                            .queue_foreach_batch(&stage.node_id, each_path, &per_row, retry.as_ref())
                             .map(|note| eprintln!("duckle: {note}"))
                         {
                             each_err = Some(format!("ctl.foreach({}): {}", each_path, e));

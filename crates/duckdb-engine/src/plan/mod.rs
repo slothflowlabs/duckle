@@ -261,6 +261,9 @@ pub enum RuntimeSpec {
         concurrency: usize,
         item_key: Option<String>,
         queue: bool,
+        /// Written into each queued item, so workers know how long to keep
+        /// retrying it without having to read the pipeline that queued it.
+        retry: Option<crate::batch::RetryPolicy>,
     },
     Parallelize(ParallelizeSpec),
     /// ctl.log / ctl.warn: emit a log line at `level` ("info" / "warn")
@@ -1607,6 +1610,7 @@ fn build_stage(
     let mut foreach_concurrency: usize = 1;
     let mut foreach_item_key: Option<String> = None;
     let mut foreach_queue = false;
+    let mut foreach_retry: Option<crate::batch::RetryPolicy> = None;
     // (level, message) for ctl.log / ctl.warn; (message, condition) for ctl.die.
     let mut log_spec: Option<(String, String)> = None;
     let mut die_spec: Option<(String, String)> = None;
@@ -3367,6 +3371,30 @@ fn build_stage(
             })
             .unwrap_or(1)
             .max(1) as usize;
+        // How long a queued item keeps being retried. Only meaningful for
+        // dispatch "queue" - an inline foreach runs each row once, in this run,
+        // and there is no later pass for a retry to happen on.
+        let num = |key: &str| -> u64 {
+            props
+                .get(key)
+                .and_then(|v| {
+                    v.as_u64()
+                        .or_else(|| v.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
+                })
+                .unwrap_or(0)
+        };
+        let max_attempts = num("maxAttempts") as u32;
+        let initial_seconds = num("retryInitialSeconds");
+        if foreach_queue && (max_attempts > 0 || initial_seconds > 0) {
+            foreach_retry = Some(crate::batch::RetryPolicy {
+                max_attempts,
+                backoff: string_prop(&props, "retryBackoff")
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| "fixed".into()),
+                initial_seconds,
+                max_seconds: num("retryMaxSeconds"),
+            });
+        }
         let sql = passthrough_view_sql(&node.id, from_view);
         (sql, StageKind::View, Some(from_view.to_string()))
     } else if component_id == "src.runevents" {
@@ -6053,6 +6081,7 @@ fn build_stage(
                 concurrency: foreach_concurrency,
                 item_key: foreach_item_key.clone(),
                 queue: foreach_queue,
+                retry: foreach_retry.clone(),
             }))
         .or_else(|| log_spec.map(|(level, message)| RuntimeSpec::Log { level, message }))
         .or_else(|| die_spec.map(|(message, condition)| RuntimeSpec::Die { message, condition }))
