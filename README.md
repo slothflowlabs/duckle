@@ -467,6 +467,39 @@ On Windows use **Task Scheduler**; on macOS a **launchd** plist; on Linux a **sy
 duckle-runner --pipeline /path/to/pipeline.json [--workspace /path/to/workspace] [--duckdb /path/to/duckdb]
 ```
 
+### Continuous mode (`follow`)
+
+A scheduled pipeline already consumes a stream without gaps: a source that
+tracks its position (`src.kafka` with `trackOffset`, `xf.incremental`) resumes
+where the last **successful** run stopped. What a schedule cannot give is
+latency - the scheduler wakes every 15 seconds, and every run pays process
+start, DuckDB resolution and document parsing again.
+
+`follow` keeps the same execution model and removes that per-batch overhead.
+The document is read and resolved once, the engine is built once, and the
+pipeline then runs in a loop. Each pass is one micro-batch:
+
+```bash
+duckle-runner follow /path/to/pipeline.json --idle-ms 500
+```
+
+| Flag | Meaning |
+|---|---|
+| `--idle-ms N` | wait N ms after a pass whose sinks wrote nothing (default 1000) |
+| `--max-batches N` | stop after N passes (default: until stopped) |
+| `--on-error stop\|continue` | stop on a failed batch (default), or keep going |
+
+**A failed batch never advances the source position.** The position is queued
+during the run and written only when the run reaches `ok`, which is after every
+sink has written - so a failure anywhere, transform, quality gate or sink,
+leaves the position where it was and the next pass re-reads exactly the records
+that did not land. Killing the process is safe for the same reason; `Ctrl-C`
+finishes the batch in hand first, which only saves you a truncated output file.
+
+That ordering is the difference between a correct micro-batch loop and a lossy
+one, so it is covered by a regression test that fails if the position ever
+advances past a batch that did not land.
+
 ### Web panel (remote management console)
 
 To run and monitor pipelines on a server with a browser instead of the desktop app, start the built-in **web panel** - it is part of the same `duckle-runner` binary, so there is nothing extra to install:

@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Pipeline payload sent from the frontend. Just the nodes + edges
 /// directly - no wrapping metadata required for a run.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PipelineDoc {
     pub nodes: Vec<PipelineNode>,
     #[serde(default)]

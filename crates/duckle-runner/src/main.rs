@@ -28,6 +28,7 @@ mod build;
 mod console_auth;
 use duckle_duckdb_engine::context;
 mod drift;
+mod follow;
 mod import;
 mod manifest;
 mod pipetest;
@@ -239,7 +240,7 @@ fn parse_args() -> Result<Args, String> {
 
 /// Find the DuckDB CLI: explicit flag, then env, then a sibling bin/duckdb
 /// (how the build bundle ships it), then PATH.
-fn resolve_duckdb(flag: Option<PathBuf>) -> Result<PathBuf, String> {
+pub(crate) fn resolve_duckdb(flag: Option<PathBuf>) -> Result<PathBuf, String> {
     if let Some(p) = flag {
         if p.exists() {
             return Ok(p);
@@ -586,7 +587,7 @@ fn load_secrets_enc(workspace: &Path) -> Result<Option<HashMap<String, String>>,
 /// the artifact path can point it at an operator-supplied secrets.env sitting
 /// next to the exe / in CWD WITHOUT copying that plaintext file into the
 /// shared, persistent extraction cache.
-fn apply_env_pass(doc: &mut PipelineDoc, workspace: &Path, env_path: &Path) -> Result<(), String> {
+pub(crate) fn apply_env_pass(doc: &mut PipelineDoc, workspace: &Path, env_path: &Path) -> Result<(), String> {
     // Secrets held in an external vault are fetched first, so a value that
     // came from the vault is in place before anything reads the properties.
     duckle_duckdb_engine::context::apply_vault(doc);
@@ -1045,6 +1046,88 @@ fn run_quickstart() -> ExitCode {
 /// network, because compiling only turns the graph into SQL. Exits 0 when all
 /// pipelines compile, 1 when any fails to compile (a real finding, distinct
 /// from the runner being misused), and 2 for a usage error.
+/// `follow <pipeline> [flags]` - parse the follower's own arguments and hand
+/// off to the loop. Kept separate from `parse_args` because the flags are
+/// disjoint: a follower has no `--target`, and none of the backfill flags mean
+/// anything mid-stream.
+fn run_follow() -> Result<(), String> {
+    let argv: Vec<String> = std::env::args().skip(2).collect();
+    if argv.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{}", FOLLOW_HELP);
+        return Ok(());
+    }
+    let mut o = follow::FollowOptions::default();
+    let mut i = 0;
+    let mut positional: Option<String> = None;
+    while i < argv.len() {
+        let a = argv[i].as_str();
+        let mut take = |what: &str| -> Result<String, String> {
+            i += 1;
+            argv.get(i)
+                .cloned()
+                .ok_or_else(|| format!("{} needs a value", what))
+        };
+        match a {
+            "--pipeline" => o.pipeline = std::path::PathBuf::from(take("--pipeline")?),
+            "--workspace" => o.workspace = Some(std::path::PathBuf::from(take("--workspace")?)),
+            "--duckdb" => o.duckdb = Some(std::path::PathBuf::from(take("--duckdb")?)),
+            "--log-dir" => o.log_dir = Some(std::path::PathBuf::from(take("--log-dir")?)),
+            "--name" => o.name = Some(take("--name")?),
+            "--idle-ms" => {
+                let v = take("--idle-ms")?;
+                o.idle_ms = v.parse().map_err(|_| format!("--idle-ms wants a number, got {v}"))?;
+            }
+            "--max-batches" => {
+                let v = take("--max-batches")?;
+                let n: u64 = v
+                    .parse()
+                    .map_err(|_| format!("--max-batches wants a number, got {v}"))?;
+                if n == 0 {
+                    return Err("--max-batches 0 would do nothing; omit it to run until stopped".into());
+                }
+                o.max_batches = Some(n);
+            }
+            "--on-error" => {
+                o.on_error = match take("--on-error")?.as_str() {
+                    "stop" => follow::OnError::Stop,
+                    "continue" => follow::OnError::Continue,
+                    other => return Err(format!("--on-error takes stop or continue, got {other}")),
+                }
+            }
+            other if other.starts_with('-') => return Err(format!("unknown flag {other}")),
+            other => positional = Some(other.to_string()),
+        }
+        i += 1;
+    }
+    if o.pipeline.as_os_str().is_empty() {
+        match positional {
+            Some(p) => o.pipeline = std::path::PathBuf::from(p),
+            None => return Err("a pipeline path is required (see --help)".into()),
+        }
+    }
+    follow::run(o).map(|_| ())
+}
+
+const FOLLOW_HELP: &str = "duckle-runner follow <pipeline.json> [flags]
+
+Run one pipeline continuously instead of once, keeping the process warm
+between batches. Each pass is a micro-batch.
+
+Sources that track their position (src.kafka with trackOffset, xf.incremental)
+resume where the last SUCCESSFUL batch stopped. A batch that fails anywhere -
+transform, quality gate or sink - does not advance that position, so the next
+pass re-reads exactly the records that did not land. Killing the process is
+safe for the same reason.
+
+  --idle-ms N        wait N ms after a pass that read nothing (default 1000)
+  --max-batches N    stop after N passes (default: run until stopped)
+  --on-error MODE    stop (default) or continue
+  --workspace DIR    default: the pipeline file's directory
+  --name NAME        run name in logs and state (default: the file stem)
+  --duckdb PATH      DuckDB binary to use
+  --log-dir DIR      default: <workspace>/logs
+";
+
 fn run_validate() -> ExitCode {
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut json_out = false;
@@ -1505,6 +1588,18 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::from(0),
             Err(e) => {
                 eprintln!("duckle-runner: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
+    // `follow` -> run one pipeline continuously instead of once, keeping the
+    // process warm between batches. Safe to kill: the saved source position
+    // only advances when a batch reaches "ok".
+    if std::env::args().nth(1).as_deref() == Some("follow") {
+        return match run_follow() {
+            Ok(()) => ExitCode::from(0),
+            Err(e) => {
+                eprintln!("duckle-runner follow: {e}");
                 ExitCode::from(2)
             }
         };

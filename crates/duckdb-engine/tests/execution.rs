@@ -15773,3 +15773,93 @@ def transform_batches(batch):
     );
 }
 
+/// The property continuous running rests on: a batch that fails downstream
+/// must NOT advance the source position, so the records it read are re-read
+/// rather than lost.
+///
+/// This is the failure mode that separates a correct micro-batch loop from an
+/// incorrect one. The tempting implementation commits the source position when
+/// the source reads - at which point a sink failure has silently dropped
+/// everything in that batch, and nothing reports it, because the source did
+/// its job. Here the position is queued and flushed only when the whole run
+/// reaches "ok", which is after every sink has written.
+///
+/// The test drives it through the real thing rather than asserting on the
+/// queue: run once cleanly, break the sink, run again with new records
+/// available, then repair the sink and assert the records that were in flight
+/// during the failure are delivered exactly once.
+#[test]
+fn a_failed_batch_does_not_advance_the_source_position() {
+    let engine = engine_or_skip!();
+    // DUCKLE_WORKSPACE is process-global and decides where the position file
+    // lives, so this has to be serialized against the other tests that set it.
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let src = write_file(
+        tmp.path(),
+        "in.csv",
+        "id,ts\n1,2026-01-01T00:00:00\n2,2026-01-02T00:00:00\n",
+    );
+    let good = out_path(tmp.path(), "good.csv");
+    // A regular FILE where the sink's output directory has to be, so the write
+    // fails without depending on permissions.
+    let blocker = tmp.path().join("blocked");
+    std::fs::write(&blocker, b"not a directory").unwrap();
+    let broken = format!("{}/out.csv", blocker.to_string_lossy().replace('\\', "/"));
+
+    let pipeline = |out: &str| {
+        doc(
+            json!([
+                node("s", "src.csv", json!({ "path": src, "hasHeader": true })),
+                node("i", "xf.incremental", json!({ "column": "ts" })),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "s", "i"), main_edge("e2", "i", "k")]),
+        )
+    };
+    let name = "position_holds";
+
+    // 1. A clean pass consumes both records and moves the position.
+    let r = engine.execute_pipeline_named(&pipeline(&good), name);
+    assert_eq!(r.status, "ok", "first pass failed: {:?}", r.error);
+    let state = tmp.path().join("state").join(name).join("i.json");
+    let after_good = std::fs::read_to_string(&state).expect("the position should be saved");
+    assert!(
+        after_good.contains("2026-01-02"),
+        "the position should have advanced to the last record: {}",
+        after_good
+    );
+
+    // 2. Two new records arrive, and the sink is broken.
+    std::fs::write(
+        &src,
+        "id,ts\n1,2026-01-01T00:00:00\n2,2026-01-02T00:00:00\n\
+         3,2026-01-03T00:00:00\n4,2026-01-04T00:00:00\n",
+    )
+    .unwrap();
+    let r = engine.execute_pipeline_named(&pipeline(&broken), name);
+    assert_eq!(r.status, "error", "the broken sink should fail the run");
+
+    // THE ASSERTION. The source read records 3 and 4 in that pass. Because the
+    // sink never wrote them, the position must be exactly where it was.
+    let after_fail = std::fs::read_to_string(&state).expect("the position file should still exist");
+    assert_eq!(
+        after_fail, after_good,
+        "a failed batch advanced the source position - records 3 and 4 would be \
+         lost with nothing reporting it"
+    );
+
+    // 3. Repair the sink. The records that were in flight must arrive, once.
+    std::fs::remove_file(&blocker).unwrap();
+    std::fs::create_dir_all(&blocker).unwrap();
+    let r = engine.execute_pipeline_named(&pipeline(&broken), name);
+    assert_eq!(r.status, "ok", "the repaired run failed: {:?}", r.error);
+    let delivered = std::fs::read_to_string(&broken).unwrap().replace("\r\n", "\n");
+    assert_eq!(
+        delivered.trim(),
+        "id,ts\n3,2026-01-03 00:00:00\n4,2026-01-04 00:00:00",
+        "exactly the records that were in flight during the failure, and no \
+         re-delivery of the two that already landed"
+    );
+}
