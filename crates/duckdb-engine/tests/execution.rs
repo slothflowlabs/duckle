@@ -15427,3 +15427,87 @@ fn a_run_that_cannot_record_its_state_does_not_report_ok() {
         err
     );
 }
+
+/// #10 follow-up: a declared date format is part of the source contract, so
+/// compiling, running, saving, reloading and compiling again must produce the
+/// same parsing expression. If execution or autodetect could rewrite it, two
+/// runs of the same saved pipeline would parse differently - which is exactly
+/// the class of change nobody notices until a date silently becomes NULL.
+#[test]
+fn a_declared_date_format_survives_a_run_and_a_reload() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    // Day-first dates, which are ambiguous without the declared format: 03/04
+    // is 3 April here and would be 4 March if anything re-detected it.
+    let in_csv = write_file(tmp.path(), "in.csv", "id,d\n1,03/04/2026\n2,25/12/2026\n");
+    let out = out_path(tmp.path(), "out.csv");
+
+    // One document, built as JSON so it can be round-tripped through a file the
+    // way a saved pipeline is.
+    let as_json = json!({
+        "nodes": [
+            {
+                "id": "s",
+                "position": { "x": 0, "y": 0 },
+                "data": {
+                    "label": "in",
+                    "componentId": "src.csv",
+                    "properties": { "path": in_csv, "hasHeader": true },
+                    "schema": [
+                        { "name": "id", "type": "int64" },
+                        { "name": "d", "type": "date", "format": "%d/%m/%Y" }
+                    ]
+                }
+            },
+            {
+                "id": "k",
+                "position": { "x": 200, "y": 0 },
+                "data": {
+                    "label": "out",
+                    "componentId": "snk.csv",
+                    "properties": { "path": out, "hasHeader": true }
+                }
+            }
+        ],
+        "edges": [ { "id": "e1", "source": "s", "target": "k", "data": { "connectionType": "main" } } ]
+    });
+
+    let sql_of = |text: &str| -> String {
+        let parsed: duckle_duckdb_engine::PipelineDoc =
+            serde_json::from_str(text).expect("doc parses");
+        duckle_duckdb_engine::compile_pipeline_sql(&parsed)
+            .expect("compiles")
+            .iter()
+            .map(|s| s.sql.clone())
+            .collect::<Vec<_>>()
+            .join("
+")
+    };
+
+    // The bytes as they would sit in the saved pipeline file.
+    let saved = as_json.to_string();
+    let before = sql_of(&saved);
+    assert!(
+        before.contains("%d/%m/%Y"),
+        "the declared format should reach the SQL: {}",
+        before
+    );
+
+    let parsed: duckle_duckdb_engine::PipelineDoc =
+        serde_json::from_str(&saved).expect("doc parses");
+    let r = engine.execute_pipeline(&parsed);
+    assert_eq!(r.status, "ok", "run failed: {:?}", r.error);
+    // Parsed with the declared format, not a re-detected one.
+    assert_eq!(
+        scalar_string(&format!("SELECT d::VARCHAR FROM read_csv_auto('{}') WHERE id = 1", out)),
+        "2026-04-03",
+        "03/04/2026 must parse day-first, as declared"
+    );
+
+    // Reload those same bytes and compile again: identical SQL.
+    let after = sql_of(&saved);
+    assert_eq!(
+        before, after,
+        "compiling a saved pipeline again produced different SQL - the declared          format is not stable across save/reload"
+    );
+}
