@@ -6,7 +6,9 @@
 // not actually call those APIs, so we bundle with esbuild and stub the bridge
 // + @tauri-apps modules to no-ops, then import the bundle to run it.
 //
-// esbuild is available as a transitive dependency of vite (already installed).
+// esbuild is a direct devDependency. It used to arrive transitively through
+// vite, which stopped being true at vite 8 - that bundles with rolldown, so
+// the transitive esbuild vanished and this script broke.
 
 import esbuild from 'esbuild';
 import { fileURLToPath } from 'node:url';
