@@ -12,6 +12,13 @@
 name: PyPI
 
 on:
+  # The version guard, the environment choice and the publish step below were
+  # all written for `release` from the start - the trigger itself was never
+  # added, so v0.6.0, v0.6.1 and v0.7.0 shipped to GitHub and never reached
+  # PyPI. Anyone running `pip install duckle` got a version from before the
+  # Talend importer, Pixeltable and the Oracle work.
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       target:
