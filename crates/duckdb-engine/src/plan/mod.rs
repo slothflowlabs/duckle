@@ -309,6 +309,7 @@ pub enum RuntimeSpec {
     TeradataSource(TeradataSourceSpec),
     TeradataSink(TeradataSinkSpec),
     SpoolSource(SpoolSourceSpec),
+    Tumble(TumbleSpec),
     Neo4jSource(Neo4jSourceSpec),
     Neo4jSink(Neo4jSinkSpec),
     TursoSource(TursoSourceSpec),
@@ -1489,6 +1490,7 @@ fn build_stage(
     let mut teradata_source: Option<TeradataSourceSpec> = None;
     let mut teradata_sink: Option<TeradataSinkSpec> = None;
     let mut spool_source: Option<SpoolSourceSpec> = None;
+    let mut tumble: Option<TumbleSpec> = None;
     let mut neo4j_source: Option<Neo4jSourceSpec> = None;
     let mut neo4j_sink: Option<Neo4jSinkSpec> = None;
     let mut turso_source: Option<TursoSourceSpec> = None;
@@ -4534,6 +4536,29 @@ fn build_stage(
             encrypt: props.get("encrypt").and_then(|v| v.as_bool()).unwrap_or(true),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "xf.tumble" {
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        tumble = Some(TumbleSpec {
+            node_id: node.id.clone(),
+            from_view: from_view.to_string(),
+            time_column: string_prop(&props, "timeColumn")
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    EngineError::Config(format!("{}: timeColumn required", component_id))
+                })?,
+            size: string_prop(&props, "size")
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| {
+                    EngineError::Config(format!(
+                        "{}: size required, as a DuckDB interval like \"1 hour\"",
+                        component_id
+                    ))
+                })?,
+            allowed_lateness: string_prop(&props, "allowedLateness")
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "0 seconds".to_string()),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.spool" {
         // Append-only NDJSON tailer. Pairs with `duckle-runner listen`, which
         // keeps a webhook or WebSocket listener up and writes here, so nothing
@@ -5880,6 +5905,7 @@ fn build_stage(
         .or_else(|| teradata_source.map(RuntimeSpec::TeradataSource))
         .or_else(|| teradata_sink.map(RuntimeSpec::TeradataSink))
         .or_else(|| spool_source.map(RuntimeSpec::SpoolSource))
+        .or_else(|| tumble.map(RuntimeSpec::Tumble))
         .or_else(|| neo4j_source.map(RuntimeSpec::Neo4jSource))
         .or_else(|| neo4j_sink.map(RuntimeSpec::Neo4jSink))
         .or_else(|| turso_source.map(RuntimeSpec::TursoSource))

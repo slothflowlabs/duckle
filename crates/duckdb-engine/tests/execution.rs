@@ -16038,3 +16038,266 @@ fn spool_does_not_advance_when_the_run_fails() {
         "a failed run recorded a spool position, so those records would never be re-read"
     );
 }
+
+/// Helper: run one tumbling-window batch over the given rows and return the
+/// rows it emitted, plus the message the stage reported.
+#[cfg(test)]
+fn tumble_batch(
+    engine: &duckle_duckdb_engine::DuckdbEngine,
+    tmp: &Path,
+    name: &str,
+    rows_sql: &str,
+    lateness: &str,
+) -> (String, String) {
+    let out = out_path(tmp, &format!("out-{}.csv", name));
+    let _ = std::fs::remove_file(&out);
+    let r = engine.execute_pipeline_named(
+        &doc(
+            json!([
+                node("g", "code.sql", json!({ "sql": rows_sql })),
+                node(
+                    "w",
+                    "xf.tumble",
+                    json!({ "timeColumn": "ts", "size": "1 hour", "allowedLateness": lateness })
+                ),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "g", "w"), main_edge("e2", "w", "k")]),
+        ),
+        name,
+    );
+    assert_eq!(r.status, "ok", "run failed: {:?}", r.error);
+    let msg = r
+        .nodes
+        .get("w")
+        .and_then(|n| n.error.clone())
+        .unwrap_or_default();
+    let csv = std::fs::read_to_string(&out).unwrap_or_default().replace("\r\n", "\n");
+    (csv, msg)
+}
+
+/// A window must not be emitted until the watermark says no more rows for it
+/// are coming - and the watermark is EVENT time, not the clock. Data from 2019
+/// produces 2019's windows, and the last window stays open because nothing has
+/// been seen past it.
+#[test]
+fn tumble_holds_a_window_open_until_the_watermark_passes_it() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+
+    // 10:00, 10:30 in one window; 11:15 in the next. The watermark reaches
+    // 11:15, which closes the 10:00-11:00 window but not the 11:00-12:00 one.
+    let (csv, _) = tumble_batch(
+        &engine,
+        tmp.path(),
+        "tumble_hold",
+        "SELECT * FROM (VALUES \
+           (1, TIMESTAMP '2019-03-04 10:00:00'), \
+           (2, TIMESTAMP '2019-03-04 10:30:00'), \
+           (3, TIMESTAMP '2019-03-04 11:15:00')) t(id, ts)",
+        "0 seconds",
+    );
+    let ids: Vec<&str> = csv.lines().skip(1).filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(ids.len(), 2, "only the closed window's rows: {csv}");
+    assert!(csv.contains("10:00:00") && csv.contains("10:30:00"), "{csv}");
+    assert!(
+        !csv.contains("11:15:00"),
+        "the 11:00 window is still open - nothing has been seen past it: {csv}"
+    );
+}
+
+/// The rows held open in one run must come back in the next, joined by
+/// whatever arrived since. This is the part that needs state to survive
+/// between runs at all.
+#[test]
+fn tumble_carries_open_windows_into_the_next_run() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let name = "tumble_carry";
+
+    let (csv1, _) = tumble_batch(
+        &engine,
+        tmp.path(),
+        name,
+        "SELECT * FROM (VALUES (1, TIMESTAMP '2019-03-04 11:15:00')) t(id, ts)",
+        "0 seconds",
+    );
+    assert_eq!(
+        csv1.lines().skip(1).filter(|l| !l.trim().is_empty()).count(),
+        0,
+        "nothing is closed yet: {csv1}"
+    );
+
+    // A row in the NEXT hour pushes the watermark past 12:00, closing the
+    // 11:00 window - and the row buffered last run must be in it.
+    let (csv2, _) = tumble_batch(
+        &engine,
+        tmp.path(),
+        name,
+        "SELECT * FROM (VALUES (2, TIMESTAMP '2019-03-04 12:30:00')) t(id, ts)",
+        "0 seconds",
+    );
+    assert!(
+        csv2.contains("11:15:00"),
+        "the row buffered in the previous run must be emitted when its window closes: {csv2}"
+    );
+    assert!(
+        !csv2.contains("12:30:00"),
+        "the 12:00 window is still open: {csv2}"
+    );
+}
+
+/// A failed batch must leave the window state exactly as it was, or the rows
+/// held in open windows are lost with it.
+#[test]
+fn tumble_state_survives_a_failed_batch() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let name = "tumble_fail";
+    let rows = "SELECT * FROM (VALUES (1, TIMESTAMP '2019-03-04 11:15:00')) t(id, ts)";
+
+    // A good run buffers the row.
+    tumble_batch(&engine, tmp.path(), name, rows, "0 seconds");
+    let state = tmp.path().join("state").join(name).join("w.json");
+    let after_good = std::fs::read_to_string(&state).expect("state saved");
+
+    // A run whose sink cannot be written.
+    let blocker = tmp.path().join("blocked");
+    std::fs::write(&blocker, b"not a directory").unwrap();
+    let broken = format!("{}/out.csv", blocker.to_string_lossy().replace('\\', "/"));
+    let r = engine.execute_pipeline_named(
+        &doc(
+            json!([
+                node("g", "code.sql", json!({ "sql": "SELECT * FROM (VALUES (9, TIMESTAMP '2019-03-04 23:00:00')) t(id, ts)" })),
+                node("w", "xf.tumble", json!({ "timeColumn": "ts", "size": "1 hour" })),
+                node("k", "snk.csv", json!({ "path": broken, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "g", "w"), main_edge("e2", "w", "k")]),
+        ),
+        name,
+    );
+    assert_eq!(r.status, "error", "the broken sink should fail the run");
+    assert_eq!(
+        std::fs::read_to_string(&state).unwrap(),
+        after_good,
+        "a failed batch advanced the window state - the rows it was holding would be gone"
+    );
+
+    // And the row from the good run is still there to be emitted.
+    let (csv, _) = tumble_batch(
+        &engine,
+        tmp.path(),
+        name,
+        "SELECT * FROM (VALUES (2, TIMESTAMP '2019-03-04 12:30:00')) t(id, ts)",
+        "0 seconds",
+    );
+    assert!(csv.contains("11:15:00"), "the buffered row survived the failure: {csv}");
+}
+
+/// Late data must not produce a second, partial copy of a window that was
+/// already delivered. SQLFlow's equivalent re-creates the deleted bucket and
+/// emits it again with only the late count in it; downstream then has the same
+/// window twice with different numbers.
+#[test]
+fn tumble_drops_data_that_arrives_after_its_window_was_delivered() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let name = "tumble_late";
+
+    // Close the 10:00 window and deliver it.
+    let (csv1, _) = tumble_batch(
+        &engine,
+        tmp.path(),
+        name,
+        "SELECT * FROM (VALUES \
+           (1, TIMESTAMP '2019-03-04 10:30:00'), \
+           (2, TIMESTAMP '2019-03-04 11:30:00')) t(id, ts)",
+        "0 seconds",
+    );
+    assert!(csv1.contains("10:30:00"), "the 10:00 window was delivered: {csv1}");
+
+    // A straggler for that same, already-delivered window.
+    let (csv2, msg) = tumble_batch(
+        &engine,
+        tmp.path(),
+        name,
+        "SELECT * FROM (VALUES (3, TIMESTAMP '2019-03-04 10:45:00')) t(id, ts)",
+        "0 seconds",
+    );
+    assert!(
+        !csv2.contains("10:45:00"),
+        "re-emitting a delivered window as a partial second copy is the bug being avoided: {csv2}"
+    );
+    let _ = msg;
+}
+
+/// allowedLateness is the whole knob for out-of-order data: with it, a window
+/// stays open past its end and a straggler still counts.
+#[test]
+fn tumble_allowed_lateness_keeps_a_window_open_for_stragglers() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+
+    // Watermark reaches 11:30. With 1 hour of lateness the 10:00-11:00 window
+    // needs the watermark past 12:00, so it stays open and holds both rows.
+    let (csv, _) = tumble_batch(
+        &engine,
+        tmp.path(),
+        "tumble_late_ok",
+        "SELECT * FROM (VALUES \
+           (1, TIMESTAMP '2019-03-04 10:30:00'), \
+           (2, TIMESTAMP '2019-03-04 11:30:00')) t(id, ts)",
+        "1 hour",
+    );
+    assert_eq!(
+        csv.lines().skip(1).filter(|l| !l.trim().is_empty()).count(),
+        0,
+        "1 hour of allowed lateness holds the 10:00 window open: {csv}"
+    );
+}
+
+/// The watermark only moves forward. A batch of older data must not re-open
+/// windows that already closed.
+#[test]
+fn tumble_watermark_does_not_go_backwards() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let name = "tumble_mono";
+
+    tumble_batch(
+        &engine,
+        tmp.path(),
+        name,
+        "SELECT * FROM (VALUES (1, TIMESTAMP '2019-03-04 20:00:00')) t(id, ts)",
+        "0 seconds",
+    );
+    let read_wm = || -> String {
+        let s = std::fs::read_to_string(tmp.path().join("state").join(name).join("w.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        v["watermark"].as_str().unwrap_or("").to_string()
+    };
+    let high = read_wm();
+    assert!(high.contains("20:00:00"), "watermark: {high}");
+
+    // An older batch arrives.
+    tumble_batch(
+        &engine,
+        tmp.path(),
+        name,
+        "SELECT * FROM (VALUES (2, TIMESTAMP '2019-03-04 09:00:00')) t(id, ts)",
+        "0 seconds",
+    );
+    assert_eq!(read_wm(), high, "a batch of older data dragged the watermark back");
+}

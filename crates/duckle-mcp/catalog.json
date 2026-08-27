@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 403,
+  "componentCount": 404,
   "components": [
     {
       "id": "src.csv",
@@ -19106,6 +19106,95 @@
                 "kind": "text",
                 "required": true,
                 "placeholder": "row_num"
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "reject",
+              "type": "reject",
+              "optional": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "xf.tumble",
+      "label": "Tumbling Window",
+      "kind": "transform",
+      "availability": "available",
+      "summary": "Event-time tumbling windows that survive across runs. Rows are held until their window CLOSES, decided by a watermark (the greatest event time seen so far) rather than the wall clock - so replaying old data produces the windows that data belongs to instead of closing them all at once. Adds window_start / window_end. allowedLateness holds a window open past its end for out-of-order arrivals; anything later than that is dropped and counted, rather than re-emitted as a second partial copy of a window already delivered. Open windows and the watermark ride the deferred flush, so a failed batch keeps them.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "reject",
+            "type": "reject",
+            "optional": true
+          }
+        ]
+      },
+      "manifest": {
+        "id": "xf.tumble",
+        "kind": "transform",
+        "label": "Tumbling Window",
+        "description": "Event-time tumbling windows that survive across runs. Rows are held until their window CLOSES, decided by a watermark (the greatest event time seen so far) rather than the wall clock - so replaying old data produces the windows that data belongs to instead of closing them all at once. Adds window_start / window_end. allowedLateness holds a window open past its end for out-of-order arrivals; anything later than that is dropped and counted, rather than re-emitted as a second partial copy of a window already delivered. Open windows and the watermark ride the deferred flush, so a failed batch keeps them.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Tumbling window",
+            "fields": [
+              {
+                "key": "timeColumn",
+                "label": "Event time column",
+                "kind": "column",
+                "required": true,
+                "description": "Windows are cut on this column, never on arrival time. Replaying old data therefore produces the windows that data belongs to."
+              },
+              {
+                "key": "size",
+                "label": "Window size",
+                "kind": "text",
+                "required": true,
+                "defaultValue": "1 hour",
+                "placeholder": "1 hour",
+                "description": "A DuckDB interval: 5 minutes, 1 hour, 1 day."
+              },
+              {
+                "key": "allowedLateness",
+                "label": "Allowed lateness",
+                "kind": "text",
+                "defaultValue": "0 seconds",
+                "placeholder": "0 seconds",
+                "description": "How far past the end of a window the watermark must reach before it closes. Buys time for out-of-order arrivals, at the cost of that much extra latency. Anything arriving after its window was delivered is dropped and counted - emitting it would give downstream a second, partial copy of a window it already has."
               }
             ]
           }

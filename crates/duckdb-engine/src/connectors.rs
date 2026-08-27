@@ -5144,6 +5144,243 @@ impl DuckdbEngine {
         materialize_jsonobjects_as_table(&self.bin, db, node_id, &[])
     }
 
+    /// xf.tumble: event-time tumbling windows across runs.
+    ///
+    /// Each run computes from `buffered rows UNION new rows`, emits the ones
+    /// whose window has closed, and writes what remains to a NEW buffer file.
+    /// The old buffer is left untouched until the run succeeds: the pointer to
+    /// the current buffer lives in the deferred state, so a run that fails
+    /// downstream leaves the previous buffer authoritative and the same rows
+    /// come back next time.
+    ///
+    /// That replace-don't-mutate shape is what makes it safe. Appending to a
+    /// shared buffer during the run would double-count on a retry, because the
+    /// source position has not advanced either.
+    pub(crate) fn run_tumble(
+        &self,
+        db: &Path,
+        spec: &plan::TumbleSpec,
+        pipeline_name: Option<&str>,
+        pending: &mut Vec<(std::path::PathBuf, JsonValue)>,
+    ) -> Result<String, EngineError> {
+        let state_path = incremental_state_path(pipeline_name, &spec.node_id).ok_or_else(|| {
+            EngineError::Config(
+                "xf.tumble: needs a workspace to keep its open windows in (DUCKLE_WORKSPACE)".into(),
+            )
+        })?;
+        let dir = state_path.with_extension("tumble");
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| EngineError::Query(format!("tumble: state dir {}: {}", dir.display(), e)))?;
+
+        let saved: Option<JsonValue> = std::fs::read_to_string(&state_path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok());
+        // The buffer the LAST SUCCESSFUL run left. Anything else in the folder
+        // is from a run that did not finish, and is ignored then cleaned up.
+        let prev_buf = saved
+            .as_ref()
+            .and_then(|v| v.get("buffer"))
+            .and_then(|v| v.as_str())
+            .map(|f| dir.join(f))
+            .filter(|p| p.exists());
+        let prev_watermark = saved
+            .as_ref()
+            .and_then(|v| v.get("watermark"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        // How far emission has already reached. A row for a window at or below
+        // this arrived too late to be counted and is dropped rather than
+        // emitted as a second, partial copy of a window already delivered.
+        let emitted_through = saved
+            .as_ref()
+            .and_then(|v| v.get("emitted_through"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let ts = plan::quote_ident(&spec.time_column);
+        let upstream = plan::quote_ident(&spec.from_view);
+        let lit = |s: &str| format!("'{}'", s.replace('\'', "''"));
+        let esc_path = |p: &std::path::Path| p.display().to_string().replace('\\', "/").replace('\'', "''");
+
+        // Everything in play this run: what was still open, plus what arrived.
+        let all = match &prev_buf {
+            Some(p) => format!(
+                "SELECT * FROM {up} UNION ALL BY NAME SELECT * FROM read_parquet('{buf}')",
+                up = upstream,
+                buf = esc_path(p)
+            ),
+            None => format!("SELECT * FROM {}", upstream),
+        };
+
+        // The watermark is computed ONCE, here, and used as a literal in every
+        // statement below. Recomputing it per statement is how the equivalent
+        // elsewhere ends up deleting more than it collected.
+        // Real tables, not TEMP views: every self.run / self.run_rows below is a
+        // separate duckdb invocation, and a temp view dies with the one that
+        // created it. These live in the run's own database and are dropped at
+        // the end.
+        let t_all = plan::quote_ident(&format!("duckle_tumble_all_{}", spec.node_id));
+        let t_b = plan::quote_ident(&format!("duckle_tumble_b_{}", spec.node_id));
+        let t_late = plan::quote_ident(&format!("duckle_tumble_late_{}", spec.node_id));
+        let wm_sql = format!(
+            "CREATE OR REPLACE TABLE {t_all} AS {all};
+             SELECT COALESCE(MAX({ts}), NULL)::VARCHAR AS wm FROM {t_all}",
+            t_all = t_all,
+            all = all,
+            ts = ts
+        );
+        let wm_rows = self.run_rows(Some(db), &wm_sql)?;
+        let batch_max = wm_rows
+            .first()
+            .and_then(|r| r.get("wm"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        // Monotonic: a batch of older data must not drag the watermark back and
+        // re-open windows that already closed.
+        let watermark = match (batch_max, prev_watermark.clone()) {
+            (Some(b), Some(p)) => Some(if b > p { b } else { p }),
+            (Some(b), None) => Some(b),
+            (None, p) => p,
+        };
+        let watermark = match watermark {
+            Some(w) => w,
+            // Nothing has ever been seen, so nothing can be closed.
+            None => {
+                self.run(
+                    Some(db),
+                    &format!(
+                        "CREATE OR REPLACE TABLE {out} AS SELECT *, \
+                           CAST(NULL AS TIMESTAMP) AS window_start, \
+                           CAST(NULL AS TIMESTAMP) AS window_end \
+                         FROM {t_all} LIMIT 0",
+                        out = plan::quote_ident(&spec.node_id),
+                        t_all = t_all
+                    ),
+                    false,
+                )?;
+                return Ok(format!("tumble: no rows yet in {}", spec.node_id));
+            }
+        };
+
+        let bucketed = format!(
+            "SELECT *, \
+               time_bucket(INTERVAL {size}, CAST({ts} AS TIMESTAMP)) AS window_start, \
+               time_bucket(INTERVAL {size}, CAST({ts} AS TIMESTAMP)) + INTERVAL {size} AS window_end \
+             FROM {t_all}",
+            size = lit(&spec.size),
+            ts = ts,
+            t_all = t_all
+        );
+        let closed = format!(
+            "window_end + INTERVAL {late} <= CAST({wm} AS TIMESTAMP)",
+            late = lit(&spec.allowed_lateness),
+            wm = lit(&watermark)
+        );
+        // A row whose window closed before the last emission is late beyond
+        // rescue: emitting it now would deliver a second, partial copy of a
+        // window a downstream consumer already has.
+        let too_late = match &emitted_through {
+            Some(e) => format!(
+                "window_end + INTERVAL {late} <= CAST({e} AS TIMESTAMP)",
+                late = lit(&spec.allowed_lateness),
+                e = lit(e)
+            ),
+            None => "FALSE".to_string(),
+        };
+
+        let next_buf_name = format!(
+            "buf-{}-{}.parquet",
+            std::process::id(),
+            TUMBLE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        let next_buf = dir.join(&next_buf_name);
+        let out = plan::quote_ident(&spec.node_id);
+
+        // One script: stage everything, emit the closed windows, and write what
+        // stays open to a NEW file. Nothing the previous run left is touched.
+        let script = format!(
+            "CREATE OR REPLACE TABLE {t_b} AS {bucketed};
+             CREATE OR REPLACE TABLE {t_late} AS \
+               SELECT * FROM {t_b} WHERE {too_late};
+             CREATE OR REPLACE TABLE {out} AS \
+               SELECT * FROM {t_b} WHERE {closed} AND NOT ({too_late});
+             COPY (SELECT * EXCLUDE (window_start, window_end) FROM {t_b} \
+                   WHERE NOT ({closed})) TO '{next}' (FORMAT PARQUET);",
+            t_b = t_b,
+            t_late = t_late,
+            bucketed = bucketed,
+            too_late = too_late,
+            closed = closed,
+            out = out,
+            next = esc_path(&next_buf)
+        );
+        self.run(Some(db), &script, false)?;
+
+        let emitted = self
+            .run_rows(Some(db), &format!("SELECT count(*) AS n FROM {}", out))?
+            .first()
+            .and_then(|r| r.get("n"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let dropped = self
+            .run_rows(Some(db), &format!("SELECT count(*) AS n FROM {}", t_late))?
+            .first()
+            .and_then(|r| r.get("n"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let still_open = self
+            .run_rows(
+                Some(db),
+                &format!("SELECT count(*) AS n FROM read_parquet('{}')", esc_path(&next_buf)),
+            )?
+            .first()
+            .and_then(|r| r.get("n"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        // The scratch tables have served their purpose; leaving them behind would
+        // put them in front of the user as if they were pipeline output.
+        let _ = self.run(
+            Some(db),
+            &format!(
+                "DROP TABLE IF EXISTS {t_all}; DROP TABLE IF EXISTS {t_b}; DROP TABLE IF EXISTS {t_late};"
+            ),
+            false,
+        );
+
+        // Emission only advances the mark when something was emitted; a quiet
+        // run must not move it and turn merely-early rows into "too late".
+        let next_emitted_through = if emitted > 0 {
+            Some(watermark.clone())
+        } else {
+            emitted_through.clone()
+        };
+        pending.push((
+            state_path,
+            serde_json::json!({
+                "buffer": next_buf_name,
+                "watermark": watermark,
+                "emitted_through": next_emitted_through,
+            }),
+        ));
+        // Old buffers from runs that did not finish are dead weight; the one
+        // the last success pointed at stays until this run is itself committed.
+        prune_tumble_buffers(&dir, &next_buf_name, prev_buf.as_deref());
+
+        Ok(format!(
+            "tumble: {} row(s) in closed windows into {}, {} still open{} (watermark {})",
+            emitted,
+            spec.node_id,
+            still_open,
+            if dropped > 0 {
+                format!(", {} dropped as too late", dropped)
+            } else {
+                String::new()
+            },
+            watermark
+        ))
+    }
+
     /// src.spool: read an append-only NDJSON file from where the last
     /// successful run stopped.
     ///
@@ -14076,6 +14313,33 @@ fn kafka_client_builder(
         builder = builder.sasl_config(kafka_sasl_config(s)?);
     }
     Ok(builder)
+}
+
+/// Sequence for tumble buffer filenames, so two runs in one process never pick
+/// the same name.
+static TUMBLE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Delete buffer files that no longer matter: anything that is neither the one
+/// this run just wrote nor the one the last SUCCESSFUL run pointed at. The
+/// previous buffer has to survive until this run commits, or a failure would
+/// leave nothing authoritative behind.
+fn prune_tumble_buffers(dir: &std::path::Path, keep: &str, prev: Option<&std::path::Path>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("buf-") || !name.ends_with(".parquet") {
+            continue;
+        }
+        if name == keep || prev.map(|p| p == path.as_path()).unwrap_or(false) {
+            continue;
+        }
+        let _ = std::fs::remove_file(&path);
+    }
 }
 
 /// The last complete JSON line in a file, used to learn a spool's column shape

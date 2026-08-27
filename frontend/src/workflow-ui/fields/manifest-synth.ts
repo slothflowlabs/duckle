@@ -1710,6 +1710,39 @@ function synthLakehouseSink(comp: ComponentDef): ComponentManifest {
 /// would otherwise win, and hand the user a form full of fields the engine
 /// never reads.
 function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
+    if (comp.id === 'xf.tumble') {
+        return base(comp, [
+            {
+                label: 'Tumbling window',
+                fields: [
+                    {
+                        key: 'timeColumn',
+                        label: 'Event time column',
+                        kind: 'column',
+                        required: true,
+                        description: 'Windows are cut on this column, never on arrival time. Replaying old data therefore produces the windows that data belongs to.',
+                    },
+                    {
+                        key: 'size',
+                        label: 'Window size',
+                        kind: 'text',
+                        required: true,
+                        defaultValue: '1 hour',
+                        placeholder: '1 hour',
+                        description: 'A DuckDB interval: 5 minutes, 1 hour, 1 day.',
+                    },
+                    {
+                        key: 'allowedLateness',
+                        label: 'Allowed lateness',
+                        kind: 'text',
+                        defaultValue: '0 seconds',
+                        placeholder: '0 seconds',
+                        description: 'How far past the end of a window the watermark must reach before it closes. Buys time for out-of-order arrivals, at the cost of that much extra latency. Anything arriving after its window was delivered is dropped and counted - emitting it would give downstream a second, partial copy of a window it already has.',
+                    },
+                ],
+            },
+        ]);
+    }
     if (comp.id === 'src.spool') {
         return base(comp, [
             {

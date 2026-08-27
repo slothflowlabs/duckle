@@ -2124,3 +2124,32 @@ pub struct SpoolSourceSpec {
     /// does not try to materialize the whole thing at once.
     pub max_bytes: u64,
 }
+
+/// xf.tumble: event-time tumbling windows that survive across runs.
+///
+/// Rows are assigned to fixed-size buckets by their event time, held until the
+/// bucket CLOSES, then emitted. Closing is decided by a watermark - the
+/// greatest event time seen so far, across runs - rather than by wall clock,
+/// so replaying yesterday's data produces yesterday's windows instead of
+/// closing all of them at once.
+///
+/// The state that has to survive between runs is the rows in windows that are
+/// still open, plus the watermark. Both are swapped in through the deferred
+/// flush, so a run that fails downstream leaves the previous state in place
+/// and its rows are re-processed rather than lost. That is the same guarantee
+/// every source position gets, and it is the part SQLFlow's equivalent does
+/// not have: there, a collect and a delete are separate lock acquisitions
+/// around a sink write, each evaluating `now()` on its own, so a window can be
+/// deleted after being collected but before being written.
+#[derive(Debug, Clone)]
+pub struct TumbleSpec {
+    pub node_id: String,
+    pub from_view: String,
+    /// The event-time column. Windows are cut on this, never on arrival time.
+    pub time_column: String,
+    /// Window size as a DuckDB interval, e.g. `1 hour`, `5 minutes`.
+    pub size: String,
+    /// How far past a window's end the watermark must reach before the window
+    /// closes. Buys time for out-of-order arrivals at the cost of latency.
+    pub allowed_lateness: String,
+}

@@ -527,6 +527,28 @@ is kept verbatim under `body` rather than dropped for not parsing. The spool is
 written and flushed BEFORE the 200 goes out, because a 200 tells the sender its
 delivery is safe and webhook senders do not retry those.
 
+### Tumbling windows that survive between runs (`xf.tumble`)
+
+Aggregating a stream by time needs a window to stay open across batches, and
+needs to know when it can be closed. `xf.tumble` assigns each row to a
+fixed-size bucket by its EVENT time, holds it until the bucket closes, then
+emits it with `window_start` / `window_end` for an ordinary `GROUP BY`
+downstream.
+
+Closing is decided by a **watermark** - the greatest event time seen so far,
+across runs - not by the wall clock. Replaying last year's data therefore
+produces last year's windows, instead of finding every one of them older than
+"now" and closing the lot at once.
+
+`allowedLateness` holds a window open past its end for out-of-order arrivals.
+Anything that arrives after its window was already delivered is **dropped and
+counted**, not emitted: sending it would hand a downstream consumer a second,
+partial copy of a window it already has, with different numbers in it.
+
+The rows in still-open windows and the watermark ride the same deferred flush
+as every source position, so a batch that fails downstream leaves them intact
+and re-processes rather than losing what it was holding.
+
 ### Web panel (remote management console)
 
 To run and monitor pipelines on a server with a browser instead of the desktop app, start the built-in **web panel** - it is part of the same `duckle-runner` binary, so there is nothing extra to install:

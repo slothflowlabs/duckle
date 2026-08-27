@@ -337,6 +337,7 @@ export const PALETTE: Category[] = [
                     xf('first', 'First Value', 'available'),
                     xf('last', 'Last Value', 'available'),
                     xf('ntile', 'NTile', 'available'),
+                    xf('tumble', 'Tumbling Window', 'available', 'Event-time tumbling windows that survive across runs. Rows are held until their window CLOSES, decided by a watermark (the greatest event time seen so far) rather than the wall clock - so replaying old data produces the windows that data belongs to instead of closing them all at once. Adds window_start / window_end. allowedLateness holds a window open past its end for out-of-order arrivals; anything later than that is dropped and counted, rather than re-emitted as a second partial copy of a window already delivered. Open windows and the watermark ride the deferred flush, so a failed batch keeps them.'),
                     xf('sessionize', 'Sessionize', 'available', 'Assign a session id to event rows by inactivity gap (clickstream / analytics prep): a new session starts when the time gap from the previous event in the partition exceeds the threshold. Emits session_id (per-partition running integer) and optionally session_seq (event index within the session).'),
                 ],
             },
