@@ -111,6 +111,93 @@ function pad(n: number): string {
 }
 
 /**
+ * Format a date object according to the given builtin base name.
+ */
+function formatTimeBuiltin(base: string, d: Date): string {
+    const ymd = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+    const hms = `${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
+    switch (base) {
+        case 'date':
+            return ymd;
+        case 'time':
+            return hms;
+        case 'datetime':
+            return `${ymd}_${hms}`;
+        case 'timestamp':
+            return String(Math.floor(d.getTime() / 1000));
+        case 'now':
+            return `${ymd}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}Z`;
+        default:
+            return '';
+    }
+}
+
+/**
+ * Parse a relative offset like `+1d`, `-2h`, `+30m`, `-45s` or a combination
+ * (`+1d6h30m`) into milliseconds (issue #191), mirroring Rust context.rs.
+ */
+function parseOffset(s: string): number | null {
+    const sign = s.startsWith('-') ? -1 : 1;
+    const rest = s.startsWith('+') || s.startsWith('-') ? s.slice(1) : s;
+    if (!rest) return null;
+
+    let totalMs = 0;
+    let numStr = '';
+    for (let i = 0; i < rest.length; i++) {
+        const ch = rest[i];
+        if (ch >= '0' && ch <= '9') {
+            numStr += ch;
+            continue;
+        }
+        if (!numStr) return null;
+        const n = parseInt(numStr, 10);
+        numStr = '';
+        switch (ch) {
+            case 'd':
+                totalMs += n * 24 * 60 * 60 * 1000;
+                break;
+            case 'h':
+                totalMs += n * 60 * 60 * 1000;
+                break;
+            case 'm':
+                totalMs += n * 60 * 1000;
+                break;
+            case 's':
+                totalMs += n * 1000;
+                break;
+            default:
+                return null;
+        }
+    }
+    if (numStr) return null;
+    return totalMs * sign;
+}
+
+/**
+ * Resolve a time-builtin placeholder name, with an optional relative offset,
+ * to its formatted value (issue #191).
+ */
+export function resolveTimeBuiltin(name: string, now: Date = new Date()): string | null {
+    const bases = ['timestamp', 'datetime', 'date', 'time', 'now'];
+    for (const base of bases) {
+        if (name === base) {
+            return formatTimeBuiltin(base, now);
+        }
+        if (name.startsWith(base)) {
+            const rest = name.slice(base.length);
+            if (rest.startsWith('+') || rest.startsWith('-')) {
+                const offsetMs = parseOffset(rest);
+                if (offsetMs !== null) {
+                    const shifted = new Date(now.getTime() + offsetMs);
+                    return formatTimeBuiltin(base, shifted);
+                }
+            }
+        }
+    }
+    return null;
+}
+
+/**
  * Dynamic date/time placeholders for timestamped source / sink paths, e.g.
  * `${workspace}/exports/${date}/orders.parquet` or `out_${datetime}.csv`.
  * All UTC so a run produces the same names on any machine / in CI, and
@@ -121,16 +208,13 @@ function pad(n: number): string {
  *   ${timestamp} -> epoch seconds
  *   ${now}       -> ISO-8601 (has colons; for values, not paths)
  */
-function timeBuiltins(): Record<string, string> {
-    const d = new Date();
-    const ymd = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
-    const hms = `${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
+function timeBuiltins(now: Date = new Date()): Record<string, string> {
     return {
-        date: ymd,
-        time: hms,
-        datetime: `${ymd}_${hms}`,
-        timestamp: String(Math.floor(d.getTime() / 1000)),
-        now: `${ymd}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}Z`,
+        date: formatTimeBuiltin('date', now),
+        time: formatTimeBuiltin('time', now),
+        datetime: formatTimeBuiltin('datetime', now),
+        timestamp: formatTimeBuiltin('timestamp', now),
+        now: formatTimeBuiltin('now', now),
     };
 }
 
@@ -142,8 +226,8 @@ function timeBuiltins(): Record<string, string> {
  * separators are normalized to `/` (DuckDB accepts them on every platform).
  * The date/time builtins are always present, even without a workspace.
  */
-export function builtinVars(workspacePath?: string | null): Record<string, string> {
-    const vars = timeBuiltins();
+export function builtinVars(workspacePath?: string | null, now: Date = new Date()): Record<string, string> {
+    const vars = timeBuiltins(now);
     if (workspacePath) {
         const root = workspacePath.replace(/\\/g, '/');
         vars.workspace = root;
@@ -152,19 +236,26 @@ export function builtinVars(workspacePath?: string | null): Record<string, strin
     return vars;
 }
 
-function substituteString(value: string, vars: Record<string, string>): string {
+function substituteString(value: string, vars: Record<string, string>, now: Date = new Date()): string {
     return value.replace(/\$\{([^}]+)\}/g, (match, expr) => {
         const key = String(expr).trim();
-        return Object.prototype.hasOwnProperty.call(vars, key) ? vars[key]! : match;
+        if (Object.prototype.hasOwnProperty.call(vars, key)) {
+            return vars[key]!;
+        }
+        const timeVal = resolveTimeBuiltin(key, now);
+        if (timeVal !== null) {
+            return timeVal;
+        }
+        return match;
     });
 }
 
-export function substituteDeep(value: unknown, vars: Record<string, string>): unknown {
-    if (typeof value === 'string') return substituteString(value, vars);
-    if (Array.isArray(value)) return value.map(v => substituteDeep(v, vars));
+export function substituteDeep(value: unknown, vars: Record<string, string>, now: Date = new Date()): unknown {
+    if (typeof value === 'string') return substituteString(value, vars, now);
+    if (Array.isArray(value)) return value.map(v => substituteDeep(v, vars, now));
     if (value && typeof value === 'object') {
         const out: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(value)) out[k] = substituteDeep(v, vars);
+        for (const [k, v] of Object.entries(value)) out[k] = substituteDeep(v, vars, now);
         return out;
     }
     return value;
@@ -200,7 +291,7 @@ export function discoverParams(
             for (const m of value.matchAll(/\$\{([^}]+)\}/g)) {
                 const key = String(m[1]).trim();
                 if (!key || key.startsWith('ENV:')) continue;
-                if (PARAM_BUILTINS.has(key)) continue;
+                if (PARAM_BUILTINS.has(key) || resolveTimeBuiltin(key) !== null) continue;
                 if (Object.prototype.hasOwnProperty.call(knownVars, key)) continue;
                 found.add(key);
             }
@@ -221,12 +312,15 @@ export function resolveForRun(
     extraVars?: Record<string, string>,
     runtimeParams?: Record<string, string>,
 ): Node<DuckleNodeData>[] {
+    // One `now` for the whole pass so every placeholder (and every offset) in a
+    // run stamps the exact same instant (mirrors context.rs:198-200).
+    const now = new Date();
     // Built-in workspace placeholders first, so an explicit context variable of
     // the same name (unusual) still wins. Global-context (extraVars) is merged
     // next so its runtime values override the static context defaults, then the
     // run-time input parameters (issue #127) win over everything.
     const vars = {
-        ...builtinVars(workspacePath),
+        ...builtinVars(workspacePath, now),
         ...buildContextVars(repo),
         ...(extraVars ?? {}),
         ...(runtimeParams ?? {}),
@@ -263,7 +357,7 @@ export function resolveForRun(
         }
 
         const resolved = hasVars
-            ? (substituteDeep(props, vars) as Record<string, unknown>)
+            ? (substituteDeep(props, vars, now) as Record<string, unknown>)
             : props;
 
         // Resolve child-pipeline ids to file paths. A value that isn't a
