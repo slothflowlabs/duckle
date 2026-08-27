@@ -297,7 +297,9 @@ async function loadV2(path: string): Promise<WorkspaceState | null> {
         }
     }
 
-    // Scan pipelines/ directory for any pipeline files on disk not explicitly referenced in repo
+    // Auto-register any pipeline files present on disk in `pipelines/` that are
+    // missing from repository.json. This is intentional for workspace recovery
+    // (e.g. from git merges or rollups where repository.json is partial).
     const diskPipelineFiles = await readDirEntries(joinPath(path, PIPELINES_DIR));
     for (const pfile of diskPipelineFiles) {
         const pid = pfile.replace(/\.json$/i, '');

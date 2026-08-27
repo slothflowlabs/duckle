@@ -589,9 +589,9 @@ export default function App() {
                 }
                 if (state) {
                     if (state.engine) setEngine(normalizeEngineId(state.engine));
-                    if (state.pipelineData && Object.keys(state.pipelineData).length > 0)
+                    if (state.pipelineData)
                         setPipelineData(state.pipelineData as Record<string, PipelineState>);
-                    if (state.repo && (state.repo as RepoItem[]).length > 0)
+                    if (state.repo)
                         setRepo(state.repo as RepoItem[]);
                     if (state.jobs && (state.jobs as Job[]).length > 0) {
                         const loadedJobs = state.jobs as Job[];
