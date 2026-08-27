@@ -5446,7 +5446,11 @@ impl DuckdbEngine {
         let take = (len - start).min(spec.max_bytes);
         if take == 0 {
             self.spool_empty_relation(db, &spec.node_id, path)?;
-            return Ok(format!("spool: no new records in {}", spec.path));
+            return Ok(format!(
+                "{}spool: no new records in {}",
+                crate::UNCHANGED_MARKER,
+                spec.path
+            ));
         }
         file.seek(SeekFrom::Start(start))
             .map_err(|e| EngineError::Query(format!("spool: seek {}: {}", spec.path, e)))?;

@@ -200,6 +200,7 @@ fn failed_run(started: DateTime<Utc>, error: &str) -> RunResult {
         preview: Vec::new(),
         category: Some(duckle_duckdb_engine::error_category::categorize_error(error).to_string()),
         error: Some(error.to_string()),
+    unchanged: false,
     }
 }
 
@@ -516,6 +517,8 @@ impl Scheduler {
         let elapsed = Utc::now().signed_duration_since(started).num_milliseconds().max(0) as u64;
         Ok(RunResult {
             status: if run.failed() { "error".into() } else { "success".into() },
+            // A plan rollup is not a source poll; it always did work or failed.
+            unchanged: false,
             duration_ms: elapsed,
             nodes: Default::default(),
             preview: Vec::new(),
@@ -644,6 +647,7 @@ impl Scheduler {
                 duckle_duckdb_engine::error_category::categorize_error(&e).to_string(),
             ),
             error: Some(e),
+            unchanged: false,
         };
         self.record_run(id, started, &result);
     }

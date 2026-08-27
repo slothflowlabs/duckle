@@ -378,6 +378,7 @@ mod tests {
         nodes.insert("snk".to_string(), mk(Some(0), "sink"));
         let r = RunResult {
             status: "ok".into(),
+            unchanged: false,
             duration_ms: 1,
             nodes,
             preview: vec![],

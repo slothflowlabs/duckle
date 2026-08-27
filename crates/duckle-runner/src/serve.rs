@@ -2905,6 +2905,8 @@ fn record_schedule_outcome(
 fn alerts_notify(state: &State, pipeline_id: &str, status: &str, duration_ms: u64, error: Option<String>) {
     let result = duckle_duckdb_engine::RunResult {
         status: status.to_string(),
+        // Synthesised for an alert about something outside a run.
+        unchanged: false,
         duration_ms,
         nodes: Default::default(),
         preview: Vec::new(),

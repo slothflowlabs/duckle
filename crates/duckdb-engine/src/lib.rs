@@ -1959,6 +1959,10 @@ impl DuckdbEngine {
             }
             let elapsed_ms = started.elapsed().as_millis() as u64;
 
+            // A runtime stage can report that it checked its source and found
+            // nothing to do. The marker is stripped here so the message shown
+            // is the plain one, and only the node's status carries the fact.
+            let stage_unchanged = matches!(&result, Ok(m) if m.starts_with(UNCHANGED_MARKER));
             match result {
                 Ok(_) => {
                     // snk.excel post-write: DuckDB's xlsx writer drops
@@ -2028,7 +2032,7 @@ impl DuckdbEngine {
                     nodes.insert(
                         stage.node_id.clone(),
                         NodeRunStatus {
-                            status: "ok".into(),
+                            status: if stage_unchanged { "unchanged" } else { "ok" }.into(),
                             kind: Some(kind_label.into()),
                             rows: rows_opt,
                             duration_ms: Some(elapsed_ms),
@@ -2241,6 +2245,7 @@ impl DuckdbEngine {
         let category = overall_error
             .as_deref()
             .map(|e| error_category::categorize_error(e).to_string());
+        let unchanged = run_was_unchanged(&nodes);
         RunResult {
             status: final_status.into(),
             duration_ms: total_start.elapsed().as_millis() as u64,
@@ -2248,6 +2253,7 @@ impl DuckdbEngine {
             preview,
             error: overall_error,
             category,
+            unchanged,
         }
     }
 
@@ -2763,6 +2769,7 @@ impl DuckdbEngine {
         let category = overall_error
             .as_deref()
             .map(|e| error_category::categorize_error(e).to_string());
+        let unchanged = run_was_unchanged(&nodes);
         RunResult {
             status: final_status.into(),
             duration_ms,
@@ -2770,6 +2777,7 @@ impl DuckdbEngine {
             preview,
             error: overall_error,
             category,
+            unchanged,
         }
     }
 
@@ -5286,6 +5294,44 @@ pub enum PipelineEvent {
     },
 }
 
+/// Prefix a runtime stage's message with this to report that node as
+/// `unchanged` rather than `ok`: it checked its source successfully and there
+/// was nothing to do.
+///
+/// A marker in the message rather than a change to the return type, because
+/// every runtime arm returns `Result<String, EngineError>` and threading a new
+/// type through all of them to carry one bit is not worth it. The control
+/// characters make a collision with real message text impossible, and the
+/// executor strips it before anyone sees the message.
+///
+/// NODE level only. The run status stays ok/error/cancelled, so nothing that
+/// keys off it - alerts, plans, exit codes, the scheduler, the batch ledger,
+/// the console, the desktop UI - can misread a quiet poll as a failure.
+pub(crate) const UNCHANGED_MARKER: &str = "\u{1}unchanged\u{1}";
+
+/// Split an `unchanged` marker off a stage message.
+pub(crate) fn split_unchanged(msg: &str) -> (bool, String) {
+    match msg.strip_prefix(UNCHANGED_MARKER) {
+        Some(rest) => (true, rest.to_string()),
+        None => (false, msg.to_string()),
+    }
+}
+
+/// Did this run do any publishable work?
+///
+/// A node being unchanged is normal and says nothing about the run; the RUN is
+/// unchanged only when it checked, found nothing, and wrote nothing. A run
+/// where one source was unchanged and another loaded rows is an ordinary `ok`.
+pub(crate) fn run_was_unchanged(
+    nodes: &std::collections::BTreeMap<String, NodeRunStatus>,
+) -> bool {
+    nodes.values().any(|n| n.status == "unchanged")
+        && !nodes
+            .values()
+            .filter(|n| n.kind.as_deref() == Some("sink"))
+            .any(|n| n.rows.unwrap_or(0) > 0)
+}
+
 /// A state write held until the run succeeds.
 ///
 /// `prior` carries what was on disk when this run READ that state, for writes
@@ -5349,6 +5395,16 @@ pub struct RunResult {
     /// Coarse bucket of `error` (see error_category) - present only on failure.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
+    /// The run checked its sources, found nothing changed, and wrote nothing.
+    ///
+    /// Beside `status`, not a fourth status value. A healthy poll can be
+    /// unchanged hundreds of times between real updates and that is worth
+    /// counting separately - but `status` is read in about forty places, and a
+    /// value none of them know turns a quiet poll into a page, a failed plan
+    /// step or a red CI job. `plans.rs` also already uses "skipped" for the
+    /// opposite meaning (a step an earlier failure stopped from running).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unchanged: bool,
 }
 
 impl RunResult {
@@ -5361,6 +5417,8 @@ impl RunResult {
             preview: Vec::new(),
             error: Some(error),
             category: Some(category.into()),
+            // A failure is never "nothing to do".
+            unchanged: false,
         }
     }
 }

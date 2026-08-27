@@ -16386,3 +16386,102 @@ fn an_edit_made_during_a_run_is_not_overwritten_by_its_flush() {
         r.error
     );
 }
+
+/// #272: a source that checked successfully and found nothing must be
+/// distinguishable from one that did work, and from one that failed.
+///
+/// A healthy poll is unchanged hundreds of times between real updates. If
+/// that reads as an ordinary success, nobody can tell a working poll from a
+/// broken one; if it reads as a failure, it pages somebody every few minutes.
+///
+/// So it is reported at NODE level as `unchanged`, and at RUN level as a
+/// separate flag - the run status stays `ok`, because about forty places key
+/// off ok/error/cancelled and a fourth value none of them know would turn a
+/// quiet poll into a page, a failed plan step or a red CI job.
+#[test]
+fn a_source_with_nothing_new_is_reported_as_unchanged_not_as_a_plain_ok() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let spool = tmp.path().join("in.ndjson");
+    let out = out_path(tmp.path(), "out.csv");
+    let pipeline = doc(
+        json!([
+            node("s", "src.spool", json!({ "path": spool.to_string_lossy().replace('\\', "/") })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    );
+    let name = "pollcheck";
+    std::fs::write(&spool, "{\"id\":1}\n").unwrap();
+
+    // A pass that DID work: ordinary ok, not unchanged.
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(r.nodes.get("s").map(|n| n.status.as_str()), Some("ok"));
+    assert!(!r.unchanged, "a run that loaded a row is not unchanged");
+
+    // A pass with nothing new.
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    assert_eq!(
+        r.status, "ok",
+        "a quiet poll must not read as a failure - that pages somebody every few minutes"
+    );
+    assert!(r.error.is_none(), "and must carry no error: {:?}", r.error);
+    assert_eq!(
+        r.nodes.get("s").map(|n| n.status.as_str()),
+        Some("unchanged"),
+        "the node must say it checked and found nothing, or a working poll and a \
+         broken one look identical"
+    );
+    assert!(
+        r.unchanged,
+        "the run did no publishable work, and that is what makes it countable \
+         separately from a run that did"
+    );
+    // The marker is an internal signal, never something the user reads.
+    let shown = format!("{:?}", r.nodes.get("s"));
+    assert!(
+        !shown.contains('\u{1}'),
+        "the marker leaked into what the user sees: {shown}"
+    );
+}
+
+/// A run where one source was unchanged and another wrote rows is an ordinary
+/// `ok`, not an unchanged run. Getting this wrong would hide real work.
+#[test]
+fn a_run_that_wrote_rows_is_not_unchanged_even_if_one_source_was() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let quiet = tmp.path().join("quiet.ndjson");
+    std::fs::write(&quiet, "{\"id\":1}\n").unwrap();
+    let busy = write_file(tmp.path(), "busy.csv", "id\n7\n8\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let name = "mixed";
+
+    let mk = || {
+        doc(
+            json!([
+                node("q", "src.spool", json!({ "path": quiet.to_string_lossy().replace('\\', "/") })),
+                node("b", "src.csv", json!({ "path": busy, "hasHeader": true })),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "b", "k")]),
+        )
+    };
+    // Drain the spool so the next run finds it quiet.
+    let r = engine.execute_pipeline_named(&mk(), name);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+
+    let r = engine.execute_pipeline_named(&mk(), name);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(r.nodes.get("q").map(|n| n.status.as_str()), Some("unchanged"));
+    assert!(
+        !r.unchanged,
+        "a sink wrote rows, so this run did publishable work and must not be \
+         counted as a quiet poll"
+    );
+}

@@ -508,6 +508,7 @@ mod tests {
             preview: Vec::new(),
             error: error.map(str::to_string),
             category: None,
+            unchanged: false,
         }
     }
 
