@@ -1567,3 +1567,15 @@ mod redaction_tests {
         assert_eq!(got.matches("${DUCKLE_PASSWORD}").count(), 2, "{got}");
     }
 }
+
+/// Serialises every test in this crate that sets `DUCKLE_WORKSPACE`, which is
+/// process-global while `cargo test` runs tests in parallel.
+///
+/// It has to be ONE lock. Two test modules with a `Mutex` each do not
+/// serialize against one another, and the symptom is the confusing one: each
+/// module passes when run alone and fails in the full suite.
+#[cfg(test)]
+pub(crate) fn workspace_env_guard() -> std::sync::MutexGuard<'static, ()> {
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}

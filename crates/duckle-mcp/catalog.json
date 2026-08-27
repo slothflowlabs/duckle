@@ -1112,7 +1112,7 @@
                 "label": "SFTP host fingerprint",
                 "kind": "text",
                 "placeholder": "SHA256:...",
-                "description": "Optional SFTP host-key pin. If set, the connection is refused unless the server key matches this SHA256 fingerprint."
+                "description": "Optional SFTP host-key pin. If set, the connection is refused unless the server key matches this SHA256 fingerprint. Leave empty and the first key seen for the host is recorded in <workspace>/.duckle/known_hosts, and a later connection offering a DIFFERENT key is refused - so a key change is noticed rather than accepted silently."
               }
             ]
           }
@@ -12557,7 +12557,7 @@
                 "label": "Host fingerprint",
                 "kind": "text",
                 "placeholder": "SHA256:...",
-                "description": "Optional SFTP host-key pin. If set, the connection is refused unless the server key matches this SHA256 fingerprint."
+                "description": "Optional SFTP host-key pin. If set, the connection is refused unless the server key matches this SHA256 fingerprint. Leave empty and the first key seen for the host is recorded in <workspace>/.duckle/known_hosts, and a later connection offering a DIFFERENT key is refused - so a key change is noticed rather than accepted silently."
               }
             ]
           },
@@ -29945,7 +29945,7 @@
                 "label": "Host fingerprint",
                 "kind": "text",
                 "placeholder": "SHA256:...",
-                "description": "Optional SFTP host-key pin. If set, the connection is refused unless the server key matches this SHA256 fingerprint."
+                "description": "Optional SFTP host-key pin. If set, the connection is refused unless the server key matches this SHA256 fingerprint. Leave empty and the first key seen for the host is recorded in <workspace>/.duckle/known_hosts, and a later connection offering a DIFFERENT key is refused - so a key change is noticed rather than accepted silently."
               }
             ]
           },

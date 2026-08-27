@@ -1156,7 +1156,7 @@ function synthFileSink(comp: ComponentDef): ComponentManifest {
                     { key: 'keyPassphrase', label: 'Key passphrase', kind: 'text', placeholder: '••••••••' },
                     { key: 'hostFingerprint', label: 'Host fingerprint', kind: 'text',
                       placeholder: 'SHA256:...',
-                      description: 'Optional SFTP host-key pin. If set, the connection is refused unless the server key matches this SHA256 fingerprint.' },
+                      description: 'Optional SFTP host-key pin. If set, the connection is refused unless the server key matches this SHA256 fingerprint. Leave empty and the first key seen for the host is recorded in <workspace>/.duckle/known_hosts, and a later connection offering a DIFFERENT key is refused - so a key change is noticed rather than accepted silently.' },
                 ],
             },
             {
@@ -1494,7 +1494,7 @@ function fileFormatSection(comp: ComponentDef): FormSection[] {
                         label: 'SFTP host fingerprint',
                         kind: 'text',
                         placeholder: 'SHA256:...',
-                        description: 'Optional SFTP host-key pin. If set, the connection is refused unless the server key matches this SHA256 fingerprint.',
+                        description: 'Optional SFTP host-key pin. If set, the connection is refused unless the server key matches this SHA256 fingerprint. Leave empty and the first key seen for the host is recorded in <workspace>/.duckle/known_hosts, and a later connection offering a DIFFERENT key is refused - so a key change is noticed rather than accepted silently.',
                     },
                 ],
             });
@@ -3886,7 +3886,7 @@ function synthMiscSource(comp: ComponentDef): ComponentManifest {
                     { key: 'keyPassphrase', label: 'Key passphrase', kind: 'text', placeholder: '••••••••' },
                     { key: 'hostFingerprint', label: 'Host fingerprint', kind: 'text',
                       placeholder: 'SHA256:...',
-                      description: 'Optional SFTP host-key pin. If set, the connection is refused unless the server key matches this SHA256 fingerprint.' },
+                      description: 'Optional SFTP host-key pin. If set, the connection is refused unless the server key matches this SHA256 fingerprint. Leave empty and the first key seen for the host is recorded in <workspace>/.duckle/known_hosts, and a later connection offering a DIFFERENT key is refused - so a key change is noticed rather than accepted silently.' },
                 ],
             },
             {

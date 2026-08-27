@@ -2301,6 +2301,11 @@
 
         // And in a real workspace it lands somewhere obvious and easy to throw away:
         // deleting the folder is the whole of "clear the cache".
+        // DUCKLE_WORKSPACE is process-global; without this the remove_var below
+        // reaches into whatever test is running alongside. It did: the SFTP
+        // known-hosts tests read their file through this variable, and lost it
+        // mid-test roughly one run in three.
+        let _g = crate::util::workspace_env_guard();
         std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
         let dir = crate::plan::cache_dir().expect("a workspace gives a cache folder");
         std::env::remove_var("DUCKLE_WORKSPACE");

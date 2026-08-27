@@ -7511,6 +7511,11 @@ impl DuckdbEngine {
         // server key; without one, accept on trust (trust-on-first-use).
         struct Verifier {
             expected: Option<String>,
+            hostport: String,
+            /// Why the key was refused. russh turns a `false` into a bare
+            /// "unknown key", which tells the user nothing about what changed
+            /// or what to do, so the reason is carried out this way.
+            refused: std::sync::Arc<std::sync::Mutex<Option<String>>>,
         }
         impl russh::client::Handler for Verifier {
             type Error = russh::Error;
@@ -7518,9 +7523,16 @@ impl DuckdbEngine {
                 &mut self,
                 server_public_key: &russh::keys::PublicKeyOrCertificate,
             ) -> Result<bool, Self::Error> {
-                match &self.expected {
-                    None => Ok(true),
-                    Some(want) => Ok(sftp_host_key_matches(server_public_key, want)),
+                match verify_sftp_host_key(
+                    server_public_key,
+                    self.expected.as_deref(),
+                    &self.hostport,
+                ) {
+                    Ok(()) => Ok(true),
+                    Err(why) => {
+                        *self.refused.lock().unwrap() = Some(why);
+                        Ok(false)
+                    }
                 }
             }
         }
@@ -7535,13 +7547,19 @@ impl DuckdbEngine {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
             let config = std::sync::Arc::new(russh::client::Config::default());
+            let refused = std::sync::Arc::new(std::sync::Mutex::new(None));
             let handler = Verifier {
                 expected: spec.host_fingerprint.clone(),
+                hostport: format!("{}:{}", spec.host, spec.port),
+                refused: refused.clone(),
             };
             let mut session =
                 russh::client::connect(config, (spec.host.as_str(), spec.port), handler)
                     .await
-                    .map_err(|e| format!("connect {}:{}: {}", spec.host, spec.port, e))?;
+                    .map_err(|e| match refused.lock().unwrap().take() {
+                        Some(why) => why,
+                        None => format!("connect {}:{}: {}", spec.host, spec.port, e),
+                    })?;
 
             // Auth: a private key wins over a password if both are present.
             let authed = if let Some(pem) = &spec.private_key {
@@ -7758,6 +7776,11 @@ impl DuckdbEngine {
         // server key; without one, accept on trust (trust-on-first-use).
         struct Verifier {
             expected: Option<String>,
+            hostport: String,
+            /// Why the key was refused. russh turns a `false` into a bare
+            /// "unknown key", which tells the user nothing about what changed
+            /// or what to do, so the reason is carried out this way.
+            refused: std::sync::Arc<std::sync::Mutex<Option<String>>>,
         }
         impl russh::client::Handler for Verifier {
             type Error = russh::Error;
@@ -7765,9 +7788,16 @@ impl DuckdbEngine {
                 &mut self,
                 server_public_key: &russh::keys::PublicKeyOrCertificate,
             ) -> Result<bool, Self::Error> {
-                match &self.expected {
-                    None => Ok(true),
-                    Some(want) => Ok(sftp_host_key_matches(server_public_key, want)),
+                match verify_sftp_host_key(
+                    server_public_key,
+                    self.expected.as_deref(),
+                    &self.hostport,
+                ) {
+                    Ok(()) => Ok(true),
+                    Err(why) => {
+                        *self.refused.lock().unwrap() = Some(why);
+                        Ok(false)
+                    }
                 }
             }
         }
@@ -7792,13 +7822,19 @@ impl DuckdbEngine {
                 use tokio::io::AsyncWriteExt;
 
                 let config = std::sync::Arc::new(russh::client::Config::default());
+                let refused = std::sync::Arc::new(std::sync::Mutex::new(None));
                 let handler = Verifier {
                     expected: spec.host_fingerprint.clone(),
+                    hostport: format!("{}:{}", spec.host, spec.port),
+                    refused: refused.clone(),
                 };
                 let mut session =
                     russh::client::connect(config, (spec.host.as_str(), spec.port), handler)
                         .await
-                        .map_err(|e| format!("connect {}:{}: {}", spec.host, spec.port, e))?;
+                        .map_err(|e| match refused.lock().unwrap().take() {
+                            Some(why) => why,
+                            None => format!("connect {}:{}: {}", spec.host, spec.port, e),
+                        })?;
 
                 let authed = if let Some(pem) = &spec.private_key {
                     let key = russh::keys::decode_secret_key(pem, spec.key_passphrase.as_deref())
@@ -15683,16 +15719,16 @@ mod sftp_host_key_tests {
     use russh::keys::ssh_key::{Certificate, PublicKey};
     use russh::keys::PublicKeyOrCertificate;
 
-    const A_PUB: &str =
+    pub(super) const A_PUB: &str =
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHNVp/MHziYS4wV2vfmafB+E18nSV2BaMmWYWkE84KvN host-a";
-    const A_FP: &str = "SHA256:1DIjFMJ6GUWygd6cLo4NLs110cetW5xyQ2G14cRCLvo";
-    const B_PUB: &str =
+    pub(super) const A_FP: &str = "SHA256:1DIjFMJ6GUWygd6cLo4NLs110cetW5xyQ2G14cRCLvo";
+    pub(super) const B_PUB: &str =
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP3A5IyXwvuYr2UKxn6b7Cojrd3YdI8NnzSLGM7rk+QH host-b";
-    const B_FP: &str = "SHA256:/pqI89pghckzSXZ9Bv/gh591hqgcKir1JWVadnrr+uQ";
+    pub(super) const B_FP: &str = "SHA256:/pqI89pghckzSXZ9Bv/gh591hqgcKir1JWVadnrr+uQ";
     /// A host certificate for key A, signed by an unrelated CA.
-    const A_CERT: &str = "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tAAAAIHmHd8n5oQYlP+gkjXwD4kYvou8OvSLgxS8IH4ETkeccAAAAIHNVp/MHziYS4wV2vfmafB+E18nSV2BaMmWYWkE84KvNAAAAAAAAAAAAAAACAAAAC2hvc3QtYS1jZXJ0AAAAFAAAABBzZnRwLmV4YW1wbGUuY29tAAAAAGqOyLUAAAAAfU7uNQAAAAAAAAAAAAAAAAAAADMAAAALc3NoLWVkMjU1MTkAAAAgKC5vUjky6nk4ceKsLufuOAGlIT3wkfHjOzg+FsstFW0AAABTAAAAC3NzaC1lZDI1NTE5AAAAQOXEYugiHUPCBT01h6WSbhBBv/Dt7JI1fQ5epfAxVWf2kgKo7Qd1MdOvK0m8y2PAannkUXMx3KcHFAT/m9982QQ= host-a";
+    pub(super) const A_CERT: &str = "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tAAAAIHmHd8n5oQYlP+gkjXwD4kYvou8OvSLgxS8IH4ETkeccAAAAIHNVp/MHziYS4wV2vfmafB+E18nSV2BaMmWYWkE84KvNAAAAAAAAAAAAAAACAAAAC2hvc3QtYS1jZXJ0AAAAFAAAABBzZnRwLmV4YW1wbGUuY29tAAAAAGqOyLUAAAAAfU7uNQAAAAAAAAAAAAAAAAAAADMAAAALc3NoLWVkMjU1MTkAAAAgKC5vUjky6nk4ceKsLufuOAGlIT3wkfHjOzg+FsstFW0AAABTAAAAC3NzaC1lZDI1NTE5AAAAQOXEYugiHUPCBT01h6WSbhBBv/Dt7JI1fQ5epfAxVWf2kgKo7Qd1MdOvK0m8y2PAannkUXMx3KcHFAT/m9982QQ= host-a";
 
-    fn raw(openssh: &str) -> PublicKeyOrCertificate {
+    pub(super) fn raw_key(openssh: &str) -> PublicKeyOrCertificate {
         PublicKeyOrCertificate::PublicKey {
             key: PublicKey::from_openssh(openssh).expect("parses"),
             hash_alg: None,
@@ -15705,7 +15741,7 @@ mod sftp_host_key_tests {
 
     #[test]
     fn the_pinned_key_is_accepted() {
-        assert!(sftp_host_key_matches(&raw(A_PUB), A_FP));
+        assert!(sftp_host_key_matches(&raw_key(A_PUB), A_FP));
     }
 
     /// The whole point. A different host key must be refused, or pinning is
@@ -15713,10 +15749,10 @@ mod sftp_host_key_tests {
     #[test]
     fn a_different_key_is_refused() {
         assert!(
-            !sftp_host_key_matches(&raw(B_PUB), A_FP),
+            !sftp_host_key_matches(&raw_key(B_PUB), A_FP),
             "a server presenting a key other than the pinned one must be refused"
         );
-        assert!(!sftp_host_key_matches(&raw(A_PUB), B_FP));
+        assert!(!sftp_host_key_matches(&raw_key(A_PUB), B_FP));
     }
 
     /// russh 0.63 can hand us a certificate where 0.62 always handed a key.
@@ -15761,9 +15797,9 @@ mod sftp_host_key_tests {
     #[test]
     fn the_sha256_prefix_is_optional_on_either_side() {
         let bare = A_FP.trim_start_matches("SHA256:");
-        assert!(sftp_host_key_matches(&raw(A_PUB), bare));
-        assert!(sftp_host_key_matches(&raw(A_PUB), A_FP));
-        assert!(sftp_host_key_matches(&raw(A_PUB), &format!("  {}  ", A_FP)));
+        assert!(sftp_host_key_matches(&raw_key(A_PUB), bare));
+        assert!(sftp_host_key_matches(&raw_key(A_PUB), A_FP));
+        assert!(sftp_host_key_matches(&raw_key(A_PUB), &format!("  {}  ", A_FP)));
     }
 
     /// Base64 is case-significant, so a fingerprint that differs only in case
@@ -15771,7 +15807,7 @@ mod sftp_host_key_tests {
     #[test]
     fn comparison_stays_case_sensitive() {
         assert!(
-            !sftp_host_key_matches(&raw(A_PUB), &A_FP.to_lowercase()),
+            !sftp_host_key_matches(&raw_key(A_PUB), &A_FP.to_lowercase()),
             "lower-casing a base64 fingerprint makes it a different value"
         );
     }
@@ -15780,18 +15816,348 @@ mod sftp_host_key_tests {
     fn nonsense_never_matches() {
         for junk in ["", "SHA256:", "not-a-fingerprint", "SHA256:AAAA"] {
             assert!(
-                !sftp_host_key_matches(&raw(A_PUB), junk),
+                !sftp_host_key_matches(&raw_key(A_PUB), junk),
                 "{junk:?} must not match"
             );
         }
     }
 }
 
-/// Host-key verifier for src.xml's SFTP reader. With a pinned SHA256 fingerprint
-/// it refuses any other server key; without one it trusts on first use. Mirrors
-/// the verifier in run_sftp_source.
+/// Where the workspace remembers SFTP host keys it has seen.
+///
+/// `None` when there is no workspace, which is the case in a bare unit test or
+/// an embedded call with nothing configured. Without somewhere to remember, the
+/// policy below degrades to the old accept-anything behaviour rather than
+/// refusing every connection.
+pub(crate) fn known_hosts_path() -> Option<std::path::PathBuf> {
+    let ws = std::env::var("DUCKLE_WORKSPACE").ok().filter(|s| !s.is_empty())?;
+    Some(std::path::Path::new(&ws).join(".duckle").join("known_hosts"))
+}
+
+/// Fingerprints already recorded for `host:port`.
+///
+/// The format is one `host:port SHA256:fingerprint` per line, `#` for comments.
+/// Deliberately NOT OpenSSH's known_hosts: that format carries hashed
+/// hostnames, per-algorithm entries and revocation markers, and half-reading it
+/// would be worse than not claiming to read it at all. This is greppable, and a
+/// line can be deleted by hand, which is the escape hatch when a host really
+/// does rotate its key.
+///
+/// Several lines for one host are allowed and any of them matches - an SFTP
+/// service behind a load balancer legitimately answers with a different key per
+/// node. They only accumulate when a human adds them: a key that is not already
+/// listed is refused, never quietly appended.
+pub(crate) fn read_known_hosts(path: &std::path::Path, hostport: &str) -> Vec<String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| {
+            let (h, fp) = l.split_once(char::is_whitespace)?;
+            (h == hostport).then(|| normalize_fingerprint(fp.trim()))
+        })
+        .collect()
+}
+
+/// Record a host key on first sight. Best-effort: a workspace that cannot be
+/// written still connects, because refusing to talk to a server over a failed
+/// bookkeeping write would be a worse failure than the one being prevented.
+fn record_known_host(path: &std::path::Path, hostport: &str, fingerprint: &str) {
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    use std::io::Write as _;
+    let line = format!("{} {}\n", hostport, fingerprint);
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut f| f.write_all(line.as_bytes()));
+}
+
+/// Strip the `SHA256:` prefix and surrounding space. Base64 is
+/// case-significant, so nothing else is normalized.
+pub(crate) fn normalize_fingerprint(s: &str) -> String {
+    s.trim().trim_start_matches("SHA256:").to_string()
+}
+
+/// The SHA256 fingerprint of whatever the server presented.
+///
+/// A certificate is reduced to the key it certifies. See
+/// `sftp_host_key_matches` for why that key, and not the certificate, is the
+/// thing worth comparing.
+pub(crate) fn presented_fingerprint(presented: &russh::keys::PublicKeyOrCertificate) -> String {
+    use russh::keys::HashAlg;
+    use russh::keys::PublicKeyOrCertificate;
+    match presented {
+        PublicKeyOrCertificate::PublicKey { key, .. } => {
+            key.fingerprint(HashAlg::Sha256).to_string()
+        }
+        PublicKeyOrCertificate::Certificate(cert) => {
+            cert.public_key().fingerprint(HashAlg::Sha256).to_string()
+        }
+    }
+}
+
+/// Decide whether to talk to this server, and say why not when the answer is no.
+///
+/// Three policies, in order of strength:
+///
+/// 1. **A pinned fingerprint wins outright.** Match or refuse; the known-hosts
+///    file is not consulted, because the user named the key explicitly.
+/// 2. **Otherwise, trust on first use - and actually remember it.** The first
+///    key seen for a host is recorded, and a later connection offering a
+///    different key is refused. Previously an unpinned connection accepted any
+///    key on every connection, which is not trust-on-first-use at all: it means
+///    a machine-in-the-middle is undetected on the first connection AND every
+///    one after it.
+/// 3. **`DUCKLE_SFTP_HOST_KEY_POLICY=accept-any` opts out**, for a host whose
+///    key genuinely changes per connection. It is an env var rather than a node
+///    field on purpose: it is an operator's decision about a machine, not a
+///    property of a pipeline, and it should be visible in the deployment rather
+///    than buried in a saved document.
+pub(crate) fn verify_sftp_host_key(
+    presented: &russh::keys::PublicKeyOrCertificate,
+    pinned: Option<&str>,
+    hostport: &str,
+) -> Result<(), String> {
+    if let Some(want) = pinned {
+        return if sftp_host_key_matches(presented, want) {
+            Ok(())
+        } else {
+            Err(format!(
+                "sftp: {} presented host key {}, which does not match the pinned \
+                 fingerprint {}. Refusing to connect.",
+                hostport,
+                presented_fingerprint(presented),
+                want.trim()
+            ))
+        };
+    }
+
+    if std::env::var("DUCKLE_SFTP_HOST_KEY_POLICY")
+        .map(|v| v.trim().eq_ignore_ascii_case("accept-any"))
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    let got = presented_fingerprint(presented);
+    let path = match known_hosts_path() {
+        Some(p) => p,
+        // Nothing to remember with. Behave as before rather than refusing every
+        // connection in a workspace-less context.
+        None => return Ok(()),
+    };
+    let known = read_known_hosts(&path, hostport);
+    if known.is_empty() {
+        record_known_host(&path, hostport, &got);
+        return Ok(());
+    }
+    if known.iter().any(|k| *k == normalize_fingerprint(&got)) {
+        return Ok(());
+    }
+    Err(format!(
+        "sftp: {} presented host key {}, but this workspace has seen a different \
+         key for it. Refusing to connect - this is what a machine-in-the-middle \
+         looks like, and it is also what a legitimate key rotation looks like. \
+         If the change is expected, remove the line for {} from {} and the new \
+         key will be recorded on the next connection.",
+        hostport,
+        got,
+        hostport,
+        path.display()
+    ))
+}
+
+
+/// Unpinned SFTP connections: trust on first use, and actually remember it.
+///
+/// Before this, an unpinned connection returned `Ok(true)` for any key on
+/// every connection. That is not trust-on-first-use - nothing was trusted and
+/// nothing was remembered, so a machine-in-the-middle was undetected on the
+/// first connection and every one after. These tests pin the behaviour that
+/// replaced it.
+#[cfg(test)]
+mod sftp_known_hosts_tests {
+    use super::sftp_host_key_tests::{raw_key, A_FP, A_PUB, B_FP, B_PUB};
+    use super::{read_known_hosts, verify_sftp_host_key};
+
+    use crate::util::workspace_env_guard as guard;
+
+    struct Workspace {
+        _dir: tempfile::TempDir,
+        _g: std::sync::MutexGuard<'static, ()>,
+    }
+    impl Workspace {
+        fn new() -> Self {
+            let g = guard();
+            let dir = tempfile::tempdir().unwrap();
+            std::env::set_var("DUCKLE_WORKSPACE", dir.path());
+            std::env::remove_var("DUCKLE_SFTP_HOST_KEY_POLICY");
+            Self { _dir: dir, _g: g }
+        }
+        fn known_hosts(&self) -> std::path::PathBuf {
+            self._dir.path().join(".duckle").join("known_hosts")
+        }
+    }
+
+    #[test]
+    fn the_first_key_seen_is_accepted_and_recorded() {
+        let ws = Workspace::new();
+        assert!(verify_sftp_host_key(&raw_key(A_PUB), None, "sftp.example.com:22").is_ok());
+        let recorded = read_known_hosts(&ws.known_hosts(), "sftp.example.com:22");
+        assert_eq!(
+            recorded,
+            vec![A_FP.trim_start_matches("SHA256:").to_string()],
+            "the key must be written down, or nothing can notice it changing"
+        );
+    }
+
+    /// The reason this exists.
+    #[test]
+    fn a_changed_key_is_refused() {
+        let ws = Workspace::new();
+        verify_sftp_host_key(&raw_key(A_PUB), None, "sftp.example.com:22").expect("first is fine");
+        let err = verify_sftp_host_key(&raw_key(B_PUB), None, "sftp.example.com:22")
+            .expect_err("a different key for a known host must be refused");
+        assert!(err.contains("different key"), "message should say what happened: {err}");
+        assert!(
+            err.contains(&ws.known_hosts().display().to_string()),
+            "message should name the file to edit: {err}"
+        );
+        // And it must not have quietly appended itself.
+        assert_eq!(
+            read_known_hosts(&ws.known_hosts(), "sftp.example.com:22").len(),
+            1,
+            "a refused key must not be recorded, or the next connection would accept it"
+        );
+    }
+
+    #[test]
+    fn the_same_key_on_a_later_connection_is_accepted() {
+        let _ws = Workspace::new();
+        for _ in 0..3 {
+            assert!(verify_sftp_host_key(&raw_key(A_PUB), None, "sftp.example.com:22").is_ok());
+        }
+    }
+
+    /// Host and port together are the identity: the same hostname on another
+    /// port is a different service and gets its own entry.
+    #[test]
+    fn hosts_are_tracked_separately() {
+        let ws = Workspace::new();
+        verify_sftp_host_key(&raw_key(A_PUB), None, "a.example.com:22").expect("a");
+        verify_sftp_host_key(&raw_key(B_PUB), None, "b.example.com:22").expect("b");
+        verify_sftp_host_key(&raw_key(B_PUB), None, "a.example.com:2222").expect("other port");
+        assert_eq!(read_known_hosts(&ws.known_hosts(), "a.example.com:22").len(), 1);
+        assert_eq!(read_known_hosts(&ws.known_hosts(), "b.example.com:22").len(), 1);
+        assert_eq!(read_known_hosts(&ws.known_hosts(), "a.example.com:2222").len(), 1);
+        // And key B is still refused on a.example.com:22 despite being known elsewhere.
+        assert!(verify_sftp_host_key(&raw_key(B_PUB), None, "a.example.com:22").is_err());
+    }
+
+    /// Several keys for one host is the load-balancer case. They only
+    /// accumulate when a human writes them, which is what the next test checks.
+    #[test]
+    fn any_key_a_human_listed_for_the_host_is_accepted() {
+        let ws = Workspace::new();
+        let path = ws.known_hosts();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                "# a cluster behind one name\n\
+                 sftp.example.com:22 {A_FP}\n\
+                 sftp.example.com:22 {B_FP}\n"
+            ),
+        )
+        .unwrap();
+        assert!(verify_sftp_host_key(&raw_key(A_PUB), None, "sftp.example.com:22").is_ok());
+        assert!(verify_sftp_host_key(&raw_key(B_PUB), None, "sftp.example.com:22").is_ok());
+    }
+
+    #[test]
+    fn a_pin_outranks_the_known_hosts_file() {
+        let ws = Workspace::new();
+        let path = ws.known_hosts();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // The file says key B is fine for this host...
+        std::fs::write(&path, format!("sftp.example.com:22 {B_FP}\n")).unwrap();
+        // ...but the pipeline pinned key A, and the pin is the stronger claim.
+        assert!(
+            verify_sftp_host_key(&raw_key(B_PUB), Some(A_FP), "sftp.example.com:22").is_err(),
+            "a pinned fingerprint must not be softened by what the file remembers"
+        );
+        assert!(verify_sftp_host_key(&raw_key(A_PUB), Some(A_FP), "sftp.example.com:22").is_ok());
+    }
+
+    #[test]
+    fn a_pin_mismatch_says_what_was_presented() {
+        let _ws = Workspace::new();
+        let err = verify_sftp_host_key(&raw_key(B_PUB), Some(A_FP), "sftp.example.com:22")
+            .expect_err("mismatch");
+        assert!(err.contains(B_FP.trim_start_matches("SHA256:")), "names the key seen: {err}");
+        assert!(err.contains(A_FP.trim_start_matches("SHA256:")), "names the key wanted: {err}");
+    }
+
+    #[test]
+    fn the_opt_out_accepts_anything() {
+        let _ws = Workspace::new();
+        verify_sftp_host_key(&raw_key(A_PUB), None, "sftp.example.com:22").expect("first");
+        std::env::set_var("DUCKLE_SFTP_HOST_KEY_POLICY", "accept-any");
+        assert!(
+            verify_sftp_host_key(&raw_key(B_PUB), None, "sftp.example.com:22").is_ok(),
+            "the documented escape hatch for a host whose key changes per connection"
+        );
+        std::env::remove_var("DUCKLE_SFTP_HOST_KEY_POLICY");
+        // ...and removing it restores the refusal, so the opt-out is not sticky.
+        assert!(verify_sftp_host_key(&raw_key(B_PUB), None, "sftp.example.com:22").is_err());
+    }
+
+    /// Comments and blank lines are for humans editing the file by hand, which
+    /// is the documented way to accept a rotated key.
+    #[test]
+    fn comments_and_blank_lines_are_ignored() {
+        let ws = Workspace::new();
+        let path = ws.known_hosts();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!("\n# rotated 2026-08-01\n\n   sftp.example.com:22 {A_FP}   \n"),
+        )
+        .unwrap();
+        assert!(verify_sftp_host_key(&raw_key(A_PUB), None, "sftp.example.com:22").is_ok());
+    }
+
+    /// With no workspace there is nowhere to remember, so the old behaviour
+    /// stands rather than refusing every connection.
+    #[test]
+    fn without_a_workspace_it_does_not_refuse() {
+        let _g = guard();
+        let saved = std::env::var("DUCKLE_WORKSPACE").ok();
+        std::env::remove_var("DUCKLE_WORKSPACE");
+        std::env::remove_var("DUCKLE_SFTP_HOST_KEY_POLICY");
+        let r = verify_sftp_host_key(&raw_key(A_PUB), None, "sftp.example.com:22");
+        if let Some(v) = saved {
+            std::env::set_var("DUCKLE_WORKSPACE", v);
+        }
+        assert!(r.is_ok(), "no workspace means nowhere to record; do not break the connection");
+    }
+}
+
+/// Host-key verifier for src.xml's SFTP reader. A pinned SHA256 fingerprint
+/// refuses any other server key; without one, the first key seen for the host
+/// is remembered and a later change is refused. See `verify_sftp_host_key`.
 struct SftpVerifier {
     expected: Option<String>,
+    hostport: String,
+    refused: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl russh::client::Handler for SftpVerifier {
@@ -15800,9 +16166,12 @@ impl russh::client::Handler for SftpVerifier {
         &mut self,
         server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        match &self.expected {
-            None => Ok(true),
-            Some(want) => Ok(sftp_host_key_matches(server_public_key, want)),
+        match verify_sftp_host_key(server_public_key, self.expected.as_deref(), &self.hostport) {
+            Ok(()) => Ok(true),
+            Err(why) => {
+                *self.refused.lock().unwrap() = Some(why);
+                Ok(false)
+            }
         }
     }
 }
@@ -15846,12 +16215,18 @@ impl SftpFileReader {
         let (session, sftp, file) = rt
             .block_on(async {
                 let config = std::sync::Arc::new(russh::client::Config::default());
+                let refused = std::sync::Arc::new(std::sync::Mutex::new(None));
                 let handler = SftpVerifier {
                     expected: host_fingerprint.map(|s| s.to_string()),
+                    hostport: format!("{}:{}", host, port),
+                    refused: refused.clone(),
                 };
                 let mut session = russh::client::connect(config, (host, port), handler)
                     .await
-                    .map_err(|e| format!("connect {}:{}: {}", host, port, e))?;
+                    .map_err(|e| match refused.lock().unwrap().take() {
+                        Some(why) => why,
+                        None => format!("connect {}:{}: {}", host, port, e),
+                    })?;
                 let authed = if let Some(pem) = private_key {
                     let key = russh::keys::decode_secret_key(pem, key_passphrase)
                         .map_err(|e| format!("private key: {}", e))?;
@@ -16680,7 +17055,8 @@ mod incremental_state_tests {
     use super::{child_run_name, incremental_state_path, inherited_incremental_state};
 
     /// Serialised: these tests set DUCKLE_WORKSPACE, which is process-global.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// Shared with the SFTP known-hosts tests - see workspace_env_guard.
+    use crate::util::workspace_env_guard;
 
     fn workspace(tag: &str) -> std::path::PathBuf {
         let ws = std::env::temp_dir().join(format!("duckle_state_{tag}_{}", std::process::id()));
@@ -16706,7 +17082,7 @@ mod incremental_state_tests {
     /// the driving query is reordered.
     #[test]
     fn each_item_of_a_foreach_keeps_its_own_watermark() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = workspace_env_guard();
         let ws = workspace("peritem");
         std::env::set_var("DUCKLE_WORKSPACE", &ws);
 
@@ -16744,7 +17120,7 @@ mod incremental_state_tests {
     /// skips rows, the exact failure incremental loading exists to prevent.
     #[test]
     fn two_children_keep_separate_watermarks() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = workspace_env_guard();
         let ws = workspace("split");
         std::env::set_var("DUCKLE_WORKSPACE", &ws);
 
@@ -16770,7 +17146,7 @@ mod incremental_state_tests {
     /// somebody's production load.
     #[test]
     fn a_newly_named_child_inherits_the_old_shared_watermark_once() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = workspace_env_guard();
         let ws = workspace("inherit");
         std::env::set_var("DUCKLE_WORKSPACE", &ws);
 
