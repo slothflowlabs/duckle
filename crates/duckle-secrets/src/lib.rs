@@ -581,6 +581,7 @@ fn merge_generic_connection(
         "url",
         "endpoint",
         "urlStyle",
+        "useSsl",
         "sslmode",
         "sslrootcert",
         "sslcert",

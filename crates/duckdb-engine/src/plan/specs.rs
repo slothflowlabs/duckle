@@ -2199,4 +2199,8 @@ pub struct ChangedSourceSpec {
     pub host_fingerprint: Option<String>,
     /// Extra request headers for https (an API key on a metadata endpoint).
     pub headers: Vec<(String, String)>,
+    /// Credentials for an `s3://` uri. None for every other scheme, and also
+    /// for an S3 URI with no credentials on the node - which is an error worth
+    /// reporting rather than an anonymous request that 403s.
+    pub s3: Option<crate::s3::S3Config>,
 }

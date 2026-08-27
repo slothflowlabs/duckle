@@ -100,7 +100,7 @@ const CONNECTION_TYPES: ConnectionType[] = [
     {
         kind: 's3',
         label: 'Amazon S3 / MinIO',
-        fields: ['bucket', 'region', 'accessKey', 'secretKey', 'endpoint', 'urlStyle'],
+        fields: ['bucket', 'region', 'accessKey', 'secretKey', 'sessionToken', 'endpoint', 'urlStyle', 'useSsl'],
     },
     {
         kind: 'gcs',

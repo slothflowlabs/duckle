@@ -5516,9 +5516,12 @@ impl DuckdbEngine {
             let stat = self.sftp_stat(spec, &host, port, &user, &path)?;
             return Ok(stat);
         }
+        if spec.uri.starts_with("s3://") || spec.uri.starts_with("s3a://") {
+            return self.s3_stat(spec);
+        }
         if !(spec.uri.starts_with("http://") || spec.uri.starts_with("https://")) {
             return Err(EngineError::Config(format!(
-                "changed: {} is not a URI this can probe - use https:// or sftp://",
+                "changed: {} is not a URI this can probe - use https://, s3:// or sftp://",
                 spec.uri
             )));
         }
@@ -5575,15 +5578,103 @@ impl DuckdbEngine {
         })
     }
 
+    /// The credentials for an `s3://` uri, or a message saying what is missing.
+    ///
+    /// An anonymous request to a private bucket comes back 403, which reads as
+    /// "wrong keys" rather than "no keys", so the absence is named here instead
+    /// of being discovered from a status code.
+    fn s3_config<'a>(
+        &self,
+        spec: &'a plan::ChangedSourceSpec,
+    ) -> Result<&'a crate::s3::S3Config, EngineError> {
+        spec.s3.as_ref().ok_or_else(|| {
+            EngineError::Config(format!(
+                "changed: {} needs S3 credentials - pick a saved S3 connection on the node, \
+                 or set its access key and secret key",
+                spec.uri
+            ))
+        })
+    }
+
+    /// One object's size, ETag and mtime, over a HEAD. No bytes transferred,
+    /// which is the whole reason this component exists.
+    fn s3_stat(&self, spec: &plan::ChangedSourceSpec) -> Result<RemoteEntry, EngineError> {
+        let cfg = self.s3_config(spec)?;
+        let (bucket, key) = crate::s3::parse_s3_uri(&spec.uri)?;
+        if key.is_empty() {
+            return Err(EngineError::Config(format!(
+                "changed: {} names a bucket but no object. Turn listing on to enumerate it.",
+                spec.uri
+            )));
+        }
+        let o = cfg.head(&bucket, &key)?;
+        Ok(RemoteEntry {
+            fingerprint: remote_fingerprint(o.etag.as_deref(), o.last_modified.as_deref(), o.size),
+            uri: spec.uri.clone(),
+            name: key.rsplit('/').next().unwrap_or(&key).to_string(),
+            size: o.size,
+            modified_at: o.last_modified,
+            etag: o.etag,
+        })
+    }
+
+    /// Every object under a prefix.
+    fn s3_list(&self, spec: &plan::ChangedSourceSpec) -> Result<Vec<RemoteEntry>, EngineError> {
+        let cfg = self.s3_config(spec)?;
+        let (bucket, prefix) = crate::s3::parse_s3_uri(&spec.uri)?;
+        // The cap goes DOWN into the listing rather than being applied after it:
+        // a prefix holding a million objects must not be walked in full to hand
+        // back a hundred. A suffix filter can discard some of what comes back,
+        // so the request asks for enough to still fill the cap afterwards.
+        let want = if spec.suffix.is_some() {
+            spec.max_entries.saturating_mul(4).max(spec.max_entries)
+        } else {
+            spec.max_entries
+        };
+        let objects = cfg.list(&bucket, &prefix, want)?;
+        let mut out: Vec<RemoteEntry> = objects
+            .into_iter()
+            .filter(|o| match &spec.suffix {
+                Some(sfx) => o.key.ends_with(sfx.as_str()),
+                None => true,
+            })
+            .map(|o| {
+                let name = o.key.rsplit('/').next().unwrap_or(&o.key).to_string();
+                RemoteEntry {
+                    fingerprint: remote_fingerprint(
+                        o.etag.as_deref(),
+                        o.last_modified.as_deref(),
+                        o.size,
+                    ),
+                    uri: format!("s3://{}/{}", bucket, o.key),
+                    name,
+                    size: o.size,
+                    modified_at: o.last_modified,
+                    etag: o.etag,
+                }
+            })
+            .collect();
+        // Oldest first, so a capped run works through a backlog in order rather
+        // than taking an arbitrary slice of it - the same rule the SFTP listing
+        // follows, and for the same reason. S3 returns keys in lexical order
+        // already; sorting by the leaf name matches what the SFTP side does when
+        // a prefix has sub-folders in it.
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
     /// Every entry in a remote directory.
     fn list_remote_entries(
         &self,
         spec: &plan::ChangedSourceSpec,
     ) -> Result<Vec<RemoteEntry>, EngineError> {
+        if spec.uri.starts_with("s3://") || spec.uri.starts_with("s3a://") {
+            return self.s3_list(spec);
+        }
         if !spec.uri.starts_with("sftp://") {
             return Err(EngineError::Config(format!(
-                "changed: listing is supported for sftp:// today, not {}. HTTP has no \
-                 standard directory listing, and S3 listing is the next thing to add here.",
+                "changed: listing needs sftp:// or s3://, not {}. HTTP has no \
+                 standard directory listing, so there is nothing to enumerate over it.",
                 spec.uri
             )));
         }

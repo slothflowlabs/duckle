@@ -37,6 +37,7 @@ pub mod review;
 pub mod alerts;
 pub mod catalog;
 pub mod runlock;
+pub mod s3;
 pub mod batch;
 pub mod plans;
 pub mod schedules;

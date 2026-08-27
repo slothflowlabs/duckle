@@ -4772,6 +4772,10 @@ fn build_stage(
             key_passphrase: string_prop(&props, "keyPassphrase").filter(|s| !s.is_empty()),
             host_fingerprint: string_prop(&props, "hostFingerprint").filter(|s| !s.is_empty()),
             headers: headers_from_props(&props),
+            // A saved connection has already been merged onto these props by
+            // resolve_connection_refs, so picking a stored S3 connection and
+            // typing the keys in by hand reach here identically.
+            s3: crate::s3::S3Config::from_props(&props),
         });
         (String::new(), StageKind::View, None)
     } else if component_id == "src.spool" {

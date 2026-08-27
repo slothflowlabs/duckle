@@ -57,6 +57,11 @@ export type ConnectionPayload = {
     // S3-compatible endpoint (MinIO / R2 / B2) + addressing style (#116).
     endpoint?: string;
     urlStyle?: string;
+    // A MinIO on plain HTTP, and temporary STS credentials. Both are things the
+    // engine reads and the form had no way to say, so a connection could not
+    // describe either one.
+    useSsl?: string;
+    sessionToken?: string;
     accountName?: string;
     accountKey?: string;
     brokers?: string;

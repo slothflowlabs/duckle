@@ -16732,3 +16732,219 @@ fn publish_group_failure_leaves_nothing_published() {
         }
     }
 }
+
+/// A stub that speaks just enough S3 to answer a metadata poll, and records
+/// what it was asked. Serves `replies.len()` requests and then stops.
+///
+/// Recording the request line and the Authorization header is the point: a
+/// signed request that reaches the wrong PATH is a 403 in production and would
+/// be an invisible pass here, because the stub answers anything.
+#[cfg(test)]
+fn stub_s3(replies: Vec<String>) -> (u16, std::sync::mpsc::Receiver<(String, String)>) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub s3");
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for (i, stream) in listener.incoming().take(replies.len()).enumerate() {
+            let mut stream = match stream {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+                .ok();
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            let line = req.lines().next().unwrap_or_default().to_string();
+            let auth = req
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("authorization:"))
+                .unwrap_or_default()
+                .to_string();
+            let _ = tx.send((line, auth));
+            let _ = stream.write_all(replies[i].as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+    (port, rx)
+}
+
+#[cfg(test)]
+fn s3_props(port: u16, uri: &str, listing: bool) -> serde_json::Value {
+    json!({
+        "uri": uri,
+        "listing": listing,
+        // The same property names a saved S3 connection supplies, so this is
+        // the shape a connection ref expands into.
+        "accessKey": "AKIAIOSFODNN7EXAMPLE",
+        "secretKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "region": "us-east-1",
+        "endpoint": format!("127.0.0.1:{}", port),
+        "urlStyle": "path",
+        "useSsl": false
+    })
+}
+
+/// #272: an S3 poll must cost a HEAD, not the object, and the HEAD has to be
+/// signed and addressed correctly or it is a 403 that reads like bad keys.
+#[test]
+fn s3_changed_probes_with_a_signed_head_and_only_emits_when_the_etag_moves() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "out.csv");
+    let name = "s3changed";
+
+    let head = |etag: &str| {
+        format!(
+            "HTTP/1.1 200 OK\r\nETag: \"{etag}\"\r\nContent-Length: 4096\r\n\
+             Last-Modified: Wed, 01 Jan 2026 00:00:00 GMT\r\nConnection: close\r\n\r\n"
+        )
+    };
+    // Same object twice, then a different one.
+    let (port, rx) = stub_s3(vec![head("aaa111"), head("aaa111"), head("bbb222")]);
+
+    let pipeline = doc(
+        json!([
+            node("c", "src.changed", s3_props(port, "s3://raw/2026/feed.zip", false)),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "c", "k")]),
+    );
+    let rows_out = || {
+        std::fs::read_to_string(&out)
+            .unwrap_or_default()
+            .replace("\r\n", "\n")
+            .lines()
+            .skip(1)
+            .filter(|l| !l.trim().is_empty())
+            .count()
+    };
+
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(rows_out(), 1, "an object never seen before must be processed");
+
+    // What actually went on the wire. Path style puts the bucket in the path,
+    // and a HEAD is what makes this cheap - a GET here would download the
+    // object the component exists to avoid.
+    let (line, auth) = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    assert!(line.starts_with("HEAD /raw/2026/feed.zip "), "wrong request: {line}");
+    assert!(
+        auth.contains("AWS4-HMAC-SHA256")
+            && auth.contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date")
+            && auth.contains("/us-east-1/s3/aws4_request"),
+        "the request was not signed the way S3 requires: {auth}"
+    );
+
+    // Same ETag: a quiet poll, reported as such rather than as ordinary work.
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    assert_eq!(r.status, "ok", "a quiet poll is not a failure: {:?}", r.error);
+    assert_eq!(rows_out(), 0, "an unchanged object must not be re-processed");
+    assert_eq!(r.nodes.get("c").map(|n| n.status.as_str()), Some("unchanged"));
+
+    // The ETag moved.
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(rows_out(), 1, "a changed object must be processed again");
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(body.contains("changed"), "the row should say it CHANGED, not that it is new: {body}");
+    assert!(body.contains("bbb222"), "the new etag belongs in the row: {body}");
+}
+
+/// Listing a prefix has to follow continuation tokens. Stopping at the first
+/// page silently processes the first 1000 objects and calls the sweep complete,
+/// which is the failure mode that hides a backlog rather than reporting it.
+#[test]
+fn s3_changed_lists_a_prefix_and_follows_the_continuation_token() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "list.csv");
+
+    let page = |body: &str| {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    };
+    let page1 = r#"<?xml version="1.0"?><ListBucketResult>
+      <IsTruncated>true</IsTruncated>
+      <NextContinuationToken>tok/2</NextContinuationToken>
+      <Contents><Key>incoming/</Key><Size>0</Size></Contents>
+      <Contents><Key>incoming/a.csv</Key><Size>10</Size><ETag>&quot;e1&quot;</ETag>
+        <LastModified>2026-01-01T00:00:00.000Z</LastModified></Contents>
+      <Contents><Key>incoming/b.csv</Key><Size>20</Size><ETag>&quot;e2&quot;</ETag>
+        <LastModified>2026-01-02T00:00:00.000Z</LastModified></Contents>
+    </ListBucketResult>"#;
+    let page2 = r#"<?xml version="1.0"?><ListBucketResult>
+      <IsTruncated>false</IsTruncated>
+      <Contents><Key>incoming/c.csv</Key><Size>30</Size><ETag>&quot;e3&quot;</ETag>
+        <LastModified>2026-01-03T00:00:00.000Z</LastModified></Contents>
+    </ListBucketResult>"#;
+    let (port, rx) = stub_s3(vec![page(page1), page(page2)]);
+
+    let r = engine.execute_pipeline_named(
+        &doc(
+            json!([
+                node("c", "src.changed", s3_props(port, "s3://raw/incoming/", true)),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "c", "k")]),
+        ),
+        "s3list",
+    );
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    let rows = body.replace("\r\n", "\n").lines().skip(1).filter(|l| !l.trim().is_empty()).count();
+    assert_eq!(rows, 3, "all three objects across both pages: {body}");
+    assert!(!body.contains("incoming/,"), "a folder marker is not an object: {body}");
+    assert!(body.contains("s3://raw/incoming/c.csv"), "page 2 was dropped: {body}");
+
+    // The first request carries the prefix; the second carries the token it was
+    // given. A second request that repeats page one would loop forever.
+    let (first, _) = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    assert!(first.contains("prefix=incoming%2F"), "prefix not sent encoded: {first}");
+    assert!(first.contains("list-type=2"), "not a ListObjectsV2 call: {first}");
+    let (second, _) = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    assert!(
+        second.contains("continuation-token=tok%2F2"),
+        "the continuation token was not sent back encoded: {second}"
+    );
+}
+
+/// An S3 uri with no credentials must say so. Sending an anonymous request
+/// instead returns 403, which reads as "wrong keys" and sends people to check
+/// credentials they never set.
+#[test]
+fn s3_changed_without_credentials_says_what_is_missing() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let r = engine.execute_pipeline_named(
+        &doc(
+            json!([
+                node("c", "src.changed", json!({ "uri": "s3://raw/feed.zip" })),
+                node("k", "snk.csv", json!({ "path": out_path(tmp.path(), "x.csv") })),
+            ]),
+            json!([main_edge("e1", "c", "k")]),
+        ),
+        "s3nocreds",
+    );
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(
+        err.contains("S3 credentials") && err.contains("connection"),
+        "the message must name what is missing: {err}"
+    );
+}

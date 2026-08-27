@@ -594,16 +594,20 @@ most specific winning.
 A pipeline that watches a bulk source should not pay for the object to find
 out whether it was needed. `src.changed` compares what a HEAD or an SFTP stat
 reports against the last fingerprint it **successfully processed**, and emits
-a row only for what moved.
+a row only for what moved. `https://`, `s3://` (including MinIO, Backblaze B2,
+Cloudflare R2 and other S3-compatible stores, through a saved connection or
+credentials on the node) and `sftp://`.
 
 Two shapes, because they are the same question asked of a different number of
 objects:
 
 - **object** - one URI replaced periodically. A row when its fingerprint
   differs, nothing when it does not.
-- **listing** - an `sftp://` directory of immutable files. Lists it, compares
-  each entry, and emits the new and changed ones as ordinary rows for a
-  `ctl.foreach` or an artifact copy downstream.
+- **listing** - an `sftp://` directory or an `s3://` prefix of immutable
+  files. Lists it, compares each entry, and emits the new and changed ones as
+  ordinary rows for a `ctl.foreach` or an artifact copy downstream. S3 listings
+  follow continuation tokens, so a prefix larger than one page is enumerated
+  fully rather than silently truncated at the first thousand.
 
 Rows carry `uri`, `name`, `size`, `modified_at`, `etag`, `fingerprint` and
 `status` (`new` / `changed`).
