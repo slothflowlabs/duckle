@@ -836,6 +836,21 @@ export function portsForComponent(comp: ComponentDef): NodePorts {
         };
     }
 
+    // An inline SQL node does not need an upstream: SQL that reads its own data
+    // (read_json_auto, read_csv, an ATTACHed database) is self-contained, and the
+    // engine already runs it - build_view_sql simply omits the `WITH input AS`
+    // prefix when there is no main input. Marking the port required flagged
+    // every such node as broken with no way to clear it, since the only other
+    // toggle that silenced it, Pure SQL, stops the node producing a relation at
+    // all. The genuine mistake - SQL that says `FROM input` with nothing wired -
+    // is caught precisely in validation.ts instead.
+    if (id === 'code.sql' || id === 'code.sqltemplate') {
+        return {
+            inputs: [{ ...MAIN_IN, optional: true }],
+            outputs: [MAIN_OUT, REJECT_OUT],
+        };
+    }
+
     // Default transform / control / quality / custom: main in, main out, optional reject
     return {
         inputs: [MAIN_IN],
@@ -2805,12 +2820,19 @@ function synthStreamingSource(comp: ComponentDef): ComponentManifest {
                     defaultValue: 'json',
                     options: [
                         { label: 'JSON', value: 'json' },
-                        { label: 'Avro', value: 'avro' },
-                        { label: 'Protobuf', value: 'protobuf' },
+                        { label: 'Avro (Confluent Schema Registry)', value: 'avro' },
                         { label: 'Plain text', value: 'text' },
                     ],
+                    description: 'Avro decodes Confluent-framed messages against the registry below. JSON and Plain text both hand the message back as text for SQL to parse. Protobuf is not offered because it is not implemented - it would need the .proto descriptors, and picking it would have produced mangled text rather than an error.',
                 },
-                { key: 'schemaRegistryUrl', label: 'Schema Registry URL', kind: 'text' },
+                {
+                    key: 'schemaRegistryUrl',
+                    label: 'Schema Registry URL',
+                    kind: 'text',
+                    placeholder: 'https://schema-registry.internal:8081',
+                    description: 'Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.',
+                    visibleWhen: [{ key: 'format', equals: 'avro' }],
+                },
             ],
         },
     ]);

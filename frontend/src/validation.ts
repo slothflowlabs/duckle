@@ -161,6 +161,57 @@ export function validatePipeline(
             }
         }
 
+        // Inline SQL: the upstream is optional, because SQL that reads its own
+        // data is self-contained and the engine runs it happily. What IS a
+        // mistake is saying `FROM input` with nothing wired in - the wrapper
+        // that defines `input` is only emitted when there is a main upstream,
+        // so that fails at run time with "Table with name input does not
+        // exist". Checking the SQL rather than the edge is what lets a
+        // self-contained node be clean without inventing a fake parent.
+        if (node.data.componentId === 'code.sql' || node.data.componentId === 'code.sqltemplate') {
+            const sql = typeof props.sql === 'string' ? props.sql : '';
+            const readsInput = /\b(?:from|join)\s+"?input"?\b/i.test(sql);
+            const hasUpstream = edges.some(e => e.target === node.id);
+            if (readsInput && !hasUpstream) {
+                push({
+                    severity: 'error',
+                    code: 'missing-required-input',
+                    message: `${node.data.label}: the SQL reads 'input', but nothing is connected to this node.`,
+                    nodeId: node.id,
+                });
+            }
+            // Raw and Pure mode both skip the wrapper, so `input` is never
+            // defined in them even when an upstream IS connected - reference the
+            // node by its own id instead.
+            if (readsInput && (props.rawSql === true || props.pureSql === true)) {
+                push({
+                    severity: 'error',
+                    code: 'missing-required-input',
+                    message: `${node.data.label}: Raw / Pure SQL mode does not define 'input' - reference the upstream node by its id, e.g. SELECT * FROM "node_id".`,
+                    nodeId: node.id,
+                });
+            }
+            // Pure mode produces no relation of its own, so anything reading
+            // from this node gets "Table with name <id> does not exist" unless
+            // the SQL creates it. That is the failure this issue was reported
+            // against, attributed to Raw mode.
+            if (props.pureSql === true && edges.some(e => e.source === node.id)) {
+                const idRe = node.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const createsOwn = new RegExp(
+                    `\\bcreate\\s+(or\\s+replace\\s+)?(temp\\s+|temporary\\s+)?(table|view)\\s+"?${idRe}"?(?!\\w)`,
+                    'i',
+                ).test(sql);
+                if (!createsOwn) {
+                    push({
+                        severity: 'error',
+                        code: 'pure-sql-no-output',
+                        message: `${node.data.label}: Pure SQL mode creates no output relation, but a node reads from this one. Create it in the SQL (CREATE OR REPLACE TABLE "${node.id}" AS ...) or turn Pure SQL off.`,
+                        nodeId: node.id,
+                    });
+                }
+            }
+        }
+
         // Filter sanity - warn only when the predicate is genuinely empty.
         // The visual builder writes `predicate` as an object that always
         // carries a compiled `.sql` string (raw mode carries `rawSql`), and

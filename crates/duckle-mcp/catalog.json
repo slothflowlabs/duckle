@@ -6970,23 +6970,28 @@
                     "value": "json"
                   },
                   {
-                    "label": "Avro",
+                    "label": "Avro (Confluent Schema Registry)",
                     "value": "avro"
-                  },
-                  {
-                    "label": "Protobuf",
-                    "value": "protobuf"
                   },
                   {
                     "label": "Plain text",
                     "value": "text"
                   }
-                ]
+                ],
+                "description": "Avro decodes Confluent-framed messages against the registry below. JSON and Plain text both hand the message back as text for SQL to parse. Protobuf is not offered because it is not implemented - it would need the .proto descriptors, and picking it would have produced mangled text rather than an error."
               },
               {
                 "key": "schemaRegistryUrl",
                 "label": "Schema Registry URL",
-                "kind": "text"
+                "kind": "text",
+                "placeholder": "https://schema-registry.internal:8081",
+                "description": "Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.",
+                "visibleWhen": [
+                  {
+                    "key": "format",
+                    "equals": "avro"
+                  }
+                ]
               }
             ]
           }
@@ -7154,23 +7159,28 @@
                     "value": "json"
                   },
                   {
-                    "label": "Avro",
+                    "label": "Avro (Confluent Schema Registry)",
                     "value": "avro"
-                  },
-                  {
-                    "label": "Protobuf",
-                    "value": "protobuf"
                   },
                   {
                     "label": "Plain text",
                     "value": "text"
                   }
-                ]
+                ],
+                "description": "Avro decodes Confluent-framed messages against the registry below. JSON and Plain text both hand the message back as text for SQL to parse. Protobuf is not offered because it is not implemented - it would need the .proto descriptors, and picking it would have produced mangled text rather than an error."
               },
               {
                 "key": "schemaRegistryUrl",
                 "label": "Schema Registry URL",
-                "kind": "text"
+                "kind": "text",
+                "placeholder": "https://schema-registry.internal:8081",
+                "description": "Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.",
+                "visibleWhen": [
+                  {
+                    "key": "format",
+                    "equals": "avro"
+                  }
+                ]
               }
             ]
           }
@@ -7338,23 +7348,28 @@
                     "value": "json"
                   },
                   {
-                    "label": "Avro",
+                    "label": "Avro (Confluent Schema Registry)",
                     "value": "avro"
-                  },
-                  {
-                    "label": "Protobuf",
-                    "value": "protobuf"
                   },
                   {
                     "label": "Plain text",
                     "value": "text"
                   }
-                ]
+                ],
+                "description": "Avro decodes Confluent-framed messages against the registry below. JSON and Plain text both hand the message back as text for SQL to parse. Protobuf is not offered because it is not implemented - it would need the .proto descriptors, and picking it would have produced mangled text rather than an error."
               },
               {
                 "key": "schemaRegistryUrl",
                 "label": "Schema Registry URL",
-                "kind": "text"
+                "kind": "text",
+                "placeholder": "https://schema-registry.internal:8081",
+                "description": "Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.",
+                "visibleWhen": [
+                  {
+                    "key": "format",
+                    "equals": "avro"
+                  }
+                ]
               }
             ]
           }
@@ -7522,23 +7537,28 @@
                     "value": "json"
                   },
                   {
-                    "label": "Avro",
+                    "label": "Avro (Confluent Schema Registry)",
                     "value": "avro"
-                  },
-                  {
-                    "label": "Protobuf",
-                    "value": "protobuf"
                   },
                   {
                     "label": "Plain text",
                     "value": "text"
                   }
-                ]
+                ],
+                "description": "Avro decodes Confluent-framed messages against the registry below. JSON and Plain text both hand the message back as text for SQL to parse. Protobuf is not offered because it is not implemented - it would need the .proto descriptors, and picking it would have produced mangled text rather than an error."
               },
               {
                 "key": "schemaRegistryUrl",
                 "label": "Schema Registry URL",
-                "kind": "text"
+                "kind": "text",
+                "placeholder": "https://schema-registry.internal:8081",
+                "description": "Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.",
+                "visibleWhen": [
+                  {
+                    "key": "format",
+                    "equals": "avro"
+                  }
+                ]
               }
             ]
           }
@@ -7706,23 +7726,28 @@
                     "value": "json"
                   },
                   {
-                    "label": "Avro",
+                    "label": "Avro (Confluent Schema Registry)",
                     "value": "avro"
-                  },
-                  {
-                    "label": "Protobuf",
-                    "value": "protobuf"
                   },
                   {
                     "label": "Plain text",
                     "value": "text"
                   }
-                ]
+                ],
+                "description": "Avro decodes Confluent-framed messages against the registry below. JSON and Plain text both hand the message back as text for SQL to parse. Protobuf is not offered because it is not implemented - it would need the .proto descriptors, and picking it would have produced mangled text rather than an error."
               },
               {
                 "key": "schemaRegistryUrl",
                 "label": "Schema Registry URL",
-                "kind": "text"
+                "kind": "text",
+                "placeholder": "https://schema-registry.internal:8081",
+                "description": "Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.",
+                "visibleWhen": [
+                  {
+                    "key": "format",
+                    "equals": "avro"
+                  }
+                ]
               }
             ]
           }
@@ -7890,23 +7915,28 @@
                     "value": "json"
                   },
                   {
-                    "label": "Avro",
+                    "label": "Avro (Confluent Schema Registry)",
                     "value": "avro"
-                  },
-                  {
-                    "label": "Protobuf",
-                    "value": "protobuf"
                   },
                   {
                     "label": "Plain text",
                     "value": "text"
                   }
-                ]
+                ],
+                "description": "Avro decodes Confluent-framed messages against the registry below. JSON and Plain text both hand the message back as text for SQL to parse. Protobuf is not offered because it is not implemented - it would need the .proto descriptors, and picking it would have produced mangled text rather than an error."
               },
               {
                 "key": "schemaRegistryUrl",
                 "label": "Schema Registry URL",
-                "kind": "text"
+                "kind": "text",
+                "placeholder": "https://schema-registry.internal:8081",
+                "description": "Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.",
+                "visibleWhen": [
+                  {
+                    "key": "format",
+                    "equals": "avro"
+                  }
+                ]
               }
             ]
           }
@@ -8074,23 +8104,28 @@
                     "value": "json"
                   },
                   {
-                    "label": "Avro",
+                    "label": "Avro (Confluent Schema Registry)",
                     "value": "avro"
-                  },
-                  {
-                    "label": "Protobuf",
-                    "value": "protobuf"
                   },
                   {
                     "label": "Plain text",
                     "value": "text"
                   }
-                ]
+                ],
+                "description": "Avro decodes Confluent-framed messages against the registry below. JSON and Plain text both hand the message back as text for SQL to parse. Protobuf is not offered because it is not implemented - it would need the .proto descriptors, and picking it would have produced mangled text rather than an error."
               },
               {
                 "key": "schemaRegistryUrl",
                 "label": "Schema Registry URL",
-                "kind": "text"
+                "kind": "text",
+                "placeholder": "https://schema-registry.internal:8081",
+                "description": "Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.",
+                "visibleWhen": [
+                  {
+                    "key": "format",
+                    "equals": "avro"
+                  }
+                ]
               }
             ]
           }
@@ -8258,23 +8293,28 @@
                     "value": "json"
                   },
                   {
-                    "label": "Avro",
+                    "label": "Avro (Confluent Schema Registry)",
                     "value": "avro"
-                  },
-                  {
-                    "label": "Protobuf",
-                    "value": "protobuf"
                   },
                   {
                     "label": "Plain text",
                     "value": "text"
                   }
-                ]
+                ],
+                "description": "Avro decodes Confluent-framed messages against the registry below. JSON and Plain text both hand the message back as text for SQL to parse. Protobuf is not offered because it is not implemented - it would need the .proto descriptors, and picking it would have produced mangled text rather than an error."
               },
               {
                 "key": "schemaRegistryUrl",
                 "label": "Schema Registry URL",
-                "kind": "text"
+                "kind": "text",
+                "placeholder": "https://schema-registry.internal:8081",
+                "description": "Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.",
+                "visibleWhen": [
+                  {
+                    "key": "format",
+                    "equals": "avro"
+                  }
+                ]
               }
             ]
           }
@@ -42258,7 +42298,8 @@
           {
             "id": "main",
             "label": "main",
-            "type": "main"
+            "type": "main",
+            "optional": true
           }
         ],
         "outputs": [
@@ -42338,7 +42379,8 @@
             {
               "id": "main",
               "label": "main",
-              "type": "main"
+              "type": "main",
+              "optional": true
             }
           ],
           "outputs": [
@@ -42368,7 +42410,8 @@
           {
             "id": "main",
             "label": "main",
-            "type": "main"
+            "type": "main",
+            "optional": true
           }
         ],
         "outputs": [
@@ -42448,7 +42491,8 @@
             {
               "id": "main",
               "label": "main",
-              "type": "main"
+              "type": "main",
+              "optional": true
             }
           ],
           "outputs": [

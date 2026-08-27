@@ -9832,6 +9832,7 @@ impl DuckdbEngine {
             .collect();
         // Captured before the async block: `tls` would shadow the crate's tls
         // module inside it.
+        let registry = spec.schema_registry_url.clone();
         let use_tls = spec.tls;
         let sasl = spec.sasl.clone();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -9868,6 +9869,9 @@ impl DuckdbEngine {
             } else {
                 spec.start_offset
             };
+            let mut schema_cache: std::collections::HashMap<u32, apache_avro::Schema> =
+                std::collections::HashMap::new();
+            let http = crate::tls::http_agent();
             let mut out: Vec<JsonValue> = Vec::new();
             while (out.len() as u64) < spec.max_records {
                 if cancel.load(Ordering::Relaxed) {
@@ -9887,21 +9891,34 @@ impl DuckdbEngine {
                         "timestamp_ms".into(),
                         JsonValue::from(r.record.timestamp.timestamp_millis()),
                     );
+                    // A Confluent-framed field is decoded against the schema
+                    // its id names; anything else stays text. Schemas are
+                    // fetched once per id and kept for the rest of the read.
+                    let mut decode = |b: &[u8]| -> Result<JsonValue, String> {
+                        if let Some(reg) = registry.as_deref() {
+                            if let Some((id, payload)) = confluent_envelope(b) {
+                                if !schema_cache.contains_key(&id) {
+                                    let sc = fetch_registry_schema(&http, reg, id)?;
+                                    schema_cache.insert(id, sc);
+                                }
+                                return avro_datum_to_json(&schema_cache[&id], payload);
+                            }
+                        }
+                        Ok(JsonValue::String(String::from_utf8_lossy(b).to_string()))
+                    };
                     obj.insert(
                         "key".into(),
-                        r.record
-                            .key
-                            .as_ref()
-                            .map(|b| JsonValue::String(String::from_utf8_lossy(b).to_string()))
-                            .unwrap_or(JsonValue::Null),
+                        match r.record.key.as_ref() {
+                            Some(b) => decode(b)?,
+                            None => JsonValue::Null,
+                        },
                     );
                     obj.insert(
                         "value".into(),
-                        r.record
-                            .value
-                            .as_ref()
-                            .map(|b| JsonValue::String(String::from_utf8_lossy(b).to_string()))
-                            .unwrap_or(JsonValue::Null),
+                        match r.record.value.as_ref() {
+                            Some(b) => decode(b)?,
+                            None => JsonValue::Null,
+                        },
                     );
                     out.push(JsonValue::Object(obj));
                     next_offset = r.offset + 1;
@@ -13056,6 +13073,70 @@ fn read_incremental_state(path: &std::path::PathBuf) -> Option<(String, String)>
     Some((value, ty))
 }
 
+/// Split a Confluent-framed Kafka message into its schema id and Avro payload.
+///
+/// The framing is a zero magic byte, a big-endian u32 schema id, then the raw
+/// Avro datum - note DATUM, not a container file: there is no embedded schema,
+/// which is exactly why the id has to be resolved against a registry.
+///
+/// Anything not carrying that frame returns None and is left as text. That is
+/// deliberate rather than lax: Confluent topics routinely pair a plain string
+/// key with an Avro value, so refusing an unframed key would break the common
+/// case. A zero first byte is not valid UTF-8 text, so this cannot misfire on a
+/// string.
+pub(crate) fn confluent_envelope(bytes: &[u8]) -> Option<(u32, &[u8])> {
+    if bytes.len() < 5 || bytes[0] != 0 {
+        return None;
+    }
+    let id = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+    Some((id, &bytes[5..]))
+}
+
+/// Decode one raw Avro datum against a schema and render it as JSON.
+pub(crate) fn avro_datum_to_json(
+    schema: &apache_avro::Schema,
+    payload: &[u8],
+) -> Result<JsonValue, String> {
+    let mut cursor = payload;
+    let value = apache_avro::from_avro_datum(schema, &mut cursor, None)
+        .map_err(|e| format!("avro decode: {}", e))?;
+    JsonValue::try_from(value).map_err(|e| format!("avro value to json: {}", e))
+}
+
+/// Fetch a writer schema from a Confluent Schema Registry by id.
+///
+/// Goes through the engine's shared agent, so a registry behind a corporate CA
+/// or a proxy is reached the same way every other HTTPS call is. Credentials in
+/// the URL (https://user:pass@host) are honoured by the agent.
+fn fetch_registry_schema(
+    agent: &ureq::Agent,
+    registry: &str,
+    id: u32,
+) -> Result<apache_avro::Schema, String> {
+    let url = format!("{}/schemas/ids/{}", registry.trim_end_matches('/'), id);
+    let body: JsonValue = match agent.get(&url).call() {
+        Ok(r) => r
+            .into_json()
+            .map_err(|e| format!("schema registry {}: response was not JSON: {}", url, e))?,
+        Err(ureq::Error::Status(code, r)) => {
+            let text = r.into_string().unwrap_or_default();
+            return Err(format!(
+                "schema registry {}: HTTP {}: {}",
+                url,
+                code,
+                text.chars().take(200).collect::<String>()
+            ));
+        }
+        Err(e) => return Err(format!("schema registry {}: {}", url, e)),
+    };
+    let text = body
+        .get("schema")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("schema registry {}: no \"schema\" field in the response", url))?;
+    apache_avro::Schema::parse_str(text)
+        .map_err(|e| format!("schema registry {}: schema {} does not parse: {}", url, id, e))
+}
+
 /// Turn a mechanism name into the SASL config rskafka wants.
 ///
 /// Only the mechanisms rskafka implements are accepted. An unrecognised one is
@@ -15563,6 +15644,69 @@ impl DuckdbEngine {
 
 #[cfg(test)]
 mod incremental_state_tests {
+
+    #[test]
+    fn a_confluent_framed_message_decodes_against_its_schema() {
+        // Build a real Confluent-framed message the way a producer does: a zero
+        // magic byte, a big-endian schema id, then a RAW Avro datum - no
+        // container header, which is why the id has to name the schema.
+        let schema = apache_avro::Schema::parse_str(
+            r#"{"type":"record","name":"Order","fields":[
+                 {"name":"id","type":"long"},
+                 {"name":"customer","type":"string"},
+                 {"name":"total","type":"double"}
+               ]}"#,
+        )
+        .unwrap();
+        let mut rec = apache_avro::types::Record::new(&schema).unwrap();
+        rec.put("id", 77i64);
+        rec.put("customer", "acme");
+        rec.put("total", 12.5f64);
+        let datum = apache_avro::to_avro_datum(&schema, rec).unwrap();
+
+        let mut framed = vec![0u8];
+        framed.extend_from_slice(&4242u32.to_be_bytes());
+        framed.extend_from_slice(&datum);
+
+        let (id, payload) = super::confluent_envelope(&framed).expect("framed message");
+        assert_eq!(id, 4242, "the schema id is a big-endian u32 after the magic byte");
+
+        let json = super::avro_datum_to_json(&schema, payload).unwrap();
+        assert_eq!(json.get("id").and_then(|v| v.as_i64()), Some(77));
+        assert_eq!(json.get("customer").and_then(|v| v.as_str()), Some("acme"));
+        assert_eq!(json.get("total").and_then(|v| v.as_f64()), Some(12.5));
+    }
+
+    #[test]
+    fn plain_text_is_not_mistaken_for_a_framed_message() {
+        // Confluent topics routinely pair a plain string key with an Avro
+        // value, so an unframed field has to pass through as text rather than
+        // fail the read. A zero first byte is not valid UTF-8 text, so this
+        // check cannot misfire on a string.
+        assert!(super::confluent_envelope(b"just-a-key").is_none());
+        assert!(super::confluent_envelope(br#"{"id":1}"#).is_none());
+        // Too short to carry an id, even though it starts with zero.
+        assert!(super::confluent_envelope(&[0u8, 1, 2]).is_none());
+        assert!(super::confluent_envelope(&[]).is_none());
+        // A zero byte followed by four bytes IS the frame, even with no payload
+        // left - an empty datum is the schema's problem, not the framing's.
+        assert_eq!(
+            super::confluent_envelope(&[0u8, 0, 0, 0, 7]).map(|(id, p)| (id, p.len())),
+            Some((7, 0))
+        );
+    }
+
+    #[test]
+    fn a_datum_that_does_not_match_its_schema_is_an_error_not_garbage() {
+        let schema = apache_avro::Schema::parse_str(
+            r#"{"type":"record","name":"R","fields":[{"name":"n","type":"long"}]}"#,
+        )
+        .unwrap();
+        // Bytes that are not a valid encoding of this record must fail loudly
+        // rather than produce a plausible-looking wrong row.
+        let err = super::avro_datum_to_json(&schema, &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+        assert!(err.is_err(), "malformed datum should not decode");
+    }
 
     #[test]
     fn a_kafka_sasl_mechanism_is_recognised_or_refused() {

@@ -3645,7 +3645,19 @@ fn build_stage(
         let topic = string_prop(&props, "topic")
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: topic required", component_id)))?;
+        // Avro decoding needs somewhere to fetch the schema from. Saying the
+        // messages are Avro and giving nowhere to look it up cannot work, so it
+        // fails here rather than handing back UTF-8 mangled bytes at run time.
+        let kafka_registry =
+            string_prop(&props, "schemaRegistryUrl").filter(|s| !s.trim().is_empty());
+        if string_prop(&props, "format").as_deref() == Some("avro") && kafka_registry.is_none() {
+            return Err(EngineError::Config(format!(
+                "{}: message format is Avro, so a Schema Registry URL is required to decode it",
+                component_id
+            )));
+        }
         kafka_source = Some(KafkaSourceSpec {
+            schema_registry_url: kafka_registry,
             tls: kafka_security(&props).0,
             sasl: kafka_security(&props).1,
             // Off by default: turning it on changes where a run starts reading,

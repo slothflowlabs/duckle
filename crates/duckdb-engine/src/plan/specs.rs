@@ -444,6 +444,10 @@ pub struct KafkaSinkSpec {
 /// rows; value is the raw byte string (no schema unpacking, no Avro).
 #[derive(Debug, Clone)]
 pub struct KafkaSourceSpec {
+    /// Confluent Schema Registry base URL. When set, a message carrying the
+    /// Confluent framing (a zero byte, then a big-endian schema id) is decoded
+    /// against the schema that id names, instead of being handed back as text.
+    pub schema_registry_url: Option<String>,
     /// Connect over TLS. Set from the Security protocol field (SSL / SASL_SSL).
     pub tls: bool,
     /// SASL credentials, when the node supplies them.
