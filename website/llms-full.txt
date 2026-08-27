@@ -15,7 +15,7 @@ catalog the application itself reads, so the names and counts here are exact.
 - Your data stays in your custody: no account, no telemetry and no phone-home, which suits air-gapped, on-premise and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
 - 385 components, 367 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 173 connectors (106 sources / 67 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 188 connectors (106 sources / 67 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 140 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 27 checks, plus 18 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
