@@ -154,8 +154,8 @@
       <h2 id="local-first">Why local-first data tooling</h2>
       <p>Most data tools assume a cluster and a control plane. For a huge amount of real work - dev and debug loops, small-team analytics, one-off cleanups, data prep for AI - that is overkill. Local-first flips three things:</p>
       <ul>
-        <li><b>Cost.</b> Your laptop is already paid for. No always-on warehouse, no per-row ingestion pricing.</li>
-        <li><b>Privacy.</b> The data never leaves your machine. No telemetry, no third-party processor, works offline.</li>
+        <li><b>Cost.</b> The machine you already run on is already paid for. No always-on warehouse, no per-row ingestion pricing.</li>
+        <li><b>Privacy.</b> Your rows go where you send them and nowhere else. Duckle runs no service in the data path, so there is no vendor to trust with a copy, no third-party processor, and no telemetry.</li>
         <li><b>Speed.</b> No network round-trips between extract, transform and load. A vectorized engine on local NVMe is astonishingly fast: Duckle incremental-loads <b>5 million rows in about a second</b>.</li>
       </ul>
       <p>When you outgrow one machine, point Duckle's output at the system that scales (a warehouse, an object store, a lakehouse). It will not pretend to be a cluster, and that honesty is the point.</p>
