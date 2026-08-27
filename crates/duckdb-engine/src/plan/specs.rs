@@ -2153,3 +2153,50 @@ pub struct TumbleSpec {
     /// closes. Buys time for out-of-order arrivals at the cost of latency.
     pub allowed_lateness: String,
 }
+
+/// src.changed: poll a remote source's METADATA and emit only what changed.
+///
+/// Two patterns, one component, because they are the same question asked of a
+/// different number of objects:
+///
+/// - **object**: one URI replaced periodically. Emits one row when its
+///   fingerprint differs from the last successfully processed one, and nothing
+///   when it does not.
+/// - **listing**: a directory or prefix of immutable files. Lists it, compares
+///   each entry against what has been processed, and emits the new and changed
+///   ones as ordinary rows for a ForEach or an artifact copy downstream.
+///
+/// The point is not to pay for the object to find out whether it was needed.
+/// A HEAD or a stat is cheap; a 30 GB download is not.
+///
+/// Fingerprints are conservative by design. None of the signals are
+/// guarantees: ETag can be absent, can weaken under compression, and on S3 is
+/// a digest-of-digests for a multipart upload rather than the object's hash;
+/// Last-Modified has one-second resolution; SFTP realistically offers mtime
+/// and size. So a missing or unreadable signal reads as CHANGED. Re-reading
+/// something unnecessarily costs compute; skipping something that did change
+/// loses data.
+#[derive(Debug, Clone)]
+pub struct ChangedSourceSpec {
+    pub node_id: String,
+    /// `https://...` or `sftp://[user@]host[:port]/path`.
+    pub uri: String,
+    /// True to list a directory/prefix rather than probe one object.
+    pub listing: bool,
+    /// Only list entries whose name ends with this (listing mode).
+    pub suffix: Option<String>,
+    /// Most entries to emit in one run, so a first run against a directory
+    /// with years of drops does not try to process all of it at once.
+    pub max_entries: usize,
+    /// Remember what was processed, so the next run only sees what is new.
+    /// Off means every run treats everything as changed.
+    pub track_state: bool,
+    // SFTP auth, ignored for https.
+    pub user: Option<String>,
+    pub password: Option<String>,
+    pub private_key: Option<String>,
+    pub key_passphrase: Option<String>,
+    pub host_fingerprint: Option<String>,
+    /// Extra request headers for https (an API key on a metadata endpoint).
+    pub headers: Vec<(String, String)>,
+}

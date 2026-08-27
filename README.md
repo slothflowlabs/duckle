@@ -562,6 +562,42 @@ is kept verbatim under `body` rather than dropped for not parsing. The spool is
 written and flushed BEFORE the 200 goes out, because a 200 tells the sender its
 delivery is safe and webhook senders do not retry those.
 
+### Poll a remote source without downloading it (`src.changed`)
+
+A pipeline that watches a bulk source should not pay for the object to find
+out whether it was needed. `src.changed` compares what a HEAD or an SFTP stat
+reports against the last fingerprint it **successfully processed**, and emits
+a row only for what moved.
+
+Two shapes, because they are the same question asked of a different number of
+objects:
+
+- **object** - one URI replaced periodically. A row when its fingerprint
+  differs, nothing when it does not.
+- **listing** - an `sftp://` directory of immutable files. Lists it, compares
+  each entry, and emits the new and changed ones as ordinary rows for a
+  `ctl.foreach` or an artifact copy downstream.
+
+Rows carry `uri`, `name`, `size`, `modified_at`, `etag`, `fingerprint` and
+`status` (`new` / `changed`).
+
+**A quiet poll is not a plain success.** When nothing changed the node reports
+`unchanged`, so a working poll and a broken one are told apart - a healthy
+source can be unchanged hundreds of times between updates, and that has to
+stay countable.
+
+**Fingerprints are conservative on purpose.** None of the signals are
+guarantees: an ETag can be absent, can weaken under compression, and on S3 is
+a digest-of-digests for a multipart upload rather than the object's hash;
+Last-Modified has one-second resolution; SFTP offers mtime and size. A missing
+or unreadable signal therefore counts as **changed**. Re-reading something
+unnecessarily costs compute; skipping something that did change loses data and
+reports nothing.
+
+What was processed advances only when the whole run succeeds, and only for
+rows that were actually emitted - so a failure downstream re-offers the same
+files, and a run capped by `maxEntries` does not mark the remainder as done.
+
 ### Tumbling windows that survive between runs (`xf.tumble`)
 
 Aggregating a stream by time needs a window to stay open across batches, and

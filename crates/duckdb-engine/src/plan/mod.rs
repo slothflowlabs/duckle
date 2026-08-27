@@ -309,6 +309,7 @@ pub enum RuntimeSpec {
     TeradataSource(TeradataSourceSpec),
     TeradataSink(TeradataSinkSpec),
     SpoolSource(SpoolSourceSpec),
+    ChangedSource(ChangedSourceSpec),
     Tumble(TumbleSpec),
     Neo4jSource(Neo4jSourceSpec),
     Neo4jSink(Neo4jSinkSpec),
@@ -1490,6 +1491,7 @@ fn build_stage(
     let mut teradata_source: Option<TeradataSourceSpec> = None;
     let mut teradata_sink: Option<TeradataSinkSpec> = None;
     let mut spool_source: Option<SpoolSourceSpec> = None;
+    let mut changed_source: Option<ChangedSourceSpec> = None;
     let mut tumble: Option<TumbleSpec> = None;
     let mut neo4j_source: Option<Neo4jSourceSpec> = None;
     let mut neo4j_sink: Option<Neo4jSinkSpec> = None;
@@ -4559,6 +4561,38 @@ fn build_stage(
                 .unwrap_or_else(|| "0 seconds".to_string()),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.changed" {
+        // Metadata-only poll. The point is not to pay for the object to find
+        // out whether it was needed.
+        let uri = string_prop(&props, "uri")
+            .or_else(|| string_prop(&props, "url"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: uri required", component_id)))?;
+        changed_source = Some(ChangedSourceSpec {
+            node_id: node.id.clone(),
+            uri,
+            listing: props
+                .get("listing")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            suffix: string_prop(&props, "suffix").filter(|s| !s.is_empty()),
+            max_entries: props
+                .get("maxEntries")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(1000) as usize,
+            track_state: props
+                .get("trackState")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            user: string_prop(&props, "user").filter(|s| !s.is_empty()),
+            password: string_prop(&props, "password").filter(|s| !s.is_empty()),
+            private_key: string_prop(&props, "privateKey").filter(|s| !s.is_empty()),
+            key_passphrase: string_prop(&props, "keyPassphrase").filter(|s| !s.is_empty()),
+            host_fingerprint: string_prop(&props, "hostFingerprint").filter(|s| !s.is_empty()),
+            headers: headers_from_props(&props),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.spool" {
         // Append-only NDJSON tailer. Pairs with `duckle-runner listen`, which
         // keeps a webhook or WebSocket listener up and writes here, so nothing
@@ -5905,6 +5939,7 @@ fn build_stage(
         .or_else(|| teradata_source.map(RuntimeSpec::TeradataSource))
         .or_else(|| teradata_sink.map(RuntimeSpec::TeradataSink))
         .or_else(|| spool_source.map(RuntimeSpec::SpoolSource))
+        .or_else(|| changed_source.map(RuntimeSpec::ChangedSource))
         .or_else(|| tumble.map(RuntimeSpec::Tumble))
         .or_else(|| neo4j_source.map(RuntimeSpec::Neo4jSource))
         .or_else(|| neo4j_sink.map(RuntimeSpec::Neo4jSink))

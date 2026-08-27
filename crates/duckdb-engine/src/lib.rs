@@ -45,6 +45,7 @@ pub mod trust;
 pub mod tls;
 pub mod watermark;
 mod connectors;
+pub use connectors::remote_fingerprint;
 mod run_log;
 mod util;
 pub(crate) use util::*;
@@ -1728,6 +1729,9 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::VortexSource(spec)) => self.run_vortex_source(&db_path, spec),
                     Some(RuntimeSpec::Tumble(spec)) => {
                         self.run_tumble(&db_path, spec, pipeline_name, &mut pending_writes)
+                    }
+                    Some(RuntimeSpec::ChangedSource(spec)) => {
+                        self.run_changed_source(&db_path, spec, pipeline_name, &mut pending_writes)
                     }
                     Some(RuntimeSpec::SpoolSource(spec)) => {
                         self.run_spool_source(&db_path, spec, pipeline_name, &mut pending_writes)

@@ -5385,6 +5385,386 @@ impl DuckdbEngine {
         ))
     }
 
+    /// src.changed: probe remote metadata and emit only what changed.
+    ///
+    /// Cheap check first is the whole point: a HEAD or a stat costs nothing
+    /// next to the object it decides about. When nothing changed the node
+    /// reports `unchanged` rather than a bare success, so a working poll and a
+    /// broken one are told apart.
+    pub(crate) fn run_changed_source(
+        &self,
+        db: &Path,
+        spec: &plan::ChangedSourceSpec,
+        pipeline_name: Option<&str>,
+        pending: &mut Vec<crate::PendingWrite>,
+    ) -> Result<String, EngineError> {
+        let state_path = if spec.track_state {
+            incremental_state_path(pipeline_name, &spec.node_id)
+        } else {
+            None
+        };
+        let prior = state_path.as_deref().and_then(crate::read_state_snapshot);
+        // What has already been processed: uri -> fingerprint.
+        let mut seen: std::collections::BTreeMap<String, String> = prior
+            .as_deref()
+            .and_then(|t| serde_json::from_str::<JsonValue>(t).ok())
+            .and_then(|v| v.get("seen").cloned())
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+
+        let entries = if spec.listing {
+            self.list_remote_entries(spec)?
+        } else {
+            vec![self.probe_remote_entry(spec)?]
+        };
+
+        let mut rows: Vec<JsonValue> = Vec::new();
+        let mut unchanged_count = 0usize;
+        for e in &entries {
+            let status = match seen.get(&e.uri) {
+                Some(prev) if *prev == e.fingerprint => {
+                    unchanged_count += 1;
+                    continue;
+                }
+                Some(_) => "changed",
+                None => "new",
+            };
+            rows.push(serde_json::json!({
+                "uri": e.uri,
+                "name": e.name,
+                "size": e.size,
+                "modified_at": e.modified_at,
+                "etag": e.etag,
+                "fingerprint": e.fingerprint,
+                "status": status,
+            }));
+            if rows.len() >= spec.max_entries {
+                break;
+            }
+        }
+
+        // Only what was EMITTED is recorded, and only if the run succeeds.
+        // Recording an entry this run did not emit - because max_entries cut it
+        // off - would skip it forever.
+        for r in &rows {
+            if let (Some(u), Some(f)) = (
+                r.get("uri").and_then(|v| v.as_str()),
+                r.get("fingerprint").and_then(|v| v.as_str()),
+            ) {
+                seen.insert(u.to_string(), f.to_string());
+            }
+        }
+
+        let emitted = rows.len();
+        if emitted == 0 {
+            // A typed empty relation, so a downstream stage sees the right
+            // columns rather than an error on a quiet poll.
+            self.changed_empty_relation(db, &spec.node_id)?;
+        } else {
+            materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &rows)?;
+        }
+
+        if let Some(p) = state_path {
+            pending.push(crate::PendingWrite::state(
+                p,
+                serde_json::json!({ "seen": seen }),
+                prior,
+            ));
+        }
+
+        let msg = format!(
+            "changed: {} of {} entr{} changed at {}{}",
+            emitted,
+            entries.len(),
+            if entries.len() == 1 { "y" } else { "ies" },
+            spec.uri,
+            if unchanged_count > 0 {
+                format!(" ({} unchanged)", unchanged_count)
+            } else {
+                String::new()
+            }
+        );
+        Ok(if emitted == 0 {
+            format!("{}{}", crate::UNCHANGED_MARKER, msg)
+        } else {
+            msg
+        })
+    }
+
+    /// The shape src.changed always emits, with no rows in it.
+    fn changed_empty_relation(&self, db: &Path, node_id: &str) -> Result<(), EngineError> {
+        self.run(
+            Some(db),
+            &format!(
+                "CREATE OR REPLACE TABLE {} (uri VARCHAR, name VARCHAR, size BIGINT, \
+                 modified_at VARCHAR, etag VARCHAR, fingerprint VARCHAR, status VARCHAR)",
+                plan::quote_ident(node_id)
+            ),
+            false,
+        )
+        .map(|_| ())
+    }
+
+    /// One object's metadata, without fetching it.
+    fn probe_remote_entry(
+        &self,
+        spec: &plan::ChangedSourceSpec,
+    ) -> Result<RemoteEntry, EngineError> {
+        if spec.uri.starts_with("sftp://") {
+            let (host, port, user, path) = parse_sftp_uri(&spec.uri)?;
+            let user = spec.user.clone().or(user).unwrap_or_default();
+            let stat = self.sftp_stat(spec, &host, port, &user, &path)?;
+            return Ok(stat);
+        }
+        if !(spec.uri.starts_with("http://") || spec.uri.starts_with("https://")) {
+            return Err(EngineError::Config(format!(
+                "changed: {} is not a URI this can probe - use https:// or sftp://",
+                spec.uri
+            )));
+        }
+        let mut req = crate::tls::http_agent().head(&spec.uri);
+        for (k, v) in &spec.headers {
+            req = req.set(k, v);
+        }
+        // A server that refuses HEAD is common enough to be worth naming, and
+        // falling back to GET would download the object this exists to avoid.
+        let resp = match req.call() {
+            Ok(r) => r,
+            Err(ureq::Error::Status(405, _)) => {
+                return Err(EngineError::Query(format!(
+                    "changed: {} rejected a HEAD request (405). This source cannot be \
+                     checked without downloading it, which is what this component exists \
+                     to avoid.",
+                    spec.uri
+                )))
+            }
+            Err(ureq::Error::Status(code, r)) => {
+                let body = r.into_string().unwrap_or_default();
+                return Err(EngineError::Query(format!(
+                    "changed: HTTP {} probing {}: {}",
+                    code,
+                    spec.uri,
+                    body.chars().take(200).collect::<String>()
+                )));
+            }
+            Err(e) => {
+                return Err(EngineError::Query(format!(
+                    "changed: probing {}: {}",
+                    spec.uri, e
+                )))
+            }
+        };
+        let etag = resp.header("etag").map(|s| s.trim_matches('"').to_string());
+        let modified = resp.header("last-modified").map(|s| s.to_string());
+        let size = resp
+            .header("content-length")
+            .and_then(|s| s.parse::<i64>().ok());
+        let name = spec
+            .uri
+            .rsplit('/')
+            .next()
+            .unwrap_or(&spec.uri)
+            .to_string();
+        Ok(RemoteEntry {
+            fingerprint: remote_fingerprint(etag.as_deref(), modified.as_deref(), size),
+            uri: spec.uri.clone(),
+            name,
+            size,
+            modified_at: modified,
+            etag,
+        })
+    }
+
+    /// Every entry in a remote directory.
+    fn list_remote_entries(
+        &self,
+        spec: &plan::ChangedSourceSpec,
+    ) -> Result<Vec<RemoteEntry>, EngineError> {
+        if !spec.uri.starts_with("sftp://") {
+            return Err(EngineError::Config(format!(
+                "changed: listing is supported for sftp:// today, not {}. HTTP has no \
+                 standard directory listing, and S3 listing is the next thing to add here.",
+                spec.uri
+            )));
+        }
+        let (host, port, user, path) = parse_sftp_uri(&spec.uri)?;
+        let user = spec.user.clone().or(user).unwrap_or_default();
+        self.sftp_list(spec, &host, port, &user, &path)
+    }
+
+    /// Connect, run `f` against the SFTP session, disconnect. Shared by the
+    /// stat and list paths so the auth and host-key handling exist once.
+    fn with_sftp<T, F>(
+        &self,
+        spec: &plan::ChangedSourceSpec,
+        host: &str,
+        port: u16,
+        user: &str,
+        f: F,
+    ) -> Result<T, EngineError>
+    where
+        F: for<'a> FnOnce(
+            &'a russh_sftp::client::SftpSession,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<T, String>> + 'a>,
+        >,
+    {
+        use russh_sftp::client::SftpSession;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| EngineError::Query(format!("changed/sftp: tokio rt: {}", e)))?;
+        let result: Result<T, String> = rt.block_on(async {
+            let config = std::sync::Arc::new(russh::client::Config::default());
+            let refused = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let handler = SftpVerifier {
+                expected: spec.host_fingerprint.clone(),
+                hostport: format!("{}:{}", host, port),
+                refused: refused.clone(),
+            };
+            let mut session = russh::client::connect(config, (host, port), handler)
+                .await
+                .map_err(|e| match refused.lock().unwrap().take() {
+                    Some(why) => why,
+                    None => format!("connect {}:{}: {}", host, port, e),
+                })?;
+            let authed = if let Some(pem) = &spec.private_key {
+                let key = russh::keys::decode_secret_key(pem, spec.key_passphrase.as_deref())
+                    .map_err(|e| format!("private key: {}", e))?;
+                let with_alg = russh::keys::PrivateKeyWithHashAlg::new(
+                    std::sync::Arc::new(key),
+                    Some(russh::keys::HashAlg::Sha256),
+                );
+                session
+                    .authenticate_publickey(user, with_alg)
+                    .await
+                    .map_err(|e| format!("publickey auth: {}", e))?
+                    .success()
+            } else if let Some(pw) = &spec.password {
+                session
+                    .authenticate_password(user, pw)
+                    .await
+                    .map_err(|e| format!("password auth: {}", e))?
+                    .success()
+            } else {
+                return Err("no credentials: set a password or a private key".into());
+            };
+            if !authed {
+                return Err(format!("authentication failed for user '{}'", user));
+            }
+            let channel = session
+                .channel_open_session()
+                .await
+                .map_err(|e| format!("open channel: {}", e))?;
+            channel
+                .request_subsystem(true, "sftp")
+                .await
+                .map_err(|e| format!("request sftp subsystem: {}", e))?;
+            let sftp = SftpSession::new(channel.into_stream())
+                .await
+                .map_err(|e| format!("sftp session: {}", e))?;
+            f(&sftp).await
+        });
+        result.map_err(|e| EngineError::Query(format!("changed/sftp: {}", e)))
+    }
+
+    /// One remote file's size and mtime.
+    fn sftp_stat(
+        &self,
+        spec: &plan::ChangedSourceSpec,
+        host: &str,
+        port: u16,
+        user: &str,
+        path: &str,
+    ) -> Result<RemoteEntry, EngineError> {
+        let uri = spec.uri.clone();
+        let name = path.rsplit('/').next().unwrap_or(path).to_string();
+        let p = path.to_string();
+        let (size, mtime) = self.with_sftp(spec, host, port, user, move |sftp| {
+            Box::pin(async move {
+                let md = sftp
+                    .metadata(p.clone())
+                    .await
+                    .map_err(|e| format!("stat {}: {}", p, e))?;
+                Ok((md.size.map(|s| s as i64), md.mtime))
+            })
+        })?;
+        let modified = mtime.map(|m| m.to_string());
+        Ok(RemoteEntry {
+            fingerprint: remote_fingerprint(None, modified.as_deref(), size),
+            uri,
+            name,
+            size,
+            modified_at: modified,
+            etag: None,
+        })
+    }
+
+    /// Every file in a remote directory, with size and mtime.
+    fn sftp_list(
+        &self,
+        spec: &plan::ChangedSourceSpec,
+        host: &str,
+        port: u16,
+        user: &str,
+        dir: &str,
+    ) -> Result<Vec<RemoteEntry>, EngineError> {
+        let d = dir.to_string();
+        let raw = self.with_sftp(spec, host, port, user, move |sftp| {
+            Box::pin(async move {
+                let entries = sftp
+                    .read_dir(d.clone())
+                    .await
+                    .map_err(|e| format!("list {}: {}", d, e))?;
+                let mut out = Vec::new();
+                for e in entries {
+                    let meta = e.metadata();
+                    // Directories are not objects to process. Recursing would
+                    // turn one poll into an unbounded walk.
+                    if meta.is_dir() {
+                        continue;
+                    }
+                    out.push((
+                        e.file_name(),
+                        meta.size.map(|s| s as i64),
+                        meta.mtime,
+                    ));
+                }
+                Ok(out)
+            })
+        })?;
+
+        let base = format!(
+            "sftp://{}{}{}",
+            if user.is_empty() { String::new() } else { format!("{}@", user) },
+            if port == 22 { host.to_string() } else { format!("{}:{}", host, port) },
+            dir
+        );
+        let base = base.trim_end_matches('/').to_string();
+        let mut out: Vec<RemoteEntry> = raw
+            .into_iter()
+            .filter(|(name, _, _)| match &spec.suffix {
+                Some(s) => name.ends_with(s.as_str()),
+                None => true,
+            })
+            .map(|(name, size, mtime)| {
+                let modified = mtime.map(|m| m.to_string());
+                RemoteEntry {
+                    fingerprint: remote_fingerprint(None, modified.as_deref(), size),
+                    uri: format!("{}/{}", base, name),
+                    name,
+                    size,
+                    modified_at: modified,
+                    etag: None,
+                }
+            })
+            .collect();
+        // Oldest first, so a capped run works through a backlog in order
+        // rather than taking an arbitrary slice of it.
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
     /// src.spool: read an append-only NDJSON file from where the last
     /// successful run stopped.
     ///
@@ -14336,6 +14716,54 @@ fn kafka_client_builder(
     }
     Ok(builder)
 }
+
+/// One remote object's identity, as far as a metadata probe can see it.
+#[derive(Debug, Clone)]
+pub(crate) struct RemoteEntry {
+    pub uri: String,
+    pub name: String,
+    pub size: Option<i64>,
+    pub modified_at: Option<String>,
+    pub etag: Option<String>,
+    pub fingerprint: String,
+}
+
+/// Combine whatever signals the protocol gave into one comparable string.
+///
+/// Conservative on purpose. None of these are guarantees: an ETag can be
+/// absent, can weaken under compression, and on S3 is a digest-of-digests for
+/// a multipart upload rather than the object's hash; Last-Modified has
+/// one-second resolution; SFTP gives mtime and size. When NOTHING usable came
+/// back the fingerprint is unique per call, so the object reads as changed and
+/// gets processed. Re-reading something unnecessarily costs compute; skipping
+/// something that did change loses data, and nothing would report it.
+pub fn remote_fingerprint(
+    etag: Option<&str>,
+    modified: Option<&str>,
+    size: Option<i64>,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(e) = etag.map(str::trim).filter(|s| !s.is_empty()) {
+        parts.push(format!("etag={}", e));
+    }
+    if let Some(m) = modified.map(str::trim).filter(|s| !s.is_empty()) {
+        parts.push(format!("mtime={}", m));
+    }
+    if let Some(sz) = size {
+        parts.push(format!("size={}", sz));
+    }
+    if parts.is_empty() {
+        // Nothing to compare. Treat as changed rather than as unchanged.
+        return format!(
+            "unknown-{}-{}",
+            std::process::id(),
+            CHANGED_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+    }
+    parts.join(" ")
+}
+
+static CHANGED_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Sequence for tumble buffer filenames, so two runs in one process never pick
 /// the same name.

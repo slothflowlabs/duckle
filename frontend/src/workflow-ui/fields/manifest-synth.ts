@@ -1743,6 +1743,39 @@ function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
             },
         ]);
     }
+    if (comp.id === 'src.changed') {
+        return base(comp, [
+            {
+                label: 'What to watch',
+                fields: [
+                    { key: 'uri', label: 'URI', kind: 'text', required: true,
+                      placeholder: 'https://host/feed.zip  or  sftp://user@host/deltas',
+                      description: 'One object to watch, or - with listing on - a directory to watch.' },
+                    { key: 'listing', label: 'Watch a directory of files', kind: 'bool', defaultValue: false,
+                      description: 'Off: watch one object and emit a row when its fingerprint moves. On: list the directory and emit the files that are new or changed since the last successful run. sftp:// only for now; HTTP has no standard listing.' },
+                    { key: 'suffix', label: 'Only names ending with', kind: 'text', placeholder: '.zip',
+                      description: 'Listing mode. Skips anything else in the directory.' },
+                    { key: 'maxEntries', label: 'Max files per run', kind: 'number', defaultValue: 1000,
+                      description: 'Bounds the first run against a directory holding years of drops. What is left over is taken by the next run, oldest first - only what was emitted is recorded as processed.' },
+                    { key: 'trackState', label: 'Remember what was processed', kind: 'bool', defaultValue: true,
+                      description: 'Advances only when the whole run succeeds, so a failure downstream re-offers the same files rather than losing them. Off means every run treats everything as changed.' },
+                ],
+            },
+            {
+                label: 'Access',
+                fields: [
+                    { key: 'user', label: 'User', kind: 'text', description: 'SFTP only; overrides a user in the URI.' },
+                    { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
+                    { key: 'privateKey', label: 'Private key (PEM)', kind: 'expression', rows: 3 },
+                    { key: 'keyPassphrase', label: 'Key passphrase', kind: 'text', placeholder: '••••••••' },
+                    { key: 'hostFingerprint', label: 'Host fingerprint', kind: 'text', placeholder: 'SHA256:...',
+                      description: 'Optional SFTP host-key pin. Leave empty and the first key seen for the host is recorded in <workspace>/.duckle/known_hosts, and a later connection offering a DIFFERENT key is refused.' },
+                    { key: 'headers', label: 'HTTP headers', kind: 'key-value',
+                      description: 'Sent with the HEAD request - an API key on a metadata endpoint, for example.' },
+                ],
+            },
+        ]);
+    }
     if (comp.id === 'src.spool') {
         return base(comp, [
             {

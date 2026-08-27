@@ -16485,3 +16485,105 @@ fn a_run_that_wrote_rows_is_not_unchanged_even_if_one_source_was() {
          counted as a quiet poll"
     );
 }
+
+/// #272: a poll should cost a HEAD, not the object. `src.changed` compares
+/// the fingerprint a HEAD gives against the last one it successfully
+/// processed, and emits a row only when it differs.
+#[test]
+fn changed_emits_a_row_only_when_the_remote_fingerprint_moves() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "out.csv");
+    let name = "changedpoll";
+
+    // Three HEADs: same ETag twice, then a different one.
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        for (i, stream) in listener.incoming().take(3).enumerate() {
+            let mut stream = match stream { Ok(s) => s, Err(_) => break };
+            stream.set_read_timeout(Some(std::time::Duration::from_millis(300))).ok();
+            let mut buf = [0u8; 2048];
+            let _ = stream.read(&mut buf);
+            // The third probe reports a different object.
+            let etag = if i < 2 { "aaa111" } else { "bbb222" };
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nETag: \"{etag}\"\r\nContent-Length: 0\r\n\
+                 Last-Modified: Wed, 01 Jan 2026 00:00:00 GMT\r\nConnection: close\r\n\r\n"
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+
+    let pipeline = doc(
+        json!([
+            node("c", "src.changed", json!({ "uri": format!("http://127.0.0.1:{}/feed.zip", port) })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "c", "k")]),
+    );
+    let rows_out = || {
+        std::fs::read_to_string(&out)
+            .unwrap_or_default()
+            .replace("\r\n", "\n")
+            .lines()
+            .skip(1)
+            .filter(|l| !l.trim().is_empty())
+            .count()
+    };
+
+    // First sight of the object: new, so it is emitted.
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(rows_out(), 1, "a source never seen before must be processed");
+    assert_eq!(r.nodes.get("c").map(|n| n.status.as_str()), Some("ok"));
+
+    // Same fingerprint: nothing to do, and it says so rather than looking like
+    // an ordinary success.
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    assert_eq!(r.status, "ok", "a quiet poll is not a failure: {:?}", r.error);
+    assert_eq!(rows_out(), 0, "an unchanged source must not be re-processed");
+    assert_eq!(
+        r.nodes.get("c").map(|n| n.status.as_str()),
+        Some("unchanged"),
+        "a working poll and a broken one must not look identical"
+    );
+    assert!(r.unchanged, "the run did no publishable work");
+
+    // The ETag moved: process it again.
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(rows_out(), 1, "a changed fingerprint must be processed");
+    let csv = std::fs::read_to_string(&out).unwrap();
+    assert!(csv.contains("changed"), "and reported as changed, not new: {csv}");
+    server.join().ok();
+}
+
+/// The fingerprint rule decides what gets skipped, so it is worth pinning.
+/// Missing metadata must read as CHANGED - re-reading costs compute, skipping
+/// loses data and reports nothing.
+#[test]
+fn a_source_that_reveals_nothing_is_treated_as_changed() {
+    use duckle_duckdb_engine::remote_fingerprint as fp;
+    // Any single signal is enough to compare on.
+    assert_eq!(fp(Some("abc"), None, None), fp(Some("abc"), None, None));
+    assert_ne!(fp(Some("abc"), None, None), fp(Some("xyz"), None, None));
+    assert_ne!(fp(None, None, Some(10)), fp(None, None, Some(11)));
+    // A weak ETag is a different string, so it reads as changed rather than
+    // being silently treated as equal.
+    assert_ne!(fp(Some("W/abc"), None, None), fp(Some("abc"), None, None));
+    // Nothing usable: two probes of the same object must NOT compare equal.
+    assert_ne!(
+        fp(None, None, None),
+        fp(None, None, None),
+        "with no signal at all the object must be re-processed, not skipped"
+    );
+    // Blank headers count as absent, not as a value.
+    assert_ne!(fp(Some("  "), Some(""), None), fp(Some("  "), Some(""), None));
+}
