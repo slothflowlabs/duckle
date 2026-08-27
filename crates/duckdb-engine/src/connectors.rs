@@ -7516,19 +7516,11 @@ impl DuckdbEngine {
             type Error = russh::Error;
             async fn check_server_key(
                 &mut self,
-                server_public_key: &russh::keys::ssh_key::PublicKey,
+                server_public_key: &russh::keys::PublicKeyOrCertificate,
             ) -> Result<bool, Self::Error> {
                 match &self.expected {
                     None => Ok(true),
-                    Some(want) => {
-                        let got = server_public_key
-                            .fingerprint(russh::keys::HashAlg::Sha256)
-                            .to_string();
-                        // Compare case-sensitively but tolerant of the
-                        // "SHA256:" prefix on either side.
-                        let norm = |s: &str| s.trim().trim_start_matches("SHA256:").to_string();
-                        Ok(norm(&got) == norm(want))
-                    }
+                    Some(want) => Ok(sftp_host_key_matches(server_public_key, want)),
                 }
             }
         }
@@ -7771,17 +7763,11 @@ impl DuckdbEngine {
             type Error = russh::Error;
             async fn check_server_key(
                 &mut self,
-                server_public_key: &russh::keys::ssh_key::PublicKey,
+                server_public_key: &russh::keys::PublicKeyOrCertificate,
             ) -> Result<bool, Self::Error> {
                 match &self.expected {
                     None => Ok(true),
-                    Some(want) => {
-                        let got = server_public_key
-                            .fingerprint(russh::keys::HashAlg::Sha256)
-                            .to_string();
-                        let norm = |s: &str| s.trim().trim_start_matches("SHA256:").to_string();
-                        Ok(norm(&got) == norm(want))
-                    }
+                    Some(want) => Ok(sftp_host_key_matches(server_public_key, want)),
                 }
             }
         }
@@ -15631,6 +15617,176 @@ fn parse_sftp_uri(uri: &str) -> Result<(String, u16, Option<String>, String), En
     Ok((host, port, user, path))
 }
 
+/// Does the host key the SFTP server presented match the pinned SHA256
+/// fingerprint?
+///
+/// One function rather than the three copies that used to sit inline, because
+/// three copies of a security check is three chances for one of them to drift.
+///
+/// russh 0.63 changed what the server can present: `check_server_key` now
+/// receives a `PublicKeyOrCertificate` instead of a bare `PublicKey`, because
+/// a host may answer with an OpenSSH host CERTIFICATE rather than a raw key.
+///
+/// A pinned fingerprint names one exact host key, so a certificate is accepted
+/// only when the key it certifies IS that key, and refused otherwise.
+///
+/// That is exactly as strong as pinning the raw key, which is worth spelling
+/// out because it is the whole security argument. russh documents that "the
+/// key exchange is signed with the key the certificate contains", and it
+/// verifies that signature before calling this. So a server can only present a
+/// certificate for the pinned key if it holds that key's private half - the
+/// same thing it must prove to present the key bare. An attacker with their
+/// own CA cannot mint a certificate that gets them in, because they would
+/// still have to sign the handshake with a key whose fingerprint we refuse.
+///
+/// The CA signature, validity window and principals are therefore NOT
+/// consulted. There is no CA to check against here: the trust anchor is the
+/// pinned key itself, not a delegation. Treating a certificate as trusted
+/// because it is a certificate would accept keys the pin never named, which
+/// is the failure this function exists to prevent.
+///
+/// Accepting it also means a host that later starts presenting a certificate
+/// for the same key keeps working rather than failing to connect.
+///
+/// Comparison tolerates a `SHA256:` prefix on either side, and is otherwise
+/// exact - base64 is case-significant.
+pub(crate) fn sftp_host_key_matches(
+    presented: &russh::keys::PublicKeyOrCertificate,
+    expected: &str,
+) -> bool {
+    use russh::keys::PublicKeyOrCertificate;
+    use russh::keys::HashAlg;
+    let got = match presented {
+        PublicKeyOrCertificate::PublicKey { key, .. } => {
+            key.fingerprint(HashAlg::Sha256).to_string()
+        }
+        PublicKeyOrCertificate::Certificate(cert) => {
+            cert.public_key().fingerprint(HashAlg::Sha256).to_string()
+        }
+    };
+    let norm = |s: &str| s.trim().trim_start_matches("SHA256:").to_string();
+    norm(&got) == norm(expected)
+}
+
+
+/// SFTP host-key pinning. This is the check that decides whether we are
+/// talking to the right server, so it is tested against real OpenSSH key
+/// material rather than mocks.
+///
+/// Two ed25519 host keys and one genuine host certificate, generated with
+/// `ssh-keygen` and pasted verbatim. The certificate certifies key A and is
+/// signed by a separate CA, which is the shape russh 0.63 can now hand to
+/// `check_server_key`.
+#[cfg(test)]
+mod sftp_host_key_tests {
+    use super::sftp_host_key_matches;
+    use russh::keys::ssh_key::{Certificate, PublicKey};
+    use russh::keys::PublicKeyOrCertificate;
+
+    const A_PUB: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHNVp/MHziYS4wV2vfmafB+E18nSV2BaMmWYWkE84KvN host-a";
+    const A_FP: &str = "SHA256:1DIjFMJ6GUWygd6cLo4NLs110cetW5xyQ2G14cRCLvo";
+    const B_PUB: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP3A5IyXwvuYr2UKxn6b7Cojrd3YdI8NnzSLGM7rk+QH host-b";
+    const B_FP: &str = "SHA256:/pqI89pghckzSXZ9Bv/gh591hqgcKir1JWVadnrr+uQ";
+    /// A host certificate for key A, signed by an unrelated CA.
+    const A_CERT: &str = "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tAAAAIHmHd8n5oQYlP+gkjXwD4kYvou8OvSLgxS8IH4ETkeccAAAAIHNVp/MHziYS4wV2vfmafB+E18nSV2BaMmWYWkE84KvNAAAAAAAAAAAAAAACAAAAC2hvc3QtYS1jZXJ0AAAAFAAAABBzZnRwLmV4YW1wbGUuY29tAAAAAGqOyLUAAAAAfU7uNQAAAAAAAAAAAAAAAAAAADMAAAALc3NoLWVkMjU1MTkAAAAgKC5vUjky6nk4ceKsLufuOAGlIT3wkfHjOzg+FsstFW0AAABTAAAAC3NzaC1lZDI1NTE5AAAAQOXEYugiHUPCBT01h6WSbhBBv/Dt7JI1fQ5epfAxVWf2kgKo7Qd1MdOvK0m8y2PAannkUXMx3KcHFAT/m9982QQ= host-a";
+
+    fn raw(openssh: &str) -> PublicKeyOrCertificate {
+        PublicKeyOrCertificate::PublicKey {
+            key: PublicKey::from_openssh(openssh).expect("parses"),
+            hash_alg: None,
+        }
+    }
+
+    fn cert(openssh: &str) -> PublicKeyOrCertificate {
+        PublicKeyOrCertificate::Certificate(Certificate::from_openssh(openssh).expect("parses"))
+    }
+
+    #[test]
+    fn the_pinned_key_is_accepted() {
+        assert!(sftp_host_key_matches(&raw(A_PUB), A_FP));
+    }
+
+    /// The whole point. A different host key must be refused, or pinning is
+    /// decoration.
+    #[test]
+    fn a_different_key_is_refused() {
+        assert!(
+            !sftp_host_key_matches(&raw(B_PUB), A_FP),
+            "a server presenting a key other than the pinned one must be refused"
+        );
+        assert!(!sftp_host_key_matches(&raw(A_PUB), B_FP));
+    }
+
+    /// russh 0.63 can hand us a certificate where 0.62 always handed a key.
+    /// A certificate FOR the pinned key is that key, so it is accepted - the
+    /// server proved possession of the private half before this ran.
+    #[test]
+    fn a_certificate_for_the_pinned_key_is_accepted() {
+        assert!(
+            sftp_host_key_matches(&cert(A_CERT), A_FP),
+            "a host that starts presenting a certificate for the same key must \
+             keep working, not fail to connect"
+        );
+    }
+
+    /// The new code path's real risk: reading a certificate as trusted because
+    /// it is a certificate, rather than because it certifies the pinned key.
+    #[test]
+    fn a_certificate_for_a_different_key_is_refused() {
+        assert!(
+            !sftp_host_key_matches(&cert(A_CERT), B_FP),
+            "a certificate is not a free pass - it must certify the pinned key, \
+             and this one certifies a different one"
+        );
+    }
+
+    /// The certificate's OWN fingerprint is not the certified key's, and is not
+    /// what a user pins. Matching on it would accept the wrong host.
+    #[test]
+    fn the_pin_is_compared_against_the_certified_key_not_the_certificate_blob() {
+        let c = Certificate::from_openssh(A_CERT).expect("parses");
+        let inner = c
+            .public_key()
+            .fingerprint(russh::keys::HashAlg::Sha256)
+            .to_string();
+        assert_eq!(
+            inner.trim_start_matches("SHA256:"),
+            A_FP.trim_start_matches("SHA256:"),
+            "the certified key must be key A"
+        );
+    }
+
+    #[test]
+    fn the_sha256_prefix_is_optional_on_either_side() {
+        let bare = A_FP.trim_start_matches("SHA256:");
+        assert!(sftp_host_key_matches(&raw(A_PUB), bare));
+        assert!(sftp_host_key_matches(&raw(A_PUB), A_FP));
+        assert!(sftp_host_key_matches(&raw(A_PUB), &format!("  {}  ", A_FP)));
+    }
+
+    /// Base64 is case-significant, so a fingerprint that differs only in case
+    /// is a different key and must not be waved through.
+    #[test]
+    fn comparison_stays_case_sensitive() {
+        assert!(
+            !sftp_host_key_matches(&raw(A_PUB), &A_FP.to_lowercase()),
+            "lower-casing a base64 fingerprint makes it a different value"
+        );
+    }
+
+    #[test]
+    fn nonsense_never_matches() {
+        for junk in ["", "SHA256:", "not-a-fingerprint", "SHA256:AAAA"] {
+            assert!(
+                !sftp_host_key_matches(&raw(A_PUB), junk),
+                "{junk:?} must not match"
+            );
+        }
+    }
+}
+
 /// Host-key verifier for src.xml's SFTP reader. With a pinned SHA256 fingerprint
 /// it refuses any other server key; without one it trusts on first use. Mirrors
 /// the verifier in run_sftp_source.
@@ -15642,17 +15798,11 @@ impl russh::client::Handler for SftpVerifier {
     type Error = russh::Error;
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh::keys::ssh_key::PublicKey,
+        server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         match &self.expected {
             None => Ok(true),
-            Some(want) => {
-                let got = server_public_key
-                    .fingerprint(russh::keys::HashAlg::Sha256)
-                    .to_string();
-                let norm = |s: &str| s.trim().trim_start_matches("SHA256:").to_string();
-                Ok(norm(&got) == norm(want))
-            }
+            Some(want) => Ok(sftp_host_key_matches(server_public_key, want)),
         }
     }
 }

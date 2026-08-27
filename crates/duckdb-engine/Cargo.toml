@@ -144,7 +144,7 @@ suppaftp = { version = "10", default-features = false, features = ["rustls-ring"
 # async; run_sftp_source wraps it in block_on like the mongo / tiberius
 # sources to stay synchronous. Host-key/fingerprint is enforced in russh's
 # check_server_key callback.
-russh = { version = "0.62", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh = { version = "0.63", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.3"
 # System clipboard reader (src.clipboard). Text-only - image-data is
 # off because we never round-trip images through pipelines. arboard
