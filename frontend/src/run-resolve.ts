@@ -208,14 +208,13 @@ export function resolveTimeBuiltin(name: string, now: Date = new Date()): string
  *   ${timestamp} -> epoch seconds
  *   ${now}       -> ISO-8601 (has colons; for values, not paths)
  */
-function timeBuiltins(): Record<string, string> {
-    const d = new Date();
+function timeBuiltins(now: Date = new Date()): Record<string, string> {
     return {
-        date: formatTimeBuiltin('date', d),
-        time: formatTimeBuiltin('time', d),
-        datetime: formatTimeBuiltin('datetime', d),
-        timestamp: formatTimeBuiltin('timestamp', d),
-        now: formatTimeBuiltin('now', d),
+        date: formatTimeBuiltin('date', now),
+        time: formatTimeBuiltin('time', now),
+        datetime: formatTimeBuiltin('datetime', now),
+        timestamp: formatTimeBuiltin('timestamp', now),
+        now: formatTimeBuiltin('now', now),
     };
 }
 
@@ -227,8 +226,8 @@ function timeBuiltins(): Record<string, string> {
  * separators are normalized to `/` (DuckDB accepts them on every platform).
  * The date/time builtins are always present, even without a workspace.
  */
-export function builtinVars(workspacePath?: string | null): Record<string, string> {
-    const vars = timeBuiltins();
+export function builtinVars(workspacePath?: string | null, now: Date = new Date()): Record<string, string> {
+    const vars = timeBuiltins(now);
     if (workspacePath) {
         const root = workspacePath.replace(/\\/g, '/');
         vars.workspace = root;
@@ -237,13 +236,13 @@ export function builtinVars(workspacePath?: string | null): Record<string, strin
     return vars;
 }
 
-function substituteString(value: string, vars: Record<string, string>): string {
+function substituteString(value: string, vars: Record<string, string>, now: Date = new Date()): string {
     return value.replace(/\$\{([^}]+)\}/g, (match, expr) => {
         const key = String(expr).trim();
         if (Object.prototype.hasOwnProperty.call(vars, key)) {
             return vars[key]!;
         }
-        const timeVal = resolveTimeBuiltin(key);
+        const timeVal = resolveTimeBuiltin(key, now);
         if (timeVal !== null) {
             return timeVal;
         }
@@ -251,12 +250,12 @@ function substituteString(value: string, vars: Record<string, string>): string {
     });
 }
 
-export function substituteDeep(value: unknown, vars: Record<string, string>): unknown {
-    if (typeof value === 'string') return substituteString(value, vars);
-    if (Array.isArray(value)) return value.map(v => substituteDeep(v, vars));
+export function substituteDeep(value: unknown, vars: Record<string, string>, now: Date = new Date()): unknown {
+    if (typeof value === 'string') return substituteString(value, vars, now);
+    if (Array.isArray(value)) return value.map(v => substituteDeep(v, vars, now));
     if (value && typeof value === 'object') {
         const out: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(value)) out[k] = substituteDeep(v, vars);
+        for (const [k, v] of Object.entries(value)) out[k] = substituteDeep(v, vars, now);
         return out;
     }
     return value;
@@ -313,12 +312,15 @@ export function resolveForRun(
     extraVars?: Record<string, string>,
     runtimeParams?: Record<string, string>,
 ): Node<DuckleNodeData>[] {
+    // One `now` for the whole pass so every placeholder (and every offset) in a
+    // run stamps the exact same instant (mirrors context.rs:198-200).
+    const now = new Date();
     // Built-in workspace placeholders first, so an explicit context variable of
     // the same name (unusual) still wins. Global-context (extraVars) is merged
     // next so its runtime values override the static context defaults, then the
     // run-time input parameters (issue #127) win over everything.
     const vars = {
-        ...builtinVars(workspacePath),
+        ...builtinVars(workspacePath, now),
         ...buildContextVars(repo),
         ...(extraVars ?? {}),
         ...(runtimeParams ?? {}),
@@ -355,7 +357,7 @@ export function resolveForRun(
         }
 
         const resolved = hasVars
-            ? (substituteDeep(props, vars) as Record<string, unknown>)
+            ? (substituteDeep(props, vars, now) as Record<string, unknown>)
             : props;
 
         // Resolve child-pipeline ids to file paths. A value that isn't a
