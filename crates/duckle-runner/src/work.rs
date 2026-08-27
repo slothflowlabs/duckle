@@ -248,12 +248,12 @@ pub fn run() -> Result<i32, String> {
             }
             Ok(false) => {
                 return Err(format!(
-                    "locks do NOT exclude on {}: a second process took a lock this one was                      already holding. Every worker would claim every item, and each item would                      run once per worker, with no error anywhere. That is what an NFS mount with                      no lock daemon does. Fix the mount, or point workers at a local workspace.                      --no-check overrides this, knowing the above.",
+                    "locks do NOT exclude on {}: a second process took a lock this one was already holding. Every worker would claim every item, and each item would run once per worker, with no error anywhere. That is what an NFS mount with no lock daemon does. Fix the mount, or point workers at a local workspace.                      --no-check overrides this, knowing the above.",
                     workspace.display()
                 ));
             }
             Err(why) => eprintln!(
-                "duckle-runner: could not verify that locks exclude here ({why}). Proceeding,                  but two workers on this filesystem are unproven."
+                "duckle-runner: could not verify that locks exclude here ({why}). Proceeding, but two workers on this filesystem are unproven."
             ),
         }
         if check_only {

@@ -477,7 +477,7 @@ fn substitute_params_deep(
                             if executed && v.contains(SHELL_METACHARACTERS) {
                                 failure.get_or_insert_with(|| {
                                     format!(
-                                        "node {node_id}: parameter '{name}' contains shell syntax                                          and the '{}' property is executed, so it is refused. Pass                                          a plain value, or move the command into the pipeline.",
+                                        "node {node_id}: parameter '{name}' contains shell syntax and the '{}' property is executed, so it is refused. Pass a plain value, or move the command into the pipeline.",
                                         key.unwrap_or("?")
                                     )
                                 });

@@ -91,7 +91,7 @@ impl std::fmt::Display for Warning {
             ),
             Warning::WriteActionApproximated { node, action, used } => write!(
                 f,
-                "{node}: the legacy write action {action} amends rows that match the key and                  drops the rest. The nearest write mode here is '{used}', which also inserts                  the rows that do not match. Check that is what the table should hold"
+                "{node}: the legacy write action {action} amends rows that match the key and drops the rest. The nearest write mode here is '{used}', which also inserts the rows that do not match. Check that is what the table should hold"
             ),
             Warning::MapperOutputUnnamed { node, target, outputs } => write!(
                 f,

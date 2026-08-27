@@ -5326,3 +5326,105 @@
         assert!(sql.contains("coalesce(BATCH_ID, 0)"), "{sql}");
         assert!(sql.contains("BATCH_ID + 1"), "{sql}");
     }
+    // -----------------------------------------------------------------------
+    // #274 - a publish group must REFUSE rather than shrink. Each of these is a
+    // way a group of N quietly became a group of N-1 while still claiming the
+    // tables publish together, which is worse than not offering the guarantee.
+    // -----------------------------------------------------------------------
+
+    fn grouped_lake_doc(extra_w2: &str, w2_path: &str) -> PipelineDoc {
+        pipeline_from_json(&format!(
+            r#"{{
+              "nodes": [
+                {{"id":"s1","position":{{"x":0,"y":0}},"data":{{"label":"a","componentId":"code.sql","properties":{{"sql":"SELECT 1 AS id"}}}}}},
+                {{"id":"s2","position":{{"x":0,"y":0}},"data":{{"label":"b","componentId":"code.sql","properties":{{"sql":"SELECT 2 AS id"}}}}}},
+                {{"id":"w1","position":{{"x":0,"y":0}},"data":{{"label":"dim","componentId":"snk.ducklake","properties":{{
+                  "path":"/tmp/lake.duckdb","schemaName":"main","tableName":"dim","mode":"overwrite","publishGroup":"nightly"}}}}}},
+                {{"id":"w2","position":{{"x":0,"y":0}},"data":{{"label":"fact",{extra}"componentId":"snk.ducklake","properties":{{
+                  "path":"{path}","schemaName":"main","tableName":"fact","mode":"overwrite","publishGroup":"nightly"}}}}}}
+              ],
+              "edges":[
+                {{"id":"e1","source":"s1","target":"w1","data":{{"connectionType":"main"}}}},
+                {{"id":"e2","source":"s2","target":"w2","data":{{"connectionType":"main"}}}}
+              ]
+            }}"#,
+            extra = extra_w2,
+            path = w2_path
+        ))
+    }
+
+    /// A group of two whose second member is disabled is a group of one. The
+    /// planner has always honoured `disabled` silently, which here would mean
+    /// publishing one table while the pipeline says two publish together.
+    #[test]
+    fn publish_group_refuses_a_disabled_member() {
+        let doc = grouped_lake_doc("\"disabled\":true,", "/tmp/lake.duckdb");
+        let err = compile(&doc).unwrap_err().to_string();
+        assert!(
+            err.contains("nightly") && err.contains("fact") && err.contains("disabled"),
+            "must name the group, the member and why: {}",
+            err
+        );
+    }
+
+    /// Two catalogs cannot be committed together. One transaction reaches one
+    /// database - there is no ordering of two commits that makes both land or
+    /// neither, so offering the option at all would be a lie.
+    #[test]
+    fn publish_group_refuses_two_different_lakes() {
+        let doc = grouped_lake_doc("", "/tmp/other-lake.duckdb");
+        let err = compile(&doc).unwrap_err().to_string();
+        assert!(
+            err.contains("nightly") && err.contains("other-lake"),
+            "must name the group and the second catalog: {}",
+            err
+        );
+    }
+
+    /// "Run from here" walks back along data edges only, so a partial run can
+    /// contain one member of a group and not the other. Publishing the half it
+    /// happens to reach is exactly the split the group exists to prevent.
+    #[test]
+    fn publish_group_refuses_a_partial_run_that_splits_it() {
+        let doc = grouped_lake_doc("", "/tmp/lake.duckdb");
+        // Running from w1 pulls in s1 and w1 - w2 is on a separate branch and
+        // is left out entirely.
+        let err = compile_partial(&doc, "w1").unwrap_err().to_string();
+        assert!(
+            err.contains("nightly") && err.contains("fact") && err.contains("not part of this run"),
+            "must say the run does not contain the whole group: {}",
+            err
+        );
+    }
+
+    /// A member inside a ctl.parallelize branch runs as its own sub-pipeline,
+    /// in its own process, and cannot join this run's transaction. The planner
+    /// removes such nodes from the main plan, so the group would have committed
+    /// without it and reported success.
+    #[test]
+    fn publish_group_refuses_a_member_inside_parallelize() {
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{"label":"a","componentId":"code.sql","properties":{"sql":"SELECT 1 AS id"}}},
+                {"id":"p","position":{"x":0,"y":0},"data":{"label":"fan","componentId":"ctl.parallelize","properties":{}}},
+                {"id":"w1","position":{"x":0,"y":0},"data":{"label":"dim","componentId":"snk.ducklake","properties":{
+                  "path":"/tmp/lake.duckdb","schemaName":"main","tableName":"dim","mode":"overwrite","publishGroup":"nightly"}}},
+                {"id":"w2","position":{"x":0,"y":0},"data":{"label":"fact","componentId":"snk.ducklake","properties":{
+                  "path":"/tmp/lake.duckdb","schemaName":"main","tableName":"fact","mode":"overwrite","publishGroup":"nightly"}}}
+              ],
+              "edges":[
+                {"id":"e1","source":"s1","target":"p","data":{"connectionType":"main"}},
+                {"id":"e2","source":"p","target":"w1","data":{"connectionType":"main"}},
+                {"id":"e3","source":"p","target":"w2","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let err = compile(&doc).unwrap_err().to_string();
+        assert!(
+            err.contains("nightly") && err.contains("parallelize"),
+            "must name the group and parallelize: {}",
+            err
+        );
+    }
+

@@ -1660,6 +1660,7 @@ function synthLakehouseSink(comp: ComponentDef): ComponentManifest {
                 fields: [
                     { key: 'schemaName', label: 'Schema', kind: 'text', defaultValue: 'main' },
                     { key: 'tableName', label: 'Table', kind: 'text', required: true, placeholder: 'orders' },
+                    { key: 'publishGroup', label: 'Publish group', kind: 'text', placeholder: 'nightly', description: 'Give several DuckLake sinks the same group name and they commit together, as one snapshot: readers see all of their tables update at once, or none of them. Every member must write to the same catalog and run in the same run - the run is refused, naming the member, if one is disabled, sits inside a Parallelize branch, or is left out by a Run-from-here. Leave blank for the normal behaviour, where each sink commits on its own.' },
                     {
                         key: 'mode',
                         label: 'Write mode',

@@ -3358,7 +3358,7 @@ pub(crate) fn build_quality(
     if stop {
         let msg = format!("{component_id}: a row failed the check and On failure is set to fail");
         return Ok(format!(
-            "SELECT * FROM {from} WHERE COALESCE(({predicate}), FALSE)              AND CASE WHEN (SELECT count(*) FROM {from} WHERE NOT COALESCE(({predicate}), FALSE)) > 0              THEN error('{}') ELSE TRUE END",
+            "SELECT * FROM {from} WHERE COALESCE(({predicate}), FALSE) AND CASE WHEN (SELECT count(*) FROM {from} WHERE NOT COALESCE(({predicate}), FALSE)) > 0              THEN error('{}') ELSE TRUE END",
             sql_escape(&msg)
         ));
     }
@@ -8484,7 +8484,7 @@ pub(crate) fn build_artifact_source(props: &JsonValue) -> String {
         "CAST(NULL AS VARCHAR) AS sha256"
     };
     format!(
-        "SELECT filename AS uri, parse_filename(filename) AS name, {media} AS media_type,          size AS size_bytes, {sha}, last_modified AS modified_at          FROM read_blob('{}')",
+        "SELECT filename AS uri, parse_filename(filename) AS name, {media} AS media_type, size AS size_bytes, {sha}, last_modified AS modified_at FROM read_blob('{}')",
         sql_escape(&target)
     )
 }

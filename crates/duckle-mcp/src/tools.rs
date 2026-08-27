@@ -154,7 +154,7 @@ pub fn list_tools() -> Value {
                 "path": { "type": "string" }
             }, "required": ["path"] })),
         tool("backfill_list",
-            "List the saved state a pipeline resumes from: incremental watermarks, DuckLake snapshot ids,              Kafka resume offsets, spool positions and tumbling-window buffers. Each entry says whether it              can be set by hand (`editable`) or only cleared.",
+            "List the saved state a pipeline resumes from: incremental watermarks, DuckLake snapshot ids, Kafka resume offsets, spool positions and tumbling-window buffers. Each entry says whether it can be set by hand (`editable`) or only cleared.",
             json!({ "type": "object",
                 "properties": {
                     "workspace": { "type": "string", "description": "Workspace folder" },
@@ -162,7 +162,7 @@ pub fn list_tools() -> Value {
                 },
                 "required": ["workspace", "pipelineName"] })),
         tool("backfill_set",
-            "Set an incremental watermark (`value` + optional `valueType`) or a DuckLake snapshot id              (`snapshotId`) so the next run resumes from there. REFUSED when the node holds a different              kind of state - a Kafka offset, a spool position or a tumbling window cannot be set by hand,              because overwriting them destroys what they were holding. Clear those instead.",
+            "Set an incremental watermark (`value` + optional `valueType`) or a DuckLake snapshot id              (`snapshotId`) so the next run resumes from there. REFUSED when the node holds a different kind of state - a Kafka offset, a spool position or a tumbling window cannot be set by hand, because overwriting them destroys what they were holding. Clear those instead.",
             json!({ "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
@@ -174,7 +174,7 @@ pub fn list_tools() -> Value {
                 },
                 "required": ["workspace", "pipelineName", "nodeId"] })),
         tool("backfill_clear",
-            "Remove a node's saved state so it starts over. NOTE: this is not always a full reload - a              Kafka source with startFrom `latest` skips whatever is already in the topic when it has no              saved offset, so clearing it moves PAST that backlog rather than replaying it.",
+            "Remove a node's saved state so it starts over. NOTE: this is not always a full reload - a Kafka source with startFrom `latest` skips whatever is already in the topic when it has no saved offset, so clearing it moves PAST that backlog rather than replaying it.",
             json!({ "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },

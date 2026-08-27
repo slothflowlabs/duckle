@@ -3018,7 +3018,7 @@ impl DuckdbEngine {
             // DECIMAL(4,2), and using the total would silently truncate it.
             let bare = format!("replace({}, '-', '')", c);
             aggs.push(format!(
-                "max(CASE WHEN {c} IS NULL THEN 0                    WHEN strpos({c}, '.') > 0 OR strpos(upper({c}), 'E') > 0 THEN 2                    ELSE 1 END),                  max(CASE WHEN strpos({b}, '.') > 0 THEN strpos({b}, '.') - 1                    ELSE length({b}) END),                  max(CASE WHEN strpos({c}, '.') > 0                    THEN length({c}) - strpos({c}, '.') ELSE 0 END),                  max(CASE WHEN strpos(upper({c}), 'E') > 0 THEN 1 ELSE 0 END)",
+                "max(CASE WHEN {c} IS NULL THEN 0                    WHEN strpos({c}, '.') > 0 OR strpos(upper({c}), 'E') > 0 THEN 2                    ELSE 1 END), max(CASE WHEN strpos({b}, '.') > 0 THEN strpos({b}, '.') - 1                    ELSE length({b}) END), max(CASE WHEN strpos({c}, '.') > 0                    THEN length({c}) - strpos({c}, '.') ELSE 0 END), max(CASE WHEN strpos(upper({c}), 'E') > 0 THEN 1 ELSE 0 END)",
                 c = c,
                 b = bare
             ));
@@ -13888,7 +13888,7 @@ fn prepare_dbt_invocation(spec: &DbtSpec, db: &Path) -> Result<DbtInvocation, En
     std::fs::create_dir_all(&profiles_dir)
         .map_err(|e| EngineError::Query(format!("xf.dbt: profiles dir: {}", e)))?;
     let profiles_yaml = format!(
-        "{}:\n  target: duckle\n  outputs:\n    duckle:\n      type: duckdb\n      path: \"{}\"\n      schema: {}\n      threads: 1\n",
+        "{}:\n  target: duckle\n  outputs:\n duckle:\n type: duckdb\n path: \"{}\"\n schema: {}\n threads: 1\n",
         profile_name, target_db_yaml, spec.schema
     );
     // write-if-changed: a rewritten profiles.yml would needlessly invalidate the
@@ -17792,19 +17792,19 @@ mod incremental_state_tests {
     fn the_two_arrow_entry_points_are_told_apart() {
             use super::{defines_streaming_entry, defines_vectorized_entry};
 
-        assert!(defines_streaming_entry("def transform_batches(batch):\n    return batch"));
+        assert!(defines_streaming_entry("def transform_batches(batch):\n return batch"));
         assert!(!defines_vectorized_entry(
-            "def transform_batches(batch):\n    return batch"
+            "def transform_batches(batch):\n return batch"
         ));
-        assert!(defines_vectorized_entry("def transform(table):\n    return table"));
-        assert!(!defines_streaming_entry("def transform(table):\n    return table"));
+        assert!(defines_vectorized_entry("def transform(table):\n return table"));
+        assert!(!defines_streaming_entry("def transform(table):\n return table"));
         // A nested def is a helper, not the entry point the harness calls.
         assert!(!defines_streaming_entry(
-            "def outer():\n    def transform_batches(b):\n        return b"
+            "def outer():\n def transform_batches(b):\n return b"
         ));
         // A script may define both; streaming is tested first, so both report true
         // and the caller's ordering decides.
-        let both = "def transform(table):\n    return table\n\n\ndef transform_batches(batch):\n    return batch";
+        let both = "def transform(table):\n return table\n\n\ndef transform_batches(batch):\n return batch";
         assert!(defines_streaming_entry(both) && defines_vectorized_entry(both));
     }
 

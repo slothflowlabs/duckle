@@ -265,7 +265,7 @@ pub fn run() -> Result<(), String> {
     let supplied = args.token.clone().or_else(|| std::env::var("DUCKLE_CONSOLE_TOKEN").ok());
     if supplied.as_deref().is_some_and(|t| t.trim().is_empty()) {
         return Err(
-            "a console credential was supplied but is empty. Set DUCKLE_CONSOLE_TOKEN (or              --token) to a real value, or remove it entirely to set the server up from a              browser. Refusing to start rather than opening an administrator claim window."
+            "a console credential was supplied but is empty. Set DUCKLE_CONSOLE_TOKEN (or              --token) to a real value, or remove it entirely to set the server up from a browser. Refusing to start rather than opening an administrator claim window."
                 .to_string(),
         );
     }

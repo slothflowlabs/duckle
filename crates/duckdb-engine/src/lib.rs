@@ -1061,9 +1061,7 @@ impl DuckdbEngine {
         // PRAGMA across stages in a single session), and any
         // sink_mode="error" with a pre-existing local file (the
         // Rust pre-check guards against silent overwrite).
-        let batchable = target.is_none()
-            && compiled.stages.len() >= 2
-            && compiled.stages.iter().all(|s| {
+        let stage_batchable = |s: &plan::Stage| {
                 s.is_pure_sql()
                     && s.retry_attempts <= 1
                     && s.wait_ms.is_none()
@@ -1082,7 +1080,42 @@ impl DuckdbEngine {
                             .as_deref()
                             .map(|p| std::path::Path::new(p).exists())
                             .unwrap_or(false))
-            });
+        };
+        let batchable = target.is_none()
+            && compiled.stages.len() >= 2
+            && compiled.stages.iter().all(&stage_batchable);
+
+        // A publish group is one transaction, and a transaction lives inside one
+        // DuckDB session. The per-stage path spawns a process per stage, so there
+        // is no session to hold one open: the members would commit one at a time
+        // while the pipeline still claimed they commit together. Name what forced
+        // the slower path rather than running and quietly not being atomic.
+        if !batchable {
+            if let Some(group) = compiled
+                .stages
+                .iter()
+                .find_map(|s| s.publish_group.as_deref())
+            {
+                let why = if target.is_some() {
+                    "this is a partial run, which executes a stage at a time".to_string()
+                } else {
+                    match compiled.stages.iter().find(|s| !stage_batchable(s)) {
+                        Some(s) => format!(
+                            "'{}' has to run in its own process, which splits the run into one session per stage",
+                            s.label
+                        ),
+                        None => "the run has only one stage".to_string(),
+                    }
+                };
+                return RunResult::failed(
+                    total_start,
+                    format!(
+                        "publish group '{}' needs every stage in one session, but {}. The group's tables would be committed one at a time, which is what the group exists to prevent.",
+                        group, why
+                    ),
+                );
+            }
+        }
 
         if batchable {
             let r = self.execute_batched(
@@ -2142,7 +2175,7 @@ impl DuckdbEngine {
                 if let PriorState::Was(expected) = prior {
                     if read_state_snapshot(path).as_deref() != expected.as_deref() {
                         failures.push(format!(
-                            "{}: changed while this run was in flight, so the run's position                              was NOT written - the change made during the run stands, and the                              next run resumes from it",
+                            "{}: changed while this run was in flight, so the run's position was NOT written - the change made during the run stands, and the next run resumes from it",
                             path.display()
                         ));
                         continue;
@@ -2326,7 +2359,32 @@ impl DuckdbEngine {
             .filter(|s| sink_self_count(s).is_some())
             .filter_map(|s| s.from.as_deref())
             .collect();
+        // The span a publish group's transaction covers: from the first grouped
+        // sink to the last. Stages between them are inside it too - the
+        // topological order interleaves independent branches by construction, so
+        // demanding that members be contiguous would refuse the ordinary case.
+        //
+        // Two groups in one pipeline share the one transaction rather than
+        // nesting (DuckDB has no nested transactions). That is stronger than
+        // either group asked for, never weaker, and it matches what the rest of
+        // the engine already promises: a failed run changes nothing.
+        let group_span: Option<(usize, usize)> = {
+            let idx: Vec<usize> = stages
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.publish_group.is_some())
+                .map(|(i, _)| i)
+                .collect();
+            match (idx.first(), idx.last()) {
+                (Some(a), Some(b)) => Some((*a, *b)),
+                _ => None,
+            }
+        };
+
         for (i, stage) in stages.iter().enumerate() {
+            if group_span.map(|(first, _)| i == first).unwrap_or(false) {
+                batched_sql.push_str("BEGIN TRANSACTION;\n");
+            }
             batched_sql.push_str(&stage.sql);
             // Planner does not always terminate stage.sql with ';' -
             // the per-stage path tolerates it because each CLI invocation
@@ -2337,6 +2395,12 @@ impl DuckdbEngine {
                 batched_sql.push(';');
             }
             batched_sql.push('\n');
+            // Before this stage's marker, not after: the marker is the "done"
+            // signal and its COUNT(*) should read what actually landed, so a
+            // commit that fails cannot leave a stage reported as ok.
+            if group_span.map(|(_, last)| i == last).unwrap_or(false) {
+                batched_sql.push_str("COMMIT; DETACH duckle_dst;\n");
+            }
             // #102: expose this node's output under its user alias so raw / pure
             // SQL nodes downstream can reference it by a friendly name. The
             // node-id relation was just created by stage.sql above, so the alias
@@ -5496,10 +5560,28 @@ pub fn compile_pipeline_sql_opts(
     } else {
         collect_secrets(doc)
     };
+    // The batched executor wraps a publish group in one transaction. The export
+    // has to show it, or the script a user copies out is not the script that
+    // runs - it would publish each table on its own while the pipeline claims
+    // they publish together.
+    let group_span: Option<(usize, usize)> = {
+        let idx: Vec<usize> = compiled
+            .stages
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.publish_group.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        match (idx.first(), idx.last()) {
+            (Some(a), Some(b)) => Some((*a, *b)),
+            _ => None,
+        }
+    };
     Ok(compiled
         .stages
         .into_iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(i, s)| {
             // Driver-backed and control-flow stages carry no DuckDB SQL
             // (they run in the Duckle runtime via Rust connectors / hooks).
             // For the SQL export we annotate them so the exported script
@@ -5525,6 +5607,18 @@ pub fn compile_pipeline_sql_opts(
                 format!("{}\n{}", procedural_note(&s), redact_secret_values(&s.sql, &secrets))
             } else {
                 redact_secret_values(&s.sql, &secrets)
+            };
+            let sql = match group_span {
+                Some((first, last)) if i == first && i == last => {
+                    format!("BEGIN TRANSACTION;\n{}\nCOMMIT; DETACH duckle_dst;", sql)
+                }
+                Some((first, _)) if i == first => {
+                    format!("BEGIN TRANSACTION;\n{}", sql)
+                }
+                Some((_, last)) if i == last => {
+                    format!("{}\nCOMMIT; DETACH duckle_dst;", sql)
+                }
+                _ => sql,
             };
             StageSql {
                 node_id: s.node_id,
@@ -5778,6 +5872,7 @@ mod tests {
             sql: String::new(),
             kind,
             from: None,
+            publish_group: None,
             sink_path: None,
             sink_mode: None,
             sink_compression: None,

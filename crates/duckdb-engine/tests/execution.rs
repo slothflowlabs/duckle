@@ -6363,7 +6363,7 @@ fn concurrent_foreach_with_python_does_not_cross_contaminate() {
             node("s", "src.csv", json!({ "path": seed, "hasHeader": true })),
             node("py", "code.python", json!({
                 // process(row) sets result to this iteration's n * 10.
-                "code": "def process(row):\n    row['result'] = ${ITER_ITEM_N} * 10\n    return row"
+                "code": "def process(row):\n row['result'] = ${ITER_ITEM_N} * 10\n return row"
             })),
             node("k", "snk.csv", json!({
                 "path": format!("{}${{ITER_ITEM_ID}}.csv", out_prefix),
@@ -15508,7 +15508,7 @@ fn a_declared_date_format_survives_a_run_and_a_reload() {
     let after = sql_of(&saved);
     assert_eq!(
         before, after,
-        "compiling a saved pipeline again produced different SQL - the declared          format is not stable across save/reload"
+        "compiling a saved pipeline again produced different SQL - the declared format is not stable across save/reload"
     );
 }
 
@@ -16586,4 +16586,149 @@ fn a_source_that_reveals_nothing_is_treated_as_changed() {
     );
     // Blank headers count as absent, not as a value.
     assert_ne!(fp(Some("  "), Some(""), None), fp(Some("  "), Some(""), None));
+}
+
+// ---------------------------------------------------------------------------
+// #274 - publish groups: several DuckLake tables become visible together, or
+// not at all. The failure this prevents is a run that writes four of five
+// tables and reports success, leaving downstream readers on a mix of old and
+// new data with nothing to tell them so.
+// ---------------------------------------------------------------------------
+
+/// Two grouped sinks over the same lake commit in ONE transaction, so the lake
+/// gains a single snapshot rather than one per table. That single snapshot IS
+/// the published version - a reader either sees both tables or neither.
+#[test]
+fn publish_group_commits_both_tables_in_one_snapshot() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let catalog = out_path(tmp.path(), "grp.duckdb");
+    let snaps = |c: &str| -> i64 {
+        let rows = duckdb_json(&format!(
+            "INSTALL ducklake; LOAD ducklake; ATTACH 'ducklake:{}' AS l (READ_ONLY); \
+             SELECT COUNT(*) AS n FROM ducklake_snapshots('l')",
+            c
+        ));
+        rows.first()
+            .and_then(|r| r.get("n"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(-1)
+    };
+
+    let grouped = |table: &str| {
+        json!({
+            "path": catalog, "schemaName": "main", "tableName": table,
+            "mode": "overwrite", "publishGroup": "nightly"
+        })
+    };
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s1", "code.sql", json!({ "sql": "SELECT 1 AS id" })),
+            node("s2", "code.sql", json!({ "sql": "SELECT 2 AS id" })),
+            node("w1", "snk.ducklake", grouped("dim")),
+            node("w2", "snk.ducklake", grouped("fact")),
+        ]),
+        json!([main_edge("e1", "s1", "w1"), main_edge("e2", "s2", "w2")]),
+    ));
+    assert_eq!(r.status, "ok", "grouped write failed: {:?}", r.error);
+
+    let before = snaps(&catalog);
+    // A second run rewrites BOTH tables. One transaction, so one snapshot -
+    // not one per sink, which is what makes "together" observable at all.
+    let r2 = engine.execute_pipeline(&doc(
+        json!([
+            node("s1", "code.sql", json!({ "sql": "SELECT 10 AS id" })),
+            node("s2", "code.sql", json!({ "sql": "SELECT 20 AS id" })),
+            node("w1", "snk.ducklake", grouped("dim")),
+            node("w2", "snk.ducklake", grouped("fact")),
+        ]),
+        json!([main_edge("e1", "s1", "w1"), main_edge("e2", "s2", "w2")]),
+    ));
+    assert_eq!(r2.status, "ok", "second grouped write failed: {:?}", r2.error);
+    let added = snaps(&catalog) - before;
+    assert_eq!(
+        added, 1,
+        "two grouped sinks must publish as one snapshot, got {} - without a shared \
+         transaction each sink commits on its own and a reader can catch the lake \
+         half-updated",
+        added
+    );
+}
+
+/// The guarantee itself: when one member fails, the member that already wrote
+/// must not be visible.
+///
+/// The control case is the point of this test. The SAME pipeline without a
+/// publish group is run first, and it DOES leave a partial publish behind -
+/// one table updated, the other not, and a failed run to explain it. That is
+/// the bug being fixed, and running it here is what proves the grouped case
+/// below is doing work rather than passing because the failing sink happened
+/// to run first and write nothing.
+#[test]
+fn publish_group_failure_leaves_nothing_published() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ids = |catalog: &str, table: &str| -> String {
+        scalar_string(&format!(
+            "INSTALL ducklake; LOAD ducklake; ATTACH 'ducklake:{}' AS l (READ_ONLY); \
+             SELECT COALESCE(string_agg(id::VARCHAR, ',' ORDER BY id), '') AS s FROM l.main.{}",
+            catalog, table
+        ))
+    };
+    // `fact` is fed by s2 and executes FIRST; `dim` is fed by s1 and executes
+    // second. So the failure goes in `dim`, leaving `fact` written and waiting
+    // to be either published on its own (no group) or rolled back (group).
+    let run = |catalog: &str, group: Option<&str>, dim_sql: &str| {
+        let props = |table: &str| {
+            let mut p = json!({
+                "path": catalog, "schemaName": "main", "tableName": table, "mode": "append"
+            });
+            if let Some(g) = group {
+                p["publishGroup"] = json!(g);
+            }
+            p
+        };
+        engine.execute_pipeline(&doc(
+            json!([
+                node("s1", "code.sql", json!({ "sql": dim_sql })),
+                node("s2", "code.sql", json!({ "sql": "SELECT 2 AS id" })),
+                node("w1", "snk.ducklake", props("dim")),
+                node("w2", "snk.ducklake", props("fact")),
+            ]),
+            json!([main_edge("e1", "s1", "w1"), main_edge("e2", "s2", "w2")]),
+        ))
+    };
+
+    for (catalog, group) in [("plain.duckdb", None), ("grouped.duckdb", Some("nightly"))] {
+        let cat = out_path(tmp.path(), catalog);
+        let r = run(&cat, group, "SELECT 1 AS id");
+        assert_eq!(r.status, "ok", "setup failed for {}: {:?}", catalog, r.error);
+        assert_eq!(ids(&cat, "dim"), "1");
+        assert_eq!(ids(&cat, "fact"), "2");
+
+        // 'boom' will not convert to the INT `dim` already declares, so the
+        // second sink fails after the first has written.
+        let r2 = run(&cat, group, "SELECT 'boom' AS id");
+        assert_eq!(r2.status, "error", "the bad member should fail the run");
+        assert_eq!(ids(&cat, "dim"), "1", "the failing member wrote something");
+
+        match group {
+            // No group: the sink that ran first is published on its own. This
+            // is the failure mode - a reader now sees a new `fact` against an
+            // old `dim`, and only the run log says anything is wrong.
+            None => assert_eq!(
+                ids(&cat, "fact"),
+                "2,2",
+                "control: without a group the first sink publishes alone. If this \
+                 stops holding, the grouped assertion below proves nothing."
+            ),
+            // Grouped: the same write is rolled back with the run.
+            Some(_) => assert_eq!(
+                ids(&cat, "fact"),
+                "2",
+                "the member that succeeded was published anyway - the group is \
+                 not atomic"
+            ),
+        }
+    }
 }

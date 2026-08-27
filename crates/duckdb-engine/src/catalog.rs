@@ -1233,7 +1233,7 @@ pub fn asset_of(component_id: &str, props: &Value) -> Result<Asset, String> {
     }
 
     Err(format!(
-        "no target property on {component_id}; expected one of path, bucket+key, topic,          index, collection, tableName, object, url or database"
+        "no target property on {component_id}; expected one of path, bucket+key, topic, index, collection, tableName, object, url or database"
     ))
 }
 

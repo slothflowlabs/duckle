@@ -32,6 +32,13 @@ pub struct Stage {
     /// For sinks: the upstream object name they read from, so the
     /// executor can report a row count.
     pub from: Option<String>,
+    /// Sinks in the same publish group become visible together or not at all.
+    ///
+    /// Scoped deliberately: one pipeline, one DuckLake catalog. There is no
+    /// honest two-phase commit across a lake and a Postgres, and a guarantee
+    /// that only sometimes holds is worse than none - so a combination that
+    /// cannot be honoured is REFUSED rather than quietly downgraded.
+    pub publish_group: Option<String>,
     /// For sinks: the output path + write mode, so the executor can
     /// enforce "error if exists" before writing.
     pub sink_path: Option<String>,
@@ -569,6 +576,33 @@ pub fn compile_partial(
             .cloned()
             .collect(),
     };
+    // A publish group has to be checked against the WHOLE document, before the
+    // filtering above hides the members this run does not reach. Inside
+    // compile_impl the dropped members simply do not exist, so the group looks
+    // complete and would publish the half a backward walk happened to include.
+    let mut split: BTreeMap<String, (bool, Vec<String>)> = BTreeMap::new();
+    for n in &pipeline.nodes {
+        if n.data.component_id.as_deref() != Some("snk.ducklake") {
+            continue;
+        }
+        let props = n.data.properties.clone().unwrap_or(JsonValue::Null);
+        if let Some(g) = string_prop(&props, "publishGroup").filter(|g| !g.trim().is_empty()) {
+            let e = split.entry(g.trim().to_string()).or_insert((false, Vec::new()));
+            if keep.contains(&n.id) {
+                e.0 = true;
+            } else {
+                e.1.push(n.data.label.clone());
+            }
+        }
+    }
+    if let Some((group, (_, missing))) = split.iter().find(|(_, (kept, m))| *kept && !m.is_empty()) {
+        return Err(EngineError::Config(format!(
+            "publish group '{}' cannot be honoured: '{}' is a member but it is not part of this run - a partial run that contains only some of a group cannot publish the group. Run the whole pipeline, or take that sink out of the group.",
+            group,
+            missing.join("', '")
+        )));
+    }
+
     // Partial runs never batch (the executor only batches when target.is_none()),
     // so suppress the live-VIEW upgrade - keep ATTACH-backed sources as
     // materialized TABLEs that survive across the per-stage processes (#87).
@@ -1158,7 +1192,126 @@ fn compile_impl(pipeline: &PipelineDoc, allow_view_upgrade: bool) -> Result<Comp
 
     apply_stage_cache(pipeline, &mut stages);
 
+    prepare_publish_groups(pipeline, &mut stages, &excluded)?;
+
     Ok(CompiledPipeline { stages, leaves })
+}
+
+/// A publish group promises its sinks become visible together or not at all.
+///
+/// Three things quietly shrink a group - a disabled node, a member pulled into a
+/// `ctl.parallelize` branch, a "run from here" that starts below one of them -
+/// and a shrunken group is worse than no group, because the promise is still
+/// being made while a table silently drops out of it. So each of those REFUSES
+/// the run and says which member went missing and why. Refusing is loud and
+/// recoverable; publishing four of five tables and reporting success is not.
+fn prepare_publish_groups(
+    pipeline: &PipelineDoc,
+    stages: &mut [Stage],
+    excluded: &HashSet<String>,
+) -> Result<(), EngineError> {
+    // Declared in the document, whether or not it survived into the plan.
+    let mut declared: BTreeMap<String, Vec<&PipelineNode>> = BTreeMap::new();
+    for node in &pipeline.nodes {
+        if node.data.component_id.as_deref() != Some("snk.ducklake") {
+            continue;
+        }
+        let props = node.data.properties.clone().unwrap_or(JsonValue::Null);
+        if let Some(g) = string_prop(&props, "publishGroup").filter(|g| !g.trim().is_empty()) {
+            declared.entry(g.trim().to_string()).or_default().push(node);
+        }
+    }
+    if declared.is_empty() {
+        return Ok(());
+    }
+
+    let planned: HashSet<String> = stages
+        .iter()
+        .filter(|s| s.publish_group.is_some())
+        .map(|s| s.node_id.clone())
+        .collect();
+
+    for (group, members) in &declared {
+        for node in members {
+            if planned.contains(&node.id) {
+                continue;
+            }
+            let why = if node.data.disabled.unwrap_or(false) {
+                "it is disabled"
+            } else if excluded.contains(&node.id) {
+                "it was pulled into a ctl.parallelize branch, which runs as its own sub-pipeline and cannot share this run's transaction"
+            } else {
+                "it is not part of this run - a partial run that contains only some of a group cannot publish the group"
+            };
+            return Err(EngineError::Config(format!(
+                "publish group '{}' cannot be honoured: '{}' is a member but {}. Either include it or take it out of the group - publishing the rest would claim an atomicity that no longer holds.",
+                group,
+                node.data.label,
+                why
+            )));
+        }
+        // One transaction reaches one catalog. Two lakes are two commits, and
+        // no ordering of them makes both land or neither.
+        let mut lakes: Vec<(String, String)> = Vec::new();
+        for node in members {
+            let props = node.data.properties.clone().unwrap_or(JsonValue::Null);
+            let path = string_prop(&props, "path").unwrap_or_default();
+            let who = node.data.label.clone();
+            lakes.push((path, who));
+        }
+        if let Some((first, _)) = lakes.first().cloned() {
+            if let Some((other, who)) = lakes.iter().find(|(p, _)| *p != first) {
+                return Err(EngineError::Config(format!(
+                    "publish group '{}' spans two DuckLake catalogs ('{}' and '{}', the second on '{}'). One transaction commits to one catalog; two catalogs are two commits and cannot be made atomic together.",
+                    group, first, other, who
+                )));
+            }
+        }
+
+        // Every sink normally attaches the lake, writes, and detaches again. Inside
+        // a shared transaction that is wrong twice over: the second ATTACH collides
+        // on the alias, and a DETACH with the transaction's writes still uncommitted
+        // discards them. So the group attaches ONCE, on its first member, and the
+        // attachment stays open until the COMMIT the executor emits after the last.
+        //
+        // One attachment also keeps the whole group inside a single transaction
+        // participant, which is what makes the commit one snapshot rather than a
+        // race between two handles on the same catalog.
+        let props = members[0].data.properties.clone().unwrap_or(JsonValue::Null);
+        let prelude = builders::ducklake_attach(&props, false);
+        let detach = "DETACH duckle_dst;";
+        let mut seen_first = false;
+        for st in stages.iter_mut() {
+            if st.publish_group.as_deref() != Some(group.as_str()) {
+                continue;
+            }
+            let trimmed = st.sql.trim_end();
+            if let Some(rest) = trimmed.strip_suffix(detach) {
+                st.sql = rest.trim_end().to_string();
+            }
+            if seen_first {
+                if let Some(rest) = st.sql.strip_prefix(prelude.as_str()) {
+                    st.sql = rest.to_string();
+                }
+            }
+            seen_first = true;
+        }
+    }
+
+    // DuckDB allows one transaction to write to exactly ONE attached database.
+    // Stages between two group members create their relations in the run
+    // database, so a transaction spanning them dies with "a single transaction
+    // can only write to a single attached database" - verified, it is a hard
+    // error and not a warning.
+    //
+    // So the group's sinks are moved to the end, contiguously, keeping their
+    // relative order. That is safe for every plan that can reach this point: a
+    // group is only honoured on the batched path, the batched path requires
+    // every stage to be pure SQL, and a pure-SQL stage that is not a sink is a
+    // view definition - nothing after the group is waiting on it. The sort is
+    // stable, so the stages that move keep the order the planner gave them.
+    stages.sort_by_key(|s| s.publish_group.is_some());
+    Ok(())
 }
 
 mod graph;
@@ -1233,7 +1386,7 @@ fn snowflake_truncate_first(props: &JsonValue, component_id: &str) -> Result<boo
         Some("overwrite") | Some("replace") => {
             if !upsert_keys_from(props, component_id)?.is_empty() {
                 return Err(EngineError::Config(format!(
-                    "{}: writeMode overwrite empties the table, and upsert keys merge into                      what is already there. Choose one.",
+                    "{}: writeMode overwrite empties the table, and upsert keys merge into what is already there. Choose one.",
                     component_id
                 )));
             }
@@ -6040,6 +6193,11 @@ fn build_stage(
         sql,
         kind,
         from,
+        publish_group: if component_id == "snk.ducklake" {
+            string_prop(&props, "publishGroup").filter(|s| !s.trim().is_empty())
+        } else {
+            None
+        },
         sink_path,
         sink_mode,
         sink_compression,

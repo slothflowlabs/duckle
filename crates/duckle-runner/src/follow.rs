@@ -294,7 +294,7 @@ fn install_stop_handler(stop: Arc<AtomicBool>) {
         // Not fatal. Without it Ctrl-C kills the process, which costs an
         // unfinished batch and no correctness.
         eprintln!(
-            "follow: could not install a Ctrl-C handler ({e});              Ctrl-C will stop the process immediately"
+            "follow: could not install a Ctrl-C handler ({e}); Ctrl-C will stop the process immediately"
         );
     }
 }
@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(
             rows_of(&r),
             0,
-            "a source that re-read 12 rows an incremental filter then dropped is an              IDLE pass - counting the graph total would spin the follower at full speed"
+            "a source that re-read 12 rows an incremental filter then dropped is an IDLE pass - counting the graph total would spin the follower at full speed"
         );
     }
 }
