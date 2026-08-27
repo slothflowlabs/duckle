@@ -6126,7 +6126,10 @@ function synthCustomCode(comp: ComponentDef): ComponentManifest {
                     ],
                 },
                 { key: 'code', label: 'Source', kind: 'textarea', rows: 12, monospace: true, required: true,
-                  placeholder: id === 'code.python' ? 'def process(row):\n    return row' : '// custom code' },
+                  placeholder: id === 'code.python' ? 'def process(row):\n    return row' : '// custom code',
+                  description: id === 'code.python'
+                      ? 'Three entry points, and the one you define picks the mode. process(row): a dict in, a dict or None out, a row at a time. transform(table): the whole table at once as a pyarrow Table. transform_batches(batch): streamed a RecordBatch at a time, so a table larger than memory still runs. The last two need pyarrow, and both keep types that the row path would stringify. INPUT_PATH holds the Parquet file the rows arrive in, if you would rather scan it yourself.'
+                      : undefined },
                 ...(id === 'code.wasm' ? [{ key: 'wasmPath', label: 'WASM file', kind: 'file-path' as const,
                     filters: [{ name: 'WebAssembly', extensions: ['wasm'] }] },
                   { key: 'reuseInstance', label: 'Reuse module instance across rows', kind: 'bool' as const,

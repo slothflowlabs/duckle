@@ -42992,7 +42992,7 @@
       "label": "Python UDF",
       "kind": "custom",
       "availability": "available",
-      "summary": "Transform via a real Python 3 interpreter (full language + installed packages). Define `process(row)` to work a row at a time (a dict in, a dict or None out, JSON both ways), or `transform(table)` to be handed the WHOLE table at once as a pyarrow Table - use that for polars/pandas/PyArrow work, OCR, entity resolution or ML, where a row at a time is the wrong shape. transform is also the one that keeps types: through the row path a timestamp arrives as a string. It needs pyarrow in the interpreter; process(row) needs nothing beyond Python. Needs Python 3 on PATH or DUCKLE_PYTHON_BIN. Code in the `code` prop.",
+      "summary": "Transform via a real Python 3 interpreter (full language + installed packages). Define `process(row)` to work a row at a time (a dict in, a dict or None out, JSON both ways), or `transform(table)` to be handed the WHOLE table at once as a pyarrow Table - use that for polars/pandas/PyArrow work, OCR, entity resolution or ML, where a row at a time is the wrong shape. Or `transform_batches(batch)` to be streamed a RecordBatch at a time (65,536 rows), which never holds the whole table in memory - use that when the data is larger than RAM. transform and transform_batches also keep types: through the row path a timestamp arrives as a string. Both need pyarrow in the interpreter; process(row) needs nothing beyond Python. The script can also read INPUT_PATH, the Parquet file the rows arrive in, to scan it with polars, DuckDB or a pyarrow Dataset directly. Needs Python 3 on PATH or DUCKLE_PYTHON_BIN. Code in the `code` prop.",
       "ports": {
         "inputs": [
           {
@@ -43019,7 +43019,7 @@
         "id": "code.python",
         "kind": "transform",
         "label": "Python UDF",
-        "description": "Transform via a real Python 3 interpreter (full language + installed packages). Define `process(row)` to work a row at a time (a dict in, a dict or None out, JSON both ways), or `transform(table)` to be handed the WHOLE table at once as a pyarrow Table - use that for polars/pandas/PyArrow work, OCR, entity resolution or ML, where a row at a time is the wrong shape. transform is also the one that keeps types: through the row path a timestamp arrives as a string. It needs pyarrow in the interpreter; process(row) needs nothing beyond Python. Needs Python 3 on PATH or DUCKLE_PYTHON_BIN. Code in the `code` prop.",
+        "description": "Transform via a real Python 3 interpreter (full language + installed packages). Define `process(row)` to work a row at a time (a dict in, a dict or None out, JSON both ways), or `transform(table)` to be handed the WHOLE table at once as a pyarrow Table - use that for polars/pandas/PyArrow work, OCR, entity resolution or ML, where a row at a time is the wrong shape. Or `transform_batches(batch)` to be streamed a RecordBatch at a time (65,536 rows), which never holds the whole table in memory - use that when the data is larger than RAM. transform and transform_batches also keep types: through the row path a timestamp arrives as a string. Both need pyarrow in the interpreter; process(row) needs nothing beyond Python. The script can also read INPUT_PATH, the Parquet file the rows arrive in, to scan it with polars, DuckDB or a pyarrow Dataset directly. Needs Python 3 on PATH or DUCKLE_PYTHON_BIN. Code in the `code` prop.",
         "schemaSource": "declared",
         "sections": [
           {
@@ -43069,7 +43069,8 @@
                 "rows": 12,
                 "monospace": true,
                 "required": true,
-                "placeholder": "def process(row):\n    return row"
+                "placeholder": "def process(row):\n    return row",
+                "description": "Three entry points, and the one you define picks the mode. process(row): a dict in, a dict or None out, a row at a time. transform(table): the whole table at once as a pyarrow Table. transform_batches(batch): streamed a RecordBatch at a time, so a table larger than memory still runs. The last two need pyarrow, and both keep types that the row path would stringify. INPUT_PATH holds the Parquet file the rows arrive in, if you would rather scan it yourself."
               }
             ]
           }

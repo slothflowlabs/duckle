@@ -9178,8 +9178,11 @@ impl DuckdbEngine {
         // It is also the difference between keeping a type and losing it. JSON leaves
         // through `default=str`, so every timestamp reaches Python as a string and any
         // decimal precision goes with it. Parquet carries timestamp[us, tz] as itself.
+        if defines_streaming_entry(&spec.script) {
+            return self.run_python_arrow(db, spec, true);
+        }
         if defines_vectorized_entry(&spec.script) {
-            return self.run_python_vectorized(db, spec);
+            return self.run_python_arrow(db, spec, false);
         }
         let rows = self.run_rows(
             Some(db),
@@ -9266,10 +9269,11 @@ impl DuckdbEngine {
     /// interchange swapped. DuckDB already writes Parquet everywhere in this engine and
     /// pyarrow, polars and pandas all read it, so the boundary costs a file each way
     /// rather than four format conversions.
-    fn run_python_vectorized(
+    fn run_python_arrow(
         &self,
         db: &Path,
         spec: &PythonSpec,
+        streaming: bool,
     ) -> Result<String, EngineError> {
         let (in_path, out_path, script_path) = python_temp_paths(db, &spec.node_id);
         let in_pq = in_path.with_extension("parquet");
@@ -9297,17 +9301,62 @@ impl DuckdbEngine {
         // needs it and a bare-Python install keeps working exactly as before. Missing,
         // it says so and stops - falling back to JSON would make the pipeline quietly
         // slower and stringify its timestamps, which is the thing this avoids.
-        let harness = [
+        let entry = if streaming { "transform_batches(batch)" } else { "transform(table)" };
+        let mut harness: Vec<String> = vec![
             "import sys".to_string(),
             "try:".to_string(),
             "    import pyarrow.parquet as __pq".to_string(),
             "except ImportError:".to_string(),
             "    sys.stderr.write(".to_string(),
-            "        'a script defining transform(table) needs pyarrow in ' + sys.executable"
-                .to_string(),
+            format!("        'a script defining {} needs pyarrow in ' + sys.executable", entry),
             "        + \"; install it, or define process(row) instead to keep the row-at-a-time mode\")"
                 .to_string(),
             "    raise SystemExit(1)".to_string(),
+            // The input Parquet is already on disk, so naming it costs nothing and
+            // lets a script reach past the harness - dataset.Scanner, polars
+            // scan_parquet, or DuckDB over the same file (#245).
+            "INPUT_PATH = sys.argv[1]".to_string(),
+            "OUTPUT_PATH = sys.argv[2]".to_string(),
+        ];
+        if streaming {
+            // Never materializes: batches in, batches out, one writer opened from
+            // the first result's schema. This is the whole point of the mode - a
+            // table that does not fit in memory still runs.
+            harness.extend([
+                "__pf = __pq.ParquetFile(sys.argv[1])".to_string(),
+                spec.script.clone(),
+                "__writer = None".to_string(),
+                "__rows = 0".to_string(),
+                "import pyarrow as __pa".to_string(),
+                // 64k rows a batch: big enough that per-batch Python overhead
+                // disappears, small enough that peak memory stays bounded, which
+                // is the entire reason for this mode.
+                "for __batch in __pf.iter_batches(batch_size=65536):".to_string(),
+                "    __res = transform_batches(__batch)".to_string(),
+                // Returning nothing means "unchanged", the same contract the
+                // whole-table mode uses.
+                "    if __res is None:".to_string(),
+                "        __res = __batch".to_string(),
+                "    if hasattr(__res, 'to_arrow'):".to_string(),
+                "        __res = __res.to_arrow()".to_string(),
+                "    if isinstance(__res, __pa.RecordBatch):".to_string(),
+                "        __res = __pa.Table.from_batches([__res])".to_string(),
+                "    elif not hasattr(__res, 'schema'):".to_string(),
+                "        __res = __pa.Table.from_pandas(__res)".to_string(),
+                "    if __writer is None:".to_string(),
+                "        __writer = __pq.ParquetWriter(sys.argv[2], __res.schema)".to_string(),
+                "    __writer.write_table(__res)".to_string(),
+                "    __rows += __res.num_rows".to_string(),
+                "if __writer is None:".to_string(),
+                // An upstream with no rows still has to leave a file with the
+                // right columns, or the next stage sees nothing rather than an
+                // empty relation.
+                "    __pq.write_table(__pf.schema_arrow.empty_table(), sys.argv[2])".to_string(),
+                "else:".to_string(),
+                "    __writer.close()".to_string(),
+            ]);
+        } else {
+        harness.extend([
             "__table = __pq.read_table(sys.argv[1])".to_string(),
             spec.script.clone(),
             "__out = transform(__table)".to_string(),
@@ -9322,8 +9371,9 @@ impl DuckdbEngine {
             "    import pyarrow as __pa".to_string(),
             "    __out = __pa.Table.from_pandas(__out)".to_string(),
             "__pq.write_table(__out, sys.argv[2])".to_string(),
-        ]
-        .join("
+        ]);
+        }
+        let harness = harness.join("
 ");
         if let Err(e) = std::fs::write(&script_path, harness) {
             cleanup(&in_pq, &out_pq, &script_path);
@@ -13285,6 +13335,20 @@ pub(crate) fn defines_vectorized_entry(script: &str) -> bool {
     })
 }
 
+/// A script defining `transform_batches` is streamed a RecordBatch at a time
+/// rather than handed the whole table (#245).
+///
+/// `defines_vectorized_entry` cannot be reused: it matches `def transform(`
+/// including the paren, so `def transform_batches(` is not a false positive
+/// there - but it does mean the two are independent checks, and streaming is
+/// tested first because a script may reasonably define both.
+pub(crate) fn defines_streaming_entry(script: &str) -> bool {
+    script.lines().any(|l| {
+        let t = l.trim_start();
+        l.starts_with("def transform_batches(") || (t == l && t.starts_with("def transform_batches("))
+    })
+}
+
 /// Temp file paths (input JSON, output JSON, harness script) for a code.python
 /// stage, unique to this run. (#203)
 ///
@@ -16289,6 +16353,28 @@ impl DuckdbEngine {
 
 #[cfg(test)]
 mod incremental_state_tests {
+    /// The two Arrow entry points are detected independently, and a script
+    /// defining `transform_batches` must not be read as defining `transform`.
+    #[test]
+    fn the_two_arrow_entry_points_are_told_apart() {
+            use super::{defines_streaming_entry, defines_vectorized_entry};
+
+        assert!(defines_streaming_entry("def transform_batches(batch):\n    return batch"));
+        assert!(!defines_vectorized_entry(
+            "def transform_batches(batch):\n    return batch"
+        ));
+        assert!(defines_vectorized_entry("def transform(table):\n    return table"));
+        assert!(!defines_streaming_entry("def transform(table):\n    return table"));
+        // A nested def is a helper, not the entry point the harness calls.
+        assert!(!defines_streaming_entry(
+            "def outer():\n    def transform_batches(b):\n        return b"
+        ));
+        // A script may define both; streaming is tested first, so both report true
+        // and the caller's ordering decides.
+        let both = "def transform(table):\n    return table\n\n\ndef transform_batches(batch):\n    return batch";
+        assert!(defines_streaming_entry(both) && defines_vectorized_entry(both));
+    }
+
 
     #[test]
     fn a_confluent_framed_message_decodes_against_its_schema() {

@@ -15690,3 +15690,86 @@ fn snk_neo4j_sends_one_unwind_batch_for_all_rows() {
     );
     assert!(req.contains("Alice") && req.contains("Bob"), "both rows: {}", req);
 }
+
+/// True when the resolved interpreter has pyarrow. The streaming and
+/// whole-table modes both need it, and a machine without it should skip
+/// rather than fail.
+fn pyarrow_available() -> bool {
+    let bin = std::env::var("DUCKLE_PYTHON_BIN").unwrap_or_else(|_| "python".to_string());
+    let mut cmd = std::process::Command::new(bin);
+    cmd.arg("-c").arg("import pyarrow");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+/// #245: `transform(table)` calls `pyarrow.parquet.read_table`, which
+/// materializes the whole relation - vectorized, but not out-of-core, so a
+/// table bigger than RAM still cannot run.
+///
+/// `transform_batches` streams instead. This proves it actually streams
+/// rather than just renaming the entry point: 200k rows at a 65,536-row batch
+/// size must reach the script as FOUR separate calls. A harness that
+/// materialized would call it once, and the assertion fails.
+#[test]
+fn code_python_transform_batches_streams_instead_of_materializing() {
+    let engine = engine_or_skip!();
+    if !pyarrow_available() {
+        eprintln!("skipping: pyarrow not installed for the resolved interpreter");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+
+    // Stamp each row with the ordinal of the batch it arrived in, so the
+    // output records how many times the entry point was called.
+    let script = "\
+_calls = {'n': 0}
+
+
+def transform_batches(batch):
+    import pyarrow as pa
+    _calls['n'] += 1
+    n = batch.num_rows
+    return pa.table({
+        'id': batch.column('id'),
+        'batch_no': pa.array([_calls['n']] * n, type=pa.int64()),
+    })
+";
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node(
+                "gen",
+                "code.sql",
+                json!({ "sql": "SELECT i AS id FROM range(200000) t(i)" })
+            ),
+            node("py", "code.python", json!({ "script": script })),
+            node(
+                "agg",
+                "code.sql",
+                json!({ "sql": "SELECT count(DISTINCT batch_no) AS batches, count(*) AS rows FROM input" })
+            ),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([
+            main_edge("e1", "gen", "py"),
+            main_edge("e2", "py", "agg"),
+            main_edge("e3", "agg", "k"),
+        ]),
+    ));
+    assert_eq!(r.status, "ok", "run failed: {:?}", r.error);
+
+    let csv = std::fs::read_to_string(&out).unwrap().replace("\r\n", "\n");
+    assert_eq!(
+        csv.trim(),
+        "batches,rows\n4,200000",
+        "200k rows at 65536 a batch is 4 calls to transform_batches, and every \
+         row must survive the round trip; one batch would mean the harness \
+         materialized the table instead of streaming it"
+    );
+}
+
