@@ -11,11 +11,11 @@
 <p><sub><i>Duckle is an independent open-source project by SlothFlowLabs. It builds on the DuckDB engine but is not part of, affiliated with, or endorsed by DuckDB Labs or MotherDuck.</i></sub></p>
 
 <p>
+<img alt="status" src="https://img.shields.io/badge/status-beta-3b82f6?style=for-the-badge"/>
 <a href="https://github.com/slothflowlabs/duckle/releases"><img alt="downloads" src="https://img.shields.io/github/downloads/slothflowlabs/duckle/total?style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;label=DOWNLOADS&amp;color=2b6cb0"/></a>
 <img alt="stars" src="https://img.shields.io/github/stars/slothflowlabs/duckle?style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;label=STARS&amp;color=f59e0b"/>
 <a href="https://discord.com/invite/rUeAStJbWb"><img alt="discord" src="https://img.shields.io/discord/1498599942246109265?style=for-the-badge&amp;logo=discord&amp;logoColor=white&amp;label=DISCORD&amp;color=5865F2"/></a>
 <br/>
-<img alt="status" src="https://img.shields.io/badge/status-beta-3b82f6?style=for-the-badge"/>
 <img alt="license" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=for-the-badge"/>
 <img alt="platforms" src="https://img.shields.io/badge/platforms-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-2b6cb0?style=for-the-badge"/>
 <img alt="duckdb" src="https://img.shields.io/badge/DuckDB-FFF000?style=for-the-badge&amp;logo=duckdb&amp;logoColor=black"/>
