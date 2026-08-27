@@ -1726,6 +1726,9 @@ impl DuckdbEngine {
                     }
                     Some(RuntimeSpec::VortexSink(spec)) => self.run_vortex_sink(&db_path, spec),
                     Some(RuntimeSpec::VortexSource(spec)) => self.run_vortex_source(&db_path, spec),
+                    Some(RuntimeSpec::SpoolSource(spec)) => {
+                        self.run_spool_source(&db_path, spec, pipeline_name, &mut pending_writes)
+                    }
                     Some(RuntimeSpec::Neo4jSource(spec)) => self.run_neo4j_source(&db_path, spec),
                     Some(RuntimeSpec::Neo4jSink(spec)) => self.run_neo4j_sink(&db_path, spec),
                     Some(RuntimeSpec::TursoSource(spec)) => self.run_turso_source(&db_path, spec),

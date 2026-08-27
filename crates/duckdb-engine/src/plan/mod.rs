@@ -308,6 +308,7 @@ pub enum RuntimeSpec {
     AdbcSink(AdbcSinkSpec),
     TeradataSource(TeradataSourceSpec),
     TeradataSink(TeradataSinkSpec),
+    SpoolSource(SpoolSourceSpec),
     Neo4jSource(Neo4jSourceSpec),
     Neo4jSink(Neo4jSinkSpec),
     TursoSource(TursoSourceSpec),
@@ -1487,6 +1488,7 @@ fn build_stage(
     let mut adbc_sink: Option<AdbcSinkSpec> = None;
     let mut teradata_source: Option<TeradataSourceSpec> = None;
     let mut teradata_sink: Option<TeradataSinkSpec> = None;
+    let mut spool_source: Option<SpoolSourceSpec> = None;
     let mut neo4j_source: Option<Neo4jSourceSpec> = None;
     let mut neo4j_sink: Option<Neo4jSinkSpec> = None;
     let mut turso_source: Option<TursoSourceSpec> = None;
@@ -4532,6 +4534,26 @@ fn build_stage(
             encrypt: props.get("encrypt").and_then(|v| v.as_bool()).unwrap_or(true),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.spool" {
+        // Append-only NDJSON tailer. Pairs with `duckle-runner listen`, which
+        // keeps a webhook or WebSocket listener up and writes here, so nothing
+        // is lost between pipeline runs.
+        spool_source = Some(SpoolSourceSpec {
+            node_id: node.id.clone(),
+            path: string_prop(&props, "path")
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| EngineError::Config(format!("{}: path required", component_id)))?,
+            track_offset: props
+                .get("trackOffset")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            max_bytes: props
+                .get("maxBytes")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(64 * 1024 * 1024),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.neo4j" {
         // Neo4j read over the HTTP Query API. Bolt would need a driver crate
         // and a second wire protocol; the Query API returns the whole result
@@ -5857,6 +5879,7 @@ fn build_stage(
         .or_else(|| adbc_sink.map(RuntimeSpec::AdbcSink))
         .or_else(|| teradata_source.map(RuntimeSpec::TeradataSource))
         .or_else(|| teradata_sink.map(RuntimeSpec::TeradataSink))
+        .or_else(|| spool_source.map(RuntimeSpec::SpoolSource))
         .or_else(|| neo4j_source.map(RuntimeSpec::Neo4jSource))
         .or_else(|| neo4j_sink.map(RuntimeSpec::Neo4jSink))
         .or_else(|| turso_source.map(RuntimeSpec::TursoSource))

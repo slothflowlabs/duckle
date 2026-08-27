@@ -500,6 +500,33 @@ That ordering is the difference between a correct micro-batch loop and a lossy
 one, so it is covered by a regression test that fails if the position ever
 advances past a batch that did not land.
 
+### Push sources that do not lose what arrives (`listen` + `src.spool`)
+
+`src.webhook` and `src.websocket` collect INSIDE a pipeline run: they bind or
+connect, take N messages or time out, and stop. Right for a one-shot capture,
+wrong for anything continuous - between runs the port is closed and arriving
+requests are refused. Under `follow` that gap is every batch boundary.
+
+`listen` is the other half. It keeps the listener up and appends what arrives
+to an append-only NDJSON spool; a pipeline reads that spool with `src.spool`,
+from wherever the last **successful** run stopped:
+
+```bash
+duckle-runner listen --port 9000 --spool ./spool/hooks.ndjson --path-filter /hooks
+duckle-runner follow ./pipelines/hooks.json --idle-ms 500
+```
+
+Arrival is decoupled from processing, so a slow batch, a failed batch or a
+restart costs nothing that already arrived. Append-only plus a byte offset is
+the whole trick: the reader never deletes and the writer never rewrites, so
+there is no race between them.
+
+A record is `{received_at, method, path, headers, json|body}` - a JSON body is
+embedded under `json` so the pipeline can address its fields, and anything else
+is kept verbatim under `body` rather than dropped for not parsing. The spool is
+written and flushed BEFORE the 200 goes out, because a 200 tells the sender its
+delivery is safe and webhook senders do not retry those.
+
 ### Web panel (remote management console)
 
 To run and monitor pipelines on a server with a browser instead of the desktop app, start the built-in **web panel** - it is part of the same `duckle-runner` binary, so there is nothing extra to install:

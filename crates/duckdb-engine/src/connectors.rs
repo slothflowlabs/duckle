@@ -5111,6 +5111,171 @@ impl DuckdbEngine {
         ))
     }
 
+    /// Produce an EMPTY relation for a spool pass that read nothing new.
+    ///
+    /// An idle pass is the normal case for a streaming source - most polls of
+    /// a quiet spool have nothing in them - so it must not fail the run. It
+    /// would, though: materializing zero rows with no declared schema is an
+    /// error, because there is no way to know what columns the empty result
+    /// has (issue #170).
+    ///
+    /// The spool itself knows. It is append-only, so the records it already
+    /// delivered are still there: the LAST complete line gives the column
+    /// shape. Materialize that one row, then delete it, and downstream sees a
+    /// 0-row relation with the right columns instead of an error.
+    ///
+    /// A spool with no records at all genuinely cannot say, and falls back to
+    /// the declared-schema path and its error message.
+    fn spool_empty_relation(
+        &self,
+        db: &Path,
+        node_id: &str,
+        path: &std::path::Path,
+    ) -> Result<(), EngineError> {
+        if let Some(row) = last_complete_json_line(path) {
+            materialize_jsonobjects_as_table(&self.bin, db, node_id, &[row])?;
+            self.run(
+                Some(db),
+                &format!("DELETE FROM {}", plan::quote_ident(node_id)),
+                false,
+            )?;
+            return Ok(());
+        }
+        materialize_jsonobjects_as_table(&self.bin, db, node_id, &[])
+    }
+
+    /// src.spool: read an append-only NDJSON file from where the last
+    /// successful run stopped.
+    ///
+    /// Reads bytes `[saved_offset, EOF)`, keeps whole lines only, and queues
+    /// the new offset for the deferred flush - so a run that fails downstream
+    /// leaves the offset where it was and the next pass re-reads exactly the
+    /// records that did not land.
+    ///
+    /// A partial trailing line is left for next time rather than parsed. The
+    /// writer appends, so a line that is short right now is a line still being
+    /// written, not a corrupt one.
+    pub(crate) fn run_spool_source(
+        &self,
+        db: &Path,
+        spec: &plan::SpoolSourceSpec,
+        pipeline_name: Option<&str>,
+        pending: &mut Vec<(std::path::PathBuf, JsonValue)>,
+    ) -> Result<String, EngineError> {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let path = std::path::Path::new(&spec.path);
+        let state_path = if spec.track_offset {
+            incremental_state_path(pipeline_name, &spec.node_id)
+        } else {
+            None
+        };
+        let saved = state_path
+            .as_deref()
+            .and_then(read_spool_offset_state)
+            .unwrap_or(0);
+
+        // A spool that does not exist yet is an empty one. A listener may not
+        // have received anything, and that is not an error.
+        let mut file = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.spool_empty_relation(db, &spec.node_id, path)?;
+                return Ok(format!(
+                    "spool: {} does not exist yet; 0 records into {}",
+                    spec.path, spec.node_id
+                ));
+            }
+            Err(e) => {
+                return Err(EngineError::Query(format!("spool: open {}: {}", spec.path, e)))
+            }
+        };
+        let len = file
+            .metadata()
+            .map_err(|e| EngineError::Query(format!("spool: stat {}: {}", spec.path, e)))?
+            .len();
+
+        // The file got SHORTER than where we stopped, so it was truncated or
+        // rotated under us. Resuming at the old offset would read from the
+        // middle of a different file, so start again and say so - silently
+        // skipping to the end would drop everything written since.
+        let (start, rotated) = if saved > len { (0, true) } else { (saved, false) };
+
+        let take = (len - start).min(spec.max_bytes);
+        if take == 0 {
+            self.spool_empty_relation(db, &spec.node_id, path)?;
+            return Ok(format!("spool: no new records in {}", spec.path));
+        }
+        file.seek(SeekFrom::Start(start))
+            .map_err(|e| EngineError::Query(format!("spool: seek {}: {}", spec.path, e)))?;
+        let mut buf = vec![0u8; take as usize];
+        file.read_exact(&mut buf)
+            .map_err(|e| EngineError::Query(format!("spool: read {}: {}", spec.path, e)))?;
+
+        // Only whole lines. Everything after the last newline is a record still
+        // being written, or one cut off by max_bytes; either way it belongs to
+        // the next pass, and the offset must stop before it.
+        let consumed = match buf.iter().rposition(|b| *b == b'\n') {
+            Some(i) => i + 1,
+            None => 0,
+        };
+        if consumed == 0 {
+            self.spool_empty_relation(db, &spec.node_id, path)?;
+            return Ok(format!(
+                "spool: {} has a partial record and no complete one; waiting for the rest",
+                spec.path
+            ));
+        }
+        let text = String::from_utf8_lossy(&buf[..consumed]);
+        let mut rows: Vec<JsonValue> = Vec::new();
+        let mut skipped = 0usize;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<JsonValue>(line) {
+                Ok(v) => rows.push(v),
+                // One unparseable line must not wedge the spool forever: the
+                // offset moves past it either way, so count it and carry on.
+                Err(_) => skipped += 1,
+            }
+        }
+        let count = rows.len();
+        materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &rows)?;
+
+        let next_offset = start + consumed as u64;
+        if let Some(p) = state_path {
+            pending.push((
+                p,
+                serde_json::json!({
+                    "path": spec.path,
+                    "next_offset": next_offset,
+                }),
+            ));
+        }
+        Ok(format!(
+            "spool: materialized {} record(s) into {}{}{}{}",
+            count,
+            spec.node_id,
+            if skipped > 0 {
+                format!(" ({} unparseable line(s) skipped)", skipped)
+            } else {
+                String::new()
+            },
+            if rotated {
+                " (the file was shorter than the saved position, so it was read from the start)"
+            } else {
+                ""
+            },
+            if spec.track_offset {
+                format!(" (resumes at byte {} if this run succeeds)", next_offset)
+            } else {
+                String::new()
+            }
+        ))
+    }
+
     /// Redis SET sink via the sync redis client. For each upstream row,
     /// SET <keyColumn> <valueColumn|json(row)> [EX <ttl>]. Pipelined in
     /// chunks of batch_size to amortize the round-trip cost.
@@ -13911,6 +14076,35 @@ fn kafka_client_builder(
         builder = builder.sasl_config(kafka_sasl_config(s)?);
     }
     Ok(builder)
+}
+
+/// The last complete JSON line in a file, used to learn a spool's column shape
+/// when a pass has nothing new. Reads only the tail rather than the whole file,
+/// which matters when a listener has been running for a long time.
+fn last_complete_json_line(path: &std::path::Path) -> Option<JsonValue> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    if len == 0 {
+        return None;
+    }
+    let window = len.min(256 * 1024);
+    f.seek(SeekFrom::Start(len - window)).ok()?;
+    let mut buf = vec![0u8; window as usize];
+    f.read_exact(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    text.lines()
+        .rev()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .find_map(|l| serde_json::from_str::<JsonValue>(l).ok())
+}
+
+/// Read a saved spool byte offset. Missing or malformed reads as "start".
+fn read_spool_offset_state(path: &std::path::Path) -> Option<u64> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: JsonValue = serde_json::from_str(&text).ok()?;
+    v.get("next_offset").and_then(|x| x.as_u64())
 }
 
 /// Read a saved Kafka resume point.

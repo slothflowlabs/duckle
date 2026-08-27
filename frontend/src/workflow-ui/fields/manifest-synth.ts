@@ -1710,6 +1710,37 @@ function synthLakehouseSink(comp: ComponentDef): ComponentManifest {
 /// would otherwise win, and hand the user a form full of fields the engine
 /// never reads.
 function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
+    if (comp.id === 'src.spool') {
+        return base(comp, [
+            {
+                label: 'Spool',
+                fields: [
+                    {
+                        key: 'path',
+                        label: 'Spool file',
+                        kind: 'text',
+                        required: true,
+                        placeholder: '${workspace}/spool/hooks.ndjson',
+                        description: 'The append-only NDJSON file to tail. This is the file `duckle-runner listen --spool` writes to.',
+                    },
+                    {
+                        key: 'trackOffset',
+                        label: 'Resume where the last run stopped',
+                        kind: 'bool',
+                        defaultValue: true,
+                        description: 'Remembers a byte offset per node. It advances only when the whole run succeeds, so a failed batch re-reads the same records instead of losing them. Uncheck to re-read the file from the start every run.',
+                    },
+                    {
+                        key: 'maxBytes',
+                        label: 'Max bytes per run',
+                        kind: 'number',
+                        defaultValue: 67108864,
+                        description: 'Caps one batch, so the first run after a long backlog does not try to load the whole spool at once. The rest is taken by the next run.',
+                    },
+                ],
+            },
+        ]);
+    }
     if (comp.id === 'src.neo4j') {
         return base(comp, [
             {
@@ -7282,6 +7313,9 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
     // Neo4j / Turso / DB2: their sinks sit in groups whose generic synth would
     // otherwise claim them, so they are routed by id ahead of the group checks.
     {
+        // src.spool sits in the files group, whose generic file-source synth
+        // would otherwise claim it and offer a path picker with no offset
+        // fields. Routed by id, like the connectors above.
         const m = synthNewConnector(comp);
         if (m) return m;
     }

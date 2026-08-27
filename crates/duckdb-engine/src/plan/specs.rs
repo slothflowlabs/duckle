@@ -2100,3 +2100,27 @@ pub struct Db2SinkSpec {
     /// "append" (default) or "overwrite", which clears the table first.
     pub mode: String,
 }
+
+/// src.spool: tail an append-only NDJSON file from where the last successful
+/// run stopped.
+///
+/// The half of push-source support that makes it lossless. A webhook or
+/// WebSocket listener that lives inside a pipeline run can only collect while
+/// that run is executing - between runs the port is closed and arriving
+/// requests are refused. `duckle-runner listen` keeps the listener up and
+/// appends here instead, so arrival is decoupled from processing and a batch
+/// boundary costs nothing.
+///
+/// Position is a BYTE offset, which works because the file is append-only:
+/// there is no reader/writer race to lose to, and nothing has to be deleted.
+#[derive(Debug, Clone)]
+pub struct SpoolSourceSpec {
+    pub node_id: String,
+    pub path: String,
+    /// Remember where this run stopped, so the next one resumes there.
+    pub track_offset: bool,
+    /// Most bytes to take in one pass. Bounds a batch when a listener has been
+    /// running unattended for a long time, so the first run after a backlog
+    /// does not try to materialize the whole thing at once.
+    pub max_bytes: u64,
+}

@@ -29,6 +29,7 @@ mod console_auth;
 use duckle_duckdb_engine::context;
 mod drift;
 mod follow;
+mod listen;
 mod import;
 mod manifest;
 mod pipetest;
@@ -1128,6 +1129,70 @@ safe for the same reason.
   --log-dir DIR      default: <workspace>/logs
 ";
 
+/// `listen --port N --spool FILE [flags]`
+fn run_listen() -> Result<(), String> {
+    let argv: Vec<String> = std::env::args().skip(2).collect();
+    if argv.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{}", LISTEN_HELP);
+        return Ok(());
+    }
+    let mut o = listen::ListenOptions::default();
+    let mut i = 0;
+    while i < argv.len() {
+        let a = argv[i].as_str();
+        let mut take = |what: &str| -> Result<String, String> {
+            i += 1;
+            argv.get(i).cloned().ok_or_else(|| format!("{} needs a value", what))
+        };
+        match a {
+            "--port" => {
+                let v = take("--port")?;
+                o.port = v.parse().map_err(|_| format!("--port wants a number, got {v}"))?;
+            }
+            "--spool" => o.spool = std::path::PathBuf::from(take("--spool")?),
+            "--path-filter" => o.path_filter = Some(take("--path-filter")?),
+            "--bind" => o.bind = take("--bind")?,
+            "--max-messages" => {
+                let v = take("--max-messages")?;
+                o.max_messages = Some(
+                    v.parse().map_err(|_| format!("--max-messages wants a number, got {v}"))?,
+                );
+            }
+            other => return Err(format!("unknown flag {other}")),
+        }
+        i += 1;
+    }
+    if o.port == 0 {
+        return Err("--port is required".into());
+    }
+    if o.spool.as_os_str().is_empty() {
+        return Err("--spool is required (the file src.spool will read)".into());
+    }
+    listen::run(o).map(|_| ())
+}
+
+const LISTEN_HELP: &str = "duckle-runner listen --port N --spool FILE [flags]
+
+Keep an HTTP listener up and append what arrives to an append-only NDJSON
+spool. Read the spool with src.spool, which resumes from where the last
+SUCCESSFUL run stopped.
+
+This exists because src.webhook collects inside a pipeline run: between runs
+its port is closed and arriving requests are refused. Spooling decouples
+arrival from processing, so a slow batch, a failed batch or a restart costs
+nothing that already arrived.
+
+  --port N           port to bind (required)
+  --spool FILE       the NDJSON file to append to (required)
+  --path-filter P    only spool requests whose path starts with P
+  --bind ADDR        default 127.0.0.1; loopback unless you say otherwise
+  --max-messages N   stop after N records
+
+A record is {received_at, method, path, headers, json|body}. A JSON body is
+embedded under `json` so the pipeline can address its fields; anything else is
+kept verbatim under `body`.
+";
+
 fn run_validate() -> ExitCode {
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut json_out = false;
@@ -1600,6 +1665,17 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::from(0),
             Err(e) => {
                 eprintln!("duckle-runner follow: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
+    // `listen` -> keep a push source up and spool what arrives, so nothing is
+    // lost between pipeline runs. Read the spool with src.spool.
+    if std::env::args().nth(1).as_deref() == Some("listen") {
+        return match run_listen() {
+            Ok(()) => ExitCode::from(0),
+            Err(e) => {
+                eprintln!("duckle-runner listen: {e}");
                 ExitCode::from(2)
             }
         };

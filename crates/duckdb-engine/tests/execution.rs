@@ -15863,3 +15863,178 @@ fn a_failed_batch_does_not_advance_the_source_position() {
          re-delivery of the two that already landed"
     );
 }
+
+/// src.spool reads an append-only NDJSON file from where the last SUCCESSFUL
+/// run stopped. It is the reading half of push-source support: a listener
+/// keeps the port up and appends here, so a batch boundary costs nothing.
+///
+/// These cover the three ways a tailer goes wrong: re-reading what it already
+/// delivered, consuming a half-written record, and losing its place when the
+/// file is rotated.
+#[test]
+fn spool_reads_only_what_is_new_and_never_re_delivers() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let spool = tmp.path().join("in.ndjson");
+    let out = out_path(tmp.path(), "out.csv");
+    let pipeline = doc(
+        json!([
+            node("s", "src.spool", json!({ "path": spool.to_string_lossy().replace('\\', "/") })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    );
+    let name = "spooltest";
+    let append = |lines: &str| {
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&spool)
+            .unwrap();
+        f.write_all(lines.as_bytes()).unwrap();
+    };
+    let rows_out = || {
+        std::fs::read_to_string(&out)
+            .unwrap()
+            .replace("\r\n", "\n")
+            .lines()
+            .skip(1)
+            .filter(|l| !l.trim().is_empty())
+            .count()
+    };
+
+    append("{\"id\":1}\n{\"id\":2}\n");
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(rows_out(), 2, "first pass takes both records");
+
+    // Nothing new: the pass must produce nothing rather than the same two again.
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(rows_out(), 0, "a second pass must not re-deliver what already landed");
+
+    // Records that arrive between passes are exactly what the next pass takes.
+    append("{\"id\":3}\n");
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(rows_out(), 1, "only the record that arrived since");
+}
+
+/// A line without its newline yet is a record still being written. Consuming
+/// it would deliver half a record AND move the offset past the rest, losing
+/// the remainder when it arrives.
+#[test]
+fn spool_leaves_a_half_written_record_for_next_time() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let spool = tmp.path().join("in.ndjson");
+    let out = out_path(tmp.path(), "out.csv");
+    let pipeline = doc(
+        json!([
+            node("s", "src.spool", json!({ "path": spool.to_string_lossy().replace('\\', "/") })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    );
+    let name = "spoolpartial";
+    // One complete record, then a fragment with no newline.
+    std::fs::write(&spool, "{\"id\":1}\n{\"id\":2,\"kin").unwrap();
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let csv = std::fs::read_to_string(&out).unwrap().replace("\r\n", "\n");
+    assert_eq!(
+        csv.lines().skip(1).filter(|l| !l.trim().is_empty()).count(),
+        1,
+        "only the complete record: {csv}"
+    );
+
+    // The rest of that record arrives; now it is whole and must be delivered.
+    use std::io::Write as _;
+    let mut f = std::fs::OpenOptions::new().append(true).open(&spool).unwrap();
+    f.write_all(b"d\":\"charge\"}\n").unwrap();
+    drop(f);
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let csv = std::fs::read_to_string(&out).unwrap().replace("\r\n", "\n");
+    assert!(
+        csv.contains("charge"),
+        "the completed record must arrive whole, not be lost with its fragment: {csv}"
+    );
+}
+
+/// A spool shorter than the saved position was rotated or truncated. Resuming
+/// at the old offset would read from the middle of a different file, so it
+/// starts again - skipping to the end would silently drop everything written
+/// since the rotation.
+#[test]
+fn spool_restarts_when_the_file_was_rotated_under_it() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let spool = tmp.path().join("in.ndjson");
+    let out = out_path(tmp.path(), "out.csv");
+    let pipeline = doc(
+        json!([
+            node("s", "src.spool", json!({ "path": spool.to_string_lossy().replace('\\', "/") })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    );
+    let name = "spoolrotate";
+    std::fs::write(&spool, "{\"id\":1}\n{\"id\":2}\n{\"id\":3}\n").unwrap();
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert!(std::fs::read_to_string(&out).unwrap().contains("3"));
+
+    // Rotated: a fresh, shorter file with different content.
+    std::fs::write(&spool, "{\"id\":99}\n").unwrap();
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let csv = std::fs::read_to_string(&out).unwrap().replace("\r\n", "\n");
+    assert!(
+        csv.contains("99"),
+        "after a rotation the new file must be read from the start, not skipped: {csv}"
+    );
+}
+
+/// The property the whole design rests on, at the spool: a batch that fails
+/// downstream must leave the offset alone, so the records are re-read rather
+/// than lost.
+#[test]
+fn spool_does_not_advance_when_the_run_fails() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let spool = tmp.path().join("in.ndjson");
+    std::fs::write(&spool, "{\"id\":1}\n{\"id\":2}\n").unwrap();
+    let spool_prop = spool.to_string_lossy().replace('\\', "/");
+
+    // A file sits where the sink's output directory has to be.
+    let blocker = tmp.path().join("blocked");
+    std::fs::write(&blocker, b"not a directory").unwrap();
+    let broken = format!("{}/out.csv", blocker.to_string_lossy().replace('\\', "/"));
+    let name = "spoolfail";
+    let r = engine.execute_pipeline_named(
+        &doc(
+            json!([
+                node("s", "src.spool", json!({ "path": spool_prop })),
+                node("k", "snk.csv", json!({ "path": broken, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "s", "k")]),
+        ),
+        name,
+    );
+    assert_eq!(r.status, "error", "the broken sink should fail the run");
+    let state = tmp.path().join("state").join(name).join("s.json");
+    assert!(
+        !state.exists(),
+        "a failed run recorded a spool position, so those records would never be re-read"
+    );
+}
