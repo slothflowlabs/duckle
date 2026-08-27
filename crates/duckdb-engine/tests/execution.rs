@@ -16301,3 +16301,88 @@ fn tumble_watermark_does_not_go_backwards() {
     );
     assert_eq!(read_wm(), high, "a batch of older data dragged the watermark back");
 }
+
+/// #273: an operator can move a watermark while a run is in flight - through
+/// the backfill panel, the CLI, the API or MCP. The run's deferred flush lands
+/// afterwards, and without a check it silently undoes their change: the next
+/// run resumes from the position they thought they had replaced, and nothing
+/// reports it.
+///
+/// A lock cannot fix this here. Only scheduled runs take one, and extending it
+/// to every run would deadlock a parallel `ctl.foreach`, whose children
+/// re-enter the same named-run path. Comparing what the run READ covers every
+/// run path instead, and also catches an edit landing after the read that a
+/// lock taken at the start would miss.
+///
+/// `ctl.wait` gives a deterministic window: the incremental node reads its
+/// state, then the run sits in the delay while the operator's edit lands, then
+/// the flush runs.
+#[test]
+fn an_edit_made_during_a_run_is_not_overwritten_by_its_flush() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let name = "midrun";
+    let ws = tmp.path().to_path_buf();
+    let src = write_file(
+        &ws,
+        "in.csv",
+        "id,ts\n1,2026-01-01T00:00:00\n2,2026-01-02T00:00:00\n",
+    );
+    let out = out_path(&ws, "out.csv");
+    let pipeline = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": src, "hasHeader": true })),
+            node("i", "xf.incremental", json!({ "column": "ts" })),
+            node("w", "ctl.wait", json!({ "duration": 2000, "unit": "ms" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([
+            main_edge("e1", "s", "i"),
+            main_edge("e2", "i", "w"),
+            main_edge("e3", "w", "k"),
+        ]),
+    );
+    let state = ws.join("state").join(name).join("i.json");
+
+    // The operator's edit lands while the run is inside the delay - after the
+    // incremental node read its state, before the flush.
+    let ws_for_thread = ws.clone();
+    let editor = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        duckle_duckdb_engine::watermark::set_incremental(
+            &ws_for_thread,
+            "midrun",
+            "i",
+            "2020-01-01 00:00:00",
+            Some("TIMESTAMP"),
+        )
+        .expect("operator edit");
+    });
+
+    let r = engine.execute_pipeline_named(&pipeline, name);
+    editor.join().expect("editor thread");
+
+    // The rows were written - the run did its job. What must NOT have happened
+    // is the flush putting the watermark back on top of the operator's value.
+    let after = std::fs::read_to_string(&state).expect("state exists");
+    assert!(
+        after.contains("2020-01-01"),
+        "the run's flush overwrote an edit made while it was in flight - the \
+         replay the operator asked for would never happen, and nothing would \
+         say so. state: {after}"
+    );
+    assert!(
+        !after.contains("2026-01-02"),
+        "the run's position won over the operator's: {after}"
+    );
+    // And the run reports it rather than staying quiet.
+    let err = r.error.clone().unwrap_or_default();
+    assert!(
+        err.contains("changed while this run was in flight"),
+        "a discarded state write must be reported, not silent. status={} error={:?}",
+        r.status,
+        r.error
+    );
+}

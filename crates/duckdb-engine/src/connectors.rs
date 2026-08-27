@@ -5161,7 +5161,7 @@ impl DuckdbEngine {
         db: &Path,
         spec: &plan::TumbleSpec,
         pipeline_name: Option<&str>,
-        pending: &mut Vec<(std::path::PathBuf, JsonValue)>,
+        pending: &mut Vec<crate::PendingWrite>,
     ) -> Result<String, EngineError> {
         let state_path = incremental_state_path(pipeline_name, &spec.node_id).ok_or_else(|| {
             EngineError::Config(
@@ -5172,9 +5172,12 @@ impl DuckdbEngine {
         std::fs::create_dir_all(&dir)
             .map_err(|e| EngineError::Query(format!("tumble: state dir {}: {}", dir.display(), e)))?;
 
-        let saved: Option<JsonValue> = std::fs::read_to_string(&state_path)
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok());
+        // The raw text as READ, so the flush can tell whether somebody changed
+        // this while the run was in flight.
+        let prior = crate::read_state_snapshot(&state_path);
+        let saved: Option<JsonValue> = prior
+            .as_deref()
+            .and_then(|t| serde_json::from_str(t).ok());
         // The buffer the LAST SUCCESSFUL run left. Anything else in the folder
         // is from a run that did not finish, and is ignored then cleaned up.
         let prev_buf = saved
@@ -5355,13 +5358,14 @@ impl DuckdbEngine {
         } else {
             emitted_through.clone()
         };
-        pending.push((
+        pending.push(crate::PendingWrite::state(
             state_path,
             serde_json::json!({
                 "buffer": next_buf_name,
                 "watermark": watermark,
                 "emitted_through": next_emitted_through,
             }),
+            prior,
         ));
         // Old buffers from runs that did not finish are dead weight; the one
         // the last success pointed at stays until this run is itself committed.
@@ -5397,7 +5401,7 @@ impl DuckdbEngine {
         db: &Path,
         spec: &plan::SpoolSourceSpec,
         pipeline_name: Option<&str>,
-        pending: &mut Vec<(std::path::PathBuf, JsonValue)>,
+        pending: &mut Vec<crate::PendingWrite>,
     ) -> Result<String, EngineError> {
         use std::io::{Read, Seek, SeekFrom};
 
@@ -5407,6 +5411,7 @@ impl DuckdbEngine {
         } else {
             None
         };
+        let prior = state_path.as_deref().and_then(crate::read_state_snapshot);
         let saved = state_path
             .as_deref()
             .and_then(read_spool_offset_state)
@@ -5483,12 +5488,13 @@ impl DuckdbEngine {
 
         let next_offset = start + consumed as u64;
         if let Some(p) = state_path {
-            pending.push((
+            pending.push(crate::PendingWrite::state(
                 p,
                 serde_json::json!({
                     "path": spec.path,
                     "next_offset": next_offset,
                 }),
+                prior,
             ));
         }
         Ok(format!(
@@ -6115,7 +6121,7 @@ impl DuckdbEngine {
         &self,
         db: &Path,
         spec: &ModelCardSpec,
-        pending: &mut Vec<(std::path::PathBuf, JsonValue)>,
+        pending: &mut Vec<crate::PendingWrite>,
     ) -> Result<String, EngineError> {
         self.check_cancelled()?;
         let rows = self.run_rows(
@@ -6170,10 +6176,13 @@ impl DuckdbEngine {
                 .collect()
         };
         let dir = std::path::Path::new(&spec.dir).join(safe(&spec.name));
-        pending.push((dir.join(format!("{}.json", safe(&version))), card.clone()));
+        pending.push(crate::PendingWrite::output(
+            dir.join(format!("{}.json", safe(&version))),
+            card.clone(),
+        ));
         // The pointer is a copy of the card, not a reference to it, so reading
         // `latest` is one read and cannot race with the versioned file moving.
-        pending.push((dir.join("latest.json"), card));
+        pending.push(crate::PendingWrite::output(dir.join("latest.json"), card));
         Ok(format!(
             "model: {} version {} will be registered if this run succeeds",
             spec.name, version
@@ -10761,7 +10770,7 @@ impl DuckdbEngine {
         db: &Path,
         spec: &KafkaSourceSpec,
         pipeline_name: Option<&str>,
-        pending: &mut Vec<(std::path::PathBuf, JsonValue)>,
+        pending: &mut Vec<crate::PendingWrite>,
     ) -> Result<String, EngineError> {
         let cancel = self.cancel.clone();
         // Where the resume point lives, and what it says. Shares the state
@@ -10771,6 +10780,7 @@ impl DuckdbEngine {
         } else {
             None
         };
+        let prior = state_path.as_deref().and_then(crate::read_state_snapshot);
         let resume = state_path
             .as_deref()
             .and_then(|p| read_kafka_offset_state(p, &spec.topic, spec.partition_id));
@@ -10896,13 +10906,14 @@ impl DuckdbEngine {
         // one resumes from it, instead of jumping to a new tip and skipping
         // whatever arrived in between.
         if let Some(path) = state_path {
-            pending.push((
+            pending.push(crate::PendingWrite::state(
                 path,
                 serde_json::json!({
                     "topic": spec.topic,
                     "partition": spec.partition_id,
                     "next_offset": next_offset,
                 }),
+                prior,
             ));
         }
         Ok(format!(
@@ -12554,13 +12565,14 @@ impl DuckdbEngine {
         db: &Path,
         spec: &plan::IncrementalSpec,
         pipeline_name: Option<&str>,
-        pending: &mut Vec<(std::path::PathBuf, JsonValue)>,
+        pending: &mut Vec<crate::PendingWrite>,
     ) -> Result<String, EngineError> {
         let col_q = plan::quote_ident(&spec.column);
         let up_q = plan::quote_ident(&spec.from_view);
         let node_q = plan::quote_ident(&spec.node_id);
 
         let state_path = incremental_state_path(pipeline_name, &spec.node_id);
+        let prior = state_path.as_deref().and_then(crate::read_state_snapshot);
         let saved = state_path
             .as_ref()
             .and_then(read_incremental_state)
@@ -12616,13 +12628,14 @@ impl DuckdbEngine {
                 .unwrap_or("VARCHAR")
                 .to_string();
             if let (Some(value), Some(path)) = (new_val, state_path) {
-                pending.push((
+                pending.push(crate::PendingWrite::state(
                     path,
                     serde_json::json!({
                         "column": spec.column,
                         "value": value,
                         "type": new_ty,
                     }),
+                    prior,
                 ));
             }
         }
@@ -12642,7 +12655,7 @@ impl DuckdbEngine {
         db: &Path,
         spec: &plan::DuckLakeCdcSpec,
         pipeline_name: Option<&str>,
-        pending: &mut Vec<(std::path::PathBuf, JsonValue)>,
+        pending: &mut Vec<crate::PendingWrite>,
     ) -> Result<String, EngineError> {
         let path = spec.path.replace('\\', "/").replace('\'', "''");
         // This path builds its own ATTACH rather than reusing ducklake_attach,
@@ -12688,6 +12701,7 @@ impl DuckdbEngine {
             .unwrap_or(0);
 
         let state_path = incremental_state_path(pipeline_name, &spec.node_id);
+        let prior = state_path.as_deref().and_then(crate::read_state_snapshot);
         let last = state_path
             .as_ref()
             .and_then(read_snapshot_state)
@@ -12741,7 +12755,11 @@ impl DuckdbEngine {
             .unwrap_or(0);
 
         if let Some(path) = state_path {
-            pending.push((path, serde_json::json!({ "snapshot_id": current })));
+            pending.push(crate::PendingWrite::state(
+                path,
+                serde_json::json!({ "snapshot_id": current }),
+                prior,
+            ));
         }
         Ok(format!(
             "ducklake-cdc: {} change row(s) from snapshot {} to {}",

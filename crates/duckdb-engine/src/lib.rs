@@ -1035,7 +1035,7 @@ impl DuckdbEngine {
         // xf.incremental high-water marks to persist - but only if the WHOLE
         // run succeeds, so a later-stage failure never advances the mark past
         // rows that were never actually delivered. (state file path, json).
-        let mut pending_writes: Vec<(std::path::PathBuf, JsonValue)> = Vec::new();
+        let mut pending_writes: Vec<PendingWrite> = Vec::new();
 
         // Fast path: if every stage is pure-SQL with no per-stage
         // hooks, pipe the whole pipeline as one SQL stream into a
@@ -2176,7 +2176,20 @@ impl DuckdbEngine {
             // whose OUTPUT succeeded and whose recorded STATE did not. That is
             // precisely what happened, and re-running is safe.
             let mut failures: Vec<String> = Vec::new();
-            for (path, value) in &pending_writes {
+            for PendingWrite { path, value, prior } in &pending_writes {
+                // Somebody changed this while the run was in flight. Their
+                // change wins: they made it deliberately, and this run's rows
+                // are already written. Overwriting would put the position back
+                // where they moved it away from, and say nothing about it.
+                if let PriorState::Was(expected) = prior {
+                    if read_state_snapshot(path).as_deref() != expected.as_deref() {
+                        failures.push(format!(
+                            "{}: changed while this run was in flight, so the run's position                              was NOT written - the change made during the run stands, and the                              next run resumes from it",
+                            path.display()
+                        ));
+                        continue;
+                    }
+                }
                 if let Some(parent) = path.parent() {
                     if let Err(e) = std::fs::create_dir_all(parent) {
                         failures.push(format!("{}: create {}: {}", path.display(), parent.display(), e));
@@ -5271,6 +5284,58 @@ pub enum PipelineEvent {
         status: String,
         duration_ms: u64,
     },
+}
+
+/// A state write held until the run succeeds.
+///
+/// `prior` carries what was on disk when this run READ that state, for writes
+/// where somebody else may have changed it since. An operator can move a
+/// watermark through the backfill panel, the CLI, the API or MCP while a run
+/// is in flight; without this the run's flush lands afterwards and silently
+/// undoes their change, and the next run resumes from the position they
+/// thought they had replaced.
+///
+/// A lock would not do here: only scheduled runs take one (serve.rs), and
+/// extending it to every run would deadlock a parallel `ctl.foreach` whose
+/// children re-enter the same named-run path. Comparing what we read is
+/// cheaper, covers every run path, and also catches an edit that lands between
+/// the read and the flush - which a lock taken at the start would not.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingWrite {
+    pub path: std::path::PathBuf,
+    pub value: JsonValue,
+    pub prior: PriorState,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum PriorState {
+    /// Write whatever is there. For outputs like a model card, which nobody
+    /// hand-edits between a run reading and writing them.
+    Unchecked,
+    /// What the run read. `None` means the file did not exist then.
+    Was(Option<String>),
+}
+
+impl PendingWrite {
+    /// Resumable position state, whose write must not clobber a mid-run edit.
+    pub(crate) fn state(
+        path: std::path::PathBuf,
+        value: JsonValue,
+        prior: Option<String>,
+    ) -> Self {
+        Self { path, value, prior: PriorState::Was(prior) }
+    }
+
+    /// An output, written unconditionally.
+    pub(crate) fn output(path: std::path::PathBuf, value: JsonValue) -> Self {
+        Self { path, value, prior: PriorState::Unchecked }
+    }
+}
+
+/// Read a state file as raw text for the conflict check. Missing reads as
+/// `None`, which is a real prior state: "there was nothing here when I looked".
+pub(crate) fn read_state_snapshot(path: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(path).ok()
 }
 
 #[derive(Debug, Serialize)]
