@@ -148,6 +148,12 @@ export default function BackfillModal({ pipelineName, workspacePath, onClose }: 
                                         <td>
                                             <input
                                                 className="modal-input backfill-value"
+                                                disabled={e.editable === false}
+                                                title={
+                                                    e.editable === false
+                                                        ? `A ${e.kind} node does not resume from a hand-written value. Clear it to start that node over.`
+                                                        : undefined
+                                                }
                                                 value={drafts[e.node_id] ?? ''}
                                                 onChange={ev =>
                                                     setDrafts(d => ({
@@ -164,6 +170,7 @@ export default function BackfillModal({ pipelineName, workspacePath, onClose }: 
                                                 className="backfill-btn"
                                                 disabled={
                                                     busy === e.node_id ||
+                                                    e.editable === false ||
                                                     (drafts[e.node_id] ?? e.value) === e.value
                                                 }
                                                 onClick={() => save(e)}

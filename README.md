@@ -500,6 +500,30 @@ That ordering is the difference between a correct micro-batch loop and a lossy
 one, so it is covered by a regression test that fails if the position ever
 advances past a batch that did not land.
 
+### Backfill without the desktop app (`backfill`)
+
+Production deployments are headless, so replaying from an earlier point should
+not mean getting at the server's workspace through a GUI:
+
+```bash
+duckle-runner backfill list  --pipeline ./pipelines/daily.json
+duckle-runner backfill set   --pipeline ./pipelines/daily.json --node inc --value 2026-01-01 --type TIMESTAMP
+duckle-runner backfill clear --pipeline ./pipelines/daily.json --node inc
+duckle-runner backfill list  --pipeline ./pipelines/daily.json --json      # for CI and agents
+```
+
+**Five node kinds keep state in that folder, and only two resume from a value a
+person can write down.** `xf.incremental` (a watermark) and
+`src.ducklake.changes` (a snapshot id) can be set; a `src.kafka` resume offset,
+a `src.spool` byte position and an `xf.tumble` buffer pointer are listed and can
+be cleared, but `set` on them is **refused**. Writing `{value,type}` over a
+tumbling window's state would drop the pointer to the rows it is holding and
+delete them on the next run, with nothing to report it.
+
+Clearing is not always a full reload, and the tool says so: a Kafka node with
+`startFrom: latest` skips whatever is already in the topic when it has no saved
+offset, so clearing it moves PAST that backlog rather than replaying it.
+
 ### Push sources that do not lose what arrives (`listen` + `src.spool`)
 
 `src.webhook` and `src.websocket` collect INSIDE a pipeline run: they bind or

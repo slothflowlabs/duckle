@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 mod audit;
+mod backfill;
 mod auth_store;
 mod catalog_cmd;
 mod branch;
@@ -1665,6 +1666,18 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::from(0),
             Err(e) => {
                 eprintln!("duckle-runner follow: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
+    // `backfill` -> inspect and edit the state a pipeline resumes from, without
+    // the desktop app. Must sit above the fallthrough run path, or the verb is
+    // parsed as a bare pipeline path.
+    if std::env::args().nth(1).as_deref() == Some("backfill") {
+        return match backfill::run() {
+            Ok(code) => ExitCode::from(code as u8),
+            Err(e) => {
+                eprintln!("duckle-runner backfill: {e}");
                 ExitCode::from(2)
             }
         };

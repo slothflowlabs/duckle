@@ -351,6 +351,10 @@ export type WatermarkEntry = {
     kind: string;
     value: string;
     value_type?: string;
+    /// False for kinds that can be cleared but not hand-set - a Kafka resume
+    /// point or a tumbling window's buffer pointer has no single value that
+    /// means the same thing to the node that wrote it.
+    editable?: boolean;
 };
 
 export async function watermarkList(
