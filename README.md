@@ -562,6 +562,33 @@ is kept verbatim under `body` rather than dropped for not parsing. The spool is
 written and flushed BEFORE the 200 goes out, because a 200 tells the sender its
 delivery is safe and webhook senders do not retry those.
 
+### Resource budget (`--memory-limit`, `--threads`, `--max-temp-size`)
+
+Duckle targets one machine and will use it. On a dedicated box that is what
+you want; on a shared server one unexpectedly large job should not be able to
+take everything else down with it.
+
+```bash
+duckle-runner --pipeline ./daily.json   --memory-limit 24GB --threads 8   --temp-dir /data/duckle-tmp --max-temp-size 300GB
+```
+
+`--max-temp-size` is the one worth setting deliberately. **DuckDB's own
+default is 90% of available disk space**, so without it a single large join or
+sort can fill the volume the OS is on - which is an outage, not a slow
+pipeline. `--memory-limit` is a spill threshold rather than a hard ceiling:
+above it DuckDB writes to the temp directory and keeps going, so the limit
+buys predictability, not failure.
+
+Each run spills into its own subdirectory of `--temp-dir`. Pointing several
+concurrent runs at one shared directory is what a person does to move spill
+onto a bigger disk, and it used to make them unsafe: four concurrent spilling
+queries sharing a directory lost 3 of 12 to segfaults and delete failures.
+
+The flags set the same variables the engine reads (`DUCKLE_MEMORY_LIMIT`,
+`DUCKLE_THREADS`, `DUCKLE_TEMP_DIR`, `DUCKLE_MAX_TEMP_DIR_SIZE`), so a flag, a
+workspace-wide export and a per-stage setting all land in one place, with the
+most specific winning.
+
 ### Poll a remote source without downloading it (`src.changed`)
 
 A pipeline that watches a bulk source should not pay for the object to find

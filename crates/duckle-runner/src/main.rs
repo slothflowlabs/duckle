@@ -87,6 +87,16 @@ OPTIONS:
                          DUCKLE_DUCKDB_BIN, then bin/duckdb next to this
                          runner, then 'duckdb' on PATH.
     --log-dir <dir>      Run-log directory (default: <workspace>/logs)
+
+  RESOURCE BUDGET (a shared machine should not be at the mercy of one job)
+    --memory-limit <sz>  e.g. 24GB. Above this DuckDB spills to disk rather
+                         than growing until the OS kills it.
+    --threads <n>        CPU threads. Default is every core, which starves
+                         anything else running alongside.
+    --temp-dir <dir>     Where spill goes. Each run gets its own subdirectory.
+    --max-temp-size <sz> e.g. 300GB. DuckDB's own default is 90% of the disk,
+                         so without this one large join can fill the volume
+                         the OS is on.
     --name <label>       Run-log + state folder name (default: pipeline file stem)
     --target <node>      Run only as far as this node, then stop and print its rows
                          (tab-separated, header first). Nothing downstream runs, so
@@ -185,6 +195,18 @@ fn parse_args() -> Result<Args, String> {
             "--workspace" => workspace = Some(PathBuf::from(take("--workspace")?)),
             "--duckdb" => duckdb = Some(PathBuf::from(take("--duckdb")?)),
             "--log-dir" => log_dir = Some(PathBuf::from(take("--log-dir")?)),
+            // Resource budget for this run. These set the same environment
+            // variables the engine already reads, rather than a second
+            // mechanism, so a flag, a workspace-wide export and a per-stage
+            // setting all end up in one place. A flag is what makes them
+            // usable on a shared server: capping one pipeline should not mean
+            // exporting a variable that every other process on the box sees.
+            "--memory-limit" => std::env::set_var("DUCKLE_MEMORY_LIMIT", take("--memory-limit")?),
+            "--threads" => std::env::set_var("DUCKLE_THREADS", take("--threads")?),
+            "--temp-dir" => std::env::set_var("DUCKLE_TEMP_DIR", take("--temp-dir")?),
+            "--max-temp-size" => {
+                std::env::set_var("DUCKLE_MAX_TEMP_DIR_SIZE", take("--max-temp-size")?)
+            }
             "--name" => name = Some(take("--name")?),
             "--target" => target = Some(take("--target")?),
             "--list-watermarks" => list_watermarks = true,

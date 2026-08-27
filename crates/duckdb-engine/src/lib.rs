@@ -1302,59 +1302,9 @@ impl DuckdbEngine {
             // and threading a config through every call site is invasive.
             // Env vars let the Tauri app's setup hook publish workspace
             // settings once, and tests can set them ad-hoc.
-            let memory_pragma = {
-                let mut prag = String::from(
-                    "PRAGMA preserve_insertion_order=false; \
-                     PRAGMA enable_object_cache=true; \
-                     PRAGMA enable_progress_bar=false; ",
-                );
-                let env_mem = std::env::var("DUCKLE_MEMORY_LIMIT").ok().filter(|s| !s.is_empty());
-                let mem = match stage.memory_limit_mb {
-                    Some(mb) => Some(format!("{}MB", mb)),
-                    None => env_mem,
-                };
-                if let Some(m) = mem {
-                    prag.push_str(&format!("PRAGMA memory_limit='{}'; ", m.replace('\'', "''")));
-                }
-                if let Ok(t) = std::env::var("DUCKLE_THREADS") {
-                    if let Ok(n) = t.trim().parse::<u32>() {
-                        if n > 0 {
-                            prag.push_str(&format!("PRAGMA threads={}; ", n));
-                        }
-                    }
-                }
-                if let Ok(d) = std::env::var("DUCKLE_TEMP_DIR") {
-                    let d = d.trim();
-                    if !d.is_empty() {
-                        // Give this run its OWN subdirectory rather than pointing
-                        // every run at the same one. DuckDB's default is already
-                        // per-database (`<db>.tmp`), so runs never collided until
-                        // someone set this variable - which is exactly what a user
-                        // does to move spill onto a bigger or faster disk, and it
-                        // silently made concurrent runs unsafe. The collision is
-                        // intermittent, so it reads as a flaky run rather than a
-                        // bug: over three trials of four concurrent spilling
-                        // queries on the pinned 1.5.4, a shared directory lost
-                        // 3 of 12 (segfault, or "Failed to delete file") while
-                        // private directories lost 0 of 12.
-                        let run_tmp = std::path::Path::new(d).join(
-                            db_path
-                                .file_name()
-                                .map(|s| s.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| "duckle_run".to_string()),
-                        );
-                        // Best effort: if the directory cannot be made, fall back
-                        // to the configured root rather than failing the run.
-                        let target = match std::fs::create_dir_all(&run_tmp) {
-                            Ok(()) => run_tmp.to_string_lossy().into_owned(),
-                            Err(_) => d.to_string(),
-                        };
-                        let escaped = target.replace('\'', "''").replace('\\', "/");
-                        prag.push_str(&format!("PRAGMA temp_directory='{}'; ", escaped));
-                    }
-                }
-                prag
-            };
+            // Same builder the batched path uses, so a setting added to one
+            // cannot go missing from the other.
+            let memory_pragma = resource_pragmas(Some(&db_path), stage.memory_limit_mb);
             // Enforce "error if exists" before writing a local file sink.
             // A legacy job routinely branches on how many rows or files an earlier
             // component saw. Those figures are already recorded per node, so expose them
@@ -2358,36 +2308,7 @@ impl DuckdbEngine {
             batched_sql.push_str(secret_prefix);
             batched_sql.push('\n');
         }
-        batched_sql.push_str(
-            "PRAGMA preserve_insertion_order=false;\n\
-             PRAGMA enable_object_cache=true;\n\
-             PRAGMA enable_progress_bar=false;\n",
-        );
-        if let Ok(m) = std::env::var("DUCKLE_MEMORY_LIMIT") {
-            let m = m.trim();
-            if !m.is_empty() {
-                batched_sql.push_str(&format!(
-                    "PRAGMA memory_limit='{}';\n",
-                    m.replace('\'', "''")
-                ));
-            }
-        }
-        if let Ok(t) = std::env::var("DUCKLE_THREADS") {
-            if let Ok(n) = t.trim().parse::<u32>() {
-                if n > 0 {
-                    batched_sql.push_str(&format!("PRAGMA threads={};\n", n));
-                }
-            }
-        }
-        if let Ok(d) = std::env::var("DUCKLE_TEMP_DIR") {
-            let d = d.trim();
-            if !d.is_empty() {
-                batched_sql.push_str(&format!(
-                    "PRAGMA temp_directory='{}';\n",
-                    d.replace('\'', "''").replace('\\', "/"),
-                ));
-            }
-        }
+        batched_sql.push_str(&resource_pragmas(Some(&db_path), None));
 
         // Relations this batch has already emitted a COUNT(*) for. A sink
         // counts its UPSTREAM relation, which is normally the view the
@@ -5336,6 +5257,76 @@ pub(crate) fn run_was_unchanged(
             .any(|n| n.rows.unwrap_or(0) > 0)
 }
 
+/// The resource and performance pragmas every DuckDB invocation opens with.
+///
+/// ONE builder, used by both execution paths. They had a copy each and had
+/// already drifted: the per-stage path gave each run its own spill
+/// subdirectory - the fix for a real collision, where four concurrent
+/// spilling queries sharing one temp directory lost 3 of 12 to segfaults and
+/// "Failed to delete file" - and the batched path still pointed every run at
+/// the same directory. A second copy of a setting is a second chance to miss
+/// one.
+pub(crate) fn resource_pragmas(
+    run_db: Option<&std::path::Path>,
+    stage_memory_mb: Option<u32>,
+) -> String {
+    // Always on. These flip DuckDB defaults that cost ETL throughput.
+    let mut p = String::from(
+        "PRAGMA preserve_insertion_order=false;\n\
+         PRAGMA enable_object_cache=true;\n\
+         PRAGMA enable_progress_bar=false;\n",
+    );
+    let env = |k: &str| {
+        std::env::var(k)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let mem = stage_memory_mb
+        .map(|mb| format!("{}MB", mb))
+        .or_else(|| env("DUCKLE_MEMORY_LIMIT"));
+    if let Some(m) = mem {
+        p.push_str(&format!("PRAGMA memory_limit='{}';\n", m.replace('\'', "''")));
+    }
+    if let Some(t) = env("DUCKLE_THREADS") {
+        if let Ok(n) = t.parse::<u32>() {
+            if n > 0 {
+                p.push_str(&format!("PRAGMA threads={};\n", n));
+            }
+        }
+    }
+    // Without this DuckDB's default cap is "90% of available disk space", so
+    // one unexpectedly large join can fill the volume the OS is on and take
+    // unrelated services with it. On a shared machine that is the difference
+    // between one slow pipeline and an outage.
+    if let Some(sz) = env("DUCKLE_MAX_TEMP_DIR_SIZE") {
+        p.push_str(&format!(
+            "PRAGMA max_temp_directory_size='{}';\n",
+            sz.replace('\'', "''")
+        ));
+    }
+    if let Some(d) = env("DUCKLE_TEMP_DIR") {
+        // A private subdirectory per run. Pointing every run at one directory
+        // is what a user does to move spill onto a bigger disk, and it
+        // silently made concurrent runs unsafe.
+        let target = match run_db.and_then(|db| db.file_name()) {
+            Some(nm) => {
+                let sub = std::path::Path::new(&d).join(nm);
+                match std::fs::create_dir_all(&sub) {
+                    Ok(()) => sub.to_string_lossy().into_owned(),
+                    Err(_) => d.clone(),
+                }
+            }
+            None => d.clone(),
+        };
+        p.push_str(&format!(
+            "PRAGMA temp_directory='{}';\n",
+            target.replace('\'', "''").replace('\\', "/")
+        ));
+    }
+    p
+}
+
 /// A state write held until the run succeeds.
 ///
 /// `prior` carries what was on disk when this run READ that state, for writes
@@ -6387,5 +6378,107 @@ mod oracle_insert_all_tests {
     fn zero_cols_defensive() {
         // Defensive divisor max(1): 999 / 1 = 999, then .min(1000) = 999.
         assert_eq!(f(0, 1000), 999);
+    }
+}
+
+#[cfg(test)]
+mod resource_pragma_tests {
+    use super::resource_pragmas;
+
+    fn guard() -> std::sync::MutexGuard<'static, ()> {
+        static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let g = L.lock().unwrap_or_else(|e| e.into_inner());
+        for k in [
+            "DUCKLE_MEMORY_LIMIT",
+            "DUCKLE_THREADS",
+            "DUCKLE_TEMP_DIR",
+            "DUCKLE_MAX_TEMP_DIR_SIZE",
+        ] {
+            std::env::remove_var(k);
+        }
+        g
+    }
+
+    /// The preset is unconditional, so a pipeline with no resource settings
+    /// still gets the throughput defaults.
+    #[test]
+    fn the_performance_preset_is_always_present() {
+        let _g = guard();
+        let p = resource_pragmas(None, None);
+        assert!(p.contains("preserve_insertion_order=false"));
+        assert!(p.contains("enable_object_cache=true"));
+        assert!(p.contains("enable_progress_bar=false"));
+        // Nothing configured means nothing capped - DuckDB's own defaults.
+        assert!(!p.contains("memory_limit"));
+        assert!(!p.contains("max_temp_directory_size"));
+    }
+
+    /// The one that stops a runaway job filling the volume the OS is on.
+    /// DuckDB's own default is "90% of available disk space", which on a
+    /// shared machine is the difference between a slow pipeline and an outage.
+    #[test]
+    fn the_temp_size_cap_is_emitted_when_set() {
+        let _g = guard();
+        std::env::set_var("DUCKLE_MAX_TEMP_DIR_SIZE", "300GB");
+        let p = resource_pragmas(None, None);
+        assert!(
+            p.contains("PRAGMA max_temp_directory_size='300GB'"),
+            "spill would be capped at 90% of the disk instead: {p}"
+        );
+        std::env::remove_var("DUCKLE_MAX_TEMP_DIR_SIZE");
+    }
+
+    #[test]
+    fn a_per_stage_memory_limit_beats_the_environment() {
+        let _g = guard();
+        std::env::set_var("DUCKLE_MEMORY_LIMIT", "16GB");
+        assert!(resource_pragmas(None, None).contains("memory_limit='16GB'"));
+        assert!(
+            resource_pragmas(None, Some(512)).contains("memory_limit='512MB'"),
+            "a stage that asked for a limit must get the one it asked for"
+        );
+        std::env::remove_var("DUCKLE_MEMORY_LIMIT");
+    }
+
+    /// Concurrent runs sharing one spill directory lost 3 of 12 queries to
+    /// segfaults and delete failures. Each run gets its own subdirectory, and
+    /// this is what both execution paths now go through - the batched one used
+    /// to skip it.
+    #[test]
+    fn each_run_spills_into_its_own_directory() {
+        let _g = guard();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("DUCKLE_TEMP_DIR", tmp.path());
+        let a = resource_pragmas(Some(std::path::Path::new("/x/duckle_run_1.duckdb")), None);
+        let b = resource_pragmas(Some(std::path::Path::new("/x/duckle_run_2.duckdb")), None);
+        assert!(a.contains("duckle_run_1.duckdb"), "{a}");
+        assert!(b.contains("duckle_run_2.duckdb"), "{b}");
+        assert_ne!(a, b, "two runs must not be pointed at the same spill directory");
+        std::env::remove_var("DUCKLE_TEMP_DIR");
+    }
+
+    #[test]
+    fn a_quote_in_a_setting_cannot_break_out_of_the_pragma() {
+        let _g = guard();
+        std::env::set_var("DUCKLE_MEMORY_LIMIT", "4GB'; DROP TABLE x; --");
+        assert!(
+            std::env::var("DUCKLE_MEMORY_LIMIT").is_ok(),
+            "the value did not survive set_var"
+        );
+        let p = resource_pragmas(None, None);
+        let line = p
+            .lines()
+            .find(|l| l.contains("memory_limit"))
+            .expect("the setting should be emitted");
+        // Doubling is what keeps it ONE string literal: SQL reads '' as a
+        // literal quote rather than the end of the string, so the rest cannot
+        // become a second statement.
+        assert!(line.contains("'4GB''; DROP TABLE x; --'"), "not escaped: {line}");
+        assert_eq!(
+            line.matches('\'').count() % 2,
+            0,
+            "an odd number of quotes means the literal is not closed: {line}"
+        );
+        std::env::remove_var("DUCKLE_MEMORY_LIMIT");
     }
 }
