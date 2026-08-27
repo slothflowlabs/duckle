@@ -601,8 +601,16 @@ export default function App() {
                                 ? state.activeJobId
                                 : loadedJobs[0].id;
                         setActiveJobId(targetActiveId);
-                    } else if (state.activeJobId) {
-                        setActiveJobId(state.activeJobId);
+                    } else {
+                        // No pipelines in this workspace. Clearing matters on a
+                        // workspace SWITCH: this effect re-runs in place for a
+                        // new path (no remount, and workspaceReady is never set
+                        // back to false), so the previous workspace's tabs would
+                        // otherwise stay on screen - pointing at pipelineData
+                        // that was just cleared - and auto-save would write them
+                        // into the workspace that does not have them.
+                        setJobs([]);
+                        if (state.activeJobId) setActiveJobId(state.activeJobId);
                     }
                     if (state.corruptFiles?.length) setCorruptFiles(state.corruptFiles);
                 }
