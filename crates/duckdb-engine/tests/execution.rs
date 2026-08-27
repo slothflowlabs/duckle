@@ -15377,3 +15377,53 @@ fn src_kafka_resumes_where_the_last_successful_run_stopped() {
     assert_eq!(v.get("topic").and_then(|x| x.as_str()), Some(topic.as_str()));
     assert_eq!(v.get("next_offset").and_then(|x| x.as_i64()), Some(6));
 }
+
+/// #253 follow-up, reported after the first implementation shipped: a run that
+/// could not write its deferred state still reported "ok".
+///
+/// That matters most for a model card. "ok" from a pipeline that registers a
+/// model means the card is on disk; if the write failed and the run still says
+/// ok, a later pipeline reads a stale `latest` - or nothing - and nothing ever
+/// said so. The same swallow applied to incremental watermarks and Kafka
+/// resume points.
+///
+/// The registry folder here is a FILE, so creating `<file>/churn/` cannot
+/// succeed, which exercises the failure path without depending on permissions.
+#[test]
+fn a_run_that_cannot_record_its_state_does_not_report_ok() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    // A regular file where the registry directory needs to be.
+    let blocker = tmp.path().join("models");
+    std::fs::write(&blocker, b"not a directory").unwrap();
+    let models = blocker.to_string_lossy().replace('\\', "/");
+
+    let csv = write_file(
+        tmp.path(),
+        "metrics.csv",
+        "version,artifact\nrun-1,s3://models/churn/v1.pkl\n",
+    );
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("m", "snk.model", json!({ "path": models, "name": "churn" })),
+        ]),
+        json!([main_edge("e1", "s", "m")]),
+    ));
+
+    assert_eq!(
+        r.status, "error",
+        "a run whose model card could not be written must not report ok"
+    );
+    let err = r.error.unwrap_or_default();
+    assert!(
+        err.contains("could not be recorded"),
+        "the error should say the state was not recorded: {}",
+        err
+    );
+    assert!(
+        err.contains("churn"),
+        "the error should name the path it could not write: {}",
+        err
+    );
+}

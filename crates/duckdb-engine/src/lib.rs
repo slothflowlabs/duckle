@@ -2133,7 +2133,7 @@ impl DuckdbEngine {
             }
         }
 
-        let final_status = if was_cancelled {
+        let mut final_status = if was_cancelled {
             "cancelled"
         } else if overall_error.is_some() {
             "error"
@@ -2152,22 +2152,59 @@ impl DuckdbEngine {
         // sink, and registering a model there would publish one from a run that
         // never reached its sink either.
         if final_status == "ok" && target.is_none() {
+            // A failure here is NOT ignorable, which is what it used to be.
+            // "ok" from a pipeline that registered a model means the card is on
+            // disk; if the write failed, saying ok is a lie a later run acts on -
+            // src.model would read a stale `latest`, or nothing at all. A
+            // watermark or Kafka offset that did not land is milder, since the
+            // next run simply redoes that window, but it still has to be visible
+            // rather than silent.
+            //
+            // The rows are already written by this point, so this reports a run
+            // whose OUTPUT succeeded and whose recorded STATE did not. That is
+            // precisely what happened, and re-running is safe.
+            let mut failures: Vec<String> = Vec::new();
             for (path, value) in &pending_writes {
                 if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                if let Ok(text) = serde_json::to_string_pretty(value) {
-                    // Write to a temp file and rename over the target, so a
-                    // reader never sees a half-written file. A model pointer is
-                    // read by other pipelines while this one is running, and a
-                    // torn read there is a wrong answer rather than an error.
-                    // On Windows rename replaces the destination, so removing
-                    // it first would only open a window where it does not exist.
-                    let tmp = path.with_extension("json.tmp");
-                    if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, path).is_err() {
-                        let _ = std::fs::remove_file(&tmp);
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        failures.push(format!("{}: create {}: {}", path.display(), parent.display(), e));
+                        continue;
                     }
                 }
+                let text = match serde_json::to_string_pretty(value) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        failures.push(format!("{}: serialize: {}", path.display(), e));
+                        continue;
+                    }
+                };
+                // Write to a temp file and rename over the target, so a reader
+                // never sees a half-written file. A model pointer is read by
+                // other pipelines while this one is running, and a torn read
+                // there is a wrong answer rather than an error. On Windows
+                // rename replaces the destination, so removing it first would
+                // only open a window where it does not exist.
+                let tmp = path.with_extension("json.tmp");
+                if let Err(e) = std::fs::write(&tmp, text) {
+                    failures.push(format!("{}: write: {}", path.display(), e));
+                    continue;
+                }
+                if let Err(e) = std::fs::rename(&tmp, path) {
+                    let _ = std::fs::remove_file(&tmp);
+                    failures.push(format!("{}: rename into place: {}", path.display(), e));
+                }
+            }
+            if !failures.is_empty() {
+                overall_error.get_or_insert(format!(
+                    "the pipeline ran, but {} could not be recorded: {}",
+                    if failures.len() == 1 {
+                        "its state".to_string()
+                    } else {
+                        format!("{} pieces of its state", failures.len())
+                    },
+                    failures.join("; ")
+                ));
+                final_status = "error";
             }
         }
 
