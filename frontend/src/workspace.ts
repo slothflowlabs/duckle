@@ -245,12 +245,14 @@ async function loadV2(path: string): Promise<WorkspaceState | null> {
         engine?: string;
         jobs?: unknown[];
         activeJobId?: string;
+        pipelineData?: Record<string, unknown>;
+        repo?: unknown[];
     }>(joinPath(path, METADATA_FILE));
     if (!meta) return null;
 
-    const repo = (await readJsonIfExists<Array<Record<string, unknown>>>(
+    let repo = (await readJsonIfExists<Array<Record<string, unknown>>>(
         joinPath(path, REPOSITORY_FILE),
-    )) ?? [];
+    )) ?? (meta.repo as Array<Record<string, unknown>> | undefined) ?? [];
 
     // Per-item files (contexts, connections, pipelines) are loaded
     // independently: a single corrupt one is skipped and reported, never
@@ -279,8 +281,10 @@ async function loadV2(path: string): Promise<WorkspaceState | null> {
         }
     }
 
-    // Load each pipeline file referenced in the repo.
-    const pipelineData: Record<string, unknown> = {};
+    // Load each pipeline file referenced in the repo (and merge inline pipelineData from meta if present).
+    const pipelineData: Record<string, unknown> = {
+        ...((meta.pipelineData as Record<string, unknown> | undefined) ?? {}),
+    };
     for (const item of repo) {
         if (item.type !== 'pipeline') continue;
         const file = joinPath(path, PIPELINES_DIR, `${item.id}.json`);
@@ -293,11 +297,87 @@ async function loadV2(path: string): Promise<WorkspaceState | null> {
         }
     }
 
+    // Auto-register any pipeline files present on disk in `pipelines/` that are
+    // missing from repository.json. This is intentional for workspace recovery
+    // (e.g. from git merges or rollups where repository.json is partial).
+    const diskPipelineFiles = await readDirEntries(joinPath(path, PIPELINES_DIR));
+    for (const pfile of diskPipelineFiles) {
+        const pid = pfile.replace(/\.json$/i, '');
+        if (!pipelineData[pid]) {
+            try {
+                const pipeline = await readJsonIfExists(joinPath(path, PIPELINES_DIR, pfile));
+                if (pipeline) {
+                    pipelineData[pid] = pipeline;
+                    if (!repo.some(r => r.id === pid)) {
+                        repo.push({
+                            id: pid,
+                            name: pid,
+                            type: 'pipeline',
+                            parentId: 'pipelines',
+                        });
+                    }
+                }
+            } catch (err) {
+                if (err instanceof WorkspaceLoadError) corruptFiles.push(err.file);
+            }
+        }
+    }
+
+    // Derive or recover jobs: if meta.jobs is empty, infer from repo / pipelineData
+    let jobs = meta.jobs as Array<{ id: string; name?: string; dirty?: boolean }> | undefined;
+    if (!jobs || jobs.length === 0) {
+        const pipelineItems = repo.filter(i => i.type === 'pipeline');
+        if (pipelineItems.length > 0) {
+            jobs = pipelineItems.map(i => ({
+                id: String(i.id),
+                name: (i.name as string) || String(i.id),
+                dirty: false,
+            }));
+        } else {
+            const pids = Object.keys(pipelineData);
+            if (pids.length > 0) {
+                jobs = pids.map(id => ({ id, name: id, dirty: false }));
+            }
+        }
+    }
+
+    // Ensure repo has items if empty but pipelineData exists
+    if (repo.length === 0 && Object.keys(pipelineData).length > 0) {
+        repo = Object.keys(pipelineData).map(id => ({
+            id,
+            name: jobs?.find(j => j.id === id)?.name || id,
+            type: 'pipeline',
+            parentId: 'pipelines',
+        }));
+    }
+
+    // Determine activeJobId fallback
+    let activeJobId = meta.activeJobId;
+    if (!activeJobId && jobs && jobs.length > 0) {
+        activeJobId = jobs[0].id;
+    }
+
+    // Fallback: If duckle.json exists but is minimal/empty (0 jobs & 0 pipelines), check if workspace.json has content
+    if ((!jobs || jobs.length === 0) && Object.keys(pipelineData).length === 0) {
+        const v1 = await readJsonIfExists<WorkspaceState>(joinPath(path, V1_FILE));
+        if (v1 && ((v1.jobs && v1.jobs.length > 0) || (v1.pipelineData && Object.keys(v1.pipelineData).length > 0))) {
+            return {
+                version: meta.version ?? 2,
+                engine: meta.engine ?? v1.engine,
+                jobs: v1.jobs ?? jobs,
+                activeJobId: meta.activeJobId ?? v1.activeJobId,
+                repo: (v1.repo as Array<Record<string, unknown>>) ?? repo,
+                pipelineData: (v1.pipelineData as Record<string, unknown>) ?? pipelineData,
+                corruptFiles: corruptFiles.length ? corruptFiles : undefined,
+            };
+        }
+    }
+
     return {
         version: meta.version ?? 2,
         engine: meta.engine,
-        jobs: meta.jobs,
-        activeJobId: meta.activeJobId,
+        jobs,
+        activeJobId,
         repo,
         pipelineData,
         corruptFiles: corruptFiles.length ? corruptFiles : undefined,
