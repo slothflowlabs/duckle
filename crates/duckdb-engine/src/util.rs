@@ -287,6 +287,31 @@ pub(crate) fn procedural_note(s: &plan::Stage) -> String {
     format!("/* {} */", body)
 }
 
+/// Resolve a general entity reference into the text it stands for.
+///
+/// quick-xml 0.42 split `&amp;`, `&#60;` and friends out of `Event::Text` into
+/// their own `Event::GeneralRef`. Code that matches only Text and CData
+/// therefore drops every entity in element content silently - `Ben &amp; Jerry`
+/// arrives as `Ben  Jerry` - which is why both parsers below handle it.
+///
+/// An entity that cannot be resolved (one declared in a DTD) is kept verbatim
+/// as `&name;` rather than dropped. Losing it silently is the failure this
+/// exists to prevent, and a literal is at least visible.
+pub(crate) fn xml_entity_text(e: &quick_xml::events::BytesRef) -> String {
+    match e.resolve_char_ref() {
+        Ok(Some(c)) => return c.to_string(),
+        // A malformed numeric reference (&#xZZ;) is content we cannot read;
+        // keep it literal rather than guess.
+        Ok(None) => {}
+        Err(_) => return format!("&{};", e.borrow().into_inner()),
+    }
+    let name = e.borrow().into_inner();
+    match quick_xml::escape::resolve_predefined_entity(&name) {
+        Some(t) => t.to_string(),
+        None => format!("&{};", name),
+    }
+}
+
 /// Finalize an XML element being popped from the stack: convert it
 /// to a JSON value, push to rows if its path matches row_path, and
 /// merge it into its parent (multiple same-named children collapse
@@ -381,7 +406,11 @@ pub(crate) fn walk_xml_to_rows(
     use quick_xml::reader::Reader;
 
     let mut reader = Reader::from_str(content);
-    reader.config_mut().trim_text(true);
+    // NOT trim_text(true). It trims every Text event individually, and since
+    // quick-xml 0.42 splits an entity out of the run of text around it, that
+    // eats the spaces beside it: `Ben &amp; Jerry` arrives as `Ben&Jerry`.
+    // Whitespace between pretty-printed tags is discarded anyway, because
+    // xml_element_value trims the text accumulated for the whole element.
     let row_path_parts: Vec<String> = row_path
         .trim_matches('/')
         .split('/')
@@ -401,21 +430,21 @@ pub(crate) fn walk_xml_to_rows(
         match event {
             Event::Eof => break,
             Event::Start(e) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 let mut builder = serde_json::Map::new();
                 for attr in e.attributes().flatten() {
-                    let k = format!("@{}", String::from_utf8_lossy(attr.key.as_ref()));
-                    let v = String::from_utf8_lossy(&attr.value).to_string();
+                    let k = format!("@{}", attr.key.as_ref());
+                    let v = attr.value.to_string();
                     builder.insert(k, JsonValue::String(v));
                 }
                 stack.push((name, builder, String::new()));
             }
             Event::Empty(e) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 let mut builder = serde_json::Map::new();
                 for attr in e.attributes().flatten() {
-                    let k = format!("@{}", String::from_utf8_lossy(attr.key.as_ref()));
-                    let v = String::from_utf8_lossy(&attr.value).to_string();
+                    let k = format!("@{}", attr.key.as_ref());
+                    let v = attr.value.to_string();
                     builder.insert(k, JsonValue::String(v));
                 }
                 xml_close_element(
@@ -428,15 +457,18 @@ pub(crate) fn walk_xml_to_rows(
                 );
             }
             Event::Text(e) => {
-                let text = String::from_utf8_lossy(
-                    e.xml_content(quick_xml::XmlVersion::Implicit1_0)
-                        .unwrap_or_default()
-                        .as_ref()
-                        .as_bytes(),
-                )
-                .to_string();
+                // quick-xml 0.42 decodes and unescapes to a Cow<str>, so this
+                // no longer round-trips through bytes.
+                let text = e
+                    .xml_content(quick_xml::XmlVersion::Implicit1_0)
+                    .to_string();
                 if let Some(last) = stack.last_mut() {
                     last.2.push_str(&text);
+                }
+            }
+            Event::GeneralRef(e) => {
+                if let Some(last) = stack.last_mut() {
+                    last.2.push_str(&xml_entity_text(&e));
                 }
             }
             Event::CData(e) => {
@@ -444,7 +476,7 @@ pub(crate) fn walk_xml_to_rows(
                 // writes complex / JSON-encoded cell values inside CDATA, and an
                 // author may wrap any value this way, so capture it like Text -
                 // otherwise the content is silently dropped (issue #33).
-                let text = String::from_utf8_lossy(e.into_inner().as_ref()).to_string();
+                let text = e.into_inner().as_ref().to_string();
                 if let Some(last) = stack.last_mut() {
                     last.2.push_str(&text);
                 }
@@ -511,7 +543,11 @@ pub(crate) fn stream_xml_rows<R: std::io::BufRead>(
     use quick_xml::reader::Reader;
 
     let mut xr = Reader::from_reader(reader);
-    xr.config_mut().trim_text(true);
+    // NOT trim_text(true). It trims every Text event individually, and since
+    // quick-xml 0.42 splits an entity out of the run of text around it, that
+    // eats the spaces beside it: `Ben &amp; Jerry` arrives as `Ben&Jerry`.
+    // Whitespace between pretty-printed tags is discarded anyway, because
+    // xml_element_value trims the text accumulated for the whole element.
     let row_path_parts: Vec<String> = row_path
         .trim_matches('/')
         .split('/')
@@ -530,21 +566,21 @@ pub(crate) fn stream_xml_rows<R: std::io::BufRead>(
         match event {
             Event::Eof => break,
             Event::Start(e) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 let mut builder = serde_json::Map::new();
                 for attr in e.attributes().flatten() {
-                    let k = format!("@{}", String::from_utf8_lossy(attr.key.as_ref()));
-                    let v = String::from_utf8_lossy(&attr.value).to_string();
+                    let k = format!("@{}", attr.key.as_ref());
+                    let v = attr.value.to_string();
                     builder.insert(k, JsonValue::String(v));
                 }
                 stack.push((name, builder, String::new()));
             }
             Event::Empty(e) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 let mut builder = serde_json::Map::new();
                 for attr in e.attributes().flatten() {
-                    let k = format!("@{}", String::from_utf8_lossy(attr.key.as_ref()));
-                    let v = String::from_utf8_lossy(&attr.value).to_string();
+                    let k = format!("@{}", attr.key.as_ref());
+                    let v = attr.value.to_string();
                     builder.insert(k, JsonValue::String(v));
                 }
                 xml_close_element_streaming(
@@ -557,19 +593,22 @@ pub(crate) fn stream_xml_rows<R: std::io::BufRead>(
                 )?;
             }
             Event::Text(e) => {
-                let text = String::from_utf8_lossy(
-                    e.xml_content(quick_xml::XmlVersion::Implicit1_0)
-                        .unwrap_or_default()
-                        .as_ref()
-                        .as_bytes(),
-                )
-                .to_string();
+                // quick-xml 0.42 decodes and unescapes to a Cow<str>, so this
+                // no longer round-trips through bytes.
+                let text = e
+                    .xml_content(quick_xml::XmlVersion::Implicit1_0)
+                    .to_string();
                 if let Some(last) = stack.last_mut() {
                     last.2.push_str(&text);
                 }
             }
+            Event::GeneralRef(e) => {
+                if let Some(last) = stack.last_mut() {
+                    last.2.push_str(&xml_entity_text(&e));
+                }
+            }
             Event::CData(e) => {
-                let text = String::from_utf8_lossy(e.into_inner().as_ref()).to_string();
+                let text = e.into_inner().as_ref().to_string();
                 if let Some(last) = stack.last_mut() {
                     last.2.push_str(&text);
                 }
@@ -1346,7 +1385,32 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+        /// Element text is decoded, not passed through raw. This is the exact
+    /// behaviour that moved in quick-xml 0.42: `xml_content` went from a
+    /// fallible byte-ish result to an infallible `Cow<str>` that decodes and
+    /// unescapes for us, and the migration deleted the decoding this code used
+    /// to do itself. If that were wrong, `&amp;` would reach a column as the
+    /// five literal characters instead of one ampersand.
     #[test]
+    fn xml_entities_in_element_text_are_decoded() {
+        let xml = "<r><row><name>Ben &amp; Jerry&apos;s</name>                   <note>a &lt; b &gt; c</note></row></r>";
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let rows = walk_xml_to_rows(xml, "row", &cancel).expect("parses");
+        assert_eq!(rows.len(), 1);
+        let o = rows[0].as_object().expect("object");
+        assert_eq!(
+            o.get("name").and_then(|v| v.as_str()),
+            Some("Ben & Jerry's"),
+            "&amp; and &apos; must arrive decoded"
+        );
+        assert_eq!(
+            o.get("note").and_then(|v| v.as_str()),
+            Some("a < b > c"),
+            "&lt; and &gt; must arrive decoded"
+        );
+    }
+
+#[test]
     fn xml_cdata_text_is_captured_not_dropped() {
         // issue #33: a value wrapped in <![CDATA[...]]> (how snk.xml writes
         // complex/JSON cells) was skipped on read, so the column came back empty.

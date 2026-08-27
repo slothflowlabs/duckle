@@ -4158,16 +4158,16 @@ fn parse(xml: &str) -> Result<Parsed, String> {
             Event::Eof => break,
             Event::Start(ref e) | Event::Empty(ref e) => {
                 let name = e.local_name();
-                let tag = String::from_utf8_lossy(name.as_ref()).to_string();
+                let tag = name.as_ref().to_string();
                 // Values must be unescaped: Talend stores Java string literals,
                 // so the quotes arrive as `&quot;` and a raw read would leave
                 // `&quot;localhost&quot;` where `localhost` belongs.
                 let attr = |k: &str| -> Option<String> {
                     e.attributes().flatten().find_map(|a| {
-                        (a.key.local_name().as_ref() == k.as_bytes()).then(|| {
+                        (a.key.local_name().as_ref() == k).then(|| {
                             a.normalized_value(quick_xml::XmlVersion::Implicit1_0)
                                 .map(|v| v.into_owned())
-                                .unwrap_or_else(|_| String::from_utf8_lossy(&a.value).to_string())
+                                .unwrap_or_else(|_| a.value.to_string())
                         })
                     })
                 };
@@ -4389,13 +4389,13 @@ fn parse(xml: &str) -> Result<Parsed, String> {
             }
             Event::End(ref e) => {
                 let name = e.local_name();
-                if name.as_ref() == b"node" || name.as_ref() == b"jobletNodes" {
+                if name.as_ref() == "node" || name.as_ref() == "jobletNodes" {
                     if let Some(done) = cur.take() {
                         nodes.push(done);
                     }
-                } else if name.as_ref() == b"outputTables" {
+                } else if name.as_ref() == "outputTables" {
                     in_output_table = false;
-                } else if name.as_ref() == b"subjob" {
+                } else if name.as_ref() == "subjob" {
                     in_subjob = false;
                 }
             }

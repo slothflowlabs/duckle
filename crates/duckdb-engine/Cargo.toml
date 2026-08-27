@@ -89,7 +89,7 @@ redis = { version = "1.6", default-features = false }
 # then either materialize as a DuckDB JSON table or write the JSON back
 # out as YAML/TOML. Avoids needing DuckDB extensions for either format.
 serde_yaml = "0.9"
-toml = "0.8"
+toml = "1.1"
 # Kafka (and Redpanda) producer + consumer via the pure-Rust rskafka
 # crate (InfluxDB IOx in production). Async-only - wrapped in tokio
 # block_on like mongo + tiberius + scylla. Avoids the C-lib rdkafka
@@ -108,7 +108,7 @@ async-nats = "0.50"
 # XML reader/writer. Used by src.xml (walks a row path, emits each
 # match as a JSON object) and snk.xml (wraps rows in row elements).
 # Pure Rust.
-quick-xml = "0.41"
+quick-xml = "0.42"
 # HTML parsing + CSS selection for src.html (#255). Pure Rust (html5ever +
 # cssparser + selectors), no native toolchain, and already resolved in this
 # workspace's lockfile via tauri-utils and wry, so it adds no new dependency

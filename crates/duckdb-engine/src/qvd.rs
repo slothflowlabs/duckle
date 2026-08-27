@@ -177,6 +177,50 @@ fn json_num(d: f64) -> Value {
     Number::from_f64(d).map(Value::Number).unwrap_or(Value::Null)
 }
 
+/// Fold one text fragment into the header being parsed.
+///
+/// `FieldName` APPENDS the raw fragment: a name is built from however many
+/// events the parser splits it into, and a column named with leading or
+/// trailing spaces keeps them. The numeric fields trim and skip blanks,
+/// because whitespace-only text sits between pretty-printed tags.
+fn take_text(
+    fields: &mut [FieldMeta],
+    nrec: &mut usize,
+    rbs: &mut usize,
+    in_field: bool,
+    cur: &str,
+    raw: &str,
+) {
+    if in_field && cur == "FieldName" {
+        if let Some(f) = fields.last_mut() {
+            f.name.push_str(raw);
+        }
+        return;
+    }
+    let txt = raw.trim();
+    if txt.is_empty() {
+        return;
+    }
+    if in_field {
+        if let Some(f) = fields.last_mut() {
+            match cur {
+                "Offset" => f.offset = txt.parse().unwrap_or(0),
+                "NoOfSymbols" => f.no_of_symbols = txt.parse().unwrap_or(0),
+                "BitOffset" => f.bit_offset = txt.parse().unwrap_or(0),
+                "BitWidth" => f.bit_width = txt.parse().unwrap_or(0),
+                "Bias" => f.bias = txt.parse().unwrap_or(0),
+                _ => {}
+            }
+        }
+    } else {
+        match cur {
+            "NoOfRecords" => *nrec = txt.parse().unwrap_or(0),
+            "RecordByteSize" => *rbs = txt.parse().unwrap_or(0),
+            _ => {}
+        }
+    }
+}
+
 fn parse_header(xml: &str) -> Result<(usize, usize, Vec<FieldMeta>), String> {
     use quick_xml::events::Event;
     use quick_xml::reader::Reader;
@@ -189,7 +233,7 @@ fn parse_header(xml: &str) -> Result<(usize, usize, Vec<FieldMeta>), String> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let name = e.name().as_ref().to_string();
                 if name == "QvdFieldHeader" {
                     in_field = true;
                     fields.push(FieldMeta {
@@ -204,46 +248,22 @@ fn parse_header(xml: &str) -> Result<(usize, usize, Vec<FieldMeta>), String> {
                 cur = name;
             }
             Ok(Event::End(e)) => {
-                if e.name().as_ref() == b"QvdFieldHeader" {
+                if e.name().as_ref() == "QvdFieldHeader" {
                     in_field = false;
                 }
                 cur.clear();
             }
+            // quick-xml 0.41 replaced unescape() with xml_content(); 0.42 made
+            // it infallible AND split entity references into their own event,
+            // so `A &amp; B` arrives as three events. Both feed the same
+            // accumulation or a field name would keep only its last fragment.
             Ok(Event::Text(t)) => {
-                // quick-xml 0.41 replaced unescape() with xml_content(), which
-                // decodes and unescapes for a stated XML version. Implicit1_0 is
-                // what the parser assumes for a document with no declaration,
-                // which is what these files are.
-                let raw = t
-                    .xml_content(quick_xml::XmlVersion::Implicit1_0)
-                    .map_err(|e| e.to_string())?;
-                let txt = raw.trim();
-                // Whitespace-only text events sit between pretty-printed tags;
-                // skip them. FieldName uses the RAW text so a column named with
-                // leading/trailing spaces keeps them (values are written inline,
-                // so raw has no stray indentation).
-                if txt.is_empty() {
-                    continue;
-                }
-                if in_field {
-                    if let Some(f) = fields.last_mut() {
-                        match cur.as_str() {
-                            "FieldName" => f.name = raw.to_string(),
-                            "Offset" => f.offset = txt.parse().unwrap_or(0),
-                            "NoOfSymbols" => f.no_of_symbols = txt.parse().unwrap_or(0),
-                            "BitOffset" => f.bit_offset = txt.parse().unwrap_or(0),
-                            "BitWidth" => f.bit_width = txt.parse().unwrap_or(0),
-                            "Bias" => f.bias = txt.parse().unwrap_or(0),
-                            _ => {}
-                        }
-                    }
-                } else {
-                    match cur.as_str() {
-                        "NoOfRecords" => nrec = txt.parse().unwrap_or(0),
-                        "RecordByteSize" => rbs = txt.parse().unwrap_or(0),
-                        _ => {}
-                    }
-                }
+                let raw = t.xml_content(quick_xml::XmlVersion::Implicit1_0);
+                take_text(&mut fields, &mut nrec, &mut rbs, in_field, &cur, &raw);
+            }
+            Ok(Event::GeneralRef(r)) => {
+                let text = crate::util::xml_entity_text(&r);
+                take_text(&mut fields, &mut nrec, &mut rbs, in_field, &cur, &text);
             }
             Ok(Event::Eof) => break,
             Err(e) => return Err(format!("QVD header XML: {}", e)),
