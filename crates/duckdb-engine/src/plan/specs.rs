@@ -2017,3 +2017,86 @@ pub enum UpsertFamily {
     /// `ON DUPLICATE KEY UPDATE col = VALUES(col)` (MySQL, MariaDB).
     MySql,
 }
+
+/// src.neo4j: Cypher read over the HTTP Query API.
+///   POST {endpoint}/db/{database}/query/v2
+///   Body:     { "statement": "MATCH ...", "parameters": {...} }
+///   Response: { "data": { "fields": [...], "values": [[...]] } }
+#[derive(Debug, Clone)]
+pub struct Neo4jSourceSpec {
+    pub node_id: String,
+    pub endpoint: String,
+    pub database: String,
+    pub user: Option<String>,
+    pub password: Option<String>,
+    pub cypher: String,
+    /// Optional Cypher parameters, passed through as `$name` bindings.
+    pub parameters: Option<serde_json::Value>,
+}
+
+/// snk.neo4j: write rows as nodes over the same Query API. Rows go up as the
+/// `$rows` parameter and are expanded server side with UNWIND.
+#[derive(Debug, Clone)]
+pub struct Neo4jSinkSpec {
+    pub from_view: String,
+    pub endpoint: String,
+    pub database: String,
+    pub user: Option<String>,
+    pub password: Option<String>,
+    /// Node label to write.
+    pub label: String,
+    /// When non-empty, MERGE on these properties instead of CREATE, so a
+    /// re-run updates the matched nodes rather than duplicating them.
+    pub merge_keys: Vec<String>,
+    /// Full override: a Cypher statement that consumes `$rows` itself.
+    pub cypher: Option<String>,
+    pub batch_size: usize,
+}
+
+/// src.turso: SQL read over the libSQL HTTP pipeline API.
+///   POST {url}/v2/pipeline
+///   Body:     { "requests": [ {"type":"execute","stmt":{"sql":...}}, {"type":"close"} ] }
+///   Response: { "results": [ { "response": { "result": { "cols":[], "rows":[[]] } } } ] }
+#[derive(Debug, Clone)]
+pub struct TursoSourceSpec {
+    pub node_id: String,
+    /// The database URL. `libsql://` is accepted and normalized to https.
+    pub url: String,
+    pub auth_token: Option<String>,
+    pub query: String,
+}
+
+/// snk.turso: INSERT rows over the libSQL HTTP pipeline API.
+#[derive(Debug, Clone)]
+pub struct TursoSinkSpec {
+    pub from_view: String,
+    pub url: String,
+    pub auth_token: Option<String>,
+    pub table: String,
+    /// "append" (default) or "overwrite", which clears the table first.
+    pub mode: String,
+    pub batch_size: usize,
+}
+
+/// src.db2: IBM DB2 read over the IBM Data Server ODBC driver. Same transport
+/// as Teradata - DB2 ships no DuckDB extension and no native Rust driver.
+#[derive(Debug, Clone)]
+pub struct Db2SourceSpec {
+    pub node_id: String,
+    pub conn_str: String,
+    pub query: String,
+    pub batch_rows: usize,
+}
+
+/// snk.db2: auto-create the target table from the upstream column types, then
+/// INSERT over ODBC.
+#[derive(Debug, Clone)]
+pub struct Db2SinkSpec {
+    pub from_view: String,
+    pub conn_str: String,
+    /// Optional schema qualifier; DB2 defaults to the connecting user's schema.
+    pub schema: Option<String>,
+    pub table: String,
+    /// "append" (default) or "overwrite", which clears the table first.
+    pub mode: String,
+}

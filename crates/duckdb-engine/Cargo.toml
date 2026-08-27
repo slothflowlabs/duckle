@@ -222,9 +222,14 @@ odbc-sys = { version = "0.31", optional = true, features = ["static", "static_lt
 [features]
 default = ["oracle"]
 oracle = ["dep:oracle"]
-# Teradata via ODBC (odbc-api). Off by default so a plain engine build/test
-# needs no ODBC driver manager; the shipped binaries enable it.
-teradata = ["dep:odbc-api"]
+# ODBC (odbc-api) transport, shared by every connector that has no DuckDB
+# extension and no native Rust driver. Off by default so a plain engine
+# build/test needs no ODBC driver manager; the shipped binaries enable it.
+odbc = ["dep:odbc-api"]
+# Teradata and IBM DB2 both ride ODBC. They stay separate feature names so a
+# build can take one without the other; both just switch the transport on.
+teradata = ["odbc"]
+db2 = ["odbc"]
 # Linux self-contained ODBC: statically link the unixODBC driver manager so a
 # shipped Linux binary launches with no system libodbc.so.2 installed. Enabled
 # only on Linux (by the consuming crates' Linux target tables) alongside

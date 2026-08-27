@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 397,
+  "componentCount": 402,
   "components": [
     {
       "id": "src.csv",
@@ -3668,8 +3668,8 @@
       "id": "src.db2",
       "label": "IBM DB2",
       "kind": "source",
-      "availability": "planned",
-      "summary": "",
+      "availability": "available",
+      "summary": "Read IBM DB2 through the IBM Data Server ODBC driver (DB2 ships no DuckDB extension and no native Rust driver). Install the IBM driver, then connect with friendly host / port / database / user / password fields, a DSN, or a full ODBC connection string. Whole-table read or custom SQL; types preserved.",
       "ports": {
         "inputs": [],
         "outputs": [
@@ -3690,44 +3690,34 @@
         "id": "src.db2",
         "kind": "source",
         "label": "IBM DB2",
-        "description": "Reads data from IBM DB2.",
+        "description": "Read IBM DB2 through the IBM Data Server ODBC driver (DB2 ships no DuckDB extension and no native Rust driver). Install the IBM driver, then connect with friendly host / port / database / user / password fields, a DSN, or a full ODBC connection string. Whole-table read or custom SQL; types preserved.",
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Connection",
+            "label": "IBM DB2 connection",
             "fields": [
-              {
-                "key": "connectionRef",
-                "label": "Saved connection",
-                "kind": "connection-ref",
-                "accepts": [
-                  "db2"
-                ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
-              },
               {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
-                "required": true,
-                "placeholder": "localhost"
+                "placeholder": "db2.example.com"
               },
               {
                 "key": "port",
                 "label": "Port",
-                "kind": "integer",
+                "kind": "number",
                 "defaultValue": 50000
               },
               {
                 "key": "database",
                 "label": "Database",
                 "kind": "text",
-                "required": true,
-                "placeholder": "mydb"
+                "placeholder": "SAMPLE",
+                "description": "Required with the friendly fields - DB2 selects the database when the connection is made."
               },
               {
-                "key": "username",
-                "label": "Username",
+                "key": "user",
+                "label": "User",
                 "kind": "text"
               },
               {
@@ -3735,63 +3725,63 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
+              },
+              {
+                "key": "useSsl",
+                "label": "Use SSL",
+                "kind": "bool",
+                "defaultValue": false
+              },
+              {
+                "key": "driver",
+                "label": "ODBC driver name",
+                "kind": "text",
+                "defaultValue": "IBM DB2 ODBC DRIVER",
+                "description": "DB2 ships no DuckDB extension and no native Rust driver, so this connector goes through the IBM Data Server ODBC driver - install it first. This is the driver name as registered with your ODBC driver manager. Or skip these fields and use a DSN / full connection string below."
+              },
+              {
+                "key": "dsn",
+                "label": "Or DSN",
+                "kind": "text",
+                "placeholder": "MYDB2"
+              },
+              {
+                "key": "connectionString",
+                "label": "Or full ODBC connection string",
+                "kind": "expression",
+                "rows": 2,
+                "placeholder": "DRIVER={IBM DB2 ODBC DRIVER};HOSTNAME=...;PORT=50000;DATABASE=SAMPLE;PROTOCOL=TCPIP;UID=...;PWD=...",
+                "description": "Wins over every field above."
               }
             ]
           },
           {
-            "label": "Query",
+            "label": "Read",
             "fields": [
               {
-                "key": "mode",
-                "label": "Read mode",
-                "kind": "select",
-                "defaultValue": "table",
-                "options": [
-                  {
-                    "label": "Whole table",
-                    "value": "table"
-                  },
-                  {
-                    "label": "Custom SQL",
-                    "value": "sql"
-                  },
-                  {
-                    "label": "Incremental (by column)",
-                    "value": "incremental"
-                  }
-                ]
-              },
-              {
-                "key": "schemaName",
-                "label": "Schema",
+                "key": "schema",
+                "label": "Schema (optional)",
                 "kind": "text",
-                "placeholder": "public"
+                "placeholder": "MYSCHEMA"
               },
               {
                 "key": "tableName",
-                "label": "Table",
+                "label": "Table (for SELECT *)",
                 "kind": "text",
-                "placeholder": "orders"
+                "placeholder": "EMPLOYEE"
               },
               {
-                "key": "sql",
-                "label": "SQL query",
+                "key": "query",
+                "label": "Or custom SQL",
                 "kind": "expression",
-                "rows": 5,
-                "placeholder": "SELECT * FROM orders WHERE status = $1"
+                "rows": 4,
+                "placeholder": "SELECT * FROM EMPLOYEE WHERE ..."
               },
               {
-                "key": "incrementalColumn",
-                "label": "Incremental column",
-                "kind": "text",
-                "placeholder": "updated_at"
-              },
-              {
-                "key": "fetchSize",
-                "label": "Fetch size",
-                "kind": "integer",
-                "defaultValue": 1000,
-                "description": "Rows fetched per round-trip."
+                "key": "batchSize",
+                "label": "Fetch batch rows",
+                "kind": "number",
+                "defaultValue": 5000
               }
             ]
           }
@@ -3901,6 +3891,86 @@
                 "kind": "expression",
                 "rows": 5,
                 "placeholder": "SELECT * FROM users WHERE created_at > ?"
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "reject",
+              "type": "reject",
+              "optional": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.turso",
+      "label": "Turso / libSQL",
+      "kind": "source",
+      "availability": "available",
+      "summary": "Read a Turso (libSQL) database over the HTTP pipeline API - no driver install. Paste the libsql:// URL the dashboard gives you (it is normalized to https) plus a database auth token. Whole-table read or custom SQL.",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "reject",
+            "type": "reject",
+            "optional": true
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.turso",
+        "kind": "source",
+        "label": "Turso / libSQL",
+        "description": "Read a Turso (libSQL) database over the HTTP pipeline API - no driver install. Paste the libsql:// URL the dashboard gives you (it is normalized to https) plus a database auth token. Whole-table read or custom SQL.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Turso / libSQL",
+            "fields": [
+              {
+                "key": "url",
+                "label": "Database URL",
+                "kind": "text",
+                "required": true,
+                "placeholder": "libsql://my-db-org.turso.io",
+                "description": "The URL from the Turso dashboard. libsql:// is accepted and used over https."
+              },
+              {
+                "key": "authToken",
+                "label": "Auth token",
+                "kind": "text",
+                "placeholder": "••••••••"
+              },
+              {
+                "key": "tableName",
+                "label": "Table (for SELECT *)",
+                "kind": "text",
+                "placeholder": "events"
+              },
+              {
+                "key": "query",
+                "label": "Or custom SQL",
+                "kind": "expression",
+                "rows": 4,
+                "placeholder": "SELECT * FROM events WHERE ..."
               }
             ]
           }
@@ -11960,6 +12030,102 @@
                 "key": "limit",
                 "label": "Limit",
                 "kind": "integer"
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "reject",
+              "type": "reject",
+              "optional": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.neo4j",
+      "label": "Neo4j",
+      "kind": "source",
+      "availability": "available",
+      "summary": "Run Cypher against Neo4j over the HTTP Query API (/db/{database}/query/v2) - works with a self-hosted server and with Aura, and needs no Bolt driver. Basic auth; optional Cypher $parameters. Node and relationship values keep their properties as structs.",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "reject",
+            "type": "reject",
+            "optional": true
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.neo4j",
+        "kind": "source",
+        "label": "Neo4j",
+        "description": "Run Cypher against Neo4j over the HTTP Query API (/db/{database}/query/v2) - works with a self-hosted server and with Aura, and needs no Bolt driver. Basic auth; optional Cypher $parameters. Node and relationship values keep their properties as structs.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Neo4j",
+            "fields": [
+              {
+                "key": "endpoint",
+                "label": "Endpoint",
+                "kind": "text",
+                "required": true,
+                "placeholder": "http://localhost:7474"
+              },
+              {
+                "key": "database",
+                "label": "Database",
+                "kind": "text",
+                "defaultValue": "neo4j",
+                "placeholder": "neo4j"
+              },
+              {
+                "key": "user",
+                "label": "User",
+                "kind": "text",
+                "placeholder": "neo4j"
+              },
+              {
+                "key": "password",
+                "label": "Password",
+                "kind": "text",
+                "placeholder": "••••••••"
+              },
+              {
+                "key": "cypher",
+                "label": "Cypher",
+                "kind": "expression",
+                "rows": 5,
+                "required": true,
+                "placeholder": "MATCH (p:Person) RETURN p.name AS name, p.age AS age",
+                "description": "RETURN a column per field you want. Returning a whole node gives one struct column with all its properties."
+              },
+              {
+                "key": "parameters",
+                "label": "Parameters (JSON, optional)",
+                "kind": "expression",
+                "rows": 3,
+                "placeholder": "{ \"minAge\": 21 }",
+                "description": "Bound as $name in the Cypher above, so values never need string-concatenating into the query."
               }
             ]
           }
@@ -31375,6 +31541,138 @@
       }
     },
     {
+      "id": "snk.db2",
+      "label": "IBM DB2",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "Write to IBM DB2 through the IBM Data Server ODBC driver. Creates the table if missing from the upstream column types; Append adds rows, Overwrite clears it first. Booleans land in SMALLINT as 1/0, which DB2 for z/OS also accepts. No upsert.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.db2",
+        "kind": "sink",
+        "label": "IBM DB2",
+        "description": "Write to IBM DB2 through the IBM Data Server ODBC driver. Creates the table if missing from the upstream column types; Append adds rows, Overwrite clears it first. Booleans land in SMALLINT as 1/0, which DB2 for z/OS also accepts. No upsert.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "IBM DB2 connection",
+            "fields": [
+              {
+                "key": "host",
+                "label": "Host",
+                "kind": "text",
+                "placeholder": "db2.example.com"
+              },
+              {
+                "key": "port",
+                "label": "Port",
+                "kind": "number",
+                "defaultValue": 50000
+              },
+              {
+                "key": "database",
+                "label": "Database",
+                "kind": "text",
+                "placeholder": "SAMPLE",
+                "description": "Required with the friendly fields - DB2 selects the database when the connection is made."
+              },
+              {
+                "key": "user",
+                "label": "User",
+                "kind": "text"
+              },
+              {
+                "key": "password",
+                "label": "Password",
+                "kind": "text",
+                "placeholder": "••••••••"
+              },
+              {
+                "key": "useSsl",
+                "label": "Use SSL",
+                "kind": "bool",
+                "defaultValue": false
+              },
+              {
+                "key": "driver",
+                "label": "ODBC driver name",
+                "kind": "text",
+                "defaultValue": "IBM DB2 ODBC DRIVER",
+                "description": "DB2 ships no DuckDB extension and no native Rust driver, so this connector goes through the IBM Data Server ODBC driver - install it first. This is the driver name as registered with your ODBC driver manager. Or skip these fields and use a DSN / full connection string below."
+              },
+              {
+                "key": "dsn",
+                "label": "Or DSN",
+                "kind": "text",
+                "placeholder": "MYDB2"
+              },
+              {
+                "key": "connectionString",
+                "label": "Or full ODBC connection string",
+                "kind": "expression",
+                "rows": 2,
+                "placeholder": "DRIVER={IBM DB2 ODBC DRIVER};HOSTNAME=...;PORT=50000;DATABASE=SAMPLE;PROTOCOL=TCPIP;UID=...;PWD=...",
+                "description": "Wins over every field above."
+              }
+            ]
+          },
+          {
+            "label": "Write",
+            "fields": [
+              {
+                "key": "schema",
+                "label": "Schema (optional)",
+                "kind": "text",
+                "placeholder": "MYSCHEMA"
+              },
+              {
+                "key": "tableName",
+                "label": "Table",
+                "kind": "text",
+                "required": true,
+                "placeholder": "EMPLOYEE"
+              },
+              {
+                "key": "mode",
+                "label": "Write mode",
+                "kind": "select",
+                "defaultValue": "append",
+                "options": [
+                  {
+                    "value": "append",
+                    "label": "Append (create if missing)"
+                  },
+                  {
+                    "value": "overwrite",
+                    "label": "Overwrite (clear first)"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
       "id": "snk.sqlite",
       "label": "SQLite",
       "kind": "sink",
@@ -31477,6 +31775,90 @@
                 "kind": "text",
                 "defaultValue": "delete",
                 "description": "The value in the Delete flag column that marks a row for deletion."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
+      "id": "snk.turso",
+      "label": "Turso / libSQL",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "INSERT rows into a Turso (libSQL) database over the HTTP pipeline API. Creates the table if missing from the upstream column types; Append adds rows, Overwrite clears it first. Values go up as bound parameters, batched (default 500).",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.turso",
+        "kind": "sink",
+        "label": "Turso / libSQL",
+        "description": "INSERT rows into a Turso (libSQL) database over the HTTP pipeline API. Creates the table if missing from the upstream column types; Append adds rows, Overwrite clears it first. Values go up as bound parameters, batched (default 500).",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Turso / libSQL",
+            "fields": [
+              {
+                "key": "url",
+                "label": "Database URL",
+                "kind": "text",
+                "required": true,
+                "placeholder": "libsql://my-db-org.turso.io",
+                "description": "The URL from the Turso dashboard. libsql:// is accepted and used over https."
+              },
+              {
+                "key": "authToken",
+                "label": "Auth token",
+                "kind": "text",
+                "placeholder": "••••••••"
+              },
+              {
+                "key": "tableName",
+                "label": "Table",
+                "kind": "text",
+                "required": true,
+                "placeholder": "events"
+              },
+              {
+                "key": "mode",
+                "label": "Write mode",
+                "kind": "select",
+                "defaultValue": "append",
+                "options": [
+                  {
+                    "value": "append",
+                    "label": "Append (create if missing)"
+                  },
+                  {
+                    "value": "overwrite",
+                    "label": "Overwrite (clear first)"
+                  }
+                ]
+              },
+              {
+                "key": "batchSize",
+                "label": "Batch size",
+                "kind": "number",
+                "defaultValue": 500
               }
             ]
           }
@@ -36792,6 +37174,100 @@
                 "label": "Batch size",
                 "kind": "integer",
                 "defaultValue": 1000
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
+      "id": "snk.neo4j",
+      "label": "Neo4j",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "Write rows as Neo4j nodes over the HTTP Query API. Rows ride up as one $rows parameter expanded with UNWIND, so a batch is one round trip. Set mergeKeys to MERGE on those properties (re-running updates the matched nodes) instead of CREATE; or supply your own Cypher that consumes $rows.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.neo4j",
+        "kind": "sink",
+        "label": "Neo4j",
+        "description": "Write rows as Neo4j nodes over the HTTP Query API. Rows ride up as one $rows parameter expanded with UNWIND, so a batch is one round trip. Set mergeKeys to MERGE on those properties (re-running updates the matched nodes) instead of CREATE; or supply your own Cypher that consumes $rows.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Neo4j",
+            "fields": [
+              {
+                "key": "endpoint",
+                "label": "Endpoint",
+                "kind": "text",
+                "required": true,
+                "placeholder": "http://localhost:7474"
+              },
+              {
+                "key": "database",
+                "label": "Database",
+                "kind": "text",
+                "defaultValue": "neo4j",
+                "placeholder": "neo4j"
+              },
+              {
+                "key": "user",
+                "label": "User",
+                "kind": "text",
+                "placeholder": "neo4j"
+              },
+              {
+                "key": "password",
+                "label": "Password",
+                "kind": "text",
+                "placeholder": "••••••••"
+              },
+              {
+                "key": "label",
+                "label": "Node label",
+                "kind": "text",
+                "required": true,
+                "placeholder": "Person"
+              },
+              {
+                "key": "mergeKeys",
+                "label": "Merge on columns (optional)",
+                "kind": "columns",
+                "description": "Leave empty to CREATE a node per row. Set columns to MERGE on those properties instead, so re-running the pipeline updates the matched nodes rather than duplicating them."
+              },
+              {
+                "key": "batchSize",
+                "label": "Batch size",
+                "kind": "number",
+                "defaultValue": 1000
+              },
+              {
+                "key": "cypher",
+                "label": "Custom Cypher (optional)",
+                "kind": "expression",
+                "rows": 4,
+                "placeholder": "UNWIND $rows AS row MERGE (n:Person {id: row.id}) SET n += row",
+                "description": "Full override. Receives the batch as $rows; the node label and merge columns above are ignored."
               }
             ]
           }

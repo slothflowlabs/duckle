@@ -20,7 +20,7 @@ duckle-duckdb-engine = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# Teradata (ODBC via odbc-api) is enabled everywhere except macOS, whose
+# Teradata and DB2 (ODBC via odbc-api) are enabled everywhere except macOS, whose
 # cross-arch ODBC driver manager is awkward to link in the release build. On
 # macOS the engine falls back to a clear "compiled without teradata" error.
 # musl is excluded for the same reason duckle-runner excludes it: there is no
@@ -30,7 +30,7 @@ serde_json = { workspace = true }
 # error on those targets. This matters now that the musl build is what the Linux
 # PyPI wheel carries.
 [target.'cfg(all(not(target_os = "macos"), not(target_env = "musl")))'.dependencies]
-duckle-duckdb-engine = { workspace = true, features = ["teradata"] }
+duckle-duckdb-engine = { workspace = true, features = ["teradata", "db2"] }
 
 # On gnu Linux, additionally link unixODBC statically so the bundled binary needs
 # no system libodbc.so.2 at runtime (issue #131). Windows keeps odbc32.

@@ -308,6 +308,12 @@ pub enum RuntimeSpec {
     AdbcSink(AdbcSinkSpec),
     TeradataSource(TeradataSourceSpec),
     TeradataSink(TeradataSinkSpec),
+    Neo4jSource(Neo4jSourceSpec),
+    Neo4jSink(Neo4jSinkSpec),
+    TursoSource(TursoSourceSpec),
+    TursoSink(TursoSinkSpec),
+    Db2Source(Db2SourceSpec),
+    Db2Sink(Db2SinkSpec),
     AttachParquetSource(AttachParquetSourceSpec),
     /// materialize = "duckdb"/"duckdbfile": persist the stage into a DuckDB file.
     MaterializeDuckDb(MaterializeDuckDbSpec),
@@ -1316,6 +1322,66 @@ fn teradata_conn_string(props: &JsonValue) -> Result<String, EngineError> {
     Ok(parts.join(";"))
 }
 
+/// Build an IBM DB2 ODBC connection string from a node's props. Same
+/// precedence as Teradata: an explicit `connectionString` wins, otherwise a
+/// `dsn`, otherwise the friendly `driver` + `host` + `port` + `database`
+/// fields. DB2 needs DATABASE at connect time - unlike Teradata, where it only
+/// sets the default schema - so it is required in the friendly form. The
+/// result carries the password, so callers must never log it.
+fn db2_conn_string(props: &JsonValue) -> Result<String, EngineError> {
+    if let Some(cs) = string_prop(props, "connectionString").filter(|s| !s.is_empty()) {
+        return Ok(cs);
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(dsn) = string_prop(props, "dsn").filter(|s| !s.is_empty()) {
+        parts.push(format!("DSN={}", dsn));
+    } else {
+        let driver = string_prop(props, "driver")
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "IBM DB2 ODBC DRIVER".to_string());
+        let host = string_prop(props, "host")
+            .or_else(|| string_prop(props, "hostname"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                EngineError::Config(
+                    "db2: host, or a dsn / connectionString, is required".into(),
+                )
+            })?;
+        let database = string_prop(props, "database")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                EngineError::Config(
+                    "db2: database is required (DB2 selects the database at connect time)".into(),
+                )
+            })?;
+        let port = props
+            .get("port")
+            .and_then(|v| v.as_u64())
+            .or_else(|| string_prop(props, "port").and_then(|s| s.parse().ok()))
+            .unwrap_or(50000);
+        parts.push(format!("DRIVER={{{}}}", driver));
+        parts.push(format!("HOSTNAME={}", host));
+        parts.push(format!("PORT={}", port));
+        parts.push(format!("DATABASE={}", database));
+        // Without PROTOCOL the IBM driver assumes a local catalogued alias
+        // rather than a TCP connection, which fails with SQL1013N.
+        parts.push("PROTOCOL=TCPIP".to_string());
+    }
+    if let Some(u) = string_prop(props, "user")
+        .or_else(|| string_prop(props, "username"))
+        .filter(|s| !s.is_empty())
+    {
+        parts.push(format!("UID={}", u));
+    }
+    if let Some(pw) = string_prop(props, "password").filter(|s| !s.is_empty()) {
+        parts.push(format!("PWD={}", pw));
+    }
+    if props.get("useSsl").and_then(|v| v.as_bool()).unwrap_or(false) {
+        parts.push("SECURITY=SSL".to_string());
+    }
+    Ok(parts.join(";"))
+}
+
 /// Sanitize a node id into a SQL-identifier-safe alias suffix (#76 per-source
 /// aliases). Non-alphanumeric chars become `_`; the `duckle_src_` prefix the
 /// caller prepends guarantees it never starts with a digit.
@@ -1421,6 +1487,12 @@ fn build_stage(
     let mut adbc_sink: Option<AdbcSinkSpec> = None;
     let mut teradata_source: Option<TeradataSourceSpec> = None;
     let mut teradata_sink: Option<TeradataSinkSpec> = None;
+    let mut neo4j_source: Option<Neo4jSourceSpec> = None;
+    let mut neo4j_sink: Option<Neo4jSinkSpec> = None;
+    let mut turso_source: Option<TursoSourceSpec> = None;
+    let mut turso_sink: Option<TursoSinkSpec> = None;
+    let mut db2_source: Option<Db2SourceSpec> = None;
+    let mut db2_sink: Option<Db2SinkSpec> = None;
     let mut attach_parquet_source: Option<AttachParquetSourceSpec> = None;
     let mut materialize_duckdb: Option<MaterializeDuckDbSpec> = None;
     let mut redis_sink: Option<RedisSinkSpec> = None;
@@ -2910,6 +2982,94 @@ fn build_stage(
             name,
         });
         (String::new(), StageKind::View, None)
+    // These three sinks MUST come before the starts_with("snk.") catch-all
+    // below. Placed after it they are unreachable, and the run fails with
+    // "not yet implemented" for a component the palette offers.
+    } else if component_id == "snk.neo4j" {
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let endpoint = string_prop(&props, "endpoint")
+            .or_else(|| string_prop(&props, "url"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                EngineError::Config(format!(
+                    "{}: endpoint required (e.g. 'http://localhost:7474')",
+                    component_id
+                ))
+            })?;
+        let cypher = string_prop(&props, "cypher").filter(|s| !s.trim().is_empty());
+        // A label names the nodes being written, so it is required unless the
+        // user supplied their own Cypher that decides what to write.
+        let label = match string_prop(&props, "label").filter(|s| !s.is_empty()) {
+            Some(l) => l,
+            None if cypher.is_some() => String::new(),
+            None => {
+                return Err(EngineError::Config(format!(
+                    "{}: label required (or supply your own cypher)",
+                    component_id
+                )))
+            }
+        };
+        neo4j_sink = Some(Neo4jSinkSpec {
+            from_view: from_view.to_string(),
+            endpoint,
+            database: string_prop(&props, "database")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "neo4j".to_string()),
+            user: string_prop(&props, "user").filter(|s| !s.is_empty()),
+            password: string_prop(&props, "password").filter(|s| !s.is_empty()),
+            label,
+            merge_keys: columns_list(&props, "mergeKeys"),
+            cypher,
+            batch_size: props
+                .get("batchSize")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(1000) as usize,
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.turso" {
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let url = string_prop(&props, "url")
+            .or_else(|| string_prop(&props, "endpoint"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: url required", component_id)))?;
+        let table = string_prop(&props, "tableName")
+            .or_else(|| string_prop(&props, "table"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: tableName required", component_id)))?;
+        turso_sink = Some(TursoSinkSpec {
+            from_view: from_view.to_string(),
+            url,
+            auth_token: string_prop(&props, "authToken")
+                .or_else(|| string_prop(&props, "token"))
+                .filter(|s| !s.is_empty()),
+            table,
+            mode: string_prop(&props, "mode")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "append".to_string()),
+            batch_size: props
+                .get("batchSize")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(500) as usize,
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.db2" {
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let table = string_prop(&props, "tableName")
+            .or_else(|| string_prop(&props, "table"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: tableName required", component_id)))?;
+        db2_sink = Some(Db2SinkSpec {
+            from_view: from_view.to_string(),
+            conn_str: db2_conn_string(&props)?,
+            schema: string_prop(&props, "schema").filter(|s| !s.is_empty()),
+            table,
+            mode: string_prop(&props, "mode")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "append".to_string()),
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id.starts_with("snk.") {
         let from_view = inputs
             .main()
@@ -4372,6 +4532,93 @@ fn build_stage(
             encrypt: props.get("encrypt").and_then(|v| v.as_bool()).unwrap_or(true),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.neo4j" {
+        // Neo4j read over the HTTP Query API. Bolt would need a driver crate
+        // and a second wire protocol; the Query API returns the whole result
+        // set as JSON, which is what materializing a relation needs.
+        let endpoint = string_prop(&props, "endpoint")
+            .or_else(|| string_prop(&props, "url"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: endpoint required", component_id)))?;
+        let cypher = string_prop(&props, "cypher")
+            .or_else(|| string_prop(&props, "query"))
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: cypher required", component_id)))?;
+        // Parameters may arrive as a JSON object or as a JSON string typed
+        // into a textarea; accept both rather than silently ignoring the text.
+        let parameters = match props.get("parameters") {
+            Some(JsonValue::Object(o)) => Some(JsonValue::Object(o.clone())),
+            Some(JsonValue::String(s)) if !s.trim().is_empty() => Some(
+                serde_json::from_str(s).map_err(|e| {
+                    EngineError::Config(format!("{}: parameters is not valid JSON: {}", component_id, e))
+                })?,
+            ),
+            _ => None,
+        };
+        neo4j_source = Some(Neo4jSourceSpec {
+            node_id: node.id.clone(),
+            endpoint,
+            database: string_prop(&props, "database")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "neo4j".to_string()),
+            user: string_prop(&props, "user").filter(|s| !s.is_empty()),
+            password: string_prop(&props, "password").filter(|s| !s.is_empty()),
+            cypher,
+            parameters,
+        });
+        (String::new(), StageKind::View, None)
+    } else if component_id == "src.turso" {
+        let url = string_prop(&props, "url")
+            .or_else(|| string_prop(&props, "endpoint"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: url required", component_id)))?;
+        let query = string_prop(&props, "query")
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| {
+                let table = string_prop(&props, "tableName")
+                    .or_else(|| string_prop(&props, "table"))
+                    .filter(|s| !s.is_empty())?;
+                Some(format!("SELECT * FROM \"{}\"", table.replace('"', "\"\"")))
+            })
+            .ok_or_else(|| {
+                EngineError::Config(format!("{}: query or tableName required", component_id))
+            })?;
+        turso_source = Some(TursoSourceSpec {
+            node_id: node.id.clone(),
+            url,
+            auth_token: string_prop(&props, "authToken")
+                .or_else(|| string_prop(&props, "token"))
+                .filter(|s| !s.is_empty()),
+            query,
+        });
+        (String::new(), StageKind::View, None)
+    } else if component_id == "src.db2" {
+        let query = string_prop(&props, "query")
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| {
+                let table = string_prop(&props, "tableName")
+                    .or_else(|| string_prop(&props, "table"))
+                    .filter(|s| !s.is_empty())?;
+                let qualified = match string_prop(&props, "schema").filter(|s| !s.is_empty()) {
+                    Some(sch) => format!("{}.{}", sch, table),
+                    None => table,
+                };
+                Some(format!("SELECT * FROM {}", qualified))
+            })
+            .ok_or_else(|| {
+                EngineError::Config(format!("{}: query or tableName required", component_id))
+            })?;
+        db2_source = Some(Db2SourceSpec {
+            node_id: node.id.clone(),
+            conn_str: db2_conn_string(&props)?,
+            query,
+            batch_rows: props
+                .get("batchSize")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(5000) as usize,
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.clickhouse" {
         let endpoint = string_prop(&props, "endpoint")
             .filter(|s| !s.is_empty())
@@ -5610,6 +5857,12 @@ fn build_stage(
         .or_else(|| adbc_sink.map(RuntimeSpec::AdbcSink))
         .or_else(|| teradata_source.map(RuntimeSpec::TeradataSource))
         .or_else(|| teradata_sink.map(RuntimeSpec::TeradataSink))
+        .or_else(|| neo4j_source.map(RuntimeSpec::Neo4jSource))
+        .or_else(|| neo4j_sink.map(RuntimeSpec::Neo4jSink))
+        .or_else(|| turso_source.map(RuntimeSpec::TursoSource))
+        .or_else(|| turso_sink.map(RuntimeSpec::TursoSink))
+        .or_else(|| db2_source.map(RuntimeSpec::Db2Source))
+        .or_else(|| db2_sink.map(RuntimeSpec::Db2Sink))
         .or_else(|| attach_parquet_source.map(RuntimeSpec::AttachParquetSource))
         .or_else(|| materialize_duckdb.map(RuntimeSpec::MaterializeDuckDb))
         .or_else(|| redis_sink.map(RuntimeSpec::RedisSink))

@@ -4427,32 +4427,40 @@ impl DuckdbEngine {
     /// casts (read all VARCHAR, then TRY_CAST each column to its DuckDB type) so
     /// numbers / decimals / dates / timestamps keep their types - the same
     /// typed-finalize the Snowflake source uses. (#122)
-    #[cfg(feature = "teradata")]
-    pub(crate) fn run_teradata_source(
+    /// Shared ODBC read: connect, describe the result columns, stream the rows
+    /// out as text and finalize with per-column typed casts. Teradata and DB2
+    /// differ only in the driver behind the connection string and the name in
+    /// the messages, so `family` is the only thing that varies.
+    #[cfg(feature = "odbc")]
+    pub(crate) fn run_odbc_source(
         &self,
         db: &Path,
-        spec: &plan::TeradataSourceSpec,
+        family: &str,
+        conn_str: &str,
+        query: &str,
+        batch_rows: usize,
+        node_id: &str,
     ) -> Result<String, EngineError> {
         use odbc_api::buffers::TextRowSet;
         use odbc_api::{ColumnDescription, ConnectionOptions, Cursor, Environment, ResultSetMetadata};
 
         let env = Environment::new()
-            .map_err(|e| EngineError::Query(format!("teradata: ODBC environment: {}", e)))?;
+            .map_err(|e| EngineError::Query(format!("{}: ODBC environment: {}", family, e)))?;
         let conn = env
-            .connect_with_connection_string(&spec.conn_str, ConnectionOptions::default())
-            .map_err(|e| EngineError::Query(format!("teradata: connect failed: {}", e)))?;
+            .connect_with_connection_string(conn_str, ConnectionOptions::default())
+            .map_err(|e| EngineError::Query(format!("{}: connect failed: {}", family, e)))?;
         let mut cursor = conn
-            .execute(&spec.query, (), None)
-            .map_err(|e| EngineError::Query(format!("teradata: query failed: {}", e)))?
+            .execute(query, (), None)
+            .map_err(|e| EngineError::Query(format!("{}: query failed: {}", family, e)))?
             .ok_or_else(|| {
-                EngineError::Query("teradata: the query returned no result set".into())
+                EngineError::Query(format!("{}: the query returned no result set", family))
             })?;
 
         // Column metadata: build the index-aligned name list, the read_json
         // columns map (everything VARCHAR), and the typed projection.
         let ncols = cursor
             .num_result_cols()
-            .map_err(|e| EngineError::Query(format!("teradata: column count: {}", e)))?
+            .map_err(|e| EngineError::Query(format!("{}: column count: {}", family, e)))?
             as u16;
         let mut names: Vec<String> = Vec::with_capacity(ncols as usize);
         let mut columns_spec_parts: Vec<String> = Vec::with_capacity(ncols as usize);
@@ -4462,7 +4470,7 @@ impl DuckdbEngine {
         for i in 1..=ncols {
             cursor
                 .describe_col(i, &mut cd)
-                .map_err(|e| EngineError::Query(format!("teradata: describe column {}: {}", i, e)))?;
+                .map_err(|e| EngineError::Query(format!("{}: describe column {}: {}", family, i, e)))?;
             let raw = cd.name_to_string().unwrap_or_else(|_| format!("col{}", i));
             let name = unique_column_name(&raw, &mut used_names);
             let ident = plan::quote_ident(&name);
@@ -4483,17 +4491,17 @@ impl DuckdbEngine {
         // Fetch in batches as text, writing each row to the NDJSON file. ODBC
         // text rendering keeps the source's textual form; the typed finalize
         // casts each column afterwards.
-        let mut writer = JsonLinesWriter::open(&spec.node_id)?;
-        let batch = spec.batch_rows.max(1);
+        let mut writer = JsonLinesWriter::open(node_id)?;
+        let batch = batch_rows.max(1);
         let buffers = TextRowSet::for_cursor(batch, &mut cursor, Some(65536))
-            .map_err(|e| EngineError::Query(format!("teradata: alloc buffers: {}", e)))?;
+            .map_err(|e| EngineError::Query(format!("{}: alloc buffers: {}", family, e)))?;
         let mut rows_cursor = cursor
             .bind_buffer(buffers)
-            .map_err(|e| EngineError::Query(format!("teradata: bind buffers: {}", e)))?;
+            .map_err(|e| EngineError::Query(format!("{}: bind buffers: {}", family, e)))?;
         let mut count = 0usize;
         while let Some(view) = rows_cursor
             .fetch()
-            .map_err(|e| EngineError::Query(format!("teradata: fetch: {}", e)))?
+            .map_err(|e| EngineError::Query(format!("{}: fetch: {}", family, e)))?
         {
             self.check_cancelled()?;
             for r in 0..view.num_rows() {
@@ -4513,21 +4521,68 @@ impl DuckdbEngine {
         }
         drop(rows_cursor);
         drop(conn);
-        writer.finalize_typed(self.binary(), db, &spec.node_id, &columns_spec, &select_list)?;
+        writer.finalize_typed(self.binary(), db, node_id, &columns_spec, &select_list)?;
         Ok(format!(
-            "teradata: materialized {} rows into {}",
-            count, spec.node_id
+            "{}: materialized {} rows into {}",
+            family, count, node_id
         ))
     }
 
-    #[cfg(not(feature = "teradata"))]
+    /// Teradata source over the Teradata ODBC driver (there is no DuckDB
+    /// Teradata extension or native Rust driver).
+    #[cfg(feature = "odbc")]
+    pub(crate) fn run_teradata_source(
+        &self,
+        db: &Path,
+        spec: &plan::TeradataSourceSpec,
+    ) -> Result<String, EngineError> {
+        self.run_odbc_source(
+            db,
+            "teradata",
+            &spec.conn_str,
+            &spec.query,
+            spec.batch_rows,
+            &spec.node_id,
+        )
+    }
+
+    /// IBM DB2 source over the IBM Data Server ODBC driver. Same transport as
+    /// Teradata; DB2 ships no DuckDB extension and no native Rust driver.
+    #[cfg(feature = "odbc")]
+    pub(crate) fn run_db2_source(
+        &self,
+        db: &Path,
+        spec: &plan::Db2SourceSpec,
+    ) -> Result<String, EngineError> {
+        self.run_odbc_source(
+            db,
+            "db2",
+            &spec.conn_str,
+            &spec.query,
+            spec.batch_rows,
+            &spec.node_id,
+        )
+    }
+
+    #[cfg(not(feature = "odbc"))]
+    pub(crate) fn run_db2_source(
+        &self,
+        _db: &Path,
+        _spec: &plan::Db2SourceSpec,
+    ) -> Result<String, EngineError> {
+        Err(EngineError::Config(
+            "db2: this build was compiled without ODBC support (enable the `db2` feature)".into(),
+        ))
+    }
+
+    #[cfg(not(feature = "odbc"))]
     pub(crate) fn run_teradata_source(
         &self,
         _db: &Path,
         _spec: &plan::TeradataSourceSpec,
     ) -> Result<String, EngineError> {
         Err(EngineError::Config(
-            "teradata: this build was compiled without the `teradata` (ODBC) feature".into(),
+            "teradata: this build was compiled without ODBC support (enable the `teradata` feature)".into(),
         ))
     }
 
@@ -4536,7 +4591,7 @@ impl DuckdbEngine {
     /// overwrite clears it first. Teradata's VALUES clause is single-row, so
     /// rows are inserted one statement at a time (large loads should use
     /// Teradata's bulk utilities). No upsert. (#122)
-    #[cfg(feature = "teradata")]
+    #[cfg(feature = "odbc")]
     pub(crate) fn run_teradata_sink(
         &self,
         db: &Path,
@@ -4624,14 +4679,435 @@ impl DuckdbEngine {
         ))
     }
 
-    #[cfg(not(feature = "teradata"))]
+    #[cfg(not(feature = "odbc"))]
     pub(crate) fn run_teradata_sink(
         &self,
         _db: &Path,
         _spec: &plan::TeradataSinkSpec,
     ) -> Result<String, EngineError> {
         Err(EngineError::Config(
-            "teradata: this build was compiled without the `teradata` (ODBC) feature".into(),
+            "teradata: this build was compiled without ODBC support (enable the `teradata` feature)".into(),
+        ))
+    }
+
+    /// IBM DB2 sink over ODBC: auto-create the target table from the upstream
+    /// column types, then INSERT row by row. DB2 has no CREATE TABLE IF NOT
+    /// EXISTS, so the create is attempted and "already exists" tolerated.
+    #[cfg(feature = "odbc")]
+    pub(crate) fn run_db2_sink(
+        &self,
+        db: &Path,
+        spec: &plan::Db2SinkSpec,
+    ) -> Result<String, EngineError> {
+        use odbc_api::{ConnectionOptions, Environment};
+
+        let select = format!("SELECT * FROM {}", plan::quote_ident(&spec.from_view));
+        let rows = self.run_rows(Some(db), &select)?;
+        if rows.is_empty() {
+            return Ok(format!("db2: 0 rows to insert into {}", spec.table));
+        }
+        let cols: Vec<String> = match rows[0].as_object() {
+            Some(o) => o.keys().cloned().collect(),
+            None => {
+                return Err(EngineError::Query(
+                    "db2: upstream rows aren't JSON objects".into(),
+                ));
+            }
+        };
+        let col_types: std::collections::HashMap<String, String> =
+            describe_columns(self, db, &spec.from_view).into_iter().collect();
+        // DB2 delimited identifiers use double quotes (doubled to escape).
+        let q = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+        let qualified = match &spec.schema {
+            Some(d) => format!("{}.{}", q(d), q(&spec.table)),
+            None => q(&spec.table),
+        };
+        let col_defs = cols
+            .iter()
+            .map(|c| {
+                let ty = duckdb_type_to_db2(
+                    col_types.get(c).map(|s| s.as_str()).unwrap_or("VARCHAR"),
+                );
+                format!("{} {}", q(c), ty)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cols_list = cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
+        let create_sql = format!("CREATE TABLE {} ({})", qualified, col_defs);
+
+        let env = Environment::new()
+            .map_err(|e| EngineError::Query(format!("db2: ODBC environment: {}", e)))?;
+        let conn = env
+            .connect_with_connection_string(&spec.conn_str, ConnectionOptions::default())
+            .map_err(|e| EngineError::Query(format!("db2: connect failed: {}", e)))?;
+        // DB2 reports an existing table as SQLCODE -601 / SQLSTATE 42710.
+        if let Err(e) = conn.execute(&create_sql, (), None) {
+            let msg = e.to_string();
+            let lower = msg.to_lowercase();
+            if !(msg.contains("42710") || msg.contains("-601") || lower.contains("already exists"))
+            {
+                return Err(EngineError::Query(format!("db2: create table: {}", msg)));
+            }
+        }
+        if spec.mode == "overwrite" {
+            conn.execute(&format!("DELETE FROM {}", qualified), (), None)
+                .map_err(|e| EngineError::Query(format!("db2: clear table: {}", e)))?;
+        }
+        let mut total = 0usize;
+        for row in &rows {
+            self.check_cancelled()?;
+            let obj = row.as_object();
+            let vals: Vec<String> = cols
+                .iter()
+                .map(|c| {
+                    let v = obj.and_then(|o| o.get(c)).unwrap_or(&JsonValue::Null);
+                    sql_literal(v, col_types.get(c).map(|s| s.as_str()), Dialect::Db2)
+                })
+                .collect();
+            let stmt = format!(
+                "INSERT INTO {} ({}) VALUES ({})",
+                qualified,
+                cols_list,
+                vals.join(", ")
+            );
+            conn.execute(&stmt, (), None)
+                .map_err(|e| EngineError::Query(format!("db2: insert: {}", e)))?;
+            total += 1;
+        }
+        Ok(format!(
+            "db2: {} {} rows into {}",
+            if spec.mode == "overwrite" { "overwrote with" } else { "inserted" },
+            total,
+            spec.table
+        ))
+    }
+
+    #[cfg(not(feature = "odbc"))]
+    pub(crate) fn run_db2_sink(
+        &self,
+        _db: &Path,
+        _spec: &plan::Db2SinkSpec,
+    ) -> Result<String, EngineError> {
+        Err(EngineError::Config(
+            "db2: this build was compiled without ODBC support (enable the `db2` feature)".into(),
+        ))
+    }
+
+    /// Neo4j source over the HTTP Query API (`POST /db/{db}/query/v2`), which
+    /// every Neo4j 5.x server and Aura exposes on the same port as Browser.
+    /// Bolt would need a driver crate and a second wire protocol for no gain
+    /// here: the API returns the whole result set as JSON, which is exactly
+    /// what materializing a relation needs.
+    ///
+    /// The response is columnar - `{"data":{"fields":[..],"values":[[..]]}}` -
+    /// so it is zipped back into one JSON object per row. Node and
+    /// relationship values arrive as nested objects and are kept as-is, so
+    /// DuckDB reads them as STRUCT rather than losing the properties.
+    pub(crate) fn run_neo4j_source(
+        &self,
+        db: &Path,
+        spec: &plan::Neo4jSourceSpec,
+    ) -> Result<String, EngineError> {
+        let url = format!(
+            "{}/db/{}/query/v2",
+            spec.endpoint.trim_end_matches('/'),
+            spec.database
+        );
+        let body = serde_json::json!({
+            "statement": spec.cypher,
+            "parameters": spec.parameters.clone().unwrap_or_else(|| serde_json::json!({})),
+        });
+        let resp = match neo4j_request(spec.user.as_deref(), spec.password.as_deref(), &url)
+            .send_json(body)
+        {
+            Ok(r) => r,
+            Err(ureq::Error::Status(code, r)) => {
+                return Err(EngineError::Query(format!(
+                    "neo4j: HTTP {} on query: {}",
+                    code,
+                    neo4j_error_detail(r.into_string().unwrap_or_default())
+                )));
+            }
+            Err(e) => return Err(EngineError::Query(format!("neo4j: HTTP transport: {}", e))),
+        };
+        let response: JsonValue = resp
+            .into_json()
+            .map_err(|e| EngineError::Query(format!("neo4j: response not JSON: {}", e)))?;
+        let data = response.get("data");
+        let fields: Vec<String> = data
+            .and_then(|d| d.get("fields"))
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .enumerate()
+                    .map(|(i, f)| match f.as_str() {
+                        Some(s) if !s.is_empty() => s.to_string(),
+                        _ => format!("col{}", i + 1),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let values = data
+            .and_then(|d| d.get("values"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let rows: Vec<JsonValue> = values
+            .iter()
+            .map(|row| {
+                let cells = row.as_array().cloned().unwrap_or_default();
+                let mut obj = serde_json::Map::with_capacity(fields.len());
+                for (i, name) in fields.iter().enumerate() {
+                    obj.insert(name.clone(), cells.get(i).cloned().unwrap_or(JsonValue::Null));
+                }
+                JsonValue::Object(obj)
+            })
+            .collect();
+        let count = rows.len();
+        materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &rows)?;
+        Ok(format!(
+            "neo4j: materialized {} rows into {}",
+            count, spec.node_id
+        ))
+    }
+
+    /// Neo4j sink: write upstream rows as nodes over the same Query API.
+    /// Rows go up in batches as the `$rows` parameter and are expanded server
+    /// side with UNWIND, so one round trip writes `batch_size` nodes rather
+    /// than one statement per row.
+    ///
+    /// `merge_keys` picks MERGE over CREATE, so re-running a pipeline updates
+    /// the matched nodes instead of duplicating them.
+    pub(crate) fn run_neo4j_sink(
+        &self,
+        db: &Path,
+        spec: &plan::Neo4jSinkSpec,
+    ) -> Result<String, EngineError> {
+        let select = format!("SELECT * FROM {}", plan::quote_ident(&spec.from_view));
+        let rows = self.run_rows(Some(db), &select)?;
+        if rows.is_empty() {
+            return Ok(format!("neo4j: 0 rows to write to :{}", spec.label));
+        }
+        let url = format!(
+            "{}/db/{}/query/v2",
+            spec.endpoint.trim_end_matches('/'),
+            spec.database
+        );
+        let cypher = match &spec.cypher {
+            Some(c) => c.clone(),
+            None if !spec.merge_keys.is_empty() => {
+                let keys = spec
+                    .merge_keys
+                    .iter()
+                    .map(|k| format!("{k}: row.{k}", k = cypher_ident(k)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "UNWIND $rows AS row MERGE (n:{} {{{}}}) SET n += row",
+                    cypher_ident(&spec.label),
+                    keys
+                )
+            }
+            None => format!(
+                "UNWIND $rows AS row CREATE (n:{}) SET n = row",
+                cypher_ident(&spec.label)
+            ),
+        };
+
+        let batch = spec.batch_size.max(1);
+        let mut written = 0usize;
+        for chunk in rows.chunks(batch) {
+            self.check_cancelled()?;
+            let body = serde_json::json!({
+                "statement": cypher,
+                "parameters": { "rows": chunk },
+            });
+            match neo4j_request(spec.user.as_deref(), spec.password.as_deref(), &url)
+                .send_json(body)
+            {
+                Ok(_) => {}
+                Err(ureq::Error::Status(code, r)) => {
+                    return Err(EngineError::Query(format!(
+                        "neo4j: HTTP {} writing the batch starting at row {}: {}",
+                        code,
+                        written,
+                        neo4j_error_detail(r.into_string().unwrap_or_default())
+                    )));
+                }
+                Err(e) => {
+                    return Err(EngineError::Query(format!(
+                        "neo4j: HTTP transport writing the batch starting at row {}: {}",
+                        written, e
+                    )))
+                }
+            }
+            written += chunk.len();
+        }
+        Ok(if spec.label.is_empty() {
+            format!("neo4j: wrote {} rows via the supplied cypher", written)
+        } else {
+            format!("neo4j: wrote {} rows as :{} nodes", written, spec.label)
+        })
+    }
+
+    /// Turso / libSQL source over the HTTP pipeline API (`POST /v2/pipeline`).
+    pub(crate) fn run_turso_source(
+        &self,
+        db: &Path,
+        spec: &plan::TursoSourceSpec,
+    ) -> Result<String, EngineError> {
+        let url = format!("{}/v2/pipeline", turso_base_url(&spec.url));
+        let body = serde_json::json!({
+            "requests": [
+                { "type": "execute", "stmt": { "sql": spec.query } },
+                { "type": "close" },
+            ]
+        });
+        let response = turso_send(spec.auth_token.as_deref(), &url, body)?;
+        let result = response
+            .get("results")
+            .and_then(|v| v.as_array())
+            .and_then(|results| {
+                results.iter().find_map(|r| {
+                    let resp = r.get("response")?;
+                    if resp.get("type").and_then(|v| v.as_str()) == Some("execute") {
+                        resp.get("result")
+                    } else {
+                        None
+                    }
+                })
+            })
+            .ok_or_else(|| {
+                EngineError::Query("turso: the pipeline returned no execute result".into())
+            })?;
+        let names: Vec<String> = result
+            .get("cols")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        c.get("name")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| format!("col{}", i + 1))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let raw_rows = result
+            .get("rows")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let rows: Vec<JsonValue> = raw_rows
+            .iter()
+            .map(|row| {
+                let cells = row.as_array().cloned().unwrap_or_default();
+                let mut obj = serde_json::Map::with_capacity(names.len());
+                for (i, name) in names.iter().enumerate() {
+                    let v = cells.get(i).map(turso_cell_to_json).unwrap_or(JsonValue::Null);
+                    obj.insert(name.clone(), v);
+                }
+                JsonValue::Object(obj)
+            })
+            .collect();
+        let count = rows.len();
+        materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &rows)?;
+        Ok(format!(
+            "turso: materialized {} rows into {}",
+            count, spec.node_id
+        ))
+    }
+
+    /// Turso / libSQL sink. Turso is SQLite, so CREATE TABLE IF NOT EXISTS is
+    /// available and the type set is the SQLite storage classes. Values go up
+    /// as bound arguments rather than inlined literals, and many statements
+    /// ride one pipeline round trip.
+    pub(crate) fn run_turso_sink(
+        &self,
+        db: &Path,
+        spec: &plan::TursoSinkSpec,
+    ) -> Result<String, EngineError> {
+        let select = format!("SELECT * FROM {}", plan::quote_ident(&spec.from_view));
+        let rows = self.run_rows(Some(db), &select)?;
+        if rows.is_empty() {
+            return Ok(format!("turso: 0 rows to insert into {}", spec.table));
+        }
+        let cols: Vec<String> = match rows[0].as_object() {
+            Some(o) => o.keys().cloned().collect(),
+            None => {
+                return Err(EngineError::Query(
+                    "turso: upstream rows aren't JSON objects".into(),
+                ))
+            }
+        };
+        let col_types: std::collections::HashMap<String, String> =
+            describe_columns(self, db, &spec.from_view).into_iter().collect();
+        let q = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+        let table = q(&spec.table);
+        let col_defs = cols
+            .iter()
+            .map(|c| {
+                let ty =
+                    duckdb_type_to_sqlite(col_types.get(c).map(|s| s.as_str()).unwrap_or("VARCHAR"));
+                format!("{} {}", q(c), ty)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cols_list = cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
+        let placeholders = vec!["?"; cols.len()].join(", ");
+        let insert_sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            table, cols_list, placeholders
+        );
+        let url = format!("{}/v2/pipeline", turso_base_url(&spec.url));
+
+        let mut setup = vec![serde_json::json!({
+            "type": "execute",
+            "stmt": { "sql": format!("CREATE TABLE IF NOT EXISTS {} ({})", table, col_defs) }
+        })];
+        if spec.mode == "overwrite" {
+            setup.push(serde_json::json!({
+                "type": "execute",
+                "stmt": { "sql": format!("DELETE FROM {}", table) }
+            }));
+        }
+        setup.push(serde_json::json!({ "type": "close" }));
+        turso_send(spec.auth_token.as_deref(), &url, serde_json::json!({ "requests": setup }))?;
+
+        let batch = spec.batch_size.max(1);
+        let mut total = 0usize;
+        for chunk in rows.chunks(batch) {
+            self.check_cancelled()?;
+            let mut requests: Vec<JsonValue> = Vec::with_capacity(chunk.len() + 1);
+            for row in chunk {
+                let obj = row.as_object();
+                let args: Vec<JsonValue> = cols
+                    .iter()
+                    .map(|c| {
+                        json_to_turso_arg(obj.and_then(|o| o.get(c)).unwrap_or(&JsonValue::Null))
+                    })
+                    .collect();
+                requests.push(serde_json::json!({
+                    "type": "execute",
+                    "stmt": { "sql": insert_sql, "args": args }
+                }));
+            }
+            requests.push(serde_json::json!({ "type": "close" }));
+            turso_send(
+                spec.auth_token.as_deref(),
+                &url,
+                serde_json::json!({ "requests": requests }),
+            )?;
+            total += chunk.len();
+        }
+        Ok(format!(
+            "turso: {} {} rows into {}",
+            if spec.mode == "overwrite" { "overwrote with" } else { "inserted" },
+            total,
+            spec.table
         ))
     }
 
@@ -12899,7 +13375,176 @@ fn tail_chars(s: &str, max: usize) -> &str {
 /// TRY_CAST it to. `None` means "leave it as VARCHAR" (no cast) - for char /
 /// binary / unknown types whose ODBC text rendering is already what we want.
 /// Decimals keep their precision/scale (clamped to DuckDB's max of 38).
-#[cfg(feature = "teradata")]
+
+/// Backtick-quote a Cypher identifier. Labels and property keys cannot be
+/// bound as parameters, so they are interpolated - which makes escaping the
+/// only thing standing between a label like `` a`b `` and a broken query.
+fn cypher_ident(s: &str) -> String {
+    format!("`{}`", s.replace('`', "``"))
+}
+
+/// A Query API request with optional Basic auth. Neo4j accepts the same
+/// user/password pair for a self-hosted server and for Aura.
+fn neo4j_request(user: Option<&str>, password: Option<&str>, url: &str) -> ureq::Request {
+    let mut req = crate::tls::http_agent()
+        .post(url)
+        .set("Content-Type", "application/json")
+        .set("Accept", "application/json");
+    if let Some(u) = user {
+        use base64::engine::general_purpose::STANDARD as B64;
+        use base64::Engine as _;
+        let creds = B64.encode(format!("{}:{}", u, password.unwrap_or("")));
+        req = req.set("Authorization", &format!("Basic {}", creds));
+    }
+    req
+}
+
+/// Pull the human-readable message out of a Query API error body. Neo4j
+/// reports Cypher problems in an `errors` array; without this the user would
+/// see only the status code, which never says which clause was wrong.
+fn neo4j_error_detail(text: String) -> String {
+    serde_json::from_str::<JsonValue>(&text)
+        .ok()
+        .and_then(|v| {
+            let e = v.get("errors")?.as_array()?.first()?;
+            e.get("message")
+                .or_else(|| e.get("error"))?
+                .as_str()
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| text.chars().take(300).collect())
+}
+
+/// Normalize a Turso database URL for HTTP. Turso hands out `libsql://` URLs,
+/// which are the same host over HTTPS - rejecting them would mean every user
+/// had to rewrite the URL the dashboard gave them.
+fn turso_base_url(url: &str) -> String {
+    let trimmed = url.trim().trim_end_matches('/');
+    match trimmed.strip_prefix("libsql://") {
+        Some(rest) => format!("https://{}", rest),
+        None => trimmed.to_string(),
+    }
+}
+
+/// POST a pipeline request and check it for statement-level failures.
+///
+/// The pipeline endpoint answers HTTP 200 even when a statement failed - the
+/// failure is an `error` entry inside `results` - so without this check a
+/// broken query would look like an empty table and a failed INSERT would look
+/// like a successful write.
+fn turso_send(
+    auth_token: Option<&str>,
+    url: &str,
+    body: JsonValue,
+) -> Result<JsonValue, EngineError> {
+    let mut req = crate::tls::http_agent()
+        .post(url)
+        .set("Content-Type", "application/json");
+    if let Some(t) = auth_token {
+        req = req.set("Authorization", &format!("Bearer {}", t));
+    }
+    let resp = match req.send_json(body) {
+        Ok(r) => r,
+        Err(ureq::Error::Status(code, r)) => {
+            let text = r.into_string().unwrap_or_default();
+            return Err(EngineError::Query(format!(
+                "turso: HTTP {}: {}",
+                code,
+                text.chars().take(300).collect::<String>()
+            )));
+        }
+        Err(e) => return Err(EngineError::Query(format!("turso: HTTP transport: {}", e))),
+    };
+    let v: JsonValue = resp
+        .into_json()
+        .map_err(|e| EngineError::Query(format!("turso: response not JSON: {}", e)))?;
+    if let Some(results) = v.get("results").and_then(|r| r.as_array()) {
+        for r in results {
+            if r.get("type").and_then(|t| t.as_str()) == Some("error") {
+                let msg = r
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown error");
+                return Err(EngineError::Query(format!("turso: {}", msg)));
+            }
+        }
+    }
+    Ok(v)
+}
+
+/// Decode one libSQL cell into plain JSON.
+///
+/// libSQL sends integers as STRINGS (`{"type":"integer","value":"42"}`) so
+/// that 64-bit values survive JSON's double-precision numbers. Passing that
+/// through untouched would make every integer column arrive as VARCHAR, so
+/// it is parsed back to a number here - and left as text if it genuinely
+/// does not fit an i64, which loses nothing.
+fn turso_cell_to_json(cell: &JsonValue) -> JsonValue {
+    let ty = cell.get("type").and_then(|v| v.as_str()).unwrap_or("null");
+    match ty {
+        "null" => JsonValue::Null,
+        "integer" => match cell.get("value") {
+            Some(JsonValue::String(s)) => match s.parse::<i64>() {
+                Ok(n) => JsonValue::Number(n.into()),
+                Err(_) => JsonValue::String(s.clone()),
+            },
+            Some(other) => other.clone(),
+            None => JsonValue::Null,
+        },
+        "float" => cell.get("value").cloned().unwrap_or(JsonValue::Null),
+        "text" => cell.get("value").cloned().unwrap_or(JsonValue::Null),
+        // Blobs come back base64-encoded under `base64`, not `value`.
+        "blob" => cell
+            .get("base64")
+            .or_else(|| cell.get("value"))
+            .cloned()
+            .unwrap_or(JsonValue::Null),
+        _ => cell.get("value").cloned().unwrap_or(JsonValue::Null),
+    }
+}
+
+/// Encode a JSON cell as a libSQL bound argument. The mirror of
+/// `turso_cell_to_json`: integers go up as strings, and SQLite has no boolean
+/// or nested types, so those become 1/0 and JSON text respectively.
+fn json_to_turso_arg(v: &JsonValue) -> JsonValue {
+    match v {
+        JsonValue::Null => serde_json::json!({ "type": "null" }),
+        JsonValue::Bool(b) => {
+            serde_json::json!({ "type": "integer", "value": if *b { "1" } else { "0" } })
+        }
+        JsonValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                serde_json::json!({ "type": "integer", "value": i.to_string() })
+            } else {
+                serde_json::json!({ "type": "float", "value": n.as_f64().unwrap_or(0.0) })
+            }
+        }
+        JsonValue::String(s) => serde_json::json!({ "type": "text", "value": s }),
+        JsonValue::Array(_) | JsonValue::Object(_) => serde_json::json!({
+            "type": "text",
+            "value": serde_json::to_string(v).unwrap_or_else(|_| "null".into())
+        }),
+    }
+}
+
+/// Map a DuckDB column type to a SQLite storage class, for auto-creating a
+/// Turso table. SQLite has no boolean, date or decimal type: booleans land in
+/// INTEGER as 1/0 and everything textual or temporal stays TEXT, which keeps
+/// the ISO form readable and sortable.
+fn duckdb_type_to_sqlite(t: &str) -> String {
+    let up = t.trim().to_ascii_uppercase();
+    match up.as_str() {
+        "BOOLEAN" | "BOOL" | "TINYINT" | "UTINYINT" | "SMALLINT" | "INT2" | "USMALLINT"
+        | "INTEGER" | "INT" | "INT4" | "UINTEGER" | "BIGINT" | "INT8" | "UBIGINT" => "INTEGER",
+        "REAL" | "FLOAT" | "FLOAT4" | "DOUBLE" | "FLOAT8" => "REAL",
+        "BLOB" | "BYTEA" | "BINARY" | "VARBINARY" => "BLOB",
+        _ => "TEXT",
+    }
+    .to_string()
+}
+
+#[cfg(feature = "odbc")]
 fn odbc_type_to_duckdb(dt: &odbc_api::DataType) -> Option<String> {
     use odbc_api::DataType as D;
     match dt {

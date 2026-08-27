@@ -85,14 +85,14 @@ custom-protocol = ["tauri/custom-protocol"]
 # shipped binaries.
 update-selftest = []
 
-# Teradata (ODBC via odbc-api) is enabled everywhere except macOS, whose
+# Teradata and DB2 (ODBC via odbc-api) are enabled everywhere except macOS, whose
 # cross-arch ODBC driver manager is awkward to link in the release build. On
 # macOS the engine falls back to a clear "compiled without teradata" error.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-duckle-duckdb-engine = { workspace = true, features = ["teradata"] }
+duckle-duckdb-engine = { workspace = true, features = ["teradata", "db2"] }
 
 # On Linux, additionally link unixODBC statically so the shipped binary carries
 # the ODBC driver manager and launches without a system libodbc.so.2 (issue
-# #131). Windows keeps the always-present odbc32; macOS has no teradata at all.
+# #131). Windows keeps the always-present odbc32; macOS has no ODBC at all.
 [target.'cfg(target_os = "linux")'.dependencies]
 duckle-duckdb-engine = { workspace = true, features = ["teradata-static"] }

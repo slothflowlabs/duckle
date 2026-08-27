@@ -52,7 +52,7 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 # dynamic ODBC driver manager at runtime anyway. The engine returns a clear
 # "compiled without teradata" error on those targets.
 [target.'cfg(all(not(target_os = "macos"), not(target_env = "musl")))'.dependencies]
-duckle-duckdb-engine = { workspace = true, features = ["teradata"] }
+duckle-duckdb-engine = { workspace = true, features = ["teradata", "db2"] }
 
 # On gnu Linux, additionally link unixODBC statically so the per-OS runner
 # bundled in the desktop app needs no system libodbc.so.2 at runtime (issue

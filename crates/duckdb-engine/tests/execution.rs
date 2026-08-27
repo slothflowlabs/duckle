@@ -15511,3 +15511,182 @@ fn a_declared_date_format_survives_a_run_and_a_reload() {
         "compiling a saved pipeline again produced different SQL - the declared          format is not stable across save/reload"
     );
 }
+
+/// src.neo4j: the Query API answers columnar - fields once, then a values
+/// array per row - so the source has to zip them back into named columns.
+#[test]
+fn src_neo4j_zips_columnar_results_into_named_rows() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let body = r#"{"data":{"fields":["name","age"],"values":[["Alice",30],["Bob",25]]}}"#;
+    let (port, rx, handle) = serve_n_json(1, "200 OK", body);
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node(
+                "g",
+                "src.neo4j",
+                json!({
+                    "endpoint": format!("http://127.0.0.1:{}", port),
+                    "database": "neo4j",
+                    "user": "neo4j",
+                    "password": "secret",
+                    "cypher": "MATCH (p:Person) RETURN p.name AS name, p.age AS age",
+                })
+            ),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "g", "k")]),
+    ));
+    handle.join().ok();
+    assert_eq!(r.status, "ok", "run failed: {:?}", r.error);
+
+    let req = rx.try_iter().collect::<Vec<_>>().join("\n");
+    assert!(
+        req.contains("/db/neo4j/query/v2"),
+        "should POST the Query API v2 path: {}",
+        req
+    );
+    // "neo4j:secret" base64-encoded - the API takes Basic auth, and getting
+    // this wrong is a 401 that looks like an empty result.
+    assert!(
+        req.contains("Authorization: Basic bmVvNGo6c2VjcmV0"),
+        "should send Basic auth: {}",
+        req
+    );
+    assert!(req.contains("MATCH (p:Person)"), "should send the cypher: {}", req);
+
+    let csv = std::fs::read_to_string(&out).unwrap().replace("\r\n", "\n");
+    assert_eq!(
+        csv.trim(),
+        "name,age\nAlice,30\nBob,25",
+        "columnar fields/values should become named columns"
+    );
+}
+
+/// src.turso: libSQL sends every integer as a JSON STRING so 64-bit values
+/// survive JSON numbers. Passing that through untouched makes each integer
+/// column arrive as VARCHAR, which silently breaks arithmetic downstream.
+#[test]
+fn src_turso_decodes_integers_sent_as_strings_as_numbers() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let body = r#"{"baton":null,"results":[{"type":"ok","response":{"type":"execute","result":{"cols":[{"name":"id"},{"name":"label"}],"rows":[[{"type":"integer","value":"9007199254740993"},{"type":"text","value":"big"}],[{"type":"integer","value":"7"},{"type":"text","value":"small"}]]}}},{"type":"ok","response":{"type":"close"}}]}"#;
+    let (port, rx, handle) = serve_n_json(1, "200 OK", body);
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node(
+                "t",
+                "src.turso",
+                json!({
+                    "url": format!("http://127.0.0.1:{}", port),
+                    "authToken": "tok",
+                    "query": "SELECT id, label FROM things",
+                })
+            ),
+            // SUM only compiles over a numeric column: if the decode left the
+            // ids as text this stage is a binder error, not a wrong number.
+            node("s", "code.sql", json!({ "sql": "SELECT SUM(id) AS total FROM input" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "t", "s"), main_edge("e2", "s", "k")]),
+    ));
+    handle.join().ok();
+    assert_eq!(r.status, "ok", "run failed: {:?}", r.error);
+
+    let req = rx.try_iter().collect::<Vec<_>>().join("\n");
+    assert!(req.contains("/v2/pipeline"), "should POST the pipeline API: {}", req);
+    assert!(
+        req.contains("Authorization: Bearer tok"),
+        "should send the auth token: {}",
+        req
+    );
+
+    let csv = std::fs::read_to_string(&out).unwrap().replace("\r\n", "\n");
+    assert_eq!(
+        csv.trim(),
+        "total\n9007199254741000",
+        "integers sent as strings must decode to numbers - SUM does not \
+         compile over VARCHAR, so a passthrough decode fails this run outright"
+    );
+}
+
+/// A failed statement comes back inside an HTTP 200 body, so a connector that
+/// only checks the status code reports success on a broken query.
+#[test]
+fn src_turso_surfaces_a_statement_error_despite_http_200() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let body = r#"{"results":[{"type":"error","error":{"message":"no such table: ghosts","code":"SQLITE_UNKNOWN"}}]}"#;
+    let (port, _rx, handle) = serve_n_json(1, "200 OK", body);
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node(
+                "t",
+                "src.turso",
+                json!({
+                    "url": format!("http://127.0.0.1:{}", port),
+                    "query": "SELECT * FROM ghosts",
+                })
+            ),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "t", "k")]),
+    ));
+    handle.join().ok();
+    assert_eq!(r.status, "error", "a failed statement must not report ok");
+    let err = r.error.unwrap_or_default();
+    assert!(
+        err.contains("no such table: ghosts"),
+        "the server's message should reach the user: {}",
+        err
+    );
+}
+
+/// snk.neo4j: rows go up as one `$rows` parameter expanded with UNWIND, so a
+/// batch is one round trip rather than one statement per row.
+#[test]
+fn snk_neo4j_sends_one_unwind_batch_for_all_rows() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "name,age\nAlice,30\nBob,25\n");
+    let (port, rx, handle) = serve_n_json(1, "200 OK", r#"{"data":{"fields":[],"values":[]}}"#);
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "n",
+                "snk.neo4j",
+                json!({
+                    "endpoint": format!("http://127.0.0.1:{}", port),
+                    "label": "Person",
+                    "mergeKeys": ["name"],
+                    "batchSize": 100,
+                })
+            ),
+        ]),
+        json!([main_edge("e1", "s", "n")]),
+    ));
+    assert_eq!(r.status, "ok", "run failed: {:?}", r.error);
+    let first = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the sink should have sent a request");
+    handle.join().ok();
+
+    let mut reqs = vec![first];
+    reqs.extend(rx.try_iter());
+    assert_eq!(reqs.len(), 1, "both rows should ride one request");
+    let req = &reqs[0];
+    assert!(
+        req.contains("UNWIND $rows AS row MERGE (n:`Person` {`name`: row.`name`})"),
+        "mergeKeys should produce a MERGE keyed on those properties: {}",
+        req
+    );
+    assert!(req.contains("Alice") && req.contains("Bob"), "both rows: {}", req);
+}

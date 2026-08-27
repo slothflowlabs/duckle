@@ -1726,6 +1726,12 @@ impl DuckdbEngine {
                     }
                     Some(RuntimeSpec::VortexSink(spec)) => self.run_vortex_sink(&db_path, spec),
                     Some(RuntimeSpec::VortexSource(spec)) => self.run_vortex_source(&db_path, spec),
+                    Some(RuntimeSpec::Neo4jSource(spec)) => self.run_neo4j_source(&db_path, spec),
+                    Some(RuntimeSpec::Neo4jSink(spec)) => self.run_neo4j_sink(&db_path, spec),
+                    Some(RuntimeSpec::TursoSource(spec)) => self.run_turso_source(&db_path, spec),
+                    Some(RuntimeSpec::TursoSink(spec)) => self.run_turso_sink(&db_path, spec),
+                    Some(RuntimeSpec::Db2Source(spec)) => self.run_db2_source(&db_path, spec),
+                    Some(RuntimeSpec::Db2Sink(spec)) => self.run_db2_sink(&db_path, spec),
                     Some(RuntimeSpec::ClickhouseSink(spec)) => {
                         self.run_clickhouse_sink(&db_path, spec)
                     }
@@ -4473,7 +4479,7 @@ fn duckdb_type_to_snowflake(t: &str) -> String {
 /// Map a DuckDB column type to the closest Teradata type, for auto-creating a
 /// sink table that doesn't exist yet. Best-effort, mirroring the Oracle / SQL
 /// Server mappers; text falls back to VARCHAR(4000).
-#[cfg(feature = "teradata")]
+#[cfg(feature = "odbc")]
 fn duckdb_type_to_teradata(t: &str) -> String {
     let up = t.trim().to_ascii_uppercase();
     if up.starts_with("DECIMAL") || up.starts_with("NUMERIC") {
@@ -4493,6 +4499,41 @@ fn duckdb_type_to_teradata(t: &str) -> String {
             "TIMESTAMP(6)"
         }
         "TIMESTAMP WITH TIME ZONE" | "TIMESTAMPTZ" => "TIMESTAMP(6) WITH TIME ZONE",
+        "BLOB" | "BYTEA" | "BINARY" | "VARBINARY" => "BLOB",
+        _ => "VARCHAR(4000)",
+    }
+    .to_string()
+}
+
+/// Map a DuckDB column type to the closest IBM DB2 type, for auto-creating a
+/// target table. DB2 LUW 11.1+ has a real BOOLEAN but DB2 for z/OS does not,
+/// so booleans land in SMALLINT as 1/0 - portable across both, and lossless.
+#[cfg(feature = "odbc")]
+fn duckdb_type_to_db2(t: &str) -> String {
+    let up = t.trim().to_ascii_uppercase();
+    if up.starts_with("DECIMAL") || up.starts_with("NUMERIC") {
+        // DECIMAL(p,s) carries over; DB2 caps precision at 31.
+        return up.replacen("NUMERIC", "DECIMAL", 1);
+    }
+    match up.as_str() {
+        "BOOLEAN" | "BOOL" | "TINYINT" | "UTINYINT" => "SMALLINT",
+        "SMALLINT" | "INT2" | "USMALLINT" => "SMALLINT",
+        "INTEGER" | "INT" | "INT4" | "UINTEGER" => "INTEGER",
+        "BIGINT" | "INT8" | "UBIGINT" => "BIGINT",
+        // DB2 DECIMAL tops out at 31 digits, so a 38-digit HUGEINT cannot be
+        // represented exactly; VARCHAR keeps every digit rather than silently
+        // truncating one.
+        "HUGEINT" | "UHUGEINT" => "VARCHAR(40)",
+        "REAL" | "FLOAT4" => "REAL",
+        "FLOAT" | "DOUBLE" | "FLOAT8" => "DOUBLE",
+        "DATE" => "DATE",
+        "TIME" => "TIME",
+        "TIMESTAMP" | "DATETIME" | "TIMESTAMP_NS" | "TIMESTAMP_MS" | "TIMESTAMP_S" => {
+            "TIMESTAMP(6)"
+        }
+        // DB2 has no timestamp-with-timezone type at all; the offset would be
+        // dropped by a TIMESTAMP column, so keep the full ISO text instead.
+        "TIMESTAMP WITH TIME ZONE" | "TIMESTAMPTZ" => "VARCHAR(64)",
         "BLOB" | "BYTEA" | "BINARY" | "VARBINARY" => "BLOB",
         _ => "VARCHAR(4000)",
     }
@@ -4525,6 +4566,7 @@ enum Dialect {
     SqlServer,
     Cassandra,
     Teradata,
+    Db2,
 }
 
 /// Render a JSON cell value as a SQL literal for `dialect`, using the
@@ -4554,7 +4596,7 @@ fn sql_literal(v: &JsonValue, target_type: Option<&str>, dialect: Dialect) -> St
             // BIT takes 1/0. Cassandra CQL and Snowflake/Databricks accept
             // real booleans (CQL is lowercase).
             // Teradata has no boolean literal either; BYTEINT takes 1/0.
-            Dialect::Oracle | Dialect::SqlServer | Dialect::Teradata => {
+            Dialect::Oracle | Dialect::SqlServer | Dialect::Teradata | Dialect::Db2 => {
                 if *b { "1" } else { "0" }.into()
             }
             Dialect::Cassandra => if *b { "true" } else { "false" }.into(),
@@ -4604,6 +4646,24 @@ fn sql_literal(v: &JsonValue, target_type: Option<&str>, dialect: Dialect) -> St
                     }
                     if norm.starts_with("TIMESTAMP") || norm == "DATETIME" {
                         return format!("TIMESTAMP {}", quote(s));
+                    }
+                }
+            }
+            // DB2 casts a quoted ISO string to DATE/TIME/TIMESTAMP implicitly
+            // in most contexts, but not when the target is a parameter-less
+            // INSERT into a typed column of a different family. The scalar
+            // constructors are unambiguous and accepted on both LUW and z/OS.
+            if dialect == Dialect::Db2 {
+                if let Some(t) = target_type {
+                    let norm = t.trim().to_ascii_uppercase();
+                    if norm == "DATE" {
+                        return format!("DATE({})", quote(s));
+                    }
+                    if norm == "TIME" {
+                        return format!("TIME({})", quote(s));
+                    }
+                    if norm.starts_with("TIMESTAMP") || norm == "DATETIME" {
+                        return format!("TIMESTAMP({})", quote(s));
                     }
                 }
             }

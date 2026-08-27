@@ -1703,6 +1703,175 @@ function synthLakehouseSink(comp: ComponentDef): ComponentManifest {
     ], 'upstream');
 }
 
+/// Neo4j, Turso/libSQL and IBM DB2 forms.
+///
+/// Routed by id from dispatchManifest, ahead of the palette-group checks: the
+/// sinks live in the snk.databases / snk.nosql groups whose generic synths
+/// would otherwise win, and hand the user a form full of fields the engine
+/// never reads.
+function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
+    if (comp.id === 'src.neo4j') {
+        return base(comp, [
+            {
+                label: 'Neo4j',
+                fields: [
+                    { key: 'endpoint', label: 'Endpoint', kind: 'text', required: true, placeholder: 'http://localhost:7474' },
+                    { key: 'database', label: 'Database', kind: 'text', defaultValue: 'neo4j', placeholder: 'neo4j' },
+                    { key: 'user', label: 'User', kind: 'text', placeholder: 'neo4j' },
+                    { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
+                    {
+                        key: 'cypher',
+                        label: 'Cypher',
+                        kind: 'expression',
+                        rows: 5,
+                        required: true,
+                        placeholder: 'MATCH (p:Person) RETURN p.name AS name, p.age AS age',
+                        description: 'RETURN a column per field you want. Returning a whole node gives one struct column with all its properties.',
+                    },
+                    {
+                        key: 'parameters',
+                        label: 'Parameters (JSON, optional)',
+                        kind: 'expression',
+                        rows: 3,
+                        placeholder: '{ "minAge": 21 }',
+                        description: 'Bound as $name in the Cypher above, so values never need string-concatenating into the query.',
+                    },
+                ],
+            },
+        ]);
+    }
+    if (comp.id === 'snk.neo4j') {
+        return base(comp, [
+            {
+                label: 'Neo4j',
+                fields: [
+                    { key: 'endpoint', label: 'Endpoint', kind: 'text', required: true, placeholder: 'http://localhost:7474' },
+                    { key: 'database', label: 'Database', kind: 'text', defaultValue: 'neo4j', placeholder: 'neo4j' },
+                    { key: 'user', label: 'User', kind: 'text', placeholder: 'neo4j' },
+                    { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
+                    { key: 'label', label: 'Node label', kind: 'text', required: true, placeholder: 'Person' },
+                    {
+                        key: 'mergeKeys',
+                        label: 'Merge on columns (optional)',
+                        kind: 'columns',
+                        description: 'Leave empty to CREATE a node per row. Set columns to MERGE on those properties instead, so re-running the pipeline updates the matched nodes rather than duplicating them.',
+                    },
+                    { key: 'batchSize', label: 'Batch size', kind: 'number', defaultValue: 1000 },
+                    {
+                        key: 'cypher',
+                        label: 'Custom Cypher (optional)',
+                        kind: 'expression',
+                        rows: 4,
+                        placeholder: 'UNWIND $rows AS row MERGE (n:Person {id: row.id}) SET n += row',
+                        description: 'Full override. Receives the batch as $rows; the node label and merge columns above are ignored.',
+                    },
+                ],
+            },
+        ]);
+    }
+    if (comp.id === 'src.turso' || comp.id === 'snk.turso') {
+        const isSource = comp.id === 'src.turso';
+        return base(comp, [
+            {
+                label: 'Turso / libSQL',
+                fields: [
+                    {
+                        key: 'url',
+                        label: 'Database URL',
+                        kind: 'text',
+                        required: true,
+                        placeholder: 'libsql://my-db-org.turso.io',
+                        description: 'The URL from the Turso dashboard. libsql:// is accepted and used over https.',
+                    },
+                    { key: 'authToken', label: 'Auth token', kind: 'text', placeholder: '••••••••' },
+                    ...(isSource
+                        ? ([
+                              { key: 'tableName', label: 'Table (for SELECT *)', kind: 'text', placeholder: 'events' },
+                              { key: 'query', label: 'Or custom SQL', kind: 'expression', rows: 4, placeholder: 'SELECT * FROM events WHERE ...' },
+                          ] as Field[])
+                        : ([
+                              { key: 'tableName', label: 'Table', kind: 'text', required: true, placeholder: 'events' },
+                              {
+                                  key: 'mode',
+                                  label: 'Write mode',
+                                  kind: 'select',
+                                  defaultValue: 'append',
+                                  options: [
+                                      { value: 'append', label: 'Append (create if missing)' },
+                                      { value: 'overwrite', label: 'Overwrite (clear first)' },
+                                  ],
+                              },
+                              { key: 'batchSize', label: 'Batch size', kind: 'number', defaultValue: 500 },
+                          ] as Field[])),
+                ],
+            },
+        ]);
+    }
+    if (comp.id === 'src.db2' || comp.id === 'snk.db2') {
+        const isSource = comp.id === 'src.db2';
+        return base(comp, [
+            {
+                label: 'IBM DB2 connection',
+                fields: [
+                    { key: 'host', label: 'Host', kind: 'text', placeholder: 'db2.example.com' },
+                    { key: 'port', label: 'Port', kind: 'number', defaultValue: 50000 },
+                    {
+                        key: 'database',
+                        label: 'Database',
+                        kind: 'text',
+                        placeholder: 'SAMPLE',
+                        description: 'Required with the friendly fields - DB2 selects the database when the connection is made.',
+                    },
+                    { key: 'user', label: 'User', kind: 'text' },
+                    { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
+                    { key: 'useSsl', label: 'Use SSL', kind: 'bool', defaultValue: false },
+                    {
+                        key: 'driver',
+                        label: 'ODBC driver name',
+                        kind: 'text',
+                        defaultValue: 'IBM DB2 ODBC DRIVER',
+                        description: 'DB2 ships no DuckDB extension and no native Rust driver, so this connector goes through the IBM Data Server ODBC driver - install it first. This is the driver name as registered with your ODBC driver manager. Or skip these fields and use a DSN / full connection string below.',
+                    },
+                    { key: 'dsn', label: 'Or DSN', kind: 'text', placeholder: 'MYDB2' },
+                    {
+                        key: 'connectionString',
+                        label: 'Or full ODBC connection string',
+                        kind: 'expression',
+                        rows: 2,
+                        placeholder: 'DRIVER={IBM DB2 ODBC DRIVER};HOSTNAME=...;PORT=50000;DATABASE=SAMPLE;PROTOCOL=TCPIP;UID=...;PWD=...',
+                        description: 'Wins over every field above.',
+                    },
+                ],
+            },
+            {
+                label: isSource ? 'Read' : 'Write',
+                fields: isSource
+                    ? ([
+                          { key: 'schema', label: 'Schema (optional)', kind: 'text', placeholder: 'MYSCHEMA' },
+                          { key: 'tableName', label: 'Table (for SELECT *)', kind: 'text', placeholder: 'EMPLOYEE' },
+                          { key: 'query', label: 'Or custom SQL', kind: 'expression', rows: 4, placeholder: 'SELECT * FROM EMPLOYEE WHERE ...' },
+                          { key: 'batchSize', label: 'Fetch batch rows', kind: 'number', defaultValue: 5000 },
+                      ] as Field[])
+                    : ([
+                          { key: 'schema', label: 'Schema (optional)', kind: 'text', placeholder: 'MYSCHEMA' },
+                          { key: 'tableName', label: 'Table', kind: 'text', required: true, placeholder: 'EMPLOYEE' },
+                          {
+                              key: 'mode',
+                              label: 'Write mode',
+                              kind: 'select',
+                              defaultValue: 'append',
+                              options: [
+                                  { value: 'append', label: 'Append (create if missing)' },
+                                  { value: 'overwrite', label: 'Overwrite (clear first)' },
+                              ],
+                          },
+                      ] as Field[]),
+            },
+        ]);
+    }
+    return null;
+}
+
 function synthDbSource(comp: ComponentDef): ComponentManifest {
     if (comp.id === 'src.oracle') {
         return base(comp, [
@@ -7107,6 +7276,12 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
     // source (it drives the Bulk API 2.0 query-job lifecycle with the
     // sink-shaped auth keys); route by id ahead of the group checks.
     if (comp.id === 'src.salesforce.bulk') return synthSalesforceBulkSource(comp);
+    // Neo4j / Turso / DB2: their sinks sit in groups whose generic synth would
+    // otherwise claim them, so they are routed by id ahead of the group checks.
+    {
+        const m = synthNewConnector(comp);
+        if (m) return m;
+    }
     if (comp.id === 'src.model') return synthModelSource(comp);
     if (comp.id === 'snk.model') return synthModelSink(comp);
     if (groupId === 'src.files') return synthFileSource(comp);
