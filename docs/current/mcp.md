@@ -84,6 +84,9 @@ Add to the client's `mcpServers` config:
 | `list_pipelines` | List pipeline `.json` files in a directory with node/edge counts. |
 | `read_pipeline` | Read and return a pipeline file. |
 | `read_run_logs` | Read the tail of a pipeline's NDJSON run log (component-level events). |
+| `backfill_list` | List the saved state a pipeline resumes from - watermarks, snapshot ids, Kafka offsets, spool positions, tumbling-window buffers. Each says whether it can be set by hand. |
+| `backfill_set` | Set a watermark or snapshot id. Refused when the node holds a different kind of state. |
+| `backfill_clear` | Remove a node's state so it starts over. Not always a full reload - see the note below. |
 | `build_pipeline` | Build a pipeline into ONE self-contained executable for server deployment (see [scheduler.md](scheduler.md)). |
 | `list_connections` | List the workspace's saved connections (secret fields masked). |
 | `create_connection` | Create a saved connection JSON so pipelines can reference its fields. |

@@ -153,7 +153,36 @@ pub fn list_tools() -> Value {
             json!({ "type": "object", "properties": {
                 "path": { "type": "string" }
             }, "required": ["path"] })),
-        tool("read_run_logs",
+        tool("backfill_list",
+            "List the saved state a pipeline resumes from: incremental watermarks, DuckLake snapshot ids,              Kafka resume offsets, spool positions and tumbling-window buffers. Each entry says whether it              can be set by hand (`editable`) or only cleared.",
+            json!({ "type": "object",
+                "properties": {
+                    "workspace": { "type": "string", "description": "Workspace folder" },
+                    "pipelineName": { "type": "string", "description": "Pipeline name (the file stem)" }
+                },
+                "required": ["workspace", "pipelineName"] })),
+        tool("backfill_set",
+            "Set an incremental watermark (`value` + optional `valueType`) or a DuckLake snapshot id              (`snapshotId`) so the next run resumes from there. REFUSED when the node holds a different              kind of state - a Kafka offset, a spool position or a tumbling window cannot be set by hand,              because overwriting them destroys what they were holding. Clear those instead.",
+            json!({ "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "pipelineName": { "type": "string" },
+                    "nodeId": { "type": "string" },
+                    "value": { "type": "string", "description": "Watermark value" },
+                    "valueType": { "type": "string", "description": "SQL type, default VARCHAR" },
+                    "snapshotId": { "type": "integer", "description": "DuckLake snapshot id" }
+                },
+                "required": ["workspace", "pipelineName", "nodeId"] })),
+        tool("backfill_clear",
+            "Remove a node's saved state so it starts over. NOTE: this is not always a full reload - a              Kafka source with startFrom `latest` skips whatever is already in the topic when it has no              saved offset, so clearing it moves PAST that backlog rather than replaying it.",
+            json!({ "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "pipelineName": { "type": "string" },
+                    "nodeId": { "type": "string" }
+                },
+                "required": ["workspace", "pipelineName", "nodeId"] })),
+                tool("read_run_logs",
             "Read the tail of a pipeline's NDJSON run log (component-level events).",
             json!({ "type": "object", "properties": {
                 "pipelineName": { "type": "string" },
@@ -218,6 +247,9 @@ pub fn call_tool(params: Value) -> Result<Value, (i64, String)> {
         "schema_drift" => t_schema_drift(&args),
         "list_pipelines" => t_list_pipelines(&args),
         "read_pipeline" => t_read_pipeline(&args),
+        "backfill_list" => t_backfill_list(&args),
+        "backfill_set" => t_backfill_set(&args),
+        "backfill_clear" => t_backfill_clear(&args),
         "read_run_logs" => t_read_run_logs(&args),
         "build_pipeline" => t_build_pipeline(&args),
         "list_connections" => t_list_connections(&args),
@@ -920,6 +952,53 @@ fn t_read_pipeline(args: &Value) -> Result<Value, String> {
     let path = arg_str(args, "path").ok_or("missing 'path'")?;
     let text = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
     serde_json::from_str(&text).map_err(|e| format!("parse {path}: {e}"))
+}
+
+/// Backfill over MCP, so an agent can inspect and replay without a GUI.
+///
+/// All three go through `duckle_duckdb_engine::watermark`, the same functions
+/// the desktop panel, the CLI and the HTTP API use - including the guard that
+/// refuses a write which would replace a different kind of state. One
+/// implementation, so an agent cannot reach a path the other surfaces block.
+fn t_backfill_list(args: &Value) -> Result<Value, String> {
+    let (ws, name) = backfill_target(args)?;
+    let entries = duckle_duckdb_engine::watermark::list(&ws, &name);
+    Ok(json!({
+        "pipeline": name,
+        "entries": serde_json::to_value(&entries).unwrap_or(json!([])),
+    }))
+}
+
+fn t_backfill_set(args: &Value) -> Result<Value, String> {
+    use duckle_duckdb_engine::watermark as wm;
+    let (ws, name) = backfill_target(args)?;
+    let node = arg_str(args, "nodeId").ok_or("missing 'nodeId'")?;
+    let snapshot = args.get("snapshotId").and_then(|v| v.as_u64());
+    let value = arg_str(args, "value");
+    match (value, snapshot) {
+        (Some(_), Some(_)) => Err("give 'value' or 'snapshotId', not both".into()),
+        (Some(v), None) => wm::set_incremental(&ws, &name, node, v, arg_str(args, "valueType"))
+            .map(|()| json!({ "ok": true, "node": node, "value": v }))
+            .map_err(|e| e.to_string()),
+        (None, Some(id)) => wm::set_snapshot(&ws, &name, node, id)
+            .map(|()| json!({ "ok": true, "node": node, "snapshotId": id }))
+            .map_err(|e| e.to_string()),
+        (None, None) => Err("provide 'value' or 'snapshotId'".into()),
+    }
+}
+
+fn t_backfill_clear(args: &Value) -> Result<Value, String> {
+    let (ws, name) = backfill_target(args)?;
+    let node = arg_str(args, "nodeId").ok_or("missing 'nodeId'")?;
+    duckle_duckdb_engine::watermark::clear(&ws, &name, node)
+        .map(|()| json!({ "ok": true, "cleared": node }))
+        .map_err(|e| e.to_string())
+}
+
+fn backfill_target(args: &Value) -> Result<(PathBuf, String), String> {
+    let ws = arg_str(args, "workspace").ok_or("missing 'workspace'")?;
+    let name = arg_str(args, "pipelineName").ok_or("missing 'pipelineName'")?;
+    Ok((PathBuf::from(ws), name.to_string()))
 }
 
 fn t_read_run_logs(args: &Value) -> Result<Value, String> {

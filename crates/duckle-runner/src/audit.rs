@@ -399,6 +399,14 @@ pub fn requirement(method: &str, path: &str) -> (Role, &'static str) {
         ("POST", "/api/admin/keys") => (Role::Admin, "admin.keys.add"),
         ("POST", "/api/admin/keys/revoke") => (Role::Admin, "admin.keys.revoke"),
 
+        // Backfill state. Reading is a viewer's business; changing it decides
+        // what data the next run processes, so it needs an operator. Named
+        // here rather than left to the fallback, or every operator gets a 403
+        // and the audit log calls the action "unknown".
+        ("GET", "/api/watermarks") => (Role::Viewer, "watermarks.read"),
+        ("POST", "/api/watermarks") => (Role::Operator, "watermark.write"),
+        ("DELETE", "/api/watermarks") => (Role::Operator, "watermark.clear"),
+
         // Anything unrecognised needs the highest role. A route added later
         // without a line here is locked down rather than left open.
         _ => (Role::Admin, "unknown"),
@@ -407,6 +415,45 @@ pub fn requirement(method: &str, path: &str) -> (Role, &'static str) {
 
 #[cfg(test)]
 mod tests {
+
+    /// The backfill routes: reading is a viewer's business, changing what the
+    /// next run processes is an operator's. A missing line here compiles,
+    /// serves, and 403s every operator in production - the same trap the run
+    /// routes below were written for.
+    #[test]
+    fn the_backfill_routes_are_not_admin_only_by_accident() {
+        use super::{requirement, Role};
+        assert_eq!(
+            requirement("GET", "/api/watermarks"),
+            (Role::Viewer, "watermarks.read"),
+            "seeing where a pipeline will resume from only reads"
+        );
+        assert_eq!(
+            requirement("POST", "/api/watermarks"),
+            (Role::Operator, "watermark.write"),
+            "moving a watermark decides what data the next run processes"
+        );
+        assert_eq!(
+            requirement("DELETE", "/api/watermarks"),
+            (Role::Operator, "watermark.clear"),
+            "clearing state is the same class of act as setting it"
+        );
+        // The failure this guards against: falling through to the fallback,
+        // which is admin-only and logs the action as "unknown".
+        for route in [
+            ("GET", "/api/watermarks"),
+            ("POST", "/api/watermarks"),
+            ("DELETE", "/api/watermarks"),
+        ] {
+            assert_ne!(
+                requirement(route.0, route.1).1,
+                "unknown",
+                "{} {} fell through to the admin fallback",
+                route.0,
+                route.1
+            );
+        }
+    }
 
     /// #259: every route dispatch_console serves needs a line in `requirement`.
     /// One that is missing falls through to the admin-only arm and 403s every

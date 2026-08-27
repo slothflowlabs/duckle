@@ -524,6 +524,20 @@ Clearing is not always a full reload, and the tool says so: a Kafka node with
 `startFrom: latest` skips whatever is already in the topic when it has no saved
 offset, so clearing it moves PAST that backlog rather than replaying it.
 
+The same three operations are on the console API and MCP, so a replay can be
+driven from CI or an agent as well as the CLI:
+
+```
+GET    /api/watermarks?file=pipelines/daily.json          viewer
+POST   /api/watermarks?file=pipelines/daily.json          operator
+DELETE /api/watermarks?file=pipelines/daily.json&node=ID  operator
+```
+
+Reading needs a viewer; changing what the next run processes needs an
+operator. All four surfaces - desktop panel, CLI, API, MCP - call the same
+engine functions, so the kind guard cannot be bypassed by picking a different
+one.
+
 ### Push sources that do not lose what arrives (`listen` + `src.spool`)
 
 `src.webhook` and `src.websocket` collect INSIDE a pipeline run: they bind or
@@ -1603,7 +1617,7 @@ For Claude Desktop and other clients, add it to `mcpServers`:
 
 Tools: `list_components`, `get_component_schema`, `create_pipeline`,
 `validate_pipeline`, `run_pipeline`, `list_pipelines`, `read_pipeline`,
-`read_run_logs`, `build_pipeline`, `list_connections`, `create_connection`.
+`read_run_logs`, `build_pipeline`, `list_connections`, `create_connection`, `backfill_list`, `backfill_set`, `backfill_clear`.
 `run_pipeline` / `build_pipeline` need a DuckDB binary (`DUCKLE_DUCKDB_BIN`);
 `build_pipeline` also needs `duckle-runner` (`DUCKLE_RUNNER_BIN`). Full guide:
 [docs/current/mcp.md](docs/current/mcp.md).

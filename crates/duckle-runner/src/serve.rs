@@ -818,6 +818,71 @@ fn dispatch_cmd(state: &WebState, cmd: &str, body: &[u8]) -> Reply {
         //
         // The workspace the desktop sends is ignored: this process knows the only workspace
         // it serves, and a browser must not be able to name a directory on the server.
+        // Backfill, for the shared editor's Backfill panel. Without these the
+        // panel is dead in the web edition while working on the desktop - the
+        // parity gap #75 exists to prevent. The argument names match the Tauri
+        // commands, because the same React code calls both.
+        //
+        // The workspace is ALWAYS this server's, never the one in the payload:
+        // a browser must not be able to point a state edit at another folder.
+        "watermark_list" => {
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            match args.get("pipelineName").and_then(|v| v.as_str()) {
+                Some(name) => {
+                    let entries = duckle_duckdb_engine::watermark::list(&state.workspace, name);
+                    respond_json(&serde_json::to_value(&entries).unwrap_or(json!([])))
+                }
+                None => respond_err("400 Bad Request", "missing pipelineName"),
+            }
+        }
+        "watermark_set" => {
+            use duckle_duckdb_engine::watermark as wm;
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let name = args.get("pipelineName").and_then(|v| v.as_str());
+            let node = args.get("nodeId").and_then(|v| v.as_str());
+            let (name, node) = match (name, node) {
+                (Some(n), Some(d)) => (n, d),
+                _ => return respond_err("400 Bad Request", "missing pipelineName or nodeId"),
+            };
+            // Same engine guard as every other surface: a write that would
+            // replace a different kind of state is refused, not applied.
+            let done = if args.get("kind").and_then(|v| v.as_str()) == Some("snapshot") {
+                match args.get("value").and_then(|v| v.as_str()).and_then(|v| v.parse::<u64>().ok()) {
+                    Some(id) => wm::set_snapshot(&state.workspace, name, node, id),
+                    None => return respond_err("400 Bad Request", "snapshot value must be a number"),
+                }
+            } else {
+                match args.get("value").and_then(|v| v.as_str()) {
+                    Some(v) => wm::set_incremental(
+                        &state.workspace,
+                        name,
+                        node,
+                        v,
+                        args.get("valueType").and_then(|t| t.as_str()),
+                    ),
+                    None => return respond_err("400 Bad Request", "missing value"),
+                }
+            };
+            match done {
+                Ok(()) => respond_json(&json!({ "ok": true })),
+                Err(e) => respond_err("400 Bad Request", &e.to_string()),
+            }
+        }
+        "watermark_clear" => {
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            match (
+                args.get("pipelineName").and_then(|v| v.as_str()),
+                args.get("nodeId").and_then(|v| v.as_str()),
+            ) {
+                (Some(name), Some(node)) => {
+                    match duckle_duckdb_engine::watermark::clear(&state.workspace, name, node) {
+                        Ok(()) => respond_json(&json!({ "ok": true })),
+                        Err(e) => respond_err("400 Bad Request", &e.to_string()),
+                    }
+                }
+                _ => respond_err("400 Bad Request", "missing pipelineName or nodeId"),
+            }
+        }
         "plans_list" => match duckle_duckdb_engine::plans::load(&state.workspace) {
             Ok(list) => respond_json(&serde_json::to_value(&list).unwrap_or(json!([]))),
             Err(e) => respond_err("500 Internal Server Error", &e),
@@ -1592,6 +1657,73 @@ fn dispatch_console(req: &Request, state: &Arc<State>, who: console_auth::Identi
                 None => respond_err("400 Bad Request", "missing id"),
             }
         }
+        // Backfill: the saved state a pipeline resumes from. Same operations
+        // the desktop Backfill panel and `duckle-runner backfill` use, so the
+        // three surfaces cannot disagree about what a run will read.
+        //
+        // The pipeline is named by ?file=, resolved inside the workspace and
+        // reduced to its file stem - exactly what execute_one hands to
+        // execute_pipeline_named - so what this reports is what a run reads.
+        ("GET", "/api/watermarks") => match watermark_target(state, req) {
+            Ok((ws, name)) => {
+                let entries = duckle_duckdb_engine::watermark::list(&ws, &name);
+                respond_json(&json!({ "pipeline": name, "entries": entries }))
+            }
+            Err(e) => respond_err("400 Bad Request", &e),
+        },
+        ("POST", "/api/watermarks") => {
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+            match watermark_target(state, req) {
+                Err(e) => respond_err("400 Bad Request", &e),
+                Ok((ws, name)) => match body.get("node").and_then(|v| v.as_str()) {
+                    None => respond_err("400 Bad Request", "missing node"),
+                    Some(node) => {
+                        use duckle_duckdb_engine::watermark as wm;
+                        // A wrong-kind write is refused by the engine, not here:
+                        // one guard, so this route cannot drift from the CLI.
+                        let done = match (
+                            body.get("value").and_then(|v| v.as_str()),
+                            body.get("snapshot_id").and_then(|v| v.as_u64()),
+                        ) {
+                            (Some(v), None) => wm::set_incremental(
+                                &ws,
+                                &name,
+                                node,
+                                v,
+                                body.get("type").and_then(|t| t.as_str()),
+                            ),
+                            (None, Some(id)) => wm::set_snapshot(&ws, &name, node, id),
+                            (Some(_), Some(_)) => {
+                                return respond_err(
+                                    "400 Bad Request",
+                                    "give value or snapshot_id, not both",
+                                )
+                            }
+                            (None, None) => {
+                                return respond_err(
+                                    "400 Bad Request",
+                                    "missing value or snapshot_id",
+                                )
+                            }
+                        };
+                        match done {
+                            Ok(()) => respond_json(&json!({ "ok": true, "node": node })),
+                            Err(e) => respond_err("400 Bad Request", &e.to_string()),
+                        }
+                    }
+                },
+            }
+        }
+        ("DELETE", "/api/watermarks") => match watermark_target(state, req) {
+            Ok((ws, name)) => match req.query.get("node") {
+                Some(node) => match duckle_duckdb_engine::watermark::clear(&ws, &name, node) {
+                    Ok(()) => respond_json(&json!({ "ok": true, "cleared": node })),
+                    Err(e) => respond_err("400 Bad Request", &e.to_string()),
+                },
+                None => respond_err("400 Bad Request", "missing node"),
+            },
+            Err(e) => respond_err("400 Bad Request", &e),
+        },
         ("GET", "/api/audit") => {
             let filter = audit::Filter {
                 actor: req.query.get("actor").cloned(),
@@ -2323,6 +2455,26 @@ fn deploy_into(workspace: &Path, body: &Value) -> Result<Value, String> {
 
 /// Resolve a workspace-relative path and refuse anything that escapes the
 /// workspace (no `..` traversal beyond the root).
+/// Workspace + pipeline NAME for a backfill request, from `?file=`.
+///
+/// The name has to be derived exactly the way a run derives it, or the API
+/// reports one folder's state while runs read another. `execute_one` resolves
+/// the file inside the workspace and hands `execute_pipeline_named` the file
+/// stem; this does the same, and goes through `resolve_in_workspace` so a
+/// `?file=../../etc` cannot read state outside the workspace.
+fn watermark_target(state: &Arc<State>, req: &Request) -> Result<(PathBuf, String), String> {
+    let file = req
+        .query
+        .get("file")
+        .ok_or_else(|| "missing file".to_string())?;
+    let path = resolve_in_workspace(&state.workspace, file)?;
+    let name = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .ok_or_else(|| "cannot read a pipeline name from that path".to_string())?;
+    Ok((state.workspace.clone(), name))
+}
+
 fn resolve_in_workspace(workspace: &Path, file: &str) -> Result<PathBuf, String> {
     let candidate = workspace.join(file);
     let canon = candidate.canonicalize().map_err(|_| format!("not found: {}", file))?;
