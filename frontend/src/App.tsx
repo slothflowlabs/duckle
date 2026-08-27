@@ -589,11 +589,21 @@ export default function App() {
                 }
                 if (state) {
                     if (state.engine) setEngine(normalizeEngineId(state.engine));
-                    if (state.pipelineData)
+                    if (state.pipelineData && Object.keys(state.pipelineData).length > 0)
                         setPipelineData(state.pipelineData as Record<string, PipelineState>);
-                    if (state.repo) setRepo(state.repo as RepoItem[]);
-                    if (state.jobs) setJobs(state.jobs as Job[]);
-                    if (state.activeJobId) setActiveJobId(state.activeJobId);
+                    if (state.repo && (state.repo as RepoItem[]).length > 0)
+                        setRepo(state.repo as RepoItem[]);
+                    if (state.jobs && (state.jobs as Job[]).length > 0) {
+                        const loadedJobs = state.jobs as Job[];
+                        setJobs(loadedJobs);
+                        const targetActiveId =
+                            state.activeJobId && loadedJobs.some(j => j.id === state.activeJobId)
+                                ? state.activeJobId
+                                : loadedJobs[0].id;
+                        setActiveJobId(targetActiveId);
+                    } else if (state.activeJobId) {
+                        setActiveJobId(state.activeJobId);
+                    }
                     if (state.corruptFiles?.length) setCorruptFiles(state.corruptFiles);
                 }
                 setWorkspaceReady(true);
