@@ -39,6 +39,8 @@ pub mod catalog;
 pub mod runlock;
 pub mod s3;
 pub mod batch;
+pub mod audit;
+pub mod baseline;
 pub mod checkpoint;
 pub mod plans;
 pub mod policy;

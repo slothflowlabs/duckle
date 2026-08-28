@@ -26,21 +26,12 @@ pub fn audit_path(workspace: &Path) -> PathBuf {
 /// The writer and the reader share this type on purpose: a log written by one
 /// shape and read by another drifts the first time a field is renamed, and the
 /// symptom is a reader that quietly shows blanks.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Entry {
-    /// RFC3339, when the attempt was made.
-    #[serde(default)]
-    pub at: String,
-    /// Who, or "-" for a caller that never identified itself.
-    #[serde(default)]
-    pub actor: String,
-    #[serde(default)]
-    pub role: String,
-    pub action: String,
-    #[serde(default)]
-    pub target: String,
-    pub outcome: String,
-}
+///
+/// It lives in the engine because the console is not the only writer. The CLI,
+/// MCP and the desktop panel reach the state mutators directly, and those
+/// record from inside the engine - so there has to be exactly one definition
+/// for all of them, not one per crate.
+pub use duckle_duckdb_engine::audit::Entry;
 
 /// How an attempt ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +70,7 @@ pub fn record(
     outcome: Outcome,
 ) {
     let entry = Entry {
+        detail: None,
         at: chrono::Utc::now().to_rfc3339(),
         // An unauthenticated caller has no name, and inventing one would make
         // the log read as though somebody known did this.

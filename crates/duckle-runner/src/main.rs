@@ -22,6 +22,7 @@ use std::process::ExitCode;
 
 mod audit;
 mod backfill;
+mod baseline;
 mod checkpoint;
 mod auth_store;
 mod catalog_cmd;
@@ -1703,6 +1704,17 @@ fn main() -> ExitCode {
             Ok(code) => ExitCode::from(code as u8),
             Err(e) => {
                 eprintln!("duckle-runner backfill: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
+    // `baseline` -> see and re-base what qa.baseline treats as normal, so a
+    // source that legitimately changed shape does not force the check off.
+    if std::env::args().nth(1).as_deref() == Some("baseline") {
+        return match baseline::run() {
+            Ok(code) => ExitCode::from(code as u8),
+            Err(e) => {
+                eprintln!("duckle-runner baseline: {e}");
                 ExitCode::from(2)
             }
         };

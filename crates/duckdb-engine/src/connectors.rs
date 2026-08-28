@@ -6741,6 +6741,29 @@ impl DuckdbEngine {
 
         materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &rows)?;
 
+        // #281: record what this run MEASURED, whatever it then decides.
+        //
+        // Deliberately not deferred like the accepted history below. The
+        // run that gets refused is precisely the one whose numbers an
+        // operator needs to look at and possibly accept as the new normal;
+        // writing the observation only on success would throw it away in
+        // every case where accepting is the thing you want to do.
+        if let Some(p) = path.as_deref() {
+            let status = if !violations.is_empty() {
+                "violation"
+            } else if history.is_empty() {
+                "first_run"
+            } else {
+                "ok"
+            };
+            crate::baseline::record_observation(
+                &p.with_extension("observed.json"),
+                &JsonValue::Object(current.clone().into_iter().collect()),
+                status,
+                &violations,
+            );
+        }
+
         // The new profile is accepted only if the whole run succeeds - the same
         // deferred flush a watermark gets, and for the same reason: a run that
         // failed downstream must not leave today's numbers as the new normal.
@@ -16355,7 +16378,7 @@ fn sanitize_sql_type(ty: &str) -> String {
 }
 
 /// Filesystem-safe single path segment (mirrors the run-log folder rule).
-fn sanitize_path_segment(name: &str) -> String {
+pub(crate) fn sanitize_path_segment(name: &str) -> String {
     let cleaned: String = name
         .trim()
         .chars()

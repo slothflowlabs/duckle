@@ -811,6 +811,30 @@ no model. Only compact numbers are stored, never copies of the data. And the
 new profile is accepted **only if the whole run succeeds**, so a bad day never
 teaches the gate that bad is normal.
 
+**Re-basing it when the source really did change.** A retired product line, a
+migrated system, a rate that genuinely moved - the accepted history now
+describes a world that is gone, and every run fails against it. A gate with no
+way to say "this is the new normal" gets deleted, or has its thresholds widened
+until it means nothing, which is worse because it still looks like a check.
+
+```bash
+duckle-runner baseline list                                    # what has a baseline
+duckle-runner baseline inspect --pipeline orders --node qa     # accepted vs last run
+duckle-runner baseline accept  --pipeline orders --node qa     # this is the new normal
+duckle-runner baseline clear   --pipeline orders --node qa     # start the history over
+```
+
+`accept` promotes what the **last run measured**; it never invents a number, so
+a node no run has measured has nothing to accept. That works because a refused
+run still records its profile - the run an operator most needs to look at is
+exactly the one the gate rejected, so that observation is written whatever the
+outcome, unlike the accepted history.
+
+Both `accept` and `clear` go through `state.allowMutation` and are written to
+the audit log with the value they replaced, because "somebody cleared it" is not
+reviewable and the number it held is. The same four operations exist over the
+HTTP API and MCP.
+
 ### Bounded materialization for large XML (`src.xml`)
 
 The XML parser is a pull parser, so live memory is one row plus the nesting

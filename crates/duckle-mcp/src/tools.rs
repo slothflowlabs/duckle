@@ -182,6 +182,41 @@ pub fn list_tools() -> Value {
                     "nodeId": { "type": "string" }
                 },
                 "required": ["workspace", "pipelineName", "nodeId"] })),
+        tool("baseline_list",
+            "Every qa.baseline node in the workspace: how many profiles it has accepted, what the last run concluded, and whether a measured profile is waiting to be accepted.",
+            json!({ "type": "object",
+                "properties": {
+                    "workspace": { "type": "string", "description": "Workspace folder" }
+                },
+                "required": ["workspace"] })),
+        tool("baseline_inspect",
+            "What one qa.baseline node considers normal, against what the last run measured: the accepted median per metric, the observed value, the percentage change, and any violations that refused the run.",
+            json!({ "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "pipelineName": { "type": "string" },
+                    "nodeId": { "type": "string" }
+                },
+                "required": ["workspace", "pipelineName", "nodeId"] })),
+        tool("baseline_accept",
+            "Make the profile the LAST RUN measured the new accepted normal, for a source that legitimately changed shape. Promotes what a run saw - it cannot invent a number, so a node no run has measured has nothing to accept. Recorded in the audit log with the value it replaced. Refused when the workspace policy withholds state mutation.",
+            json!({ "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "pipelineName": { "type": "string" },
+                    "nodeId": { "type": "string" },
+                    "history": { "type": "integer", "description": "How many profiles to keep, default 10" }
+                },
+                "required": ["workspace", "pipelineName", "nodeId"] })),
+        tool("baseline_clear",
+            "Forget a node's accepted history so the next run starts it over and cannot fail against a baseline that no longer describes the source. Leaves the last observation alone - that is the evidence somebody is looking at. Audited, and refused when the policy withholds state mutation.",
+            json!({ "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "pipelineName": { "type": "string" },
+                    "nodeId": { "type": "string" }
+                },
+                "required": ["workspace", "pipelineName", "nodeId"] })),
                 tool("read_run_logs",
             "Read the tail of a pipeline's NDJSON run log (component-level events).",
             json!({ "type": "object", "properties": {
@@ -250,6 +285,10 @@ pub fn call_tool(params: Value) -> Result<Value, (i64, String)> {
         "backfill_list" => t_backfill_list(&args),
         "backfill_set" => t_backfill_set(&args),
         "backfill_clear" => t_backfill_clear(&args),
+        "baseline_list" => t_baseline_list(&args),
+        "baseline_inspect" => t_baseline_inspect(&args),
+        "baseline_accept" => t_baseline_accept(&args),
+        "baseline_clear" => t_baseline_clear(&args),
         "read_run_logs" => t_read_run_logs(&args),
         "build_pipeline" => t_build_pipeline(&args),
         "list_connections" => t_list_connections(&args),
@@ -992,6 +1031,40 @@ fn t_backfill_clear(args: &Value) -> Result<Value, String> {
     let node = arg_str(args, "nodeId").ok_or("missing 'nodeId'")?;
     duckle_duckdb_engine::watermark::clear(&ws, &name, node)
         .map(|()| json!({ "ok": true, "cleared": node }))
+        .map_err(|e| e.to_string())
+}
+
+/// #281: operating the anomaly gate over MCP, so an agent that is helping an
+/// operator investigate can also see what "normal" currently means - and, when
+/// the source really did change, re-base it through the same guarded path the
+/// CLI and the panel use rather than a private one.
+fn t_baseline_list(args: &Value) -> Result<Value, String> {
+    let ws = arg_str(args, "workspace").ok_or("missing 'workspace'")?;
+    let rows = duckle_duckdb_engine::baseline::list(std::path::Path::new(ws));
+    Ok(json!({ "baselines": serde_json::to_value(&rows).unwrap_or(json!([])) }))
+}
+
+fn t_baseline_inspect(args: &Value) -> Result<Value, String> {
+    let (ws, name) = backfill_target(args)?;
+    let node = arg_str(args, "nodeId").ok_or("missing 'nodeId'")?;
+    let view = duckle_duckdb_engine::baseline::inspect(&ws, &name, node);
+    serde_json::to_value(&view).map_err(|e| e.to_string())
+}
+
+fn t_baseline_accept(args: &Value) -> Result<Value, String> {
+    let (ws, name) = backfill_target(args)?;
+    let node = arg_str(args, "nodeId").ok_or("missing 'nodeId'")?;
+    let history = args.get("history").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+    let after = duckle_duckdb_engine::baseline::accept(&ws, &name, node, history)
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&after).map_err(|e| e.to_string())
+}
+
+fn t_baseline_clear(args: &Value) -> Result<Value, String> {
+    let (ws, name) = backfill_target(args)?;
+    let node = arg_str(args, "nodeId").ok_or("missing 'nodeId'")?;
+    duckle_duckdb_engine::baseline::clear(&ws, &name, node)
+        .map(|dropped| json!({ "ok": true, "dropped": dropped }))
         .map_err(|e| e.to_string())
 }
 

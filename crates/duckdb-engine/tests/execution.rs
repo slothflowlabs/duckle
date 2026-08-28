@@ -18749,3 +18749,160 @@ fn archive_extract_refuses_to_skip_a_destination_that_is_a_different_file() {
     let err = r.error.unwrap_or_default();
     assert!(err.contains("notes.txt"), "names the file: {err}");
 }
+
+// ---------------------------------------------------------------------------
+// #281 - operating the gate. The failure this prevents is not a wrong answer,
+// it is the check getting switched off: a source legitimately changes shape,
+// every run fails from then on, and with no way to re-base it the only options
+// are deleting the node or widening the thresholds until they mean nothing.
+// ---------------------------------------------------------------------------
+
+/// A refused run still records what it measured, and accepting that promotes it
+/// to the new normal - after which the same data passes.
+#[test]
+fn a_refused_baseline_can_be_accepted_and_the_gate_then_passes() {
+    use duckle_duckdb_engine::baseline;
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let ws = tmp.path();
+    let out = out_path(ws, "b281.csv");
+    let name = "rebase";
+    let rules = json!([{ "metric": "row_count", "maxDecreasePct": 20 }]);
+
+    // Three normal days establish the accepted history.
+    for _ in 0..3 {
+        let r = engine.execute_pipeline_named(
+            &baseline_pipeline(
+                "SELECT i AS id FROM range(1000) t(i)",
+                &out,
+                json!({ "rules": rules.clone() }),
+            ),
+            name,
+        );
+        assert_eq!(r.status, "ok", "{:?}", r.error);
+    }
+
+    // The source legitimately shrinks - a product line was retired, say.
+    let smaller = "SELECT i AS id FROM range(100) t(i)";
+    let r = engine.execute_pipeline_named(
+        &baseline_pipeline(smaller, &out, json!({ "rules": rules.clone() })),
+        name,
+    );
+    assert_eq!(r.status, "error", "the gate does its job first");
+
+    // The refused run still left its numbers behind. This is the whole point:
+    // if the observation were deferred like the accepted history, the run an
+    // operator most needs to look at would leave nothing to look at.
+    let view = baseline::inspect(ws, name, "b");
+    assert_eq!(view.status.observed_status.as_deref(), Some("violation"));
+    assert!(view.status.pending, "there is something to accept");
+    assert!(!view.violations.is_empty(), "and it says why it was refused");
+    let rc = view
+        .metrics
+        .iter()
+        .find(|m| m.metric == "row_count")
+        .expect("row_count is profiled");
+    assert_eq!(rc.baseline, Some(1000.0), "the accepted median");
+    assert_eq!(rc.observed, Some(100.0), "what the refused run saw");
+
+    // The operator investigates, decides this is the new normal, and says so.
+    let after = baseline::accept(ws, name, "b", 10).expect("accept");
+    assert_eq!(after.status.accepted, 4);
+    assert!(!after.status.pending, "nothing left outstanding");
+
+    // Accepting once does not flip the gate on its own - the median of four is
+    // still near the old world, which is the median doing its job. What must be
+    // true is that the operator now has a lever at all, and that repeated
+    // acceptance moves the baseline to the new normal.
+    for _ in 0..3 {
+        let r = engine.execute_pipeline_named(
+            &baseline_pipeline(smaller, &out, json!({ "rules": rules.clone() })),
+            name,
+        );
+        let _ = r;
+        baseline::accept(ws, name, "b", 10).expect("accept");
+    }
+    let r = engine.execute_pipeline_named(
+        &baseline_pipeline(smaller, &out, json!({ "rules": rules })),
+        name,
+    );
+    assert_eq!(
+        r.status, "ok",
+        "once the new shape IS the accepted history the gate passes again: {:?}",
+        r.error
+    );
+}
+
+/// Clearing forces the history to start over, so the next run cannot fail
+/// against a world that no longer exists.
+#[test]
+fn clearing_a_baseline_lets_the_next_run_start_the_history_again() {
+    use duckle_duckdb_engine::baseline;
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let ws = tmp.path();
+    let out = out_path(ws, "b281c.csv");
+    let name = "wipe";
+    let rules = json!([{ "metric": "row_count", "maxDecreasePct": 20 }]);
+
+    for _ in 0..3 {
+        let r = engine.execute_pipeline_named(
+            &baseline_pipeline(
+                "SELECT i AS id FROM range(1000) t(i)",
+                &out,
+                json!({ "rules": rules.clone() }),
+            ),
+            name,
+        );
+        assert_eq!(r.status, "ok", "{:?}", r.error);
+    }
+    assert_eq!(baseline::inspect(ws, name, "b").status.accepted, 3);
+
+    let dropped = baseline::clear(ws, name, "b").expect("clear");
+    assert_eq!(dropped, 3, "reports what it dropped");
+
+    // With no accepted history the next run is a first run, not a failure.
+    let r = engine.execute_pipeline_named(
+        &baseline_pipeline("SELECT i AS id FROM range(100) t(i)", &out, json!({ "rules": rules })),
+        name,
+    );
+    assert_eq!(r.status, "ok", "a cleared baseline cannot refuse anything: {:?}", r.error);
+}
+
+/// The same permission that withholds a watermark edit withholds this one. An
+/// accept is a change to what the environment considers normal, so a locked
+/// down environment must not let it through any surface.
+#[test]
+fn accepting_a_baseline_obeys_the_state_mutation_policy() {
+    use duckle_duckdb_engine::baseline;
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let ws = tmp.path();
+    let dir = ws.join("state").join("p").join("baselines");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("n.json"), r#"{"profiles":[{"row_count":10}]}"#).unwrap();
+    std::fs::write(
+        dir.join("n.observed.json"),
+        r#"{"at":"2026-08-28T00:00:00Z","status":"violation","violations":[],"profile":{"row_count":1}}"#,
+    )
+    .unwrap();
+
+    let policy = ws.join("server-policy.yaml");
+    std::fs::write(&policy, "mode: enforce\nstate:\n  allowMutation: false\n").unwrap();
+    std::env::set_var("DUCKLE_POLICY_FILE", &policy);
+
+    let accept = baseline::accept(ws, "p", "n", 10);
+    let clear = baseline::clear(ws, "p", "n");
+    std::env::remove_var("DUCKLE_POLICY_FILE");
+
+    assert!(accept.is_err(), "accept walked past state.allowMutation");
+    assert!(clear.is_err(), "clear walked past state.allowMutation");
+    // And the refusal is real: the history is untouched.
+    let still = std::fs::read_to_string(dir.join("n.json")).unwrap();
+    assert!(still.contains("\"row_count\":10"), "the accepted history changed: {still}");
+}
