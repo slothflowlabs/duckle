@@ -296,13 +296,13 @@ pub(crate) fn hex_sha256(bytes: &[u8]) -> String {
 pub(crate) fn verify_download(label: &str, actual_hex: &str, expected: &str) -> Result<(), String> {
     if expected == UNPINNED {
         eprintln!(
-            "duckle: {label} is not pinned to a checksum, so only TLS vouches for it.              See UNPINNED in engine_manager.rs."
+            "duckle: {label} is not pinned to a checksum, so only TLS vouches for it. See UNPINNED in engine_manager.rs."
         );
         return Ok(());
     }
     if !actual_hex.eq_ignore_ascii_case(expected) {
         return Err(format!(
-            "{label} failed checksum verification and was discarded. Expected {expected},              got {actual_hex}. Either the download was tampered with, or the pinned digest              is stale after a version bump."
+            "{label} failed checksum verification and was discarded. Expected {expected}, got {actual_hex}. Either the download was tampered with, or the pinned digest is stale after a version bump."
         ));
     }
     Ok(())
