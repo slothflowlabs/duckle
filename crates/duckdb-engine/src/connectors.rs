@@ -5882,13 +5882,13 @@ impl DuckdbEngine {
     }
 
     /// Open a source for reading, whatever scheme it is written in.
-    fn open_artifact(
+    pub(crate) fn open_artifact(
         &self,
-        spec: &plan::ArtifactCopySpec,
+        auth: &plan::ArtifactAuth,
         src: &str,
     ) -> Result<Box<dyn std::io::Read + Send>, EngineError> {
         if src.starts_with("s3://") || src.starts_with("s3a://") {
-            let cfg = spec.s3.as_ref().ok_or_else(|| {
+            let cfg = auth.s3.as_ref().ok_or_else(|| {
                 EngineError::Config(format!(
                     "artifact.copy: {} needs S3 credentials - pick a saved S3 connection on \
                      the node, or set its access key and secret key",
@@ -5900,7 +5900,7 @@ impl DuckdbEngine {
         }
         if src.starts_with("http://") || src.starts_with("https://") {
             let mut req = crate::tls::http_agent().get(src);
-            for (k, v) in &spec.headers {
+            for (k, v) in &auth.headers {
                 req = req.set(k, v);
             }
             let resp = req
@@ -5913,7 +5913,7 @@ impl DuckdbEngine {
             // driven on its own runtime and cannot be held open behind a plain
             // Read. The file is streamed out of afterwards, so the destination
             // upload is still bounded - only the local spool is not.
-            return self.sftp_spool(spec, src);
+            return self.sftp_spool(auth, src);
         }
         let f = std::fs::File::open(src)
             .map_err(|e| EngineError::Query(format!("artifact.copy: opening {src}: {e}")))?;
@@ -5928,7 +5928,7 @@ impl DuckdbEngine {
         spec: &plan::ArtifactCopySpec,
         src: &str,
     ) -> Result<(String, u64), EngineError> {
-        let reader = self.open_artifact(spec, src)?;
+        let reader = self.open_artifact(&spec.auth, src)?;
         let mut hashing = crate::s3::HashingReader::new(reader);
         std::io::copy(&mut hashing, &mut std::io::sink())
             .map_err(|e| EngineError::Query(format!("artifact.copy: reading {src}: {e}")))?;
@@ -5942,11 +5942,11 @@ impl DuckdbEngine {
         src: &str,
         dest: &str,
     ) -> Result<(String, u64), EngineError> {
-        let reader = self.open_artifact(spec, src)?;
+        let reader = self.open_artifact(&spec.auth, src)?;
         let mut hashing = crate::s3::HashingReader::new(reader);
 
         if dest.starts_with("s3://") || dest.starts_with("s3a://") {
-            let cfg = spec.s3.as_ref().ok_or_else(|| {
+            let cfg = spec.auth.s3.as_ref().ok_or_else(|| {
                 EngineError::Config(format!(
                     "artifact.copy: writing to {} needs S3 credentials on the node",
                     dest
@@ -6003,7 +6003,7 @@ impl DuckdbEngine {
         dest: &str,
     ) -> Result<bool, EngineError> {
         if dest.starts_with("s3://") || dest.starts_with("s3a://") {
-            let Some(cfg) = spec.s3.as_ref() else {
+            let Some(cfg) = spec.auth.s3.as_ref() else {
                 return Ok(false);
             };
             let (bucket, key) = crate::s3::parse_s3_uri(dest)?;
@@ -6027,26 +6027,26 @@ impl DuckdbEngine {
     /// memory bound holds; it is the local disk that pays.
     fn sftp_spool(
         &self,
-        spec: &plan::ArtifactCopySpec,
+        auth: &plan::ArtifactAuth,
         src: &str,
     ) -> Result<Box<dyn std::io::Read + Send>, EngineError> {
         let (host, port, user, path) = parse_sftp_uri(src)?;
-        let user = spec.user.clone().or(user).unwrap_or_default();
+        let user = auth.user.clone().or(user).unwrap_or_default();
         // src.changed's SFTP helpers take a ChangedSourceSpec, so the copy node's
         // equivalent auth is presented in that shape rather than duplicating the
         // connect-and-verify path. One implementation, one host-key policy.
         let as_changed = plan::ChangedSourceSpec {
-            node_id: spec.node_id.clone(),
+            node_id: String::new(),
             uri: src.to_string(),
             listing: false,
             suffix: None,
             max_entries: 1,
             track_state: false,
             user: Some(user.clone()),
-            password: spec.password.clone(),
-            private_key: spec.private_key.clone(),
-            key_passphrase: spec.key_passphrase.clone(),
-            host_fingerprint: spec.host_fingerprint.clone(),
+            password: auth.password.clone(),
+            private_key: auth.private_key.clone(),
+            key_passphrase: auth.key_passphrase.clone(),
+            host_fingerprint: auth.host_fingerprint.clone(),
             headers: Vec::new(),
             s3: None,
         };
@@ -6176,6 +6176,95 @@ impl DuckdbEngine {
                 .unwrap_or(0)
         };
         Ok((num("f"), num("b")))
+    }
+
+    /// The artifacts a parser should read this run, from its upstream relation
+    /// or from its configured path.
+    ///
+    /// #282: one resolver for every parser, so `src.pdf`, `src.xml` and
+    /// `src.html` agree about what a URI column is and what is carried out of
+    /// it. Giving each of them its own would produce conventions that agree
+    /// until one is changed.
+    pub(crate) fn resolve_artifact_inputs(
+        &self,
+        db: &Path,
+        secret_prefix: &str,
+        input: &plan::ArtifactInput,
+    ) -> Result<Vec<ResolvedArtifact>, EngineError> {
+        let Some(view) = input.from_view.as_deref() else {
+            return Ok(Vec::new());
+        };
+        let rows = self.run_rows(
+            Some(db),
+            &format!("{}SELECT * FROM {}", secret_prefix, plan::quote_ident(view)),
+        )?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let uri = row
+                .get(&input.uri_column)
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| {
+                    EngineError::Query(format!(
+                        "no '{}' to read on an upstream row. Set the URI column to whichever \
+                         column names the artifact.",
+                        input.uri_column
+                    ))
+                })?;
+            // Carried, never recomputed: whatever landed these bytes already
+            // hashed exactly them, and hashing again would cost a second full
+            // read AND describe whatever is at that URI now rather than what
+            // was parsed.
+            let sha256 = row
+                .get(&input.sha_column)
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string);
+            out.push(ResolvedArtifact { uri, sha256, row });
+        }
+        Ok(out)
+    }
+
+    /// A local path for an artifact, fetching it first if it is remote.
+    ///
+    /// A format that can be parsed from a stream should be; this is for the
+    /// ones that cannot. A PDF reader seeks - the cross-reference table is at
+    /// the END of the file - so a PDF has to be a file. The spool is one
+    /// artifact at a time and is deleted when the guard drops, whether the
+    /// parse succeeded or not, so the bound is one artifact times concurrency
+    /// rather than the size of the corpus.
+    pub(crate) fn local_copy_of_artifact(
+        &self,
+        auth: &plan::ArtifactAuth,
+        uri: &str,
+    ) -> Result<SpooledInput, EngineError> {
+        let remote = uri.starts_with("s3://")
+            || uri.starts_with("s3a://")
+            || uri.starts_with("http://")
+            || uri.starts_with("https://")
+            || uri.starts_with("sftp://");
+        if !remote {
+            // Already a file. Nothing is copied and nothing is deleted.
+            return Ok(SpooledInput { path: PathBuf::from(uri), temp: false });
+        }
+        let mut reader = self.open_artifact(auth, uri)?;
+        let name = uri
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("artifact");
+        let path = std::env::temp_dir().join(format!(
+            "duckle_input_{}_{}_{}",
+            std::process::id(),
+            crate::now_nanos(),
+            safe_file_name(name)
+        ));
+        let mut f = std::fs::File::create(&path)
+            .map_err(|e| EngineError::Query(format!("spooling {uri}: {e}")))?;
+        std::io::copy(&mut reader, &mut f)
+            .map_err(|e| EngineError::Query(format!("fetching {uri}: {e}")))?;
+        Ok(SpooledInput { path, temp: true })
     }
 
     /// Every entry in a remote directory.
@@ -7196,11 +7285,32 @@ impl DuckdbEngine {
     pub(crate) fn run_pdf_source(
         &self,
         db: &Path,
+        secret_prefix: &str,
         spec: &PdfSourceSpec,
     ) -> Result<String, EngineError> {
         self.check_cancelled()?;
-        let files = expand_pdf_paths(&spec.path, spec.recursive);
-        if files.is_empty() {
+        // #282: the documents are whatever an upstream relation names, or the
+        // configured path when nothing is wired in.
+        let from_upstream = spec.input.from_view.is_some();
+        let docs: Vec<(String, Option<String>)> = if from_upstream {
+            self.resolve_artifact_inputs(db, secret_prefix, &spec.input)?
+                .into_iter()
+                .map(|a| (a.uri, a.sha256))
+                .collect()
+        } else {
+            expand_pdf_paths(&spec.path, spec.recursive)
+                .into_iter()
+                .map(|f| (f, None))
+                .collect()
+        };
+        // An upstream that named nothing is a legitimate quiet run - a change
+        // feed with no new documents - and must produce the empty typed
+        // relation rather than an error or a relation of unknown shape.
+        if docs.is_empty() && from_upstream {
+            self.pdf_empty_relation(db, spec)?;
+            return Ok(format!("{}pdf: 0 documents to read", crate::UNCHANGED_MARKER));
+        }
+        if docs.is_empty() {
             return Err(EngineError::Config(format!(
                 "pdf: no .pdf files at {}",
                 spec.path
@@ -7213,10 +7323,33 @@ impl DuckdbEngine {
             _ => JsonLinesWriter::open(&spec.node_id)?,
         };
         let mut count: usize = 0;
-        for file in &files {
+        let mut skipped: usize = 0;
+        for (uri, source_sha) in &docs {
             self.check_cancelled()?;
-            let doc = lopdf::Document::load(file)
-                .map_err(|e| EngineError::Query(format!("pdf: open {}: {}", file, e)))?;
+            // A PDF reader SEEKS - the cross-reference table is at the end of
+            // the file - so a remote document has to become a local one. One at
+            // a time, and removed when the guard drops however the parse ended.
+            let spooled = match self.local_copy_of_artifact(&spec.input.auth, uri) {
+                Ok(s) => s,
+                Err(e) if spec.on_error == "skip" => {
+                    eprintln!("duckle: pdf: skipping {uri}: {e}");
+                    skipped += 1;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            let file = &spooled.path.to_string_lossy().to_string();
+            let doc = match lopdf::Document::load(file) {
+                Ok(d) => d,
+                Err(e) if spec.on_error == "skip" => {
+                    eprintln!("duckle: pdf: skipping {uri}: {e}");
+                    skipped += 1;
+                    continue;
+                }
+                Err(e) => {
+                    return Err(EngineError::Query(format!("pdf: open {}: {}", uri, e)))
+                }
+            };
             let pages = doc.get_pages();
             let page_count = pages.len();
 
@@ -7273,7 +7406,21 @@ impl DuckdbEngine {
                 let text = texts.get(idx).cloned().unwrap_or_default();
                 let mut row = serde_json::Map::new();
                 // Same value src.artifact puts in `uri`, so the two join.
-                row.insert("document_id".into(), JsonValue::String(file.clone()));
+                // The URI, not the spool path: a temp file nobody can look at
+                // afterwards is not provenance. Both names carry it, so a
+                // pipeline joining on `document_id` keeps working.
+                row.insert("document_id".into(), JsonValue::String(uri.clone()));
+                row.insert("document_uri".into(), JsonValue::String(uri.clone()));
+                row.insert(
+                    "source_sha256".into(),
+                    match source_sha {
+                        // Carried from whatever landed the bytes. Absent rather
+                        // than recomputed: re-hashing would describe whatever is
+                        // at that URI now, not what was parsed.
+                        Some(h) => JsonValue::String(h.clone()),
+                        None => JsonValue::Null,
+                    },
+                );
                 row.insert("page_number".into(), JsonValue::from(*page_number as u64));
                 // A page whose text is only whitespace has no usable text layer,
                 // which is the scanned-page case worth routing elsewhere.
@@ -7303,11 +7450,32 @@ impl DuckdbEngine {
             _ => writer.finalize_into_table(&self.bin, db, &spec.node_id)?,
         }
         Ok(format!(
-            "pdf: materialized {} page(s) from {} file(s) into {}",
+            "pdf: materialized {} page(s) from {} document(s){}",
             count,
-            files.len(),
-            spec.node_id
+            docs.len() - skipped,
+            if skipped > 0 {
+                format!(" ({} skipped as unreadable)", skipped)
+            } else {
+                String::new()
+            }
         ))
+    }
+
+    /// The shape src.pdf always emits, with no rows in it.
+    ///
+    /// A change feed that found no new documents is a quiet success, and a
+    /// downstream stage must see the right columns rather than an error or a
+    /// relation whose shape depends on whether anything arrived.
+    fn pdf_empty_relation(&self, db: &Path, spec: &PdfSourceSpec) -> Result<(), EngineError> {
+        self.run(
+            Some(db),
+            &format!(
+                "CREATE OR REPLACE TABLE {} (document_id VARCHAR, document_uri VARCHAR, source_sha256 VARCHAR, page_number BIGINT, text VARCHAR, has_text_layer BOOLEAN, width DOUBLE, height DOUBLE, metadata JSON)",
+                plan::quote_ident(&spec.node_id)
+            ),
+            false,
+        )
+        .map(|_| ())
     }
 
     /// src.html: rows out of an HTML page, by CSS selector (#255).
@@ -19047,4 +19215,38 @@ fn maintenance_call(spec: &plan::DuckLakeMaintainSpec) -> Result<String, EngineE
         _ => "ducklake_table_info",
     };
     Ok(format!("{}({})", func, args.join(", ")))
+}
+
+/// One artifact a parser was asked to read, and what the upstream row said
+/// about it.
+pub(crate) struct ResolvedArtifact {
+    pub uri: String,
+    /// The hash of these bytes, if whatever produced the row knew it.
+    pub sha256: Option<String>,
+    /// The whole upstream row, so a reject can carry it back out.
+    pub row: JsonValue,
+}
+
+/// A local file for a parser to read, removed on drop when this fetched it.
+pub(crate) struct SpooledInput {
+    pub path: PathBuf,
+    temp: bool,
+}
+
+impl Drop for SpooledInput {
+    fn drop(&mut self) {
+        // Deterministic, and on every exit path: a parser that failed must not
+        // leave the document behind, or a long run fills the disk with the
+        // documents it could not read.
+        if self.temp {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// A file name that cannot escape the temp directory.
+fn safe_file_name(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' })
+        .collect()
 }

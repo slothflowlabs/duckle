@@ -1010,7 +1010,9 @@ function synthFileSource(comp: ComponentDef): ComponentManifest {
                     key: 'path',
                     label: 'Path',
                     kind: 'file-path',
-                    required: true,
+                    // #282: src.pdf can take its documents from an upstream
+                    // artifact relation instead, so a path is not always needed.
+                    required: comp.id !== 'src.pdf',
                     filters,
                     ...(pathDescription ? { description: pathDescription } : {}),
                 },
@@ -1029,7 +1031,107 @@ function synthFileSource(comp: ComponentDef): ComponentManifest {
             ],
         },
         ...fileFormatSection(comp),
+        ...(comp.id === 'src.pdf' ? [artifactInputSection(), artifactAuthSection()] : []),
     ]);
+}
+
+// #282: read the documents an upstream artifact relation names, instead of a
+// configured path. Wiring something in is what turns it on - with nothing wired
+// in the node reads its path exactly as it always has.
+function artifactInputSection(): FormSection {
+    return {
+        label: 'Read from upstream artifacts',
+        fields: [
+            {
+                key: 'uriColumn',
+                label: 'URI column',
+                kind: 'column',
+                defaultValue: 'uri',
+                description:
+                    'Wire an artifact relation in and each row names a document to read. Changed?, Artifact and Copy Artifact all emit a uri column, so the default already lines up with them. With nothing wired in, the Path above is used and nothing changes.',
+            },
+            {
+                key: 'shaColumn',
+                label: 'Hash column',
+                kind: 'column',
+                defaultValue: 'sha256',
+                description:
+                    'Carried onto every page as source_sha256, so the parsed rows point back at the exact bytes. Not recomputed: re-hashing would cost a second full read and would describe whatever is at that URI now rather than what was parsed.',
+            },
+            {
+                key: 'onError',
+                label: 'When a document cannot be read',
+                kind: 'select',
+                defaultValue: 'fail',
+                options: [
+                    { label: 'Fail the run', value: 'fail' },
+                    { label: 'Skip it and carry on', value: 'skip' },
+                ],
+                description:
+                    'Fail is the default, because silently dropping a document is how a load goes short without anyone noticing. Skip reports how many were skipped.',
+            },
+        ],
+    };
+}
+
+// Credentials for reaching a remote artifact. The same property names every
+// other artifact-aware node takes, so one saved connection drives all of them.
+function artifactAuthSection(): FormSection {
+    return {
+        label: 'Remote access (for s3://, https:// and sftp:// documents)',
+        fields: [
+            {
+                key: 'accessKey',
+                label: 'S3 access key',
+                kind: 'text',
+                description:
+                    'For s3:// documents. Pick a saved S3 connection instead and these fill from it at run time. A PDF has to be read as a FILE - its cross-reference table is at the end - so a remote document is fetched to a temporary file, one at a time, and removed as soon as it has been parsed.',
+            },
+            { key: 'secretKey', label: 'S3 secret key', kind: 'text', placeholder: 'secret' },
+            { key: 'sessionToken', label: 'S3 session token', kind: 'text', placeholder: 'token' },
+            { key: 'region', label: 'S3 region', kind: 'text', placeholder: 'us-east-1' },
+            {
+                key: 'endpoint',
+                label: 'S3 endpoint',
+                kind: 'text',
+                placeholder: 'https://s3.eu-central-003.backblazeb2.com',
+                description: 'For MinIO, Backblaze B2, Cloudflare R2 and other S3-compatible stores.',
+            },
+            {
+                key: 'urlStyle',
+                label: 'S3 URL style',
+                kind: 'select',
+                defaultValue: '',
+                options: [
+                    { label: 'Default', value: '' },
+                    { label: 'Path (host/bucket/key)', value: 'path' },
+                    { label: 'Virtual host (bucket.host/key)', value: 'vhost' },
+                ],
+            },
+            {
+                key: 'useSsl',
+                label: 'S3 use TLS',
+                kind: 'select',
+                defaultValue: '',
+                options: [
+                    { label: 'Default (from the endpoint scheme)', value: '' },
+                    { label: 'Yes', value: 'true' },
+                    { label: 'No (local MinIO)', value: 'false' },
+                ],
+            },
+            {
+                key: 'headers',
+                label: 'HTTP headers',
+                kind: 'key-value',
+                description: 'Sent when fetching an https:// document.',
+            },
+            { key: 'user', label: 'SFTP user', kind: 'text' },
+            { key: 'password', label: 'SFTP password', kind: 'text', placeholder: 'password' },
+            { key: 'privateKey', label: 'SFTP private key (PEM)', kind: 'expression', rows: 3 },
+            { key: 'keyPassphrase', label: 'SFTP key passphrase', kind: 'text', placeholder: 'passphrase' },
+            { key: 'hostFingerprint', label: 'SFTP host fingerprint', kind: 'text', placeholder: 'SHA256:...' },
+        ],
+    };
 }
 
 function partitionBySection(): FormSection {

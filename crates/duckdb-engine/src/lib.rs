@@ -1819,7 +1819,9 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::NatsSource(spec)) => self.run_nats_source(&db_path, spec),
                     Some(RuntimeSpec::PubsubSink(spec)) => self.run_pubsub_sink(&db_path, spec),
                     Some(RuntimeSpec::PubsubSource(spec)) => self.run_pubsub_source(&db_path, spec),
-                    Some(RuntimeSpec::PdfSource(spec)) => self.run_pdf_source(&db_path, spec),
+                    Some(RuntimeSpec::PdfSource(spec)) => {
+                        self.run_pdf_source(&db_path, &secret_prefix, spec)
+                    }
             Some(RuntimeSpec::HtmlSource(spec)) => self.run_html_source(&db_path, spec),
             Some(RuntimeSpec::XmlSource(spec)) => self.run_xml_source(&db_path, spec),
                     Some(RuntimeSpec::XmlSink(spec)) => self.run_xml_sink(&db_path, spec),

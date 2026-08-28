@@ -17384,3 +17384,190 @@ fn ducklake_maintain_stats_are_an_ordinary_relation() {
     assert!(body.contains("table_name") && body.contains("file_size_bytes"), "{body}");
     assert!(body.contains("t"), "the table should be in there: {body}");
 }
+
+// ---------------------------------------------------------------------------
+// #282 / #248 - a parser reads what an upstream artifact relation names, so
+// `src.changed -> xf.artifact.copy -> parse` is one pipeline rather than a
+// hard-coded path and a shell stage.
+// ---------------------------------------------------------------------------
+
+/// The composable case: the documents are whatever the upstream rows say, and
+/// the hash of the bytes that were landed travels with the pages.
+#[test]
+fn src_pdf_reads_the_documents_an_upstream_relation_names() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("a.pdf");
+    let b = tmp.path().join("b.pdf");
+    std::fs::write(&a, minimal_pdf(&["Alpha one", "Alpha two"])).unwrap();
+    std::fs::write(&b, minimal_pdf(&["Bravo one"])).unwrap();
+    let out = out_path(tmp.path(), "pages.csv");
+
+    // Exactly the shape xf.artifact.copy emits: a uri and the sha256 of the
+    // bytes it landed.
+    let rows = format!(
+        "SELECT '{}' AS uri, 'aaa111' AS sha256 UNION ALL SELECT '{}', 'bbb222'",
+        a.to_string_lossy().replace('\\', "/"),
+        b.to_string_lossy().replace('\\', "/")
+    );
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("art", "code.sql", json!({ "sql": rows })),
+            node("s", "src.pdf", json!({})),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "art", "s"), main_edge("e2", "s", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "src.pdf from upstream failed: {:?}", r.error);
+
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    // Counted by reading the CSV, not by counting lines: a page's text
+    // carries its own newlines, so the file has more lines than rows.
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3, "two documents, three pages");
+    assert!(body.contains("Alpha one") && body.contains("Bravo one"), "{body}");
+    // The provenance chain: the hash of the bytes that were parsed, carried
+    // rather than recomputed.
+    assert!(body.contains("aaa111") && body.contains("bbb222"), "the sha travels: {body}");
+    assert!(body.contains("a.pdf") && body.contains("b.pdf"), "document_uri names the source");
+}
+
+/// A raw zone is remote, so the parser has to fetch. The spool is one document
+/// at a time and must be gone afterwards - a long run that leaves every
+/// document behind fills the disk.
+#[test]
+fn src_pdf_fetches_a_remote_document_and_leaves_no_spool_behind() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let bytes = minimal_pdf(&["Remote page one", "Remote page two"]);
+
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let served = bytes.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(1) {
+            let mut stream = match stream {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            stream.set_read_timeout(Some(std::time::Duration::from_millis(400))).ok();
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: {}\r\n\
+                 Connection: close\r\n\r\n",
+                served.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&served);
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+
+    let spools = || {
+        std::fs::read_dir(std::env::temp_dir())
+            .map(|d| {
+                d.flatten()
+                    .filter(|e| e.file_name().to_string_lossy().starts_with("duckle_input_"))
+                    .count()
+            })
+            .unwrap_or(0)
+    };
+    let before = spools();
+    let out = out_path(tmp.path(), "remote.csv");
+    let uri = format!("http://127.0.0.1:{}/doc.pdf", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("art", "code.sql", json!({ "sql": format!("SELECT '{}' AS uri", uri) })),
+            node("s", "src.pdf", json!({})),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "art", "s"), main_edge("e2", "s", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "remote document failed: {:?}", r.error);
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(body.contains("Remote page one"), "the remote PDF was parsed: {body}");
+    assert!(body.contains(&uri), "document_uri is the URI, not the spool path: {body}");
+
+    assert_eq!(spools(), before, "the spooled document was not cleaned up");
+}
+
+/// A change feed with nothing new is a quiet success, not an error - and the
+/// relation still has to have the right columns so a downstream stage binds.
+#[test]
+fn src_pdf_with_nothing_upstream_produces_an_empty_typed_relation() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "empty.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("art", "code.sql", json!({
+                "sql": "SELECT 'x' AS uri WHERE 1 = 0"
+            })),
+            node("s", "src.pdf", json!({})),
+            node("f", "code.sql", json!({
+                "sql": "SELECT document_uri, page_number, source_sha256 FROM input"
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([
+            main_edge("e1", "art", "s"),
+            main_edge("e2", "s", "f"),
+            main_edge("e3", "f", "k"),
+        ]),
+    ));
+    assert_eq!(
+        r.status, "ok",
+        "an upstream that named no documents is not a failure: {:?}",
+        r.error
+    );
+    // The columns bound downstream, which is what "typed" has to mean here.
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(body.contains("document_uri"), "the empty relation still has its shape: {body}");
+    assert_eq!(r.nodes.get("s").map(|n| n.status.as_str()), Some("unchanged"));
+}
+
+/// One unreadable document in a batch of hundreds should not have to end the
+/// run, when the pipeline says so.
+#[test]
+fn src_pdf_can_skip_a_document_it_cannot_read() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let good = tmp.path().join("good.pdf");
+    let bad = tmp.path().join("bad.pdf");
+    std::fs::write(&good, minimal_pdf(&["Readable"])).unwrap();
+    std::fs::write(&bad, b"this is not a pdf at all").unwrap();
+    let out = out_path(tmp.path(), "skip.csv");
+    let rows = format!(
+        "SELECT '{}' AS uri UNION ALL SELECT '{}'",
+        bad.to_string_lossy().replace('\\', "/"),
+        good.to_string_lossy().replace('\\', "/")
+    );
+
+    // Default is still to fail, because silently dropping a document is how a
+    // load goes short without anyone noticing.
+    let strict = engine.execute_pipeline(&doc(
+        json!([
+            node("art", "code.sql", json!({ "sql": rows.clone() })),
+            node("s", "src.pdf", json!({})),
+            node("k", "snk.csv", json!({ "path": out.clone(), "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "art", "s"), main_edge("e2", "s", "k")]),
+    ));
+    assert_eq!(strict.status, "error", "an unreadable document fails by default");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("art", "code.sql", json!({ "sql": rows })),
+            node("s", "src.pdf", json!({ "onError": "skip" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "art", "s"), main_edge("e2", "s", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(body.contains("Readable"), "the good document was still read: {body}");
+    let note = r.nodes.get("s").and_then(|n| n.note.clone()).unwrap_or_default();
+    assert!(note.contains("skipped"), "what was skipped has to be reported: {note}");
+}

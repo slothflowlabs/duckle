@@ -1582,6 +1582,40 @@ fn rename_token(sql: &str, from: &str, to: &str) -> String {
     out
 }
 
+/// The credentials a node needs to reach an artifact URI.
+///
+/// One reader for every node that can open one, so `src.pdf`, `src.xml` and
+/// `xf.artifact.copy` all take the same property names. Three readers would be
+/// three conventions that agree until one of them is changed.
+fn artifact_auth_from_props(props: &JsonValue) -> ArtifactAuth {
+    ArtifactAuth {
+        s3: crate::s3::S3Config::from_props(props),
+        headers: builders::headers_from_props(props),
+        user: string_prop(props, "user").filter(|s| !s.is_empty()),
+        password: string_prop(props, "password").filter(|s| !s.is_empty()),
+        private_key: string_prop(props, "privateKey").filter(|s| !s.is_empty()),
+        key_passphrase: string_prop(props, "keyPassphrase").filter(|s| !s.is_empty()),
+        host_fingerprint: string_prop(props, "hostFingerprint").filter(|s| !s.is_empty()),
+    }
+}
+
+/// A parser's optional artifact input.
+///
+/// `from_view` is None when nothing is wired in, which is what keeps every
+/// existing path-configured pipeline working unchanged.
+fn artifact_input_from_props(props: &JsonValue, from_view: Option<&str>) -> ArtifactInput {
+    ArtifactInput {
+        from_view: from_view.map(str::to_string),
+        uri_column: string_prop(props, "uriColumn")
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "uri".to_string()),
+        sha_column: string_prop(props, "shaColumn")
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "sha256".to_string()),
+        auth: artifact_auth_from_props(props),
+    }
+}
+
 fn build_stage(
     node: &PipelineNode,
     component_id: &str,
@@ -4392,18 +4426,44 @@ fn build_stage(
     } else if component_id == "src.pdf" {
         // #248: pages out of a document. Not SQL - DuckDB cannot open a PDF -
         // so this is a runtime hook that materialises the relation itself.
-        let path = string_prop(&props, "path")
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| EngineError::Config(format!("{}: path required (a .pdf file, or a folder of them)", component_id)))?;
+        //
+        // #282: with something wired in, the documents are whatever the upstream
+        // rows name and `path` is not required. With nothing wired in it reads
+        // its configured path exactly as it always has, so every existing
+        // pipeline is untouched.
+        let upstream = inputs.main();
+        let path = string_prop(&props, "path").filter(|s| !s.is_empty());
+        if path.is_none() && upstream.is_none() {
+            return Err(EngineError::Config(format!(
+                "{}: needs either a path (a .pdf file, or a folder of them) or an upstream relation naming the documents to read",
+                component_id
+            )));
+        }
         pdf_source = Some(PdfSourceSpec {
             node_id: node.id.clone(),
-            path,
+            path: path.unwrap_or_default(),
+            input: artifact_input_from_props(&props, upstream),
+            concurrency: props
+                .get("concurrency")
+                .and_then(|v| {
+                    v.as_u64()
+                        .or_else(|| v.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
+                })
+                .unwrap_or(1)
+                .max(1) as usize,
+            on_error: string_prop(&props, "onError")
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "fail".to_string()),
             recursive: props
                 .get("recursive")
                 .and_then(JsonValue::as_bool)
                 .unwrap_or(false),
             declared_schema: node.data.schema.clone(),
         });
+        // `from` stays None even with an input wired in: this node MATERIALISES
+        // its own relation, and `from` names the relation a stage READS. Setting
+        // it to the upstream made the downstream sink count - and write - the
+        // artifact rows instead of the pages.
         (String::new(), StageKind::View, None)
     } else if component_id == "src.html" {
         // #255: rows out of an HTML page. Not SQL - DuckDB cannot parse HTML -
@@ -4755,7 +4815,7 @@ fn build_stage(
         const DRY_RUNNABLE: &[&str] = &["expireSnapshots", "cleanupFiles", "deleteOrphans"];
         if dry_run && !DRY_RUNNABLE.contains(&operation.as_str()) {
             return Err(EngineError::Config(format!(
-                "{}: '{}' has no dry run in DuckLake, so ticking it would be ignored and the                  operation would happen anyway. Dry run is available on: {}",
+                "{}: '{}' has no dry run in DuckLake, so ticking it would be ignored and the operation would happen anyway. Dry run is available on: {}",
                 component_id,
                 operation,
                 DRY_RUNNABLE.join(", ")
@@ -4831,13 +4891,7 @@ fn build_stage(
                 .map(|n| (n as usize) * 1024 * 1024)
                 .unwrap_or(8 * 1024 * 1024)
                 .max(5 * 1024 * 1024),
-            s3: crate::s3::S3Config::from_props(&props),
-            user: string_prop(&props, "user").filter(|s| !s.is_empty()),
-            password: string_prop(&props, "password").filter(|s| !s.is_empty()),
-            private_key: string_prop(&props, "privateKey").filter(|s| !s.is_empty()),
-            key_passphrase: string_prop(&props, "keyPassphrase").filter(|s| !s.is_empty()),
-            host_fingerprint: string_prop(&props, "hostFingerprint").filter(|s| !s.is_empty()),
-            headers: headers_from_props(&props),
+            auth: artifact_auth_from_props(&props),
         });
         (String::new(), StageKind::View, Some(from_view.to_string()))
     } else if component_id == "xf.tumble" {

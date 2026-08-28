@@ -569,8 +569,19 @@ pub struct ModelCardSpec {
 #[derive(Debug, Clone)]
 pub struct PdfSourceSpec {
     pub node_id: String,
-    /// A .pdf file, or a directory of them.
+    /// A .pdf file, or a directory of them. Ignored when `input` names an
+    /// upstream relation.
     pub path: String,
+    /// #282: read the documents named by an upstream artifact relation instead
+    /// of a configured path.
+    pub input: ArtifactInput,
+    /// How many documents to parse at once. Sequential by default: rendering
+    /// and parsing a document can take a lot of memory, and the bound that
+    /// matters is one artifact times this.
+    pub concurrency: usize,
+    /// What to do with a document that cannot be parsed: "fail" the run,
+    /// "skip" it, or "reject" it down the reject port.
+    pub on_error: String,
     /// Descend into sub-directories when `path` is a directory.
     pub recursive: bool,
     /// Optional declared output schema (the node's Schema tab).
@@ -2205,6 +2216,58 @@ pub struct ChangedSourceSpec {
     pub s3: Option<crate::s3::S3Config>,
 }
 
+/// How to reach an artifact, whatever scheme its URI is written in.
+///
+/// #282: the artifact boundary is only composable if every parser reaches a URI
+/// the SAME way. Giving `src.pdf`, `src.xml` and `src.html` each their own
+/// credential fields would produce three conventions that agree until the day
+/// one of them does not, so the auth lives here once and each of them holds one.
+#[derive(Debug, Clone, Default)]
+pub struct ArtifactAuth {
+    /// Credentials for `s3://`.
+    pub s3: Option<crate::s3::S3Config>,
+    /// Extra request headers for `https://`.
+    pub headers: Vec<(String, String)>,
+    // SFTP.
+    pub user: Option<String>,
+    pub password: Option<String>,
+    pub private_key: Option<String>,
+    pub key_passphrase: Option<String>,
+    pub host_fingerprint: Option<String>,
+}
+
+/// A parser's optional artifact input: the upstream relation naming what to
+/// read, and which of its columns holds the URI.
+///
+/// Absent means the node reads its configured path, exactly as it always has -
+/// every existing pipeline keeps working, which is the only acceptable way to
+/// add this.
+#[derive(Debug, Clone)]
+pub struct ArtifactInput {
+    /// The upstream relation. None when the node has no input wired.
+    pub from_view: Option<String>,
+    /// Column holding each artifact's URI. `uri` by default, which is what
+    /// `src.changed`, `src.artifact` and `xf.artifact.copy` all emit.
+    pub uri_column: String,
+    /// Column holding the hash of those bytes, carried through to the parsed
+    /// rows. Not recomputed: the copy that landed the artifact already hashed
+    /// exactly those bytes, and re-hashing would both cost a second full read
+    /// and produce the hash of whatever is at that URI NOW.
+    pub sha_column: String,
+    pub auth: ArtifactAuth,
+}
+
+impl Default for ArtifactInput {
+    fn default() -> Self {
+        ArtifactInput {
+            from_view: None,
+            uri_column: "uri".into(),
+            sha_column: "sha256".into(),
+            auth: ArtifactAuth::default(),
+        }
+    }
+}
+
 /// `src.ducklake.maintain`: run one of DuckLake's own maintenance operations
 /// and emit what it did as an ordinary relation.
 ///
@@ -2268,13 +2331,6 @@ pub struct ArtifactCopySpec {
     /// Bytes per multipart part when writing to S3. Also the ceiling on memory
     /// used per object, which is why it is a knob at all.
     pub part_size_bytes: usize,
-    /// Credentials for whichever side is `s3://`.
-    pub s3: Option<crate::s3::S3Config>,
-    // Source auth for the other schemes, matching src.changed.
-    pub user: Option<String>,
-    pub password: Option<String>,
-    pub private_key: Option<String>,
-    pub key_passphrase: Option<String>,
-    pub host_fingerprint: Option<String>,
-    pub headers: Vec<(String, String)>,
+    /// Credentials for whichever side is `s3://`, and for the other schemes.
+    pub auth: ArtifactAuth,
 }
