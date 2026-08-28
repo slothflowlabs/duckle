@@ -3937,6 +3937,20 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
                     description: 'How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm.',
                 },
                 {
+                    key: 'incrementalField',
+                    label: 'Incremental field',
+                    kind: 'text',
+                    placeholder: 'updated_at',
+                    description: 'A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state.',
+                },
+                {
+                    key: 'incrementalInitial',
+                    label: 'Incremental starting value',
+                    kind: 'text',
+                    placeholder: '1970-01-01',
+                    description: 'What {incremental} is on the very first run, before a mark has been saved. Blank is a real choice for an API that reads an empty cursor as "from the beginning". The mark is saved only when the whole pipeline succeeds, and only when it moved forward.',
+                },
+                {
                     key: 'concurrency',
                     label: 'Requests in flight',
                     kind: 'integer',

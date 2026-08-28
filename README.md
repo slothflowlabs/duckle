@@ -794,6 +794,41 @@ empty, so a node wired to it binds on a clean run too.
 `_page_number` is now per parent walk. A global counter said 4001 for the first
 page of the 4001st company.
 
+### A cursor that reaches the request
+
+Filtering after the fetch is not incremental for an API. You still pay for the
+whole dataset every run, so for a large API it is a full reload with extra
+steps. The cursor has to reach the request.
+
+Name an **Incremental field** on `src.rest` and put `{incremental}` wherever the
+API takes its cursor - the URL, a query parameter, the body or a header:
+
+```
+URL                  : https://api.example.com/changes?since={incremental}
+Incremental field    : updated_at
+Starting value       : 1970-01-01
+```
+
+```
+run 1  GET /changes?since=1970-01-01   -> records up to 2026-03-05
+run 2  GET /changes?since=2026-03-05   -> only what is new
+```
+
+The mark is the **highest value seen**, not the last one received - an API that
+returns a page out of order must not move the cursor backwards and re-fetch
+what was already taken. Numbers compare numerically and everything else
+lexically, which is why ISO-8601 works without a date parser.
+
+**It is saved only when the whole pipeline succeeds**, through the same deferred
+queue every other watermark uses. A run that fails after this stage does not
+advance the cursor past rows no sink ever received. Nothing REST-specific was
+added for that; it is the mechanism `xf.incremental` and the Kafka resume point
+already use.
+
+`{incremental}` is a reserved name. When the node is also fanning out over
+upstream rows, an upstream column called `incremental` is refused rather than
+silently shadowed by the mark.
+
 ### A ceiling on the bill, not just on the rate
 
 Rate limiting controls how fast money leaves. It does not control how much. A

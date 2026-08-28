@@ -1813,7 +1813,9 @@ impl DuckdbEngine {
                     }
                     // Generic HTTP source: fetch URL, walk response_path,
                     // follow cursor pagination, materialize as table.
-                    Some(RuntimeSpec::RestSource(spec)) => self.run_rest_source(&db_path, spec),
+                    Some(RuntimeSpec::RestSource(spec)) => {
+                        self.run_rest_source(&db_path, spec, pipeline_name, &mut pending_writes)
+                    }
                     Some(RuntimeSpec::ElasticSource(spec)) => {
                         self.run_elastic_source(&db_path, spec)
                     }

@@ -1761,6 +1761,20 @@ pub struct RestSourceSpec {
     /// careless upstream cannot turn into an unbounded request storm. Only
     /// applies when fanning out.
     pub max_requests: u64,
+    /// #257: the response field that derives the next high-water mark.
+    ///
+    /// A plain key (`updated_at`) or a JSON pointer (`/meta/updated_at`) into
+    /// each returned ROW. None = no request-side incremental state, which is
+    /// every pipeline that existed before.
+    ///
+    /// Fetch-then-filter is not incremental for an API: filtering after the
+    /// fetch still pays for the whole dataset every run. The cursor has to
+    /// reach the request, which is what `{incremental}` is for.
+    pub incremental_field: Option<String>,
+    /// The value `{incremental}` takes on the first run, before any mark has
+    /// been saved. Empty is a legitimate choice for an API that treats a blank
+    /// cursor as "from the beginning".
+    pub incremental_initial: String,
     /// #257: how many parent requests may be in flight at once.
     ///
     /// 1 is sequential and byte for byte what this node did before, including

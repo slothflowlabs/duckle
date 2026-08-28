@@ -14797,6 +14797,106 @@ fn qa_block_keeps_a_pair_once_when_several_rules_catch_it() {
 /// APIs look like: GET /companies, then GET /companies/{id}/officers.
 ///
 /// Asserts on the CAPTURED REQUEST LINES, not just the row count, because the
+/// #257: the incremental cursor reaches the REQUEST, and only moves forward
+/// when the whole run succeeded.
+///
+/// Fetch-then-filter is not incremental for an API - it still pays for the
+/// whole dataset every run - so the test that matters is what the server was
+/// asked for, not what came back. Run 1 sends the initial mark; run 2 sends the
+/// highest value run 1 saw.
+#[test]
+fn the_incremental_mark_reaches_the_request_and_advances_only_on_success() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let _g = env_guard();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let asked = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = asked.clone();
+    let handle = std::thread::spawn(move || {
+        for (idx, stream) in listener.incoming().take(2).enumerate() {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            for _ in 0..8 {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        buf.extend_from_slice(&chunk[..n]);
+                        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let req = String::from_utf8_lossy(&buf).to_string();
+            seen.lock().unwrap().push(req.lines().next().unwrap_or("").to_string());
+            // Two records; the later one is what the next run must ask from.
+            let body = if idx == 0 {
+                r#"{"items":[{"id":1,"updated_at":"2026-01-01"},{"id":2,"updated_at":"2026-03-05"}]}"#
+            } else {
+                r#"{"items":[{"id":3,"updated_at":"2026-04-09"}]}"#
+            };
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", &ws);
+    let out = out_path(tmp.path(), "out.csv");
+    let url = format!("http://127.0.0.1:{}/changes?since={{incremental}}", port);
+    let build = || {
+        doc(
+            json!([
+                node("r", "src.rest", json!({
+                    "url": url,
+                    "responsePath": "/items",
+                    "incrementalField": "updated_at",
+                    "incrementalInitial": "1970-01-01",
+                })),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "r", "k")]),
+        )
+    };
+
+    let r1 = engine.execute_pipeline_named(&build(), "incr");
+    assert_eq!(r1.status, "ok", "first run failed: {:?}", r1.error);
+    let r2 = engine.execute_pipeline_named(&build(), "incr");
+    assert_eq!(r2.status, "ok", "second run failed: {:?}", r2.error);
+    drop(handle);
+
+    let reqs = asked.lock().unwrap().clone();
+    assert_eq!(reqs.len(), 2, "two runs, two requests: {reqs:?}");
+    assert!(
+        reqs[0].contains("since=1970-01-01"),
+        "the first run must send the initial mark: {}",
+        reqs[0]
+    );
+    // The highest value run 1 SAW, not the last one it happened to receive.
+    assert!(
+        reqs[1].contains("since=2026-03-05"),
+        "the second run must ask from where the first one got to: {}",
+        reqs[1]
+    );
+    std::env::remove_var("DUCKLE_WORKSPACE");
+}
+
 /// #257: the fan-out really runs requests at the same time, and the rows are
 /// all still there.
 ///

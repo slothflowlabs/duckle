@@ -5469,6 +5469,8 @@ fn build_stage(
             // This is the fixed-endpoint form (a vendor alias), which never
             // fans out, so there is nothing to run in parallel and no parent
             // that could fail on its own.
+            incremental_field: None,
+            incremental_initial: String::new(),
             concurrency: 1,
             on_parent_error: "fail".to_string(),
             transport: http_transport_from_props(&props),
@@ -5756,6 +5758,10 @@ fn build_stage(
             from_view: rest_from_view,
             url_template: rest_url_template,
             parent_key_column: string_prop(&props, "parentKeyColumn").filter(|s| !s.is_empty()),
+            incremental_field: string_prop(&props, "incrementalField")
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()),
+            incremental_initial: string_prop(&props, "incrementalInitial").unwrap_or_default(),
             concurrency: props
                 .get("concurrency")
                 .and_then(JsonValue::as_u64)

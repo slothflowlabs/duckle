@@ -14674,6 +14674,8 @@ impl DuckdbEngine {
         &self,
         db: &Path,
         spec: &RestSourceSpec,
+        pipeline_name: Option<&str>,
+        pending: &mut Vec<crate::PendingWrite>,
     ) -> Result<String, EngineError> {
         let mut pages = 0_u64;
         // One Agent for the whole pagination walk so keep-alive connections
@@ -14696,6 +14698,39 @@ impl DuckdbEngine {
             eff_headers.retain(|(k, _)| !k.eq_ignore_ascii_case("authorization"));
             eff_headers.push(("Authorization".into(), format!("Bearer {}", token)));
         }
+        // #257: request-side incremental state.
+        //
+        // Fetch-then-filter is not incremental for an API - filtering after the
+        // fetch still pays for the whole dataset every run - so the cursor has
+        // to reach the request. Read here, substituted below, and the NEXT mark
+        // is derived from the rows and queued for the deferred write that only
+        // flushes when the whole run succeeds.
+        let state_path = spec
+            .incremental_field
+            .as_ref()
+            .and_then(|_| incremental_state_path(pipeline_name, &spec.node_id));
+        let prior_state = state_path.as_ref().map(|p| crate::read_state_snapshot(p));
+        let saved_mark = state_path
+            .as_ref()
+            .and_then(read_incremental_state)
+            .map(|(v, _)| v);
+        let mark = saved_mark
+            .clone()
+            .unwrap_or_else(|| spec.incremental_initial.clone());
+        // Applied to everything that reaches the wire, because an API may take
+        // its cursor in any of them.
+        let sub = |t: &str| t.replace(INCREMENTAL_PLACEHOLDER, &mark);
+        let spec = &{
+            let mut s2 = spec.clone();
+            if s2.incremental_field.is_some() {
+                s2.url = sub(&s2.url);
+                s2.url_template = s2.url_template.as_deref().map(sub);
+                s2.body = s2.body.as_deref().map(sub);
+                s2.headers = s2.headers.iter().map(|(k, v)| (k.clone(), sub(v))).collect();
+            }
+            s2
+        };
+
         // #257: a parent endpoint can feed a child endpoint. Without a URL
         // template there is one pass and no substitution, exactly what this
         // function did before, so every existing pipeline and all the vendor
@@ -14709,6 +14744,20 @@ impl DuckdbEngine {
             )?,
             _ => vec![JsonValue::Null],
         };
+        // The mark is substituted before the parent-row pass, so an upstream
+        // column of the same name would be shadowed without a word. Refuse
+        // rather than pick one silently.
+        if spec.incremental_field.is_some() {
+            if let Some(obj) = parents.first().and_then(|p| p.as_object()) {
+                if obj.contains_key(INCREMENTAL_NAME) {
+                    return Err(EngineError::Config(format!(
+                        "rest: the upstream has a column named {INCREMENTAL_NAME:?}, which is \
+                         the name this node substitutes the saved incremental mark under. \
+                         Rename the column, or turn the incremental field off."
+                    )));
+                }
+            }
+        }
         if spec.url_template.is_some() && parents.len() as u64 > spec.max_requests {
             return Err(EngineError::Query(format!(
                 "rest: {} upstream rows would each make a request, past the cap of {}. Filter the upstream, or raise Max requests.",
@@ -15061,6 +15110,8 @@ impl DuckdbEngine {
         let mut rejects: Vec<JsonValue> = Vec::new();
         let mut written = 0_usize;
         let mut failed = 0_usize;
+        // The highest value seen in the incremental field, across every parent.
+        let mut next_mark: Option<String> = None;
 
         if spec.concurrency <= 1 {
             for parent in &parents {
@@ -15068,6 +15119,7 @@ impl DuckdbEngine {
                     Ok((rows, walked)) => {
                         pages += walked;
                         for r in &rows {
+                            advance_mark(&mut next_mark, spec.incremental_field.as_deref(), r);
                             writer.write_row(r)?;
                             written += 1;
                         }
@@ -15096,7 +15148,15 @@ impl DuckdbEngine {
                 &mut u64,
                 &mut usize,
                 &mut usize,
-            )> = Mutex::new((&mut writer, &mut rejects, &mut pages, &mut written, &mut failed));
+                &mut Option<String>,
+            )> = Mutex::new((
+                &mut writer,
+                &mut rejects,
+                &mut pages,
+                &mut written,
+                &mut failed,
+                &mut next_mark,
+            ));
             let first_error: Mutex<Option<EngineError>> = Mutex::new(None);
             let workers = spec.concurrency.min(parents.len().max(1));
             std::thread::scope(|scope| {
@@ -15113,6 +15173,11 @@ impl DuckdbEngine {
                             Ok((rows, walked)) => {
                                 *g.2 += walked;
                                 for r in &rows {
+                                    advance_mark(
+                                        g.5,
+                                        spec.incremental_field.as_deref(),
+                                        r,
+                                    );
                                     // A write failure is the stage's failure,
                                     // not this parent's, so it stops everything
                                     // rather than becoming a reject row.
@@ -15160,6 +15225,26 @@ impl DuckdbEngine {
                 &rejects,
                 Some(&parent_failure_schema()),
             )?;
+        }
+        // #257: queued, not written. The deferred queue flushes only when the
+        // WHOLE run succeeds, so a pipeline that fails after this stage does
+        // not advance the cursor past rows no sink ever received.
+        //
+        // Only when it moved FORWARD. A page that came back out of order, or an
+        // API that returned an older record last, must not walk the mark
+        // backwards and re-fetch what was already taken.
+        if let (Some(path), Some(found)) = (state_path.as_ref(), next_mark.as_ref()) {
+            let moved = saved_mark
+                .as_deref()
+                .map(|old| mark_is_newer(found, old))
+                .unwrap_or(true);
+            if moved {
+                pending.push(crate::PendingWrite::state(
+                    path.clone(),
+                    serde_json::json!({ "value": found, "type": "VARCHAR" }),
+                    prior_state.unwrap_or(None),
+                ));
+            }
         }
         Ok(format!(
             "rest: materialized {} rows ({} page(s)) into {}{}{}",
@@ -16832,6 +16917,52 @@ fn json_matches_type(v: &JsonValue, want: &str) -> bool {
         // A type the checker does not know is not a reason to reject an answer
         // the provider already validated.
         _ => true,
+    }
+}
+
+/// #257: the name the saved incremental mark is substituted under.
+///
+/// Reserved: an upstream column of this name is refused rather than shadowed.
+pub(crate) const INCREMENTAL_NAME: &str = "incremental";
+pub(crate) const INCREMENTAL_PLACEHOLDER: &str = "{incremental}";
+
+/// Is `candidate` past `current`?
+///
+/// Numeric when both parse as numbers, textual otherwise - which is what makes
+/// ISO-8601 work without a date parser, since it sorts lexically by design. A
+/// format that does not sort lexically (`03/04/2026`) is not usable as a cursor
+/// here, and would not be usable as one against the API either.
+pub(crate) fn mark_is_newer(candidate: &str, current: &str) -> bool {
+    match (candidate.parse::<f64>(), current.parse::<f64>()) {
+        (Ok(a), Ok(b)) => a > b,
+        _ => candidate > current,
+    }
+}
+
+/// Raise `mark` to this row's value, if the row carries a higher one.
+///
+/// The field is a plain key (`updated_at`) or a JSON pointer
+/// (`/meta/updated_at`). A row missing it is skipped rather than treated as
+/// empty: a null cursor would drag the mark down to nothing.
+pub(crate) fn advance_mark(mark: &mut Option<String>, field: Option<&str>, row: &JsonValue) {
+    let Some(field) = field else { return };
+    let found = if field.starts_with('/') {
+        row.pointer(field)
+    } else {
+        row.get(field)
+    };
+    let Some(v) = found else { return };
+    let text = match v {
+        JsonValue::String(s) => s.clone(),
+        JsonValue::Null => return,
+        other => other.to_string(),
+    };
+    if text.is_empty() {
+        return;
+    }
+    match mark {
+        Some(current) if !mark_is_newer(&text, current) => {}
+        _ => *mark = Some(text),
     }
 }
 
