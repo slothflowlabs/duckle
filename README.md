@@ -747,6 +747,53 @@ row.
 quietly stops early is the exact failure this feature exists to remove, so a
 schema that pulls in another one says so and asks for a self-contained file.
 
+### A fan-out over two million parents
+
+`src.rest` with a **URL per upstream row** turns `/companies` into
+`/companies/{id}/officers` - one request per parent, one relation out. At
+registry scale three things about that mattered, and none of them were the
+requests themselves.
+
+**Memory.** The fan-out used to hold every child row in one list until the stage
+ended, so a 2M-parent walk was bounded by RAM rather than by the API. It now
+writes as each walk finishes. Memory is the parent list, the walks in flight and
+one write batch; the total number of children is no longer in that sum.
+
+**Concurrency.** **Requests in flight** puts N parents in the air at once.
+Workers pull the next parent rather than being handed a slice, so one slow
+endpoint does not leave the others idle at the end of their share.
+
+```
+c  ok (8 rows) - rest: materialized 8 rows (8 page(s)) into c (unordered: 4 requests in flight)
+```
+
+Above 1, **the output order is not the upstream order** - rows land as their
+requests finish. That is said in the field, in the node's message and here,
+rather than left to be discovered when a downstream `LIMIT 10` returns different
+rows on a rerun. **Carry upstream column** is what makes a child row traceable
+without order, which is why it exists.
+
+**One bad parent.** **When a row request fails** chooses:
+
+| | |
+|---|---|
+| `Stop the run` | the default, and what it did before |
+| `Skip that row` | drop it and carry on |
+| `Send it to the reject output` | carry on, and keep the failure as a row |
+
+```
+parent_key | url                                  | error         | failed_at
+2          | http://.../companies/2/officers      | REST HTTP 500 | 2026-08-28T...
+```
+
+One failure in a million requests should not discard the 999,999 that worked,
+and a run that half-failed is only operable if the failures are somewhere you
+can query rather than only in a log. The reject relation is built even when
+empty, so a node wired to it binds on a clean run too.
+
+`_page_number` is now per parent walk. A global counter said 4001 for the first
+page of the 4001st company.
+
 ### A ceiling on the bill, not just on the rate
 
 Rate limiting controls how fast money leaves. It does not control how much. A

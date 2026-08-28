@@ -14675,7 +14675,6 @@ impl DuckdbEngine {
         db: &Path,
         spec: &RestSourceSpec,
     ) -> Result<String, EngineError> {
-        let mut all_rows: Vec<JsonValue> = Vec::new();
         let mut pages = 0_u64;
         // One Agent for the whole pagination walk so keep-alive connections
         // are reused across pages instead of a fresh TCP+TLS handshake each
@@ -14717,7 +14716,15 @@ impl DuckdbEngine {
                 spec.max_requests
             )));
         }
-        for parent in &parents {
+        // #257: one parent's whole paginated walk, as a callable unit.
+        //
+        // Extracted so the fan-out can be driven either sequentially (which is
+        // byte for byte what this node did before) or by a bounded pool. It
+        // returns that parent's rows and the pages it walked; it accumulates
+        // nothing across parents, which is what lets the caller write results
+        // out as they finish instead of holding the whole child dataset.
+        let fetch_parent = |parent: &JsonValue| -> Result<(Vec<JsonValue>, u64), EngineError> {
+            let mut out: Vec<JsonValue> = Vec::new();
             self.check_cancelled()?;
             let mut url = match &spec.url_template {
                 Some(t) => render_url_template(t, parent)?,
@@ -14895,7 +14902,14 @@ impl DuckdbEngine {
                                         "_response_sha256".into(),
                                         JsonValue::from(page_sha256.clone()),
                                     );
-                                    o.insert("_page_number".into(), JsonValue::from(pages + 1));
+                                    // Per this parent's walk. A global counter
+                                    // would keep climbing across parents, so
+                                    // `_page_number` would say 4001 for the
+                                    // first page of the 4001st company.
+                                    o.insert(
+                                        "_page_number".into(),
+                                        JsonValue::from(parent_pages + 1),
+                                    );
                                 }
                                 r
                             })
@@ -14921,8 +14935,7 @@ impl DuckdbEngine {
                     }
                     _ => rows,
                 };
-                all_rows.extend(rows);
-                pages += 1;
+                out.extend(rows);
                 parent_pages += 1;
                 // Determine whether another page exists (and set up the next
                 // request URL as a side effect). Done BEFORE the page-cap
@@ -15025,25 +15038,150 @@ impl DuckdbEngine {
                 }
             }
             if truncated {
-                return Err(pagination_capped_err(
-                    "rest",
-                    all_rows.len(),
-                    spec.max_pages,
-                ));
+                return Err(pagination_capped_err("rest", out.len(), spec.max_pages));
+            }
+            Ok((out, parent_pages))
+        };
+
+        // #257: write as the walks finish, rather than accumulating.
+        //
+        // The old shape held every child row in one Vec until the stage ended,
+        // so a 2M-parent fan-out was bounded by RAM rather than by the API.
+        // Memory is now the parent list, the walks in flight and one write
+        // batch; the TOTAL number of children no longer appears in that sum.
+        // `materialize_jsonobjects_as_table_typed` is the same writer with a
+        // Vec in front of it, and its own comment says to use the writer
+        // directly for exactly this case.
+        let mut writer =
+            JsonLinesWriter::open_with_schema(&spec.node_id, spec.declared_schema.clone())?;
+        // #257 + #101: a parent that failed is a row, not just a log line. A
+        // 2M-parent run that half-failed is only operable if the failures are
+        // durable next to the successes.
+        let reject_policy = spec.on_parent_error.as_str();
+        let mut rejects: Vec<JsonValue> = Vec::new();
+        let mut written = 0_usize;
+        let mut failed = 0_usize;
+
+        if spec.concurrency <= 1 {
+            for parent in &parents {
+                match fetch_parent(parent) {
+                    Ok((rows, walked)) => {
+                        pages += walked;
+                        for r in &rows {
+                            writer.write_row(r)?;
+                            written += 1;
+                        }
+                    }
+                    Err(e) => match reject_policy {
+                        "fail" => return Err(e),
+                        p => {
+                            failed += 1;
+                            if p == "reject" {
+                                rejects.push(parent_failure_row(spec, parent, &e));
+                            }
+                        }
+                    },
+                }
+            }
+        } else {
+            // Bounded pool. Workers pull the next parent index rather than
+            // being handed a slice, so one slow endpoint does not leave the
+            // other workers idle at the end of their share.
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            use std::sync::Mutex;
+            let next = AtomicUsize::new(0);
+            let shared: Mutex<(
+                &mut JsonLinesWriter,
+                &mut Vec<JsonValue>,
+                &mut u64,
+                &mut usize,
+                &mut usize,
+            )> = Mutex::new((&mut writer, &mut rejects, &mut pages, &mut written, &mut failed));
+            let first_error: Mutex<Option<EngineError>> = Mutex::new(None);
+            let workers = spec.concurrency.min(parents.len().max(1));
+            std::thread::scope(|scope| {
+                for _ in 0..workers {
+                    scope.spawn(|| loop {
+                        if first_error.lock().map(|e| e.is_some()).unwrap_or(true) {
+                            return;
+                        }
+                        let i = next.fetch_add(1, Ordering::SeqCst);
+                        let Some(parent) = parents.get(i) else { return };
+                        let outcome = fetch_parent(parent);
+                        let Ok(mut g) = shared.lock() else { return };
+                        match outcome {
+                            Ok((rows, walked)) => {
+                                *g.2 += walked;
+                                for r in &rows {
+                                    // A write failure is the stage's failure,
+                                    // not this parent's, so it stops everything
+                                    // rather than becoming a reject row.
+                                    if let Err(e) = g.0.write_row(r) {
+                                        if let Ok(mut slot) = first_error.lock() {
+                                            slot.get_or_insert(e);
+                                        }
+                                        return;
+                                    }
+                                    *g.3 += 1;
+                                }
+                            }
+                            Err(e) => match reject_policy {
+                                "fail" => {
+                                    if let Ok(mut slot) = first_error.lock() {
+                                        slot.get_or_insert(e);
+                                    }
+                                    return;
+                                }
+                                p => {
+                                    *g.4 += 1;
+                                    if p == "reject" {
+                                        g.1.push(parent_failure_row(spec, parent, &e));
+                                    }
+                                }
+                            },
+                        }
+                    });
+                }
+            });
+            if let Some(e) = first_error.lock().ok().and_then(|mut s| s.take()) {
+                return Err(e);
             }
         }
-        materialize_jsonobjects_as_table_typed(
-            &self.bin,
-            db,
-            &spec.node_id,
-            &all_rows,
-            spec.declared_schema.as_deref(),
-        )?;
+
+        writer.finalize_into_table(&self.bin, db, &spec.node_id)?;
+        // The reject relation is built even when empty, so a downstream node
+        // wired to it binds on a clean run instead of failing on a missing
+        // table - the same reason the main output is typed when empty.
+        if reject_policy == "reject" {
+            materialize_jsonobjects_as_table_typed(
+                &self.bin,
+                db,
+                &format!("{}__reject", spec.node_id),
+                &rejects,
+                Some(&parent_failure_schema()),
+            )?;
+        }
         Ok(format!(
-            "rest: materialized {} rows ({} page(s)) into {}",
-            all_rows.len(),
+            "rest: materialized {} rows ({} page(s)) into {}{}{}",
+            written,
             pages,
-            spec.node_id
+            spec.node_id,
+            if failed > 0 {
+                format!(
+                    ", {} parent(s) failed and were {}",
+                    failed,
+                    if reject_policy == "reject" { "rejected" } else { "skipped" }
+                )
+            } else {
+                String::new()
+            },
+            // Said here rather than left to be discovered when a downstream
+            // LIMIT 10 returns different rows on a rerun.
+            if spec.concurrency > 1 {
+                format!(" (unordered: {} requests in flight)", spec.concurrency)
+            } else {
+                String::new()
+            },
         ))
     }
 
@@ -16695,6 +16833,56 @@ fn json_matches_type(v: &JsonValue, want: &str) -> bool {
         // the provider already validated.
         _ => true,
     }
+}
+
+/// #257: the columns a rejected parent produces.
+///
+/// Declared rather than inferred so the reject relation has the same shape on a
+/// clean run as on a bad one - a downstream node wired to it must bind either
+/// way, and inferring from zero rows cannot type anything.
+fn parent_failure_schema() -> Vec<duckle_metadata::Column> {
+    use duckle_metadata::{Column, DataType};
+    let col = |name: &str, t: DataType| Column {
+        name: name.to_string(),
+        data_type: t,
+        nullable: true,
+        primary_key: None,
+        format: None,
+    };
+    vec![
+        col("parent_key", DataType::String),
+        col("url", DataType::String),
+        col("error", DataType::String),
+        col("failed_at", DataType::String),
+    ]
+}
+
+/// #257: one parent's failure, as a row.
+///
+/// Carries the parent key rather than the whole parent row: the key is what
+/// joins the failure back to its source, and a whole row of arbitrary width
+/// would make the reject relation's shape depend on the upstream's.
+fn parent_failure_row(spec: &RestSourceSpec, parent: &JsonValue, e: &EngineError) -> JsonValue {
+    let key = spec
+        .parent_key_column
+        .as_deref()
+        .and_then(|c| parent.get(c))
+        .map(|v| match v {
+            JsonValue::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+        .unwrap_or_default();
+    let url = spec
+        .url_template
+        .as_deref()
+        .map(|t| render_url_template(t, parent).unwrap_or_else(|_| t.to_string()))
+        .unwrap_or_else(|| spec.url.clone());
+    serde_json::json!({
+        "parent_key": key,
+        "url": url,
+        "error": e.to_string(),
+        "failed_at": chrono::Utc::now().to_rfc3339(),
+    })
 }
 
 /// Last `max` characters of `s` (UTF-8-safe) - used to keep the useful end

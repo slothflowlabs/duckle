@@ -5466,6 +5466,11 @@ fn build_stage(
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "/data".into());
         rest_source = Some(RestSourceSpec {
+            // This is the fixed-endpoint form (a vendor alias), which never
+            // fans out, so there is nothing to run in parallel and no parent
+            // that could fail on its own.
+            concurrency: 1,
+            on_parent_error: "fail".to_string(),
             transport: http_transport_from_props(&props),
             node_id: node.id.clone(),
             raw_response_destination: string_prop(&props, "rawResponseDestination")
@@ -5751,6 +5756,15 @@ fn build_stage(
             from_view: rest_from_view,
             url_template: rest_url_template,
             parent_key_column: string_prop(&props, "parentKeyColumn").filter(|s| !s.is_empty()),
+            concurrency: props
+                .get("concurrency")
+                .and_then(JsonValue::as_u64)
+                .map(|v| v.clamp(1, 64) as usize)
+                .unwrap_or(1),
+            on_parent_error: string_prop(&props, "onParentError")
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| "fail".to_string()),
             max_requests: props
                 .get("maxRequests")
                 .and_then(|v| v.as_u64())

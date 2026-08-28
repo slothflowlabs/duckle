@@ -14797,6 +14797,206 @@ fn qa_block_keeps_a_pair_once_when_several_rules_catch_it() {
 /// APIs look like: GET /companies, then GET /companies/{id}/officers.
 ///
 /// Asserts on the CAPTURED REQUEST LINES, not just the row count, because the
+/// #257: the fan-out really runs requests at the same time, and the rows are
+/// all still there.
+///
+/// The stub holds each connection open briefly while counting how many are in
+/// flight. A sequential driver can never see more than one, so the max is the
+/// measurement that distinguishes "concurrency was configured" from
+/// "concurrency happened".
+#[test]
+fn rest_fan_out_runs_parent_requests_concurrently() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let (f, pk) = (in_flight.clone(), peak.clone());
+    let handle = std::thread::spawn(move || {
+        let mut workers = Vec::new();
+        for stream in listener.incoming().take(8) {
+            let Ok(mut stream) = stream else { break };
+            let (f, pk) = (f.clone(), pk.clone());
+            workers.push(std::thread::spawn(move || {
+                let now = f.fetch_add(1, Ordering::SeqCst) + 1;
+                pk.fetch_max(now, Ordering::SeqCst);
+                stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+                let mut chunk = [0u8; 4096];
+                let _ = stream.read(&mut chunk);
+                // Held open so overlapping requests actually overlap.
+                std::thread::sleep(Duration::from_millis(120));
+                let body = r#"{"results":[{"officer":"x"}]}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.write_all(body.as_bytes());
+                let _ = stream.flush();
+                let _ = stream.shutdown(std::net::Shutdown::Write);
+                f.fetch_sub(1, Ordering::SeqCst);
+            }));
+        }
+        for w in workers {
+            let _ = w.join();
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let in_csv = write_file(
+        tmp.path(),
+        "in.csv",
+        "id\n1\n2\n3\n4\n5\n6\n7\n8\n",
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let base = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": in_csv, "hasHeader": true })),
+            node("c", "src.rest", json!({
+                "url": base,
+                "urlTemplate": format!("{}/companies/{{id}}/officers", base),
+                "responsePath": "/results",
+                "parentKeyColumn": "id",
+                "concurrency": 4,
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+    ));
+    // Not joined: the stub waits for a fixed number of connections, and a run
+    // that stops early never makes them all. A test must not hang on the
+    // failure it is there to detect.
+    drop(handle);
+    assert_eq!(r.status, "ok", "fan-out failed: {:?}", r.error);
+    assert_eq!(
+        count(&format!("read_csv_auto('{}')", out)),
+        8,
+        "every parent's child row is still there"
+    );
+    assert!(
+        peak.load(Ordering::SeqCst) > 1,
+        "requests never overlapped, so this ran sequentially: peak {}",
+        peak.load(Ordering::SeqCst)
+    );
+    // Unordered output is the point of the pool, so the parent key is what
+    // makes a child row traceable - it must be on every row.
+    assert_eq!(
+        count(&format!("read_csv_auto('{}') WHERE id IS NOT NULL", out)),
+        8,
+        "the carried parent key is what replaces order"
+    );
+}
+
+/// #257 + #101: one parent's failure does not discard the others, and the
+/// failure itself survives as a row.
+///
+/// A 2M-parent run that half-failed is only operable if the failures are
+/// durable next to the successes. A log line is not durable.
+#[test]
+fn a_failed_parent_becomes_a_reject_row_instead_of_ending_the_run() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        for stream in listener.incoming().take(3) {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            for _ in 0..8 {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        buf.extend_from_slice(&chunk[..n]);
+                        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let req = String::from_utf8_lossy(&buf).to_string();
+            // Company 2 is the one the server refuses.
+            let (status, body) = if req.contains("/companies/2/") {
+                ("500 Internal Server Error", r#"{"error":"boom"}"#)
+            } else {
+                ("200 OK", r#"{"results":[{"officer":"x"}]}"#)
+            };
+            let resp = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                status,
+                body.len()
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let in_csv = write_file(tmp.path(), "in.csv", "id\n1\n2\n3\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let rej = out_path(tmp.path(), "rej.csv");
+    let base = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": in_csv, "hasHeader": true })),
+            node("c", "src.rest", json!({
+                "url": base,
+                "urlTemplate": format!("{}/companies/{{id}}/officers", base),
+                "responsePath": "/results",
+                "parentKeyColumn": "id",
+                "onParentError": "reject",
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            node("kr", "snk.csv", json!({ "path": rej, "hasHeader": true })),
+        ]),
+        json!([
+            main_edge("e1", "s", "c"),
+            main_edge("e2", "c", "k"),
+            json!({ "id": "e3", "source": "c", "target": "kr", "sourceHandle": "reject" }),
+        ]),
+    ));
+    // Not joined: the stub waits for a fixed number of connections, and a run
+    // that stops early never makes them all. A test must not hang on the
+    // failure it is there to detect.
+    drop(handle);
+
+    assert_eq!(r.status, "ok", "one bad parent must not end the run: {:?}", r.error);
+    assert_eq!(
+        count(&format!("read_csv_auto('{}')", out)),
+        2,
+        "the two companies that answered are still there"
+    );
+    assert_eq!(
+        count(&format!("read_csv_auto('{}')", rej)),
+        1,
+        "and the one that did not is a row, not just a log line"
+    );
+    let key = scalar_string(&format!(
+        "SELECT parent_key FROM read_csv_auto('{}')",
+        rej
+    ));
+    assert_eq!(key, "2", "the reject row names which parent failed");
+    let err = scalar_string(&format!(
+        "SELECT error FROM read_csv_auto('{}')",
+        rej
+    ));
+    assert!(err.contains("500"), "and why: {err}");
+}
+
 /// row count alone cannot tell you the parent's value ever reached the URL.
 #[test]
 fn src_rest_fans_a_child_endpoint_out_over_parent_rows() {

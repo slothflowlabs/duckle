@@ -9847,6 +9847,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -10222,6 +10250,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -10589,6 +10645,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -11042,6 +11126,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -11409,6 +11521,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -11809,6 +11949,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -12178,6 +12346,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -12545,6 +12741,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -13992,6 +14216,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -46171,6 +46423,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -46773,6 +47053,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -47140,6 +47448,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -47511,6 +47847,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -47878,6 +48242,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -48249,6 +48641,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -48616,6 +49036,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -48987,6 +49435,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -49354,6 +49830,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -49725,6 +50229,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -50092,6 +50624,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -50463,6 +51023,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -50830,6 +51418,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -51201,6 +51817,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -51568,6 +52212,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -51939,6 +52611,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -52306,6 +53006,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -52677,6 +53405,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -53044,6 +53800,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -53415,6 +54199,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -53782,6 +54594,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -54153,6 +54993,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -54520,6 +55388,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -54891,6 +55787,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -55258,6 +56182,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",
@@ -55629,6 +56581,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -55998,6 +56978,34 @@
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
               },
               {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
                 "key": "responseMetadata",
                 "label": "Add response metadata",
                 "kind": "bool",
@@ -56365,6 +57373,34 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
               },
               {
                 "key": "responseMetadata",

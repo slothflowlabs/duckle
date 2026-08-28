@@ -1761,6 +1761,20 @@ pub struct RestSourceSpec {
     /// careless upstream cannot turn into an unbounded request storm. Only
     /// applies when fanning out.
     pub max_requests: u64,
+    /// #257: how many parent requests may be in flight at once.
+    ///
+    /// 1 is sequential and byte for byte what this node did before, including
+    /// the output row order. Above 1 the output order is NOT the parent order -
+    /// rows land as their walks finish - which is why the carried parent key
+    /// exists and why this is opt-in.
+    pub concurrency: usize,
+    /// #257: what one parent's failure does to the fan-out.
+    ///
+    /// `fail` (the default, and what this node did before) ends the run.
+    /// `skip` drops that parent and carries on. `reject` also carries on and
+    /// writes the failure to `<node>__reject`, so a run that half-failed leaves
+    /// its failures durable next to its successes rather than only in a log.
+    pub on_parent_error: String,
     pub url: String,
     pub method: String,
     pub headers: Vec<(String, String)>,
