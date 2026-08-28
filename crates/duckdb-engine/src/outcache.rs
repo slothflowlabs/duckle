@@ -66,6 +66,26 @@ pub fn key_material(config_fp: &str, input_fp: &str, engine: &str) -> String {
     }))
 }
 
+/// #246 + #252: the configuration half of a stage's key, once the Python
+/// environment is taken into account.
+///
+/// `None` means refuse to cache. For `code.python` the environment IS part of
+/// the input: the same script under a different pyarrow produces a different
+/// answer, so a key that ignored it would serve the old one after an upgrade.
+/// A workspace with no environment of its own has no identity to fold in - the
+/// stage runs against whatever interpreter the machine happens to have, which
+/// can change without anything here noticing - so it is not cached at all.
+pub fn config_with_environment(
+    component_id: &str,
+    config_fp: &str,
+    environment_hash: Option<&str>,
+) -> Option<String> {
+    if component_id != "code.python" {
+        return Some(config_fp.to_string());
+    }
+    environment_hash.map(|h| format!("{config_fp}:{h}"))
+}
+
 /// The identity of one completed output.
 ///
 /// The engine version is part of it. A deterministic stage is deterministic
@@ -254,6 +274,31 @@ mod tests {
         let a = key_for(ws, "p", "n1", "cfg", "in");
         let b = key_for(ws, "p", "n2", "cfg", "in");
         assert_ne!(a.dir, b.dir);
+    }
+
+    /// The same script under a different pyarrow is different work, and a
+    /// stage with no environment of its own has nothing to pin at all.
+    #[test]
+    fn a_python_stage_is_keyed_on_its_environment_or_not_cached() {
+        assert_eq!(
+            config_with_environment("code.python", "cfg", Some("envA")),
+            Some("cfg:envA".to_string())
+        );
+        assert_ne!(
+            config_with_environment("code.python", "cfg", Some("envA")),
+            config_with_environment("code.python", "cfg", Some("envB"))
+        );
+        assert_eq!(
+            config_with_environment("code.python", "cfg", None),
+            None,
+            "no workspace environment means no identity, so no cache"
+        );
+        // Everything else is unaffected: a JS stage has no interpreter of its
+        // own to drift.
+        assert_eq!(
+            config_with_environment("code.javascript", "cfg", None),
+            Some("cfg".to_string())
+        );
     }
 
     /// An upgrade can change what a deterministic stage produces - a parser

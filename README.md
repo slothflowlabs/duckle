@@ -708,6 +708,55 @@ duckle-runner checkpoint prune --retain-days 30      # bound it
 Pruning is explicit. These entries are results that were already paid for, so
 nothing is dropped on a default nobody chose.
 
+### Two machines that both look correct (Python environments)
+
+```
+machine A    .venv with splink==4.0.0
+machine B    .venv with splink==3.9.1
+```
+
+Same pipeline, same `uv.lock`, different answers, and nothing anywhere says so.
+Duckle now reads the environment as it **is** - the distributions installed in
+it - rather than trusting a marker written by whoever created it. A stamp file
+records an intention; `*.dist-info` records the fact.
+
+Commit a `uv.lock` and the check turns on. A pipeline with a `code.python` node
+is refused before it runs when the workspace `.venv` contradicts the lock:
+
+```
+error : python: the workspace .venv is not the environment uv.lock describes,
+        so this run would not be the run the lock says it is:
+          splink: installed 3.9.1, locked 4.0.0
+```
+
+```bash
+duckle-runner python check      # exit 1 when it does not match, so CI can gate
+duckle-runner python prepare    # rebuild .venv from the lock (uv sync --frozen)
+```
+
+**Nothing is installed during a pipeline run.** Resolving dependencies mid-run
+would turn a missing package into a download, which an air-gapped box and a
+scheduled job cannot have. `prepare` is a provisioning step: run it once, in CI
+or at deploy time.
+
+A package the lock names but that is not installed is **reported and does not
+fail**. A lock resolves for every platform, so something absent here may simply
+not apply here; a package that really is needed and really is missing raises
+`ImportError` on the first row, which is already unambiguous. What does fail is
+a version that contradicts the lock, or a package the lock never mentions -
+those are the two shapes of "someone changed this environment".
+
+`DUCKLE_PYTHON_ALLOW_DRIFT=1` downgrades the refusal to a warning. There is
+always a machine where the rule is wrong, and a check with no way past it gets
+deleted rather than fixed.
+
+With no `uv.lock`, none of this applies and `code.python` behaves exactly as it
+did: `DUCKLE_PYTHON_BIN`, then the workspace `.venv`, then the system Python.
+
+The signed run manifest records the Python version, the platform, the `uv.lock`
+SHA-256 and the environment hash - but only for a pipeline that actually has a
+Python stage, so an unused interpreter does not become noise in every manifest.
+
 ### Do not parse the same 40,000 PDFs twice (output caching)
 
 The checkpoint above remembers each **item** as it is bought. This remembers the
@@ -733,6 +782,10 @@ It is off unless you ask for it, and it is deliberately hard to fool:
   has no input this pipeline can checksum, so keying on settings alone would
   hand back last week's parse of a file that has since changed. It is refused
   instead of guessed at.
+- **A Python stage is keyed on its environment too**, and refused without one.
+  The same script under a different pyarrow is different work; a stage running
+  against whatever interpreter the machine happens to have has no identity to
+  pin, so it is not cached at all.
 - **An engine upgrade invalidates everything.** A stage is deterministic given
   a build: a parser fix makes the same input produce a different, better answer,
   and a cache that survived the upgrade would quietly keep serving the one the

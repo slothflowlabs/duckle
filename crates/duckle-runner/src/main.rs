@@ -37,6 +37,7 @@ mod listen;
 mod import;
 mod manifest;
 mod pipetest;
+mod python;
 mod selfextract;
 mod work;
 mod serve;
@@ -51,6 +52,7 @@ USAGE:
     duckle-runner mcp                      (stdio MCP server for AI agents)
     duckle-runner test [<file.test.json> ...]
     duckle-runner cache <list|clear>       (stage outputs kept for reuse)
+    duckle-runner python <check|prepare>   (the workspace's Python environment)
 
 TEST:
     Run a pipeline against a fixed input and assert the rows out of one node.
@@ -1757,6 +1759,19 @@ fn main() -> ExitCode {
             Ok(code) => ExitCode::from(code as u8),
             Err(e) => {
                 eprintln!("duckle-runner cache: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
+    // `python` -> prepare and inspect the workspace's Python environment.
+    // Separate from a run on purpose: resolving dependencies mid-pipeline would
+    // turn a missing package into a download, which an air-gapped or scheduled
+    // run cannot have.
+    if std::env::args().nth(1).as_deref() == Some("python") {
+        return match python::run() {
+            Ok(code) => ExitCode::from(code as u8),
+            Err(e) => {
+                eprintln!("duckle-runner python: {e}");
                 ExitCode::from(2)
             }
         };

@@ -45,6 +45,7 @@ pub mod checkpoint;
 pub mod outcache;
 pub mod plans;
 pub mod policy;
+pub mod pyenv;
 pub mod schedules;
 pub mod talend;
 pub mod trust;
@@ -370,6 +371,19 @@ impl DuckdbEngine {
         let ws = std::env::var("DUCKLE_WORKSPACE")
             .ok()
             .filter(|s| !s.is_empty())?;
+        // #246: for a Python stage the installed packages are part of the
+        // input, and a stage with no workspace environment has no identity to
+        // key on at all - so it is refused rather than keyed on the script.
+        let env_hash = if stage.component_id == "code.python" {
+            pyenv::inspect(std::path::Path::new(&ws)).environment_hash
+        } else {
+            None
+        };
+        let config_fp = outcache::config_with_environment(
+            &stage.component_id,
+            &stage.cache_config_fp,
+            env_hash.as_deref(),
+        )?;
         let input_fp =
             outcache::input_fingerprint(&self.bin, db, view, |d, sql| self.run_rows(Some(d), sql))
                 .ok()?;
@@ -377,7 +391,7 @@ impl DuckdbEngine {
             std::path::Path::new(&ws),
             pipeline_name.unwrap_or("pipeline"),
             &stage.node_id,
-            &stage.cache_config_fp,
+            &config_fp,
             &input_fp,
         ))
     }
@@ -980,6 +994,30 @@ impl DuckdbEngine {
                 total_start,
                 "DuckDB engine isn't installed yet. Open Setup to install it.".into(),
             );
+        }
+
+        // #246: a Python stage against an environment that is not the one
+        // uv.lock describes produces a run that is not the run the lock says it
+        // is. Checked BEFORE anything executes, because the point is to catch
+        // it instead of discovering it in the numbers afterwards. Silent unless
+        // the workspace committed a lock, and silent for a pipeline with no
+        // Python in it.
+        if doc.nodes.iter().any(|n| {
+            n.data.component_id.as_deref() == Some("code.python")
+        }) {
+            if let Ok(ws) = std::env::var("DUCKLE_WORKSPACE") {
+                if !ws.trim().is_empty() {
+                    match pyenv::guard(std::path::Path::new(&ws)) {
+                        Ok(Some(note)) => user_on_event(PipelineEvent::Log {
+                            node_id: String::new(),
+                            level: "warn".into(),
+                            message: note,
+                        }),
+                        Ok(None) => {}
+                        Err(e) => return RunResult::failed(total_start, e.to_string()),
+                    }
+                }
+            }
         }
 
         // Create the parent folder of every local file sink before running, so a

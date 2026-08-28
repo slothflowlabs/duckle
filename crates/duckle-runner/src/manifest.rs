@@ -152,6 +152,24 @@ pub fn write_manifest(
     // #278: the limits the run actually ran under, so two runs that spilled
     // differently can be told apart from two runs given different budgets.
     let limits = duckle_duckdb_engine::effective_resource_limits();
+    // #246: the Python environment, but only for a pipeline that has a Python
+    // stage - recording an unused interpreter would put noise in every
+    // manifest. Without it, two runs of the same pipeline under different
+    // package versions produce different numbers and identical provenance.
+    let python = doc
+        .nodes
+        .iter()
+        .any(|n| n.data.component_id.as_deref() == Some("code.python"))
+        .then(|| {
+            let e = duckle_duckdb_engine::pyenv::inspect(workspace);
+            json!({
+                "pythonVersion": e.python_version,
+                "platform": e.platform,
+                "lockSha256": e.lock_sha256,
+                "environmentHash": e.environment_hash,
+                "packageCount": e.installed.len(),
+            })
+        });
     let mut body = json!({
         "schemaVersion": SCHEMA_VERSION,
         "pipeline": name,
@@ -172,6 +190,9 @@ pub fn write_manifest(
     });
     if let (Some(l), Some(obj)) = (lineage_json, body.as_object_mut()) {
         obj.insert("lineage".to_string(), l);
+    }
+    if let (Some(py), Some(obj)) = (python, body.as_object_mut()) {
+        obj.insert("pythonEnvironment".to_string(), py);
     }
 
     let sk = signing_key(workspace)?;
