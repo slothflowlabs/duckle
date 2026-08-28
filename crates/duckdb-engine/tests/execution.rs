@@ -9598,6 +9598,112 @@ fn code_javascript_runs_transform_per_row_via_boa() {
     assert_eq!(name1, "WIDGET");
 }
 
+/// #252: a stage that asked for output caching does not run again when neither
+/// its configuration nor its input has changed - and DOES run again when the
+/// input changes.
+///
+/// The proof is deliberately not "the second run produced the same answer",
+/// which a stage that simply re-ran would also satisfy. Between the two runs
+/// the cached file is overwritten with a row that the script could never
+/// produce. If the second run emits that row, the output came from the cache
+/// and the stage did not execute. If it emits the real answer, the cache was
+/// ignored.
+#[test]
+fn cached_output_is_reused_until_the_input_changes() {
+    let engine = engine_or_skip!();
+    let _g = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", &ws);
+
+    let in_csv = write_file(
+        tmp.path(),
+        "in.csv",
+        "id,name,qty,price\n1,widget,3,10.0\n2,gadget,2,5.5\n",
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let script = r#"
+        function transform(row) {
+            return { id: row.id, total: row.qty * row.price };
+        }
+    "#;
+    let build = |csv: &str| {
+        doc(
+            json!([
+                node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                node(
+                    "j",
+                    "code.javascript",
+                    json!({ "script": script, "cacheOutput": true })
+                ),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "s", "j"), main_edge("e2", "j", "k")]),
+        )
+    };
+
+    // Run 1 - a cold cache, so the stage runs and its output is kept.
+    let r1 = engine.execute_pipeline_named(&build(&in_csv), "cachepipe");
+    assert_eq!(r1.status, "ok", "first run failed: {:?}", r1.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2);
+    let cache_dir = ws.join("cache").join("cachepipe").join("j");
+    let cached: Vec<_> = std::fs::read_dir(&cache_dir)
+        .expect("the cache directory should exist after a cached stage ran")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().map(|x| x == "parquet").unwrap_or(false))
+        .collect();
+    assert_eq!(cached.len(), 1, "exactly one cached output: {:?}", cached);
+
+    // Overwrite the cache with an answer the script cannot produce. Only a run
+    // that skipped the stage can emit this.
+    duckdb_exec(
+        ":memory:",
+        &format!(
+            "COPY (SELECT 99 AS id, -1.0 AS total) TO '{}' (FORMAT PARQUET)",
+            cached[0].to_string_lossy().replace('\\', "/")
+        ),
+    );
+
+    // Run 2 - same config, same input, so the tampered cache is served.
+    let r2 = engine.execute_pipeline_named(&build(&in_csv), "cachepipe");
+    assert_eq!(r2.status, "ok", "second run failed: {:?}", r2.error);
+    assert_eq!(
+        scalar_string(&format!("SELECT id FROM read_csv_auto('{}')", out)),
+        "99",
+        "the second run must have come from the cache, not from the script"
+    );
+    // Louis asked for the reuse to be visible in run metadata, not silent.
+    let note = r2.nodes.get("j").and_then(|n| n.note.clone()).unwrap_or_default();
+    assert!(
+        note.contains("reused cached output"),
+        "a reused stage must say so; got {:?}",
+        note
+    );
+
+    // Run 3 - one more input row, so the key changes and the stage really runs.
+    let changed = write_file(
+        tmp.path(),
+        "in2.csv",
+        "id,name,qty,price\n1,widget,3,10.0\n2,gadget,2,5.5\n3,bolt,10,0.25\n",
+    );
+    let r3 = engine.execute_pipeline_named(&build(&changed), "cachepipe");
+    assert_eq!(r3.status, "ok", "third run failed: {:?}", r3.error);
+    assert_eq!(
+        count(&format!("read_csv_auto('{}')", out)),
+        3,
+        "a changed input is a cache miss"
+    );
+    let note3 = r3.nodes.get("j").and_then(|n| n.note.clone()).unwrap_or_default();
+    assert!(
+        !note3.contains("reused cached output"),
+        "a changed input must not be reported as reused; got {:?}",
+        note3
+    );
+
+    std::env::remove_var("DUCKLE_WORKSPACE");
+}
+
 /// Regression: boa's JsValue::from_json/to_json clamped integers to i32 and
 /// demoted the rest to f64, so a 64-bit id (e.g. a Snowflake key) was corrupted
 /// (1350000000000000001 -> 1.35e18) even by an identity transform. The

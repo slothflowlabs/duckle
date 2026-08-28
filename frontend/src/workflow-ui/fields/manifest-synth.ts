@@ -1034,7 +1034,31 @@ function synthFileSource(comp: ComponentDef): ComponentManifest {
         ...(comp.id === 'src.pdf' || comp.id === 'src.xml' || comp.id === 'src.html'
             ? [artifactInputSection(), artifactAuthSection()]
             : []),
+        ...outputCacheSection(comp),
     ]);
+}
+
+// #252: reuse a stage's completed output when nothing that produced it has
+// changed. Only offered on components whose work is a pure function of their
+// inputs - anything that writes somewhere or reads a clock gives a different
+// answer the second time, and reusing the first one would be wrong, not fast.
+// The engine keeps its own allowlist; this only decides where the box appears.
+const CACHEABLE_COMPONENTS = ['src.pdf', 'src.xml', 'src.html', 'code.python', 'code.javascript', 'code.wasm'];
+
+function outputCacheSection(comp: ComponentDef): FormSection[] {
+    if (!CACHEABLE_COMPONENTS.includes(comp.id)) return [];
+    return [{
+        label: 'Reuse completed output',
+        fields: [
+            {
+                key: 'cacheOutput',
+                label: 'Skip this step when its inputs have not changed',
+                kind: 'bool',
+                defaultValue: false,
+                description: 'Keeps what this step produced and serves it again on the next run, as long as the settings above and the rows arriving from upstream are both identical. Change either and the step runs for real. Needs an upstream connection: without one there is nothing to compare, so the setting is ignored rather than guessed at. Cached output lives under the workspace cache folder and is safe to delete.',
+            },
+        ],
+    }];
 }
 
 // #282: read the documents an upstream artifact relation names, instead of a
@@ -6700,6 +6724,7 @@ function synthCustomCode(comp: ComponentDef): ComponentManifest {
                     placeholder: 'Faster, but module memory/state persists between rows (default: fresh instance per row)' }] : []),
             ],
         },
+        ...outputCacheSection(comp),
     ], 'declared');
 }
 

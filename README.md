@@ -708,6 +708,39 @@ duckle-runner checkpoint prune --retain-days 30      # bound it
 Pruning is explicit. These entries are results that were already paid for, so
 nothing is dropped on a default nobody chose.
 
+### Do not parse the same 40,000 PDFs twice (output caching)
+
+The checkpoint above remembers each **item** as it is bought. This remembers the
+**whole relation a stage produced**, so a stage whose inputs and settings have
+not changed does not run at all - the parse, the script, the extraction, none of
+it.
+
+Tick **Skip this step when its inputs have not changed** on `src.pdf`,
+`src.xml`, `src.html`, `code.python`, `code.javascript` or `code.wasm`. On the
+next run the stage's output is served from the workspace cache instead of being
+recomputed, and the node says so:
+
+```
+j  code.javascript  ok  reused cached output 3f9a1c22b4d0
+```
+
+It is off unless you ask for it, and it is deliberately hard to fool:
+
+- The key is the component, the node's settings **and** a checksum of the rows
+  arriving from upstream. Change any of them and the stage really runs.
+- Secrets are stripped out of the key. A rotated password is not new work.
+- **No upstream connection means no caching.** A stage reading the outside world
+  has no input this pipeline can checksum, so keying on settings alone would
+  hand back last week's parse of a file that has since changed. It is refused
+  instead of guessed at.
+- The list of components is an allowlist, not a denylist. Anything that writes
+  somewhere, reads a clock or talks to a queue gives a different answer the
+  second time, and reusing the first one would be wrong rather than fast.
+- A cache that cannot be read or written is a slower run, never a failed one.
+
+Cached output lives under `<workspace>/cache/<pipeline>/<node>/` and can be
+deleted at any time.
+
 ### A JSON column that appears late is not a column you lose
 
 DuckDB decides what a JSON document's columns ARE from the first `sample_size`

@@ -94,6 +94,17 @@ pub struct Stage {
     /// skips the per-stage count + preview (and the batched count marker) for
     /// these, the same way it does for nodes that never create a plain relation.
     pub no_output_relation: bool,
+    /// #252: this stage asked for its completed output to be reused when
+    /// nothing that produced it has changed. Opt-in, and only honoured for the
+    /// components in [`CACHEABLE_COMPONENTS`].
+    pub cache_output: bool,
+    /// The relation whose contents the cache key is taken from. `None` means
+    /// the stage has no upstream this pipeline can checksum, and caching is
+    /// refused rather than keyed on configuration alone.
+    pub cache_input_view: Option<String>,
+    /// Everything about the node, other than its input, that could change the
+    /// answer. Fixed at plan time.
+    pub cache_config_fp: String,
 }
 
 impl Stage {
@@ -123,6 +134,22 @@ impl Stage {
 /// come from the sasl* fields. Returns (tls, sasl). Both halves of the form
 /// were read by nothing before this, so a node configured for SASL_SSL
 /// connected in plaintext with no credentials and said nothing about it.
+/// #252 slice 1: the components whose completed output may be reused.
+///
+/// An allowlist rather than a denylist on purpose. Anything that writes
+/// somewhere, reads a clock, or talks to a queue produces a different answer
+/// the second time even with identical inputs, and a cache that returned the
+/// first answer would be wrong rather than fast. Adding a component here is a
+/// claim that it is a pure function of its inputs.
+const CACHEABLE_COMPONENTS: &[&str] = &[
+    "src.pdf",
+    "src.xml",
+    "src.html",
+    "code.python",
+    "code.javascript",
+    "code.wasm",
+];
+
 /// A column list the GUI may hand over either as an array or as the
 /// comma-separated string a hand-written pipeline uses.
 fn column_list(props: &JsonValue, key: &str) -> Vec<String> {
@@ -6676,7 +6703,50 @@ fn build_stage(
             sql = format!("{}{}DETACH {};", trimmed, sep, effective);
         }
     }
+    // #252 slice 1: opt-in reuse of this stage's completed output.
+    //
+    // Restricted to components whose work is deterministic given their inputs
+    // and whose inputs are a relation this pipeline can checksum. A stage that
+    // reads the outside world has no input identity the pipeline can see, so it
+    // is refused rather than keyed on configuration alone - which would return
+    // last week's parse of a file that has since changed.
+    let cache_output = props
+        .get("cacheOutput")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false)
+        && CACHEABLE_COMPONENTS.contains(&component_id);
+    let cache_input_view = if cache_output {
+        inputs.main().map(str::to_string)
+    } else {
+        None
+    };
+    // Everything about the node that could change the answer, minus the parts
+    // that cannot: the cache flag itself is not an input, and a secret is not
+    // part of the result.
+    let cache_config_fp = if cache_output {
+        let mut cfg = props.clone();
+        if let Some(o) = cfg.as_object_mut() {
+            o.remove("cacheOutput");
+            o.retain(|k, _| {
+                let l = k.to_ascii_lowercase();
+                !(l.contains("password")
+                    || l.contains("secret")
+                    || l.contains("apikey")
+                    || l.contains("token"))
+            });
+        }
+        crate::checkpoint::fingerprint(&serde_json::json!({
+            "component": component_id,
+            "props": cfg,
+            "schema": node.data.schema,
+        }))
+    } else {
+        String::new()
+    };
     Ok(Stage {
+        cache_output,
+        cache_input_view,
+        cache_config_fp,
         node_id: node.id.clone(),
         component_id: component_id.to_string(),
         label: node.data.label.clone(),

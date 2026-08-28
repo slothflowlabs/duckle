@@ -42,6 +42,7 @@ pub mod batch;
 pub mod audit;
 pub mod baseline;
 pub mod checkpoint;
+pub mod outcache;
 pub mod plans;
 pub mod policy;
 pub mod schedules;
@@ -342,6 +343,38 @@ impl DuckdbEngine {
 
     /// Run SQL and return the first JSON array of rows it printed
     /// (DESCRIBE / SELECT produce one array; preludes produce none).
+    /// #252: the identity of this stage's completed output, or None when the
+    /// stage did not ask for caching or cannot be keyed honestly.
+    ///
+    /// Refused without an upstream relation on purpose. A stage that reads the
+    /// outside world has no input identity this pipeline can checksum, so the
+    /// only key available would be its configuration - and that would return
+    /// last week's answer for a file that has since changed.
+    fn output_cache_key(
+        &self,
+        db: &Path,
+        stage: &plan::Stage,
+        pipeline_name: Option<&str>,
+    ) -> Option<outcache::Key> {
+        if !stage.cache_output {
+            return None;
+        }
+        let view = stage.cache_input_view.as_deref()?;
+        let ws = std::env::var("DUCKLE_WORKSPACE")
+            .ok()
+            .filter(|s| !s.is_empty())?;
+        let input_fp =
+            outcache::input_fingerprint(&self.bin, db, view, |d, sql| self.run_rows(Some(d), sql))
+                .ok()?;
+        Some(outcache::key_for(
+            std::path::Path::new(&ws),
+            pipeline_name.unwrap_or("pipeline"),
+            &stage.node_id,
+            &stage.cache_config_fp,
+            &input_fp,
+        ))
+    }
+
     fn run_rows(&self, db: Option<&Path>, sql: &str) -> Result<Vec<JsonValue>, EngineError> {
         let out = self.run(db, sql, true)?;
         Ok(parse_json_arrays(&out).into_iter().next().unwrap_or_default())
@@ -1667,7 +1700,28 @@ impl DuckdbEngine {
                         continue;
                     }
                 }
-                result = match stage.runtime.as_ref() {
+                // #252: an unchanged rerun of a deterministic stage does not
+                // have to do the work again. The key is computed BEFORE the
+                // stage runs, from the relation it is about to read, so a
+                // changed input produces a different key and a genuine re-run.
+                let cache_key = self.output_cache_key(&db_path, stage, pipeline_name);
+                let restored = match cache_key.as_ref() {
+                    Some(k) if outcache::hit(k) => {
+                        match outcache::restore(&self.bin, &db_path, &stage.node_id, k) {
+                            // Said out loud on the node, because a run that did
+                            // no work must not look like a run that did.
+                            Ok(()) => Some(format!("reused cached output {}", k.short())),
+                            // A cache that cannot be read is a slow run, not a
+                            // failed one - fall through and do the work.
+                            Err(_) => None,
+                        }
+                    }
+                    _ => None,
+                };
+                let did_restore = restored.is_some();
+                result = match restored {
+                    Some(note) => Ok(note),
+                    None => match stage.runtime.as_ref() {
                     // HTTP sink (snk.webhook / snk.rest): materialize the
                     // upstream as JSON via DuckDB, then dispatch one request
                     // per row or one batched request via ureq.
@@ -1984,7 +2038,15 @@ impl DuckdbEngine {
                             self.run(Some(&db_path), &sql, false)
                         }
                     }
+                    },
                 };
+                // Keep what the stage produced, so the next unchanged run skips
+                // it. Only on success, and only when the work actually ran.
+                if let Some(k) = cache_key.as_ref() {
+                    if !did_restore && result.is_ok() {
+                        outcache::store(&self.bin, &db_path, &stage.node_id, k);
+                    }
+                }
                 // Stop retrying on success OR cancellation - a cancel must
                 // exit immediately, not burn through the remaining attempts
                 // (the contract is "retry on engine errors, not cancellation").
@@ -6173,6 +6235,9 @@ mod tests {
     /// `views_counted_by_sink` and `sink_self_count` read are ever varied.
     fn st(node_id: &str, component_id: &str, kind: crate::plan::StageKind) -> crate::plan::Stage {
         crate::plan::Stage {
+            cache_output: false,
+            cache_input_view: None,
+            cache_config_fp: String::new(),
             node_id: node_id.into(),
             component_id: component_id.into(),
             label: node_id.into(),

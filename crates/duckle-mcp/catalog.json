@@ -1450,6 +1450,18 @@
                 "placeholder": "SHA256:..."
               }
             ]
+          },
+          {
+            "label": "Reuse completed output",
+            "fields": [
+              {
+                "key": "cacheOutput",
+                "label": "Skip this step when its inputs have not changed",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Keeps what this step produced and serves it again on the next run, as long as the settings above and the rows arriving from upstream are both identical. Change either and the step runs for real. Needs an upstream connection: without one there is nothing to compare, so the setting is ignored rather than guessed at. Cached output lives under the workspace cache folder and is safe to delete."
+              }
+            ]
           }
         ],
         "ports": {
@@ -1758,6 +1770,18 @@
                 "placeholder": "SHA256:..."
               }
             ]
+          },
+          {
+            "label": "Reuse completed output",
+            "fields": [
+              {
+                "key": "cacheOutput",
+                "label": "Skip this step when its inputs have not changed",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Keeps what this step produced and serves it again on the next run, as long as the settings above and the rows arriving from upstream are both identical. Change either and the step runs for real. Needs an upstream connection: without one there is nothing to compare, so the setting is ignored rather than guessed at. Cached output lives under the workspace cache folder and is safe to delete."
+              }
+            ]
           }
         ],
         "ports": {
@@ -2063,6 +2087,18 @@
                 "label": "SFTP host fingerprint",
                 "kind": "text",
                 "placeholder": "SHA256:..."
+              }
+            ]
+          },
+          {
+            "label": "Reuse completed output",
+            "fields": [
+              {
+                "key": "cacheOutput",
+                "label": "Skip this step when its inputs have not changed",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Keeps what this step produced and serves it again on the next run, as long as the settings above and the rows arriving from upstream are both identical. Change either and the step runs for real. Needs an upstream connection: without one there is nothing to compare, so the setting is ignored rather than guessed at. Cached output lives under the workspace cache folder and is safe to delete."
               }
             ]
           }
@@ -44949,6 +44985,18 @@
                 "description": "Three entry points, and the one you define picks the mode. process(row): a dict in, a dict or None out, a row at a time. transform(table): the whole table at once as a pyarrow Table. transform_batches(batch): streamed a RecordBatch at a time, so a table larger than memory still runs. The last two need pyarrow, and both keep types that the row path would stringify. INPUT_PATH holds the Parquet file the rows arrive in, if you would rather scan it yourself."
               }
             ]
+          },
+          {
+            "label": "Reuse completed output",
+            "fields": [
+              {
+                "key": "cacheOutput",
+                "label": "Skip this step when its inputs have not changed",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Keeps what this step produced and serves it again on the next run, as long as the settings above and the rows arriving from upstream are both identical. Change either and the step runs for real. Needs an upstream connection: without one there is nothing to compare, so the setting is ignored rather than guessed at. Cached output lives under the workspace cache folder and is safe to delete."
+              }
+            ]
           }
         ],
         "ports": {
@@ -45169,6 +45217,18 @@
                 "monospace": true,
                 "required": true,
                 "placeholder": "// custom code"
+              }
+            ]
+          },
+          {
+            "label": "Reuse completed output",
+            "fields": [
+              {
+                "key": "cacheOutput",
+                "label": "Skip this step when its inputs have not changed",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Keeps what this step produced and serves it again on the next run, as long as the settings above and the rows arriving from upstream are both identical. Change either and the step runs for real. Needs an upstream connection: without one there is nothing to compare, so the setting is ignored rather than guessed at. Cached output lives under the workspace cache folder and is safe to delete."
               }
             ]
           }
@@ -45411,6 +45471,18 @@
                 "kind": "bool",
                 "defaultValue": false,
                 "placeholder": "Faster, but module memory/state persists between rows (default: fresh instance per row)"
+              }
+            ]
+          },
+          {
+            "label": "Reuse completed output",
+            "fields": [
+              {
+                "key": "cacheOutput",
+                "label": "Skip this step when its inputs have not changed",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Keeps what this step produced and serves it again on the next run, as long as the settings above and the rows arriving from upstream are both identical. Change either and the step runs for real. Needs an upstream connection: without one there is nothing to compare, so the setting is ignored rather than guessed at. Cached output lives under the workspace cache folder and is safe to delete."
               }
             ]
           }
