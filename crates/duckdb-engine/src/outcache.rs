@@ -51,7 +51,28 @@ pub fn dir(workspace: &Path, pipeline: &str, node_id: &str) -> PathBuf {
 /// The identity of one completed output.
 ///
 /// `config_fp` is fixed at plan time from the component and its properties;
-/// `input_fp` is a checksum of the relation the stage reads, taken now.
+/// `input_fp` is a checksum of the relation the stage reads, taken now;
+/// `engine` is the build that produced it.
+///
+/// Split out from [`key_for`] so the engine half can be varied in a test. It
+/// cannot be varied at run time - there is only ever one build running - and a
+/// key ingredient that no test can change is a key ingredient nobody notices
+/// has stopped being included.
+pub fn key_material(config_fp: &str, input_fp: &str, engine: &str) -> String {
+    crate::checkpoint::fingerprint(&serde_json::json!({
+        "config": config_fp,
+        "input": input_fp,
+        "engine": engine,
+    }))
+}
+
+/// The identity of one completed output.
+///
+/// The engine version is part of it. A deterministic stage is deterministic
+/// GIVEN A BUILD: a parser fix or a changed default makes the same input
+/// produce a different, better answer, and an upgrade that kept serving the
+/// old one would quietly undo the fix. Every entry is therefore invalidated by
+/// an upgrade, which costs one slow run and is the right side to err on.
 pub fn key_for(
     workspace: &Path,
     pipeline: &str,
@@ -59,13 +80,9 @@ pub fn key_for(
     config_fp: &str,
     input_fp: &str,
 ) -> Key {
-    let key = crate::checkpoint::fingerprint(&serde_json::json!({
-        "config": config_fp,
-        "input": input_fp,
-    }));
     Key {
         dir: dir(workspace, pipeline, node_id),
-        key,
+        key: key_material(config_fp, input_fp, env!("CARGO_PKG_VERSION")),
     }
 }
 
@@ -237,6 +254,16 @@ mod tests {
         let a = key_for(ws, "p", "n1", "cfg", "in");
         let b = key_for(ws, "p", "n2", "cfg", "in");
         assert_ne!(a.dir, b.dir);
+    }
+
+    /// An upgrade can change what a deterministic stage produces - a parser
+    /// fix, a changed default - so a cache that survived one would keep
+    /// serving the answer the upgrade was meant to correct.
+    #[test]
+    fn a_different_engine_build_is_a_different_key() {
+        let a = key_material("cfg", "in", "0.6.1");
+        assert_eq!(a, key_material("cfg", "in", "0.6.1"), "stable");
+        assert_ne!(a, key_material("cfg", "in", "0.6.2"), "engine version counts");
     }
 
     #[test]

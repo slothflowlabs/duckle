@@ -733,6 +733,11 @@ It is off unless you ask for it, and it is deliberately hard to fool:
   has no input this pipeline can checksum, so keying on settings alone would
   hand back last week's parse of a file that has since changed. It is refused
   instead of guessed at.
+- **An engine upgrade invalidates everything.** A stage is deterministic given
+  a build: a parser fix makes the same input produce a different, better answer,
+  and a cache that survived the upgrade would quietly keep serving the one the
+  fix was meant to correct. That costs one slow run, which is the right side to
+  err on.
 - The list of components is an allowlist, not a denylist. Anything that writes
   somewhere, reads a clock or talks to a queue gives a different answer the
   second time, and reusing the first one would be wrong rather than fast.
