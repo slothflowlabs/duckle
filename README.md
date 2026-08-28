@@ -664,6 +664,29 @@ Two maintenance runs against one catalog serialise on a lock rather than
 racing, so a weekly compaction overlapping a monthly cleanup waits instead of
 failing a two-hour job at its commit.
 
+### Unpack an archive into artifacts (`xf.archive.extract`)
+
+Bulk data is published as archives far more often than as readable files, and
+unpacking one used to mean a shell stage. As an **artifact operation** rather
+than something built into each parser, a ZIP of CSVs, a TAR of JSON and a GZIP
+of NDJSON all land the same way and each member then flows into whichever
+parser suits it.
+
+One archive row in, one artifact row per member out: `archive_uri`,
+`member_name`, `member_index`, `uri`, `media_type`, `compressed_size`,
+`size_bytes` and `sha256`. ZIP, TAR, TAR.GZ and GZIP.
+
+TAR and GZIP are read front to back and stream straight from the source, so an
+archive nobody has to hold is an archive whose size does not matter. A ZIP is
+spooled one at a time, because its central directory is at the END of the file
+and a reader has to seek.
+
+Two things about untrusted input, because an archive from an external publisher
+is exactly that. **A member path can never escape the destination**, however the
+archive names it. And an archive is a compression format, so a small one can
+expand to fill a volume - the expansion limit is applied **while reading**,
+which refuses rather than discovering it from a disk-full error.
+
 ### Land the bytes somewhere durable (`xf.artifact.copy`)
 
 An artifact is a reference - a uri, a media type, a size, a hash - so a

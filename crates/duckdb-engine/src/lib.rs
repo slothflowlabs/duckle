@@ -1739,6 +1739,9 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::ArtifactCopy(spec)) => {
                         self.run_artifact_copy(&db_path, &secret_prefix, spec, &mut artifacts)
                     }
+                    Some(RuntimeSpec::ArchiveExtract(spec)) => {
+                        self.run_archive_extract(&db_path, &secret_prefix, spec, &mut artifacts)
+                    }
                     Some(RuntimeSpec::DuckLakeMaintain(spec)) => {
                         self.run_ducklake_maintain(&db_path, spec)
                     }

@@ -321,6 +321,7 @@ pub enum RuntimeSpec {
     SpoolSource(SpoolSourceSpec),
     ChangedSource(ChangedSourceSpec),
     ArtifactCopy(ArtifactCopySpec),
+    ArchiveExtract(ArchiveExtractSpec),
     DuckLakeMaintain(DuckLakeMaintainSpec),
     Tumble(TumbleSpec),
     Neo4jSource(Neo4jSourceSpec),
@@ -1686,6 +1687,7 @@ fn build_stage(
     let mut spool_source: Option<SpoolSourceSpec> = None;
     let mut changed_source: Option<ChangedSourceSpec> = None;
     let mut artifact_copy: Option<ArtifactCopySpec> = None;
+    let mut archive_extract: Option<ArchiveExtractSpec> = None;
     let mut ducklake_maintain: Option<DuckLakeMaintainSpec> = None;
     let mut tumble: Option<TumbleSpec> = None;
     let mut neo4j_source: Option<Neo4jSourceSpec> = None;
@@ -4857,6 +4859,77 @@ fn build_stage(
             }),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "xf.archive.extract" {
+        // #284: one artifact in, one artifact per member out. Generic on
+        // purpose - a ZIP of CSVs and a TAR of JSON differ only in how the
+        // members are found, and each member then flows into whichever parser
+        // suits it.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let globs = |key: &str| -> Vec<String> {
+            props
+                .get(key)
+                .and_then(JsonValue::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .or_else(|| {
+                    string_prop(&props, key).map(|s| {
+                        s.split(',')
+                            .map(str::trim)
+                            .filter(|p| !p.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                })
+                .unwrap_or_default()
+        };
+        let num = |key: &str| -> Option<u64> {
+            props.get(key).and_then(|v| {
+                v.as_u64()
+                    .or_else(|| v.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
+            })
+        };
+        archive_extract = Some(ArchiveExtractSpec {
+            node_id: node.id.clone(),
+            input: artifact_input_from_props(&props, Some(from_view)),
+            destination: string_prop(&props, "destination")
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| {
+                    EngineError::Config(format!(
+                        "{}: destination required - an s3:// prefix or a local directory",
+                        component_id
+                    ))
+                })?,
+            naming: string_prop(&props, "naming")
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "preserve".to_string()),
+            if_exists: string_prop(&props, "ifExists")
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "skip".to_string()),
+            part_size_bytes: num("partSizeMb")
+                .filter(|n| *n > 0)
+                .map(|n| (n as usize) * 1024 * 1024)
+                .unwrap_or(8 * 1024 * 1024)
+                .max(5 * 1024 * 1024),
+            include: globs("include"),
+            exclude: globs("exclude"),
+            max_members: num("maxMembers").filter(|n| *n > 0).unwrap_or(10_000) as usize,
+            // 50 GiB. Generous for real data and still a bound: without one, a
+            // 1 MB archive can fill the volume, and an archive from an external
+            // publisher is untrusted input.
+            max_uncompressed_bytes: num("maxUncompressedGb")
+                .filter(|n| *n > 0)
+                .map(|n| n * 1024 * 1024 * 1024)
+                .unwrap_or(50 * 1024 * 1024 * 1024),
+            on_error: string_prop(&props, "onError")
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "fail".to_string()),
+        });
+        (String::new(), StageKind::View, Some(from_view.to_string()))
     } else if component_id == "xf.artifact.copy" {
         // #247: land the BYTES of the artifacts named upstream somewhere durable
         // and emit a row per landed copy, so a change feed becomes a raw zone
@@ -6302,6 +6375,7 @@ fn build_stage(
         .or_else(|| spool_source.map(RuntimeSpec::SpoolSource))
         .or_else(|| changed_source.map(RuntimeSpec::ChangedSource))
         .or_else(|| artifact_copy.map(RuntimeSpec::ArtifactCopy))
+        .or_else(|| archive_extract.map(RuntimeSpec::ArchiveExtract))
         .or_else(|| ducklake_maintain.map(RuntimeSpec::DuckLakeMaintain))
         .or_else(|| tumble.map(RuntimeSpec::Tumble))
         .or_else(|| neo4j_source.map(RuntimeSpec::Neo4jSource))

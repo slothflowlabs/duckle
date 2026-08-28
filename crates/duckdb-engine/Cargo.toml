@@ -129,6 +129,9 @@ flate2 = "1"
 # .xlsx (which is a zip), add the attribute, and repack (#141). Deflate only -
 # no need for the bzip2 / zstd / aes backends.
 zip = { version = "8", default-features = false, features = ["deflate"] }
+# #284: TAR members, for the .tar and .tar.gz archives bulk publishers use.
+# Already in the lock via the desktop app, so this adds no new tree.
+tar = "0.4"
 # RabbitMQ / AMQP 0.9.1 client. Pure Rust, async. Same block_on
 # pattern as Kafka/NATS. Publishes to an exchange + routing key;
 # pulls from a queue with a per-message timeout for batch ETL.
@@ -246,6 +249,10 @@ required-features = ["oracle"]
 
 [dev-dependencies]
 tempfile = "3.10"
+# Re-imported as dev-deps so the integration tests can BUILD the archives they
+# then read back through xf.archive.extract. Same versions as the lib deps.
+zip = { version = "8", default-features = false, features = ["deflate"] }
+tar = "0.4"
 # Re-imported as a dev-dep so the integration tests can call its
 # Writer to build a small .avro file inline before reading it back
 # through src.avro. Same version as the lib dep above.

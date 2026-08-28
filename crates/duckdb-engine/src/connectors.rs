@@ -5943,12 +5943,28 @@ impl DuckdbEngine {
         dest: &str,
     ) -> Result<(String, u64), EngineError> {
         let reader = self.open_artifact(&spec.auth, src)?;
+        self.land_bytes(&spec.auth, reader, dest, spec.part_size_bytes)
+    }
+
+    /// Write a reader's bytes to a destination, hashing them on the way past.
+    ///
+    /// Shared by the copy and by archive extraction, because "land these bytes
+    /// somewhere durable and tell me their hash and size" is one operation and
+    /// two implementations of it would disagree about atomicity the first time
+    /// one was changed.
+    pub(crate) fn land_bytes(
+        &self,
+        auth: &plan::ArtifactAuth,
+        reader: impl std::io::Read,
+        dest: &str,
+        part_size: usize,
+    ) -> Result<(String, u64), EngineError> {
         let mut hashing = crate::s3::HashingReader::new(reader);
 
         if dest.starts_with("s3://") || dest.starts_with("s3a://") {
-            let cfg = spec.auth.s3.as_ref().ok_or_else(|| {
+            let cfg = auth.s3.as_ref().ok_or_else(|| {
                 EngineError::Config(format!(
-                    "artifact.copy: writing to {} needs S3 credentials on the node",
+                    "writing to {} needs S3 credentials on the node",
                     dest
                 ))
             })?;
@@ -5956,13 +5972,7 @@ impl DuckdbEngine {
             // Multipart regardless of size: the source's length is not known
             // for an HTTP body without a Content-Length, and a plain PUT has to
             // declare one. Multipart streams in bounded parts either way.
-            cfg.put_multipart(
-                &bucket,
-                &key,
-                &mut hashing,
-                spec.part_size_bytes,
-                Some(media_type_for(dest)),
-            )?;
+            cfg.put_multipart(&bucket, &key, &mut hashing, part_size, Some(media_type_for(dest)))?;
             return Ok(hashing.finish());
         }
 
@@ -5972,7 +5982,7 @@ impl DuckdbEngine {
         let path = std::path::Path::new(dest);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| {
-                EngineError::Query(format!("artifact.copy: creating {}: {e}", dir.display()))
+                EngineError::Query(format!("creating {}: {e}", dir.display()))
             })?;
         }
         let tmp = path.with_extension(format!(
@@ -5981,17 +5991,17 @@ impl DuckdbEngine {
         ));
         {
             let mut f = std::fs::File::create(&tmp).map_err(|e| {
-                EngineError::Query(format!("artifact.copy: creating {}: {e}", tmp.display()))
+                EngineError::Query(format!("creating {}: {e}", tmp.display()))
             })?;
             std::io::copy(&mut hashing, &mut f)
-                .map_err(|e| EngineError::Query(format!("artifact.copy: writing {dest}: {e}")))?;
+                .map_err(|e| EngineError::Query(format!("writing {dest}: {e}")))?;
         }
         // Windows will not rename over an existing file, so the old one goes
         // first. Anything else silently leaves the previous copy in place.
         let _ = std::fs::remove_file(path);
         std::fs::rename(&tmp, path).map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
-            EngineError::Query(format!("artifact.copy: placing {dest}: {e}"))
+            EngineError::Query(format!("placing {dest}: {e}"))
         })?;
         Ok(hashing.finish())
     }
@@ -6265,6 +6275,304 @@ impl DuckdbEngine {
         std::io::copy(&mut reader, &mut f)
             .map_err(|e| EngineError::Query(format!("fetching {uri}: {e}")))?;
         Ok(SpooledInput { path, temp: true })
+    }
+
+    /// xf.archive.extract: one archive artifact in, one artifact per member out.
+    ///
+    /// Bulk data is published as archives far more often than as readable
+    /// files, and unpacking one used to mean a shell stage. Doing it as an
+    /// ARTIFACT operation rather than inside each parser means a ZIP of CSVs, a
+    /// TAR of JSON and a GZIP of NDJSON all land the same way, with the same
+    /// provenance, and each member then flows into whichever parser suits it.
+    pub(crate) fn run_archive_extract(
+        &self,
+        db: &Path,
+        secret_prefix: &str,
+        spec: &plan::ArchiveExtractSpec,
+        artifacts: &mut Vec<crate::ArtifactRef>,
+    ) -> Result<String, EngineError> {
+        let archives = self.resolve_artifact_inputs(db, secret_prefix, &spec.input)?;
+        let mut out: Vec<JsonValue> = Vec::new();
+        let mut skipped_archives = 0usize;
+
+        for archive in &archives {
+            self.check_cancelled()?;
+            match self.extract_one_archive(spec, archive, &mut out, artifacts) {
+                Ok(()) => {}
+                Err(e) if spec.on_error == "skip" => {
+                    eprintln!("duckle: archive.extract: skipping {}: {e}", archive.uri);
+                    skipped_archives += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        if out.is_empty() {
+            // A typed empty relation, so a run where nothing new arrived still
+            // gives a downstream stage the right columns to bind against.
+            self.run(
+                Some(db),
+                &format!(
+                    "CREATE OR REPLACE TABLE {} (archive_uri VARCHAR, member_name VARCHAR, member_index BIGINT, uri VARCHAR, media_type VARCHAR, compressed_size BIGINT, size_bytes BIGINT, sha256 VARCHAR)",
+                    plan::quote_ident(&spec.node_id)
+                ),
+                false,
+            )?;
+        } else {
+            materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &out)?;
+        }
+
+        let msg = format!(
+            "archive.extract: {} member(s) from {} archive(s) to {}{}",
+            out.len(),
+            archives.len() - skipped_archives,
+            spec.destination,
+            if skipped_archives > 0 {
+                format!(" ({} archive(s) skipped)", skipped_archives)
+            } else {
+                String::new()
+            }
+        );
+        Ok(if out.is_empty() && !archives.is_empty() {
+            format!("{}{}", crate::UNCHANGED_MARKER, msg)
+        } else {
+            msg
+        })
+    }
+
+    /// Unpack one archive, landing each member that passes the filters.
+    fn extract_one_archive(
+        &self,
+        spec: &plan::ArchiveExtractSpec,
+        archive: &ResolvedArtifact,
+        out: &mut Vec<JsonValue>,
+        artifacts: &mut Vec<crate::ArtifactRef>,
+    ) -> Result<(), EngineError> {
+        let kind = archive_kind(&archive.uri);
+        // A ZIP's central directory is at the END of the file, so a ZIP has to
+        // be seekable and a remote one is spooled. TAR and GZIP are read
+        // front to back and stream straight from the source, which is why they
+        // are not spooled: an archive nobody has to hold is an archive whose
+        // size does not matter.
+        let spooled = match kind {
+            ArchiveKind::Zip => Some(self.local_copy_of_artifact(&spec.input.auth, &archive.uri)?),
+            _ => None,
+        };
+
+        let mut budget = MemberBudget {
+            remaining_members: spec.max_members,
+            remaining_bytes: spec.max_uncompressed_bytes,
+            archive_uri: archive.uri.clone(),
+        };
+
+        match kind {
+            ArchiveKind::Zip => {
+                let path = &spooled.as_ref().expect("spooled above").path;
+                let file = std::fs::File::open(path)
+                    .map_err(|e| EngineError::Query(format!("archive: open {}: {e}", archive.uri)))?;
+                let mut zip = zip::ZipArchive::new(file).map_err(|e| {
+                    EngineError::Query(format!("archive: {} is not a readable zip: {e}", archive.uri))
+                })?;
+                for i in 0..zip.len() {
+                    let (name, compressed) = {
+                        let entry = zip.by_index(i).map_err(|e| {
+                            EngineError::Query(format!("archive: {} member {i}: {e}", archive.uri))
+                        })?;
+                        if entry.is_dir() {
+                            continue;
+                        }
+                        (entry.name().to_string(), entry.compressed_size())
+                    };
+                    if !member_wanted(&name, spec) {
+                        continue;
+                    }
+                    budget.take_member(&name)?;
+                    let entry = zip.by_index(i).map_err(|e| {
+                        EngineError::Query(format!("archive: {} member {i}: {e}", archive.uri))
+                    })?;
+                    self.land_member(
+                        spec,
+                        archive,
+                        &name,
+                        i,
+                        Some(compressed as i64),
+                        entry,
+                        &mut budget,
+                        out,
+                        artifacts,
+                    )?;
+                }
+            }
+            ArchiveKind::Tar | ArchiveKind::TarGz => {
+                let raw = self.open_artifact(&spec.input.auth, &archive.uri)?;
+                let stream: Box<dyn std::io::Read> = if matches!(kind, ArchiveKind::TarGz) {
+                    Box::new(flate2::read::GzDecoder::new(raw))
+                } else {
+                    Box::new(raw)
+                };
+                let mut tar = tar::Archive::new(stream);
+                let entries = tar.entries().map_err(|e| {
+                    EngineError::Query(format!("archive: {} is not a readable tar: {e}", archive.uri))
+                })?;
+                for (i, entry) in entries.enumerate() {
+                    let entry = entry.map_err(|e| {
+                        EngineError::Query(format!("archive: {} member {i}: {e}", archive.uri))
+                    })?;
+                    if !entry.header().entry_type().is_file() {
+                        continue;
+                    }
+                    let name = entry
+                        .path()
+                        .map(|p| p.to_string_lossy().replace('\\', "/"))
+                        .unwrap_or_else(|_| format!("member-{i}"));
+                    if !member_wanted(&name, spec) {
+                        continue;
+                    }
+                    budget.take_member(&name)?;
+                    let compressed = entry.header().size().ok().map(|n| n as i64);
+                    self.land_member(
+                        spec, archive, &name, i, compressed, entry, &mut budget, out, artifacts,
+                    )?;
+                }
+            }
+            ArchiveKind::Gzip => {
+                // One compressed stream rather than named members, so the name
+                // comes from the archive with its .gz taken off.
+                let raw = self.open_artifact(&spec.input.auth, &archive.uri)?;
+                let name = archive
+                    .uri
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or("member")
+                    .trim_end_matches(".gz")
+                    .to_string();
+                if member_wanted(&name, spec) {
+                    budget.take_member(&name)?;
+                    let decoded = flate2::read::GzDecoder::new(raw);
+                    self.land_member(
+                        spec, archive, &name, 0, None, decoded, &mut budget, out, artifacts,
+                    )?;
+                }
+            }
+            ArchiveKind::Unknown => {
+                return Err(EngineError::Config(format!(
+                    "archive: {} is not an archive this can open - expected .zip, .tar, .tar.gz, \
+                     .tgz or .gz",
+                    archive.uri
+                )))
+            }
+        }
+        Ok(())
+    }
+
+    /// Land one member and record what it produced.
+    #[allow(clippy::too_many_arguments)]
+    fn land_member(
+        &self,
+        spec: &plan::ArchiveExtractSpec,
+        archive: &ResolvedArtifact,
+        name: &str,
+        index: usize,
+        compressed_size: Option<i64>,
+        reader: impl std::io::Read,
+        budget: &mut MemberBudget,
+        out: &mut Vec<JsonValue>,
+        artifacts: &mut Vec<crate::ArtifactRef>,
+    ) -> Result<(), EngineError> {
+        let leaf = name.rsplit('/').next().unwrap_or(name).to_string();
+        let key = match spec.naming.as_str() {
+            "flat" => leaf.clone(),
+            // Content-addressed naming would need the hash before the key, and
+            // a member cannot be read twice out of a streaming archive without
+            // spooling it. So it is landed under its own name first and the
+            // hash reported; a content-addressed store is a copy away.
+            _ => name.to_string(),
+        };
+        let dest = join_destination(&spec.destination, &key);
+
+        // Bounded by the member, not by the archive: the reader is capped so a
+        // small archive that expands to fill the disk is refused while it is
+        // being read rather than after.
+        let capped = CappedReader { inner: reader, remaining: budget.remaining_bytes };
+        let (sha, size, remaining) = match spec.if_exists.as_str() {
+            "skip" if self.archive_dest_exists(spec, &dest)? => {
+                out.push(serde_json::json!({
+                    "archive_uri": archive.uri,
+                    "member_name": name,
+                    "member_index": index as u64,
+                    "uri": dest,
+                    "media_type": media_type_for(&leaf),
+                    "compressed_size": compressed_size,
+                    "size_bytes": JsonValue::Null,
+                    "sha256": JsonValue::Null,
+                }));
+                return Ok(());
+            }
+            "error" if self.archive_dest_exists(spec, &dest)? => {
+                return Err(EngineError::Query(format!(
+                    "archive: {} already exists and ifExists is 'error'",
+                    dest
+                )))
+            }
+            _ => {
+                let mut capped = capped;
+                let (sha, size) =
+                    self.land_bytes(&spec.input.auth, &mut capped, &dest, spec.part_size_bytes)?;
+                if capped.remaining == 0 {
+                    return Err(EngineError::Query(format!(
+                        "archive: {} expands past the {} GB limit for one archive. An archive \
+                         from an external publisher is untrusted input, so this refuses rather \
+                         than filling the volume; raise the limit if the data really is that big.",
+                        budget.archive_uri,
+                        spec.max_uncompressed_bytes / (1024 * 1024 * 1024)
+                    )));
+                }
+                (sha, size, capped.remaining)
+            }
+        };
+        budget.remaining_bytes = remaining;
+
+        artifacts.push(crate::ArtifactRef {
+            node: spec.node_id.clone(),
+            role: "output".into(),
+            uri: dest.clone(),
+            name: Some(leaf.clone()),
+            media_type: Some(media_type_for(&leaf).to_string()),
+            size_bytes: Some(size as i64),
+            sha256: Some(sha.clone()),
+            etag: None,
+            modified_at: None,
+        });
+        out.push(serde_json::json!({
+            "archive_uri": archive.uri,
+            "member_name": name,
+            "member_index": index as u64,
+            "uri": dest,
+            "media_type": media_type_for(&leaf),
+            "compressed_size": compressed_size,
+            "size_bytes": size as i64,
+            "sha256": sha,
+        }));
+        Ok(())
+    }
+
+    fn archive_dest_exists(
+        &self,
+        spec: &plan::ArchiveExtractSpec,
+        dest: &str,
+    ) -> Result<bool, EngineError> {
+        if dest.starts_with("s3://") || dest.starts_with("s3a://") {
+            let Some(cfg) = spec.input.auth.s3.as_ref() else {
+                return Ok(false);
+            };
+            let (bucket, key) = crate::s3::parse_s3_uri(dest)?;
+            return match cfg.head(&bucket, &key) {
+                Ok(_) => Ok(true),
+                Err(e) if e.to_string().contains("HTTP 404") => Ok(false),
+                Err(e) => Err(e),
+            };
+        }
+        Ok(std::path::Path::new(dest).exists())
     }
 
     /// Every entry in a remote directory.
@@ -19249,4 +19557,83 @@ fn safe_file_name(name: &str) -> String {
     name.chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' })
         .collect()
+}
+
+/// Which archive a URI names, from its extension.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ArchiveKind {
+    Zip,
+    Tar,
+    TarGz,
+    Gzip,
+    Unknown,
+}
+
+fn archive_kind(uri: &str) -> ArchiveKind {
+    let lower = uri.to_ascii_lowercase();
+    // Order matters: .tar.gz has to be recognised before .gz, or a tar of many
+    // members is treated as one compressed stream.
+    if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+        ArchiveKind::TarGz
+    } else if lower.ends_with(".zip") {
+        ArchiveKind::Zip
+    } else if lower.ends_with(".tar") {
+        ArchiveKind::Tar
+    } else if lower.ends_with(".gz") {
+        ArchiveKind::Gzip
+    } else {
+        ArchiveKind::Unknown
+    }
+}
+
+/// How much one archive is still allowed to produce.
+struct MemberBudget {
+    remaining_members: usize,
+    remaining_bytes: u64,
+    archive_uri: String,
+}
+
+impl MemberBudget {
+    fn take_member(&mut self, name: &str) -> Result<(), EngineError> {
+        if self.remaining_members == 0 {
+            return Err(EngineError::Query(format!(
+                "archive: {} holds more members than the limit allows (stopped at '{}'). Raise \
+                 the member limit, or narrow the include filter.",
+                self.archive_uri, name
+            )));
+        }
+        self.remaining_members -= 1;
+        Ok(())
+    }
+}
+
+/// A reader that stops after a fixed number of bytes.
+///
+/// The bound has to apply while the member is being READ, not after: an archive
+/// is a compression format, so a small one can expand to fill a volume, and
+/// discovering that from the disk-full error is too late.
+struct CappedReader<R> {
+    inner: R,
+    remaining: u64,
+}
+
+impl<R: std::io::Read> std::io::Read for CappedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 {
+            return Ok(0);
+        }
+        let cap = buf.len().min(self.remaining as usize);
+        let n = self.inner.read(&mut buf[..cap])?;
+        self.remaining -= n as u64;
+        Ok(n)
+    }
+}
+
+/// Does this member pass the include / exclude filters?
+fn member_wanted(name: &str, spec: &plan::ArchiveExtractSpec) -> bool {
+    let matches = |pat: &String| glob_match(pat, name);
+    if !spec.include.is_empty() && !spec.include.iter().any(matches) {
+        return false;
+    }
+    !spec.exclude.iter().any(matches)
 }

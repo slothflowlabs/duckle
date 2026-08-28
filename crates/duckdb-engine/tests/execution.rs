@@ -17571,3 +17571,239 @@ fn src_pdf_can_skip_a_document_it_cannot_read() {
     let note = r.nodes.get("s").and_then(|n| n.note.clone()).unwrap_or_default();
     assert!(note.contains("skipped"), "what was skipped has to be reported: {note}");
 }
+
+// ---------------------------------------------------------------------------
+// #284 - archive extraction as an artifact operation, so a ZIP of CSVs and a
+// TAR of JSON land the same way and each member flows into its own parser.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+fn write_zip(path: &Path, members: &[(&str, &str)]) {
+    use std::io::Write;
+    let f = std::fs::File::create(path).unwrap();
+    let mut z = zip::ZipWriter::new(f);
+    let opts: zip::write::FileOptions<'_, ()> =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    for (name, body) in members {
+        z.start_file(*name, opts).unwrap();
+        z.write_all(body.as_bytes()).unwrap();
+    }
+    z.finish().unwrap();
+}
+
+/// The composable case: an archive becomes one artifact row per member, and
+/// each member is a real file at the destination with its hash recorded.
+#[test]
+fn archive_extract_lands_every_member_as_its_own_artifact() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let zip_path = tmp.path().join("bundle.zip");
+    write_zip(
+        &zip_path,
+        &[
+            ("companies.csv", "id,name\n1,Acme\n"),
+            ("documents/notes.txt", "hello world"),
+        ],
+    );
+    let dest = out_path(tmp.path(), "unpacked");
+    let out = out_path(tmp.path(), "members.csv");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("a", "code.sql", json!({
+                "sql": format!("SELECT '{}' AS uri", zip_path.to_string_lossy().replace('\\', "/"))
+            })),
+            node("x", "xf.archive.extract", json!({ "destination": dest })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "a", "x"), main_edge("e2", "x", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+
+    // The member paths inside the archive are preserved under the destination.
+    assert_eq!(
+        std::fs::read_to_string(format!("{}/companies.csv", dest)).unwrap_or_default(),
+        "id,name\n1,Acme\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(format!("{}/documents/notes.txt", dest)).unwrap_or_default(),
+        "hello world"
+    );
+
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2, "one row per member: {body}");
+    assert!(body.contains("bundle.zip"), "archive_uri names where it came from: {body}");
+    assert!(body.contains("text/csv"), "media type from the member's own name: {body}");
+    // sha256 of "hello world" - the hash is of the member's bytes, not the
+    // archive's, which is what makes the extracted member a real artifact.
+    assert!(
+        body.contains("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"),
+        "the member's own hash: {body}"
+    );
+}
+
+/// A member path that climbs out of the destination is the classic archive
+/// attack, and it is not hypothetical: the format lets an archive say anything.
+#[test]
+fn archive_extract_cannot_write_outside_the_destination() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let zip_path = tmp.path().join("evil.zip");
+    write_zip(&zip_path, &[("../../escaped.txt", "pwned")]);
+    let dest = out_path(tmp.path(), "raw/zone");
+    std::fs::create_dir_all(&dest).unwrap();
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("a", "code.sql", json!({
+                "sql": format!("SELECT '{}' AS uri", zip_path.to_string_lossy().replace('\\', "/"))
+            })),
+            node("x", "xf.archive.extract", json!({ "destination": dest })),
+            node("k", "snk.csv", json!({ "path": out_path(tmp.path(), "m.csv"), "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "a", "x"), main_edge("e2", "x", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "the archive itself is readable: {:?}", r.error);
+    for climbed in ["escaped.txt", "raw/escaped.txt"] {
+        assert!(
+            !tmp.path().join(climbed).exists(),
+            "a member climbed out of the destination to {climbed}"
+        );
+    }
+    assert!(
+        std::path::Path::new(&format!("{}/escaped.txt", dest)).exists(),
+        "it should land INSIDE the destination with the climbing segments dropped"
+    );
+}
+
+/// An archive is a compression format, so a small one can expand to fill a
+/// volume. The bound has to be applied WHILE reading - discovering it from a
+/// disk-full error is too late, and by then the disk is full.
+#[test]
+fn archive_extract_refuses_an_archive_that_expands_past_its_limit() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let zip_path = tmp.path().join("bomb.zip");
+    // Compresses to almost nothing and expands to 8 MB.
+    let big = "A".repeat(8 * 1024 * 1024);
+    write_zip(&zip_path, &[("big.txt", &big)]);
+    let dest = out_path(tmp.path(), "unpacked");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("a", "code.sql", json!({
+                "sql": format!("SELECT '{}' AS uri", zip_path.to_string_lossy().replace('\\', "/"))
+            })),
+            node("x", "xf.archive.extract", json!({
+                "destination": dest, "maxUncompressedGb": 1
+            })),
+            node("k", "snk.csv", json!({ "path": out_path(tmp.path(), "m.csv") })),
+        ]),
+        json!([main_edge("e1", "a", "x"), main_edge("e2", "x", "k")]),
+    ));
+    // 8 MB is well under 1 GB, so this one is allowed through - the limit is
+    // real but not in the way here.
+    assert_eq!(r.status, "ok", "8 MB under a 1 GB limit should extract: {:?}", r.error);
+
+    // Now the same archive against a limit it cannot fit in. The member is
+    // bigger than the budget, so it is refused rather than truncated - a
+    // silently truncated member is worse than a failure, because the file
+    // looks complete.
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("a", "code.sql", json!({
+                "sql": format!("SELECT '{}' AS uri", zip_path.to_string_lossy().replace('\\', "/"))
+            })),
+            node("x", "xf.archive.extract", json!({
+                "destination": out_path(tmp.path(), "unpacked2"),
+                "maxUncompressedGb": 1,
+                "maxMembers": 1
+            })),
+            node("k", "snk.csv", json!({ "path": out_path(tmp.path(), "m2.csv") })),
+        ]),
+        json!([main_edge("e1", "a", "x"), main_edge("e2", "x", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+}
+
+/// Include and exclude decide what comes out, so a bundle carrying several
+/// datasets can be routed without extracting all of it.
+#[test]
+fn archive_extract_include_and_exclude_pick_members() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let zip_path = tmp.path().join("mixed.zip");
+    write_zip(
+        &zip_path,
+        &[
+            ("companies.xml", "<a/>"),
+            ("officers.csv", "id\n1\n"),
+            ("__MACOSX/junk.xml", "<junk/>"),
+        ],
+    );
+    let dest = out_path(tmp.path(), "picked");
+    let out = out_path(tmp.path(), "picked.csv");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("a", "code.sql", json!({
+                "sql": format!("SELECT '{}' AS uri", zip_path.to_string_lossy().replace('\\', "/"))
+            })),
+            node("x", "xf.archive.extract", json!({
+                "destination": dest, "include": "*.xml", "exclude": "__MACOSX/*"
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "a", "x"), main_edge("e2", "x", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(body.contains("companies.xml"), "the wanted member: {body}");
+    assert!(!body.contains("officers.csv"), "include kept the csv out: {body}");
+    assert!(!body.contains("__MACOSX"), "exclude beats include: {body}");
+}
+
+/// A .tar.gz is streamed rather than spooled - it is read front to back, so an
+/// archive nobody has to hold is an archive whose size does not matter. The
+/// ordering of the extension check matters too: .tar.gz must not be read as one
+/// compressed stream.
+#[test]
+fn archive_extract_streams_a_tar_gz_without_spooling_it() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let tgz = tmp.path().join("bundle.tar.gz");
+    {
+        use std::io::Write;
+        let f = std::fs::File::create(&tgz).unwrap();
+        let enc = flate2::write::GzEncoder::new(f, flate2::Compression::default());
+        let mut builder = tar::Builder::new(enc);
+        for (name, body) in [("one.json", "{\"a\":1}"), ("two.json", "{\"a\":2}")] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, name, body.as_bytes()).unwrap();
+        }
+        let enc = builder.into_inner().unwrap();
+        enc.finish().unwrap().flush().unwrap();
+    }
+    let dest = out_path(tmp.path(), "tarred");
+    let out = out_path(tmp.path(), "tar.csv");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("a", "code.sql", json!({
+                "sql": format!("SELECT '{}' AS uri", tgz.to_string_lossy().replace('\\', "/"))
+            })),
+            node("x", "xf.archive.extract", json!({ "destination": dest })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "a", "x"), main_edge("e2", "x", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "tar.gz failed: {:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2, "both tar members");
+    assert_eq!(
+        std::fs::read_to_string(format!("{}/one.json", dest)).unwrap_or_default(),
+        "{\"a\":1}"
+    );
+}

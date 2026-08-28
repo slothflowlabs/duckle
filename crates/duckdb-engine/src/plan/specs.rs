@@ -2268,6 +2268,41 @@ impl Default for ArtifactInput {
     }
 }
 
+/// `xf.archive.extract`: turn one archive artifact into one artifact per member.
+///
+/// #284: bulk data is published as archives far more often than as readable
+/// files, and unpacking one used to mean a shell stage. As an ARTIFACT
+/// operation rather than something built into each parser, a ZIP of CSVs, a TAR
+/// of JSON and a GZIP of NDJSON all land the same way and each member then
+/// flows into whichever parser suits it.
+#[derive(Debug, Clone)]
+pub struct ArchiveExtractSpec {
+    pub node_id: String,
+    /// The archives to open, named by an upstream relation.
+    pub input: ArtifactInput,
+    /// Where members land: an `s3://` prefix or a local directory.
+    pub destination: String,
+    /// "preserve" the member's path inside the archive, "flat" for its file
+    /// name only, or "hash" for a content-addressed name.
+    pub naming: String,
+    /// "skip" (the default), "replace" or "error" when a member is already at
+    /// the destination.
+    pub if_exists: String,
+    pub part_size_bytes: usize,
+    /// Only extract members matching one of these globs. Empty means all.
+    pub include: Vec<String>,
+    /// Never extract members matching one of these, applied after `include`.
+    pub exclude: Vec<String>,
+    /// Most members to take out of one archive.
+    pub max_members: usize,
+    /// Refuse an archive that expands past this. A ZIP is a compression format,
+    /// so a small one can expand to fill a disk - an archive from an external
+    /// publisher is untrusted input and this is the bound that says so.
+    pub max_uncompressed_bytes: u64,
+    /// What to do with an archive that cannot be opened: "fail" or "skip".
+    pub on_error: String,
+}
+
 /// `src.ducklake.maintain`: run one of DuckLake's own maintenance operations
 /// and emit what it did as an ordinary relation.
 ///

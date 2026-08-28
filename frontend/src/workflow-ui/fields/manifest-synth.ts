@@ -1846,6 +1846,99 @@ function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
             },
         ]);
     }
+    if (comp.id === 'xf.archive.extract') {
+        return base(comp, [
+            {
+                label: 'What to extract',
+                fields: [
+                    { key: 'uriColumn', label: 'URI column', kind: 'column', defaultValue: 'uri',
+                      description: 'The upstream column naming each archive. Changed?, Artifact and Copy Artifact all emit a uri column.' },
+                    { key: 'destination', label: 'Destination', kind: 'text', required: true,
+                      placeholder: 's3://raw/unpacked/  or  /var/lake/unpacked',
+                      description: 'Where members land. A member path can never escape this prefix, however the archive names it.' },
+                    { key: 'include', label: 'Only these members', kind: 'text',
+                      placeholder: '*.xml, documents/*.pdf',
+                      description: 'Comma-separated globs. Blank takes every member.' },
+                    { key: 'exclude', label: 'Never these members', kind: 'text',
+                      placeholder: '__MACOSX/*, *.tmp',
+                      description: 'Applied after the include filter.' },
+                    {
+                        key: 'naming',
+                        label: 'Name each member',
+                        kind: 'select',
+                        defaultValue: 'preserve',
+                        options: [
+                            { label: 'Preserve its path inside the archive', value: 'preserve' },
+                            { label: 'File name only (flat)', value: 'flat' },
+                        ],
+                    },
+                    {
+                        key: 'ifExists',
+                        label: 'When a member is already there',
+                        kind: 'select',
+                        defaultValue: 'skip',
+                        options: [
+                            { label: 'Skip (leave the existing copy)', value: 'skip' },
+                            { label: 'Replace', value: 'replace' },
+                            { label: 'Fail the run', value: 'error' },
+                        ],
+                        description: 'Skip suits an immutable raw zone: re-running does not re-extract what already landed. The row still comes out.',
+                    },
+                    {
+                        key: 'onError',
+                        label: 'When an archive cannot be opened',
+                        kind: 'select',
+                        defaultValue: 'fail',
+                        options: [
+                            { label: 'Fail the run', value: 'fail' },
+                            { label: 'Skip it and carry on', value: 'skip' },
+                        ],
+                    },
+                ],
+            },
+            {
+                label: 'Limits',
+                fields: [
+                    { key: 'maxMembers', label: 'Max members per archive', kind: 'integer', defaultValue: 10000,
+                      description: 'Bounds one archive. Reaching it fails the run naming the member it stopped at, rather than extracting an arbitrary prefix of the archive.' },
+                    { key: 'maxUncompressedGb', label: 'Max expanded size (GB)', kind: 'integer', defaultValue: 50,
+                      description: 'An archive is a compression format, so a small one can expand to fill a volume - and an archive from an external publisher is untrusted input. The limit is applied WHILE reading, so it refuses rather than discovering it from a disk-full error.' },
+                    { key: 'partSizeMb', label: 'Part size (MB)', kind: 'integer', defaultValue: 8,
+                      description: 'Bytes held in memory per member while uploading to S3. Below 5 is raised to 5: S3 rejects a smaller non-final part.' },
+                ],
+            },
+            {
+                label: 'S3 / S3-compatible',
+                fields: [
+                    { key: 'accessKey', label: 'Access key', kind: 'text',
+                      description: 'Used for whichever side is s3://, the archive or the destination. Pick a saved S3 connection instead and these fill from it at run time.' },
+                    { key: 'secretKey', label: 'Secret key', kind: 'text', placeholder: 'secret' },
+                    { key: 'sessionToken', label: 'Session token', kind: 'text', placeholder: 'token' },
+                    { key: 'region', label: 'Region', kind: 'text', placeholder: 'us-east-1' },
+                    { key: 'endpoint', label: 'Endpoint', kind: 'text', placeholder: 'https://s3.eu-central-003.backblazeb2.com' },
+                    { key: 'urlStyle', label: 'URL style', kind: 'select', defaultValue: '',
+                      options: [
+                          { label: 'Default', value: '' },
+                          { label: 'Path (host/bucket/key)', value: 'path' },
+                          { label: 'Virtual host (bucket.host/key)', value: 'vhost' },
+                      ] },
+                    { key: 'useSsl', label: 'Use TLS', kind: 'select', defaultValue: '',
+                      options: [
+                          { label: 'Default (from the endpoint scheme)', value: '' },
+                          { label: 'Yes', value: 'true' },
+                          { label: 'No (local MinIO)', value: 'false' },
+                      ] },
+                    { key: 'headers', label: 'HTTP headers', kind: 'key-value',
+                      description: 'Sent when fetching an https:// archive.' },
+                    { key: 'user', label: 'SFTP user', kind: 'text' },
+                    { key: 'password', label: 'SFTP password', kind: 'text', placeholder: 'password' },
+                    { key: 'privateKey', label: 'SFTP private key (PEM)', kind: 'expression', rows: 3 },
+                    { key: 'keyPassphrase', label: 'SFTP key passphrase', kind: 'text', placeholder: 'passphrase' },
+                    { key: 'hostFingerprint', label: 'SFTP host fingerprint', kind: 'text', placeholder: 'SHA256:...' },
+                ],
+            },
+        ], 'upstream');
+    }
     if (comp.id === 'xf.artifact.copy') {
         return base(comp, [
             {
