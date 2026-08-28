@@ -664,6 +664,25 @@ Two maintenance runs against one catalog serialise on a lock rather than
 racing, so a weekly compaction overlapping a monthly cleanup waits instead of
 failing a two-hour job at its commit.
 
+### Bounded materialization for large XML (`src.xml`)
+
+The XML parser is a pull parser, so live memory is one row plus the nesting
+depth however big the file is. The intermediate was not bounded the same way:
+every parsed row went to one NDJSON file that grew to the size of the whole
+result, and NDJSON repeats every property name on every row - so a 30GB
+compressed source could put hundreds of gigabytes on the temp volume.
+
+**With a declared schema**, rows are rolled to a compressed Parquet part every
+250,000 rows (`batchRows`), the NDJSON only ever holds the tail, and the parts
+are read back as one relation. The uncompressed intermediate is bounded by one
+part rather than by the result, and the rest is columnar, so the property names
+are stored once per part instead of once per row.
+
+The declared schema is what makes this available: each part is typed as it is
+written, because two parts inferring different types for the same column would
+fail to union at the end. The node reports how many parts it took, so the
+bounding is visible rather than assumed.
+
 ### Unpack an archive into artifacts (`xf.archive.extract`)
 
 Bulk data is published as archives far more often than as readable files, and

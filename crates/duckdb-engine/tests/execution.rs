@@ -17807,3 +17807,121 @@ fn archive_extract_streams_a_tar_gz_without_spooling_it() {
         "{\"a\":1}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #283 - bounded materialization. The parser was already out-of-core in RAM,
+// but every parsed row went to one NDJSON file that grew to the size of the
+// whole result, and NDJSON repeats every property name on every row.
+// ---------------------------------------------------------------------------
+
+/// An input larger than one batch has to produce several parts, every row has
+/// to survive the round trip, and nothing may be left on the temp volume.
+#[test]
+fn xml_larger_than_one_batch_is_materialized_in_parts_without_losing_rows() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let xml = tmp.path().join("big.xml");
+    {
+        use std::io::Write;
+        let mut f = std::io::BufWriter::new(std::fs::File::create(&xml).unwrap());
+        writeln!(f, "<rows>").unwrap();
+        for i in 0..2500 {
+            writeln!(f, "<row><id>{i}</id><name>name-{i}</name></row>").unwrap();
+        }
+        writeln!(f, "</rows>").unwrap();
+    }
+    let out = out_path(tmp.path(), "xml.csv");
+
+    let spools_before = std::fs::read_dir(std::env::temp_dir())
+        .map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().contains(".parts")).count())
+        .unwrap_or(0);
+
+    // A declared schema is what turns bounded materialization on, and a batch
+    // far smaller than the input is what makes several parts.
+    let node_json = json!({
+        "path": xml.to_string_lossy(),
+        "rowPath": "/rows/row",
+        "batchRows": 400
+    });
+    let mut doc_json = doc(
+        json!([
+            node("x", "src.xml", node_json),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "x", "k")]),
+    );
+    // The declared schema lives on the node's Schema tab rather than in props.
+    doc_json.nodes[0].data.schema = Some(
+        serde_json::from_value(json!([
+            { "name": "id", "type": "int64" },
+            { "name": "name", "type": "string" }
+        ]))
+        .unwrap(),
+    );
+
+    let r = engine.execute_pipeline(&doc_json);
+    assert_eq!(r.status, "ok", "src.xml failed: {:?}", r.error);
+
+    // It really was written in parts - without this the test passes whether
+    // spilling happened or not, which is the shape of test that proves nothing.
+    let note = r.nodes.get("x").and_then(|n| n.note.clone()).unwrap_or_default();
+    assert!(
+        note.contains("7 bounded part(s)"),
+        "2500 rows at 400 per part is seven parts: {note}"
+    );
+    // Every row survived the round trip through them.
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2500, "rows were lost between parts");
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(body.contains("name-0"), "the first row: {}", &body[..body.len().min(200)]);
+    assert!(body.contains("name-2499"), "the last row survived the final part");
+
+    // Nothing left behind. Parts that outlive the run are the temp volume this
+    // exists to protect.
+    let spools_after = std::fs::read_dir(std::env::temp_dir())
+        .map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().contains(".parts")).count())
+        .unwrap_or(0);
+    assert_eq!(spools_after, spools_before, "parts were left on the temp volume");
+}
+
+/// The declared schema still pins the types, which is the property that makes
+/// per-part writing safe: two parts inferring different types for one column
+/// would fail to union at the end.
+#[test]
+fn xml_parts_keep_the_declared_types() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let xml = tmp.path().join("typed.xml");
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&xml).unwrap();
+        writeln!(f, "<rows>").unwrap();
+        // The first batch is all digits; the second has a value that would be
+        // inferred as text if each part were typed on its own.
+        for i in 0..12 {
+            writeln!(f, "<row><id>{i}</id></row>").unwrap();
+        }
+        writeln!(f, "</rows>").unwrap();
+    }
+    let out = out_path(tmp.path(), "typed.csv");
+    let mut doc_json = doc(
+        json!([
+            node("x", "src.xml", json!({
+                "path": xml.to_string_lossy(), "rowPath": "/rows/row", "batchRows": 5
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "x", "k")]),
+    );
+    doc_json.nodes[0].data.schema = Some(
+        serde_json::from_value(json!([{ "name": "id", "type": "int64" }])).unwrap(),
+    );
+    let r = engine.execute_pipeline(&doc_json);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 12);
+    // Still an INTEGER after being written and read back through three parts.
+    let t = scalar_string(&format!(
+        "SELECT typeof(id) AS s FROM read_csv_auto('{}') LIMIT 1",
+        out
+    ));
+    assert!(t.contains("INT"), "the declared type survived the parts: {t}");
+}

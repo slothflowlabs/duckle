@@ -3589,6 +3589,36 @@ pub(crate) struct JsonLinesWriter {
     /// None -> an empty result is a clear source-level error rather than a
     /// misleading single-`json` column.
     empty_schema: Option<Vec<duckle_metadata::Column>>,
+    /// #283: convert to Parquet every N rows instead of growing one NDJSON file
+    /// to the size of the whole result.
+    spill: Option<Spill>,
+}
+
+/// Bounded materialization: roll the NDJSON to a compressed Parquet part every
+/// `every` rows, and read the parts back as one relation at the end.
+///
+/// #283: a streaming parser is out-of-core in RAM, but writing every parsed row
+/// to one NDJSON file puts the whole result on the temp volume - and NDJSON
+/// repeats every property name on every row, so a 30 GB compressed XML source
+/// can produce hundreds of gigabytes of intermediate. Rolling to Parquet keeps
+/// the uncompressed text bounded by one part and stores the rest columnar.
+/// A path as DuckDB SQL wants it: forward slashes, quotes doubled.
+fn sql_path(p: &std::path::Path) -> String {
+    p.display().to_string().replace('\\', "/").replace('\'', "''")
+}
+
+pub(crate) struct Spill {
+    bin: PathBuf,
+    db: PathBuf,
+    /// The declared columns, so each part is typed as it is written rather than
+    /// inferred per part - two parts inferring different types for one column
+    /// is a union error at the end, and the declared schema is what makes this
+    /// path available in the first place.
+    columns_spec: String,
+    every: usize,
+    dir: PathBuf,
+    parts: usize,
+    rows_in_part: usize,
 }
 
 impl JsonLinesWriter {
@@ -3611,7 +3641,85 @@ impl JsonLinesWriter {
             path,
             rows_written: 0,
             empty_schema,
+            spill: None,
         })
+    }
+
+    /// Turn on bounded materialization (#283).
+    ///
+    /// Only available with a declared schema, because each part has to be typed
+    /// as it is written: two parts inferring different types for the same column
+    /// would fail to union at the end, and inference per part is exactly where
+    /// that happens.
+    pub(crate) fn spilling_every(
+        mut self,
+        bin: &Path,
+        db: &Path,
+        columns_spec: &str,
+        every: usize,
+    ) -> Result<Self, EngineError> {
+        let dir = self.path.with_extension("parts");
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| EngineError::Query(format!("spill: create {}: {e}", dir.display())))?;
+        self.spill = Some(Spill {
+            bin: bin.to_path_buf(),
+            db: db.to_path_buf(),
+            columns_spec: columns_spec.to_string(),
+            every: every.max(1),
+            dir,
+            parts: 0,
+            rows_in_part: 0,
+        });
+        Ok(self)
+    }
+
+    /// Close the current NDJSON, convert it to a Parquet part, and start a new
+    /// one. DuckDB does the conversion, so there is no second JSON reader here
+    /// to disagree with the one that reads the parts back.
+    fn roll_part(&mut self) -> Result<(), EngineError> {
+        use std::io::Write;
+        let Some(spill) = self.spill.as_mut() else {
+            return Ok(());
+        };
+        if spill.rows_in_part == 0 {
+            return Ok(());
+        }
+        self.writer
+            .flush()
+            .map_err(|e| EngineError::Query(format!("spill: flush: {e}")))?;
+        // Reopen onto a fresh file after the conversion; the handle has to be
+        // closed first because DuckDB reads the same path.
+        let empty = std::fs::File::create(self.path.with_extension("rolling"))
+            .map_err(|e| EngineError::Query(format!("spill: create: {e}")))?;
+        let old = std::mem::replace(
+            &mut self.writer,
+            std::io::BufWriter::with_capacity(64 * 1024, empty),
+        );
+        drop(old);
+
+        let part = spill.dir.join(format!("part-{:06}.parquet", spill.parts));
+        let sql = format!(
+            "COPY (SELECT * FROM read_json('{}', format='newline_delimited', columns={{{}}})) TO '{}' (FORMAT PARQUET, COMPRESSION ZSTD)",
+            sql_path(&self.path),
+            spill.columns_spec,
+            sql_path(&part),
+        );
+        apply_duckdb_sql(&spill.bin, &spill.db, &sql)?;
+        spill.parts += 1;
+        spill.rows_in_part = 0;
+
+        // The NDJSON for this part is now redundant, and removing it here is
+        // what bounds the temp volume to one part rather than the whole result.
+        let _ = std::fs::remove_file(&self.path);
+        let fresh = std::fs::File::create(&self.path)
+            .map_err(|e| EngineError::Query(format!("spill: reopen: {e}")))?;
+        let rolling = std::mem::replace(
+            &mut self.writer,
+            std::io::BufWriter::with_capacity(64 * 1024, fresh),
+        );
+        drop(rolling);
+        let _ = std::fs::remove_file(self.path.with_extension("rolling"));
+        Ok(())
     }
 
     pub(crate) fn write_row(&mut self, row: &JsonValue) -> Result<(), EngineError> {
@@ -3622,6 +3730,12 @@ impl JsonLinesWriter {
             .write_all(b"\n")
             .map_err(|e| EngineError::Query(format!("rest source: write tmp file: {}", e)))?;
         self.rows_written += 1;
+        if let Some(spill) = self.spill.as_mut() {
+            spill.rows_in_part += 1;
+            if spill.rows_in_part >= spill.every {
+                self.roll_part()?;
+            }
+        }
         Ok(())
     }
 
@@ -3718,8 +3832,10 @@ impl JsonLinesWriter {
         node_id: &str,
         columns_spec: &str,
         select_list: &str,
-    ) -> Result<(), EngineError> {
+    ) -> Result<usize, EngineError> {
         use std::io::Write;
+        // Whatever is still in the current NDJSON becomes the last part.
+        self.roll_part()?;
         self.writer
             .flush()
             .map_err(|e| EngineError::Query(format!("rest source: flush tmp file: {}", e)))?;
@@ -3730,19 +3846,38 @@ impl JsonLinesWriter {
             .to_string()
             .replace('\\', "/")
             .replace('\'', "''");
-        let sql = format!(
-            "CREATE OR REPLACE TABLE {} AS SELECT {} FROM read_json('{}', format='newline_delimited', columns={{{}}})",
-            plan::quote_ident(node_id),
-            select_list,
-            path,
-            columns_spec,
-        );
+        // #283: with spilling on, the rows are already in Parquet parts and the
+        // NDJSON only ever held the tail. Reading the parts back is one relation
+        // either way, so nothing downstream can tell the difference.
+        let sql = if let Some(spill) = self.spill.as_ref() {
+            format!(
+                "CREATE OR REPLACE TABLE {} AS SELECT {} FROM read_parquet('{}')",
+                plan::quote_ident(node_id),
+                select_list,
+                sql_path(&spill.dir.join("part-*.parquet")),
+            )
+        } else {
+            format!(
+                "CREATE OR REPLACE TABLE {} AS SELECT {} FROM read_json('{}', format='newline_delimited', columns={{{}}})",
+                plan::quote_ident(node_id),
+                select_list,
+                path,
+                columns_spec,
+            )
+        };
         let r = apply_duckdb_sql(bin, db, &sql);
-        // Remove the temp NDJSON (sized to the whole result set) regardless of
-        // the load result; otherwise duckle-rest-*.json accumulate in the temp
-        // dir forever (mirrors finalize_into_table).
+        let parts = self.spill.as_ref().map(|s| s.parts).unwrap_or(0);
+        if let Some(spill) = self.spill.as_ref() {
+            // Every part is redundant once the relation exists. Removed whether
+            // the load worked or not: parts left behind are the temp volume this
+            // exists to protect.
+            let _ = std::fs::remove_dir_all(&spill.dir);
+        }
+        // Remove the temp NDJSON regardless of the load result; otherwise
+        // duckle-rest-*.json accumulate in the temp dir forever (mirrors
+        // finalize_into_table). With spilling on it only ever held the tail.
         let _ = std::fs::remove_file(&self.path);
-        r
+        r.map(|()| parts)
     }
 }
 

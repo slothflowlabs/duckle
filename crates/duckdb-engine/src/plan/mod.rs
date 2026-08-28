@@ -4551,6 +4551,17 @@ fn build_stage(
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: path required", component_id)))?;
         xml_source = Some(XmlSourceSpec {
+            // 250k rows per part: big enough that the per-part DuckDB call is
+            // noise against the parse, small enough that the uncompressed
+            // intermediate stays bounded.
+            batch_rows: props
+                .get("batchRows")
+                .and_then(|v| {
+                    v.as_u64()
+                        .or_else(|| v.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
+                })
+                .filter(|n| *n > 0)
+                .unwrap_or(250_000) as usize,
             node_id: node.id.clone(),
             path,
             // The GUI historically wrote this under `rootPath` while the engine

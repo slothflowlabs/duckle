@@ -657,6 +657,9 @@ pub struct XmlSourceSpec {
     pub sftp_private_key: Option<String>,
     pub sftp_key_passphrase: Option<String>,
     pub sftp_host_fingerprint: Option<String>,
+    /// #283: rows per Parquet part when a schema is declared. Bounds the
+    /// UNCOMPRESSED intermediate to one part rather than the whole result.
+    pub batch_rows: usize,
 }
 
 /// snk.xml: write rows as

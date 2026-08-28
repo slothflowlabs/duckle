@@ -8007,9 +8007,18 @@ impl DuckdbEngine {
         }
 
         // A declared schema pins the output to exactly those columns and types.
+        //
+        // #283: it also turns on bounded materialization. Without it every
+        // parsed row goes to one NDJSON file that grows to the size of the whole
+        // result, and NDJSON repeats every property name on every row - so a
+        // 30 GB compressed source can put hundreds of gigabytes on the temp
+        // volume. With it, the text is rolled to a compressed Parquet part every
+        // `spec.batch_rows` rows and the NDJSON only ever holds the tail.
         let mut writer = match &spec.declared_schema {
             Some(schema) if !schema.is_empty() => {
+                let (columns_spec, _) = xml_declared_columns(schema);
                 JsonLinesWriter::open_with_schema(&spec.node_id, Some(schema.clone()))?
+                    .spilling_every(&self.bin, db, &columns_spec, spec.batch_rows)?
             }
             _ => JsonLinesWriter::open(&spec.node_id)?,
         };
@@ -8096,16 +8105,27 @@ impl DuckdbEngine {
                 }
             }
         }
-        match &spec.declared_schema {
+        let parts = match &spec.declared_schema {
             Some(schema) if !schema.is_empty() => {
                 let (columns_spec, select_list) = xml_declared_columns(schema);
-                writer.finalize_typed(&self.bin, db, &spec.node_id, &columns_spec, &select_list)?;
+                writer.finalize_typed(&self.bin, db, &spec.node_id, &columns_spec, &select_list)?
             }
-            _ => writer.finalize_into_table(&self.bin, db, &spec.node_id)?,
-        }
+            _ => {
+                writer.finalize_into_table(&self.bin, db, &spec.node_id)?;
+                0
+            }
+        };
         Ok(format!(
-            "xml: materialized {} rows into {}",
-            count, spec.node_id
+            "xml: materialized {} rows into {}{}",
+            count,
+            spec.node_id,
+            // #283: how many bounded parts it took. The number is the whole
+            // point - it says the intermediate never held the full result.
+            if parts > 0 {
+                format!(" ({} bounded part(s))", parts)
+            } else {
+                String::new()
+            }
         ))
     }
 
