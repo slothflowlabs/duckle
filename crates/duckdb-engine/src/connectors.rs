@@ -8321,13 +8321,26 @@ impl DuckdbEngine {
         spec: &XmlSourceSpec,
     ) -> Result<String, EngineError> {
         use std::io::{BufReader, Read, Seek};
-        // Cloud object stores would need a signed streaming GET we don't have for
-        // XML yet (DuckDB's httpfs can't parse XML); fail early with a pointer
-        // rather than opening a temp file we'd leak.
+        // #282: the documents are whatever an upstream relation names, or
+        // the configured path when nothing is wired in.
+        let from_upstream = spec.input.from_view.is_some();
+        let docs: Vec<(String, Option<String>, JsonValue)> = if from_upstream {
+            self.resolve_artifact_inputs(db, "", &spec.input)?
+                .into_iter()
+                .map(|a| (a.uri, a.sha256, a.row))
+                .collect()
+        } else {
+            vec![(spec.path.clone(), None, JsonValue::Null)]
+        };
+        // Object storage on the CONFIGURED PATH still has no signed streaming
+        // GET here (DuckDB's httpfs cannot parse XML), so it fails early with a
+        // pointer rather than opening a temp file we would leak. Reached through
+        // an upstream artifact relation it works, because that route goes
+        // through open_artifact, which does sign S3 reads (#282).
         let lower = spec.path.to_ascii_lowercase();
         if let Some(scheme) = ["s3://", "gs://", "gcs://", "az://", "azure://"]
             .iter()
-            .find(|s| lower.starts_with(**s))
+            .find(|s| !from_upstream && lower.starts_with(**s))
         {
             return Err(EngineError::Config(format!(
                 "xml: {} object storage is not supported for src.xml yet; use an https:// or sftp:// URL, or download the file to a local path",
@@ -8352,7 +8365,86 @@ impl DuckdbEngine {
             _ => JsonLinesWriter::open(&spec.node_id)?,
         };
         let mut count: usize = 0;
-        {
+        let mut skipped: usize = 0;
+        if from_upstream {
+            // #282: a CORPUS rather than one document.
+            //
+            // Streamed straight out of the artifact reader. The pull parser
+            // never seeks, so spooling each document to disk first would buy
+            // nothing and cost a full local copy of every one of them.
+            //
+            // The writer is shared across all of them on purpose: the
+            // bounded-parts machinery from #283 then bounds the WHOLE corpus
+            // rather than each file, so a million small documents cannot do
+            // what one huge document already could not.
+            for (uri, source_sha, upstream_row) in &docs {
+                self.check_cancelled()?;
+                let mut emit = |row: &JsonValue| -> Result<(), EngineError> {
+                    let mut obj = match row {
+                        JsonValue::Object(o) => o.clone(),
+                        other => {
+                            let mut m = serde_json::Map::new();
+                            m.insert("value".into(), other.clone());
+                            m
+                        }
+                    };
+                    // The business keys that say what a document IS live on
+                    // the artifact row and are lost the moment rows are
+                    // emitted instead. Carrying them is what lets a row be
+                    // joined back to the document it came from.
+                    for key in &spec.input.carry {
+                        obj.insert(
+                            key.clone(),
+                            upstream_row.get(key).cloned().unwrap_or(JsonValue::Null),
+                        );
+                    }
+                    obj.insert("source_uri".into(), JsonValue::String(uri.clone()));
+                    obj.insert(
+                        "source_sha256".into(),
+                        match source_sha {
+                            // Carried from whatever landed the bytes, never
+                            // recomputed: re-hashing would describe whatever
+                            // is at that URI now, not what was parsed.
+                            Some(h) => JsonValue::String(h.clone()),
+                            None => JsonValue::Null,
+                        },
+                    );
+                    writer.write_row(&JsonValue::Object(obj))?;
+                    count += 1;
+                    Ok(())
+                };
+                if uri.to_ascii_lowercase().ends_with(".zip") {
+                    return Err(EngineError::Config(format!(
+                        concat!(
+                            "xml: {} is a zip, and a zip directory is at the END of ",
+                            "the file, so it cannot be streamed. Put xf.archive.extract ",
+                            "in front of this node to unpack it into artifacts, and ",
+                            "parse those."
+                        ),
+                        uri
+                    )));
+                }
+                let opened = match self.open_artifact(&spec.input.auth, uri) {
+                    Ok(r) => Some(r),
+                    Err(e) if spec.on_error == "skip" => {
+                        eprintln!("duckle: xml: skipping {uri}: {e}");
+                        skipped += 1;
+                        None
+                    }
+                    Err(e) => return Err(e),
+                };
+                if let Some(reader) = opened {
+                    match stream_remote_xml(reader, &spec.row_path, &self.cancel, &mut emit) {
+                        Ok(()) => {}
+                        Err(e) if spec.on_error == "skip" => {
+                            eprintln!("duckle: xml: skipping {uri}: {e}");
+                            skipped += 1;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+        } else {
             let mut emit = |row: &JsonValue| -> Result<(), EngineError> {
                 writer.write_row(row)?;
                 count += 1;
@@ -8445,9 +8537,16 @@ impl DuckdbEngine {
             }
         };
         Ok(format!(
-            "xml: materialized {} rows into {}{}",
+            "xml: materialized {} rows into {}{}{}",
             count,
             spec.node_id,
+            if skipped > 0 {
+                // Named, not silent: a corpus that quietly lost documents is
+                // the failure this whole contract exists to make visible.
+                format!(" ({} document(s) skipped)", skipped)
+            } else {
+                String::new()
+            },
             // #283: how many bounded parts it took. The number is the whole
             // point - it says the intermediate never held the full result.
             if parts > 0 {

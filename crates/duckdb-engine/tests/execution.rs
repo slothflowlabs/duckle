@@ -18906,3 +18906,147 @@ fn accepting_a_baseline_obeys_the_state_mutation_policy() {
     let still = std::fs::read_to_string(dir.join("n.json")).unwrap();
     assert!(still.contains("\"row_count\":10"), "the accepted history changed: {still}");
 }
+
+// ---------------------------------------------------------------------------
+// #282 - src.xml on the shared ArtifactInput contract. A corpus of documents
+// named by an upstream relation, rather than one configured path.
+// ---------------------------------------------------------------------------
+
+/// The composability case: an upstream relation names the documents, each is
+/// parsed, and the business keys that say what a document IS survive onto every
+/// row it produced.
+#[test]
+fn src_xml_parses_every_document_an_upstream_relation_names() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("a.xml");
+    let b = tmp.path().join("b.xml");
+    std::fs::write(&a, "<rows><row><id>1</id><name>Acme</name></row></rows>").unwrap();
+    std::fs::write(
+        &b,
+        "<rows><row><id>2</id><name>Globex</name></row><row><id>3</id><name>Initech</name></row></rows>",
+    )
+    .unwrap();
+    let out = out_path(tmp.path(), "corpus.csv");
+    let listing = format!(
+        "SELECT '{}' AS uri, 'sha-a' AS sha256, 101 AS company_id \
+         UNION ALL SELECT '{}', 'sha-b', 202",
+        a.to_string_lossy().replace('\\', "/"),
+        b.to_string_lossy().replace('\\', "/")
+    );
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": listing })),
+            node("x", "src.xml", json!({ "rowPath": "/rows/row", "carryColumns": ["company_id"] })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "x"), main_edge("e2", "x", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3, "one row per <row>: {body}");
+    assert!(body.contains("Acme") && body.contains("Globex") && body.contains("Initech"), "{body}");
+    // The business key rides along, so a row can be joined back to its document
+    // without a second lookup - which is the whole point of carryColumns.
+    assert!(body.contains("101") && body.contains("202"), "carried company_id: {body}");
+    // And the hash is the one the upstream carried, not one recomputed here.
+    assert!(body.contains("sha-a") && body.contains("sha-b"), "carried sha256: {body}");
+}
+
+/// A configured path with nothing wired in behaves exactly as it always did.
+/// The corpus route must not change the single-document one.
+#[test]
+fn src_xml_without_an_upstream_still_reads_its_configured_path() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let only = tmp.path().join("only.xml");
+    std::fs::write(&only, "<rows><row><id>7</id></row></rows>").unwrap();
+    let out = out_path(tmp.path(), "single.csv");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("x", "src.xml", json!({
+                "path": only.to_string_lossy(), "rowPath": "/rows/row"
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "x", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(body.contains('7'), "{body}");
+    assert!(
+        !body.contains("source_uri"),
+        "the single-document shape gains no columns: {body}"
+    );
+}
+
+/// A zip cannot be streamed - its directory is at the end - so the corpus route
+/// says so and names the component that solves it, rather than silently
+/// spooling a file of unknown size.
+#[test]
+fn src_xml_refuses_to_stream_a_zip_and_points_at_archive_extract() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let z = tmp.path().join("bundle.zip");
+    write_zip(&z, &[("inner.xml", "<rows><row><id>1</id></row></rows>")]);
+    let listing = format!(
+        "SELECT '{}' AS uri",
+        z.to_string_lossy().replace('\\', "/")
+    );
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": listing })),
+            node("x", "src.xml", json!({ "rowPath": "/rows/row" })),
+        ]),
+        json!([main_edge("e1", "s", "x")]),
+    ));
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("xf.archive.extract"), "names the way out: {err}");
+}
+
+/// One unreadable document in a corpus should not have to end the run - but the
+/// skip has to be VISIBLE, because a corpus that quietly lost documents is the
+/// failure this whole contract exists to prevent.
+#[test]
+fn src_xml_can_skip_a_document_it_cannot_read_and_says_how_many() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let good = tmp.path().join("good.xml");
+    std::fs::write(&good, "<rows><row><id>1</id></row></rows>").unwrap();
+    let missing = tmp.path().join("not-here.xml");
+    let out = out_path(tmp.path(), "skip.csv");
+    let listing = format!(
+        "SELECT '{}' AS uri UNION ALL SELECT '{}'",
+        good.to_string_lossy().replace('\\', "/"),
+        missing.to_string_lossy().replace('\\', "/")
+    );
+
+    // fail (the default) stops the run.
+    let strict = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": listing.clone() })),
+            node("x", "src.xml", json!({ "rowPath": "/rows/row" })),
+        ]),
+        json!([main_edge("e1", "s", "x")]),
+    ));
+    assert_eq!(strict.status, "error", "a missing document is not silently fine");
+
+    // skip keeps going, and reports the count.
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": listing })),
+            node("x", "src.xml", json!({ "rowPath": "/rows/row", "onError": "skip" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "x"), main_edge("e2", "x", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 1, "the readable one still came through");
+    let note = r.nodes.get("x").and_then(|n| n.note.clone()).unwrap_or_default();
+    assert!(note.contains("1 document(s) skipped"), "the loss has to be visible: {note}");
+}

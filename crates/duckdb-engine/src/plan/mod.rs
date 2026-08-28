@@ -4584,10 +4584,23 @@ fn build_stage(
         // walk from the root (e.g. "library/books/book"). Each match
         // becomes a JSON object with attributes prefixed '@', text in
         // '_text', and child elements nested.
-        let path = string_prop(&props, "path")
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| EngineError::Config(format!("{}: path required", component_id)))?;
+        // #282: with an upstream relation wired in, the documents are whatever
+        // that relation names and `path` is not required. With nothing wired in
+        // it reads its configured path exactly as it always has, so every
+        // existing pipeline is untouched.
+        let upstream = inputs.main();
+        let path = string_prop(&props, "path").filter(|s| !s.is_empty());
+        if path.is_none() && upstream.is_none() {
+            return Err(EngineError::Config(format!(
+                "{}: needs either a path or an upstream relation naming the documents to read",
+                component_id
+            )));
+        }
         xml_source = Some(XmlSourceSpec {
+            input: artifact_input_from_props(&props, upstream),
+            on_error: string_prop(&props, "onError")
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "fail".to_string()),
             // 250k rows per part: big enough that the per-part DuckDB call is
             // noise against the parse, small enough that the uncompressed
             // intermediate stays bounded.
@@ -4600,7 +4613,7 @@ fn build_stage(
                 .filter(|n| *n > 0)
                 .unwrap_or(250_000) as usize,
             node_id: node.id.clone(),
-            path,
+            path: path.unwrap_or_default(),
             // The GUI historically wrote this under `rootPath` while the engine
             // only ever read `rowPath`, so GUI-configured XML never picked up
             // the path. The manifest now writes `rowPath`; accept `rootPath` as

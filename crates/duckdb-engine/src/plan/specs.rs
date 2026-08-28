@@ -660,6 +660,17 @@ pub struct XmlSourceSpec {
     /// #283: rows per Parquet part when a schema is declared. Bounds the
     /// UNCOMPRESSED intermediate to one part rather than the whole result.
     pub batch_rows: usize,
+    /// #282: the documents to parse, when an upstream relation names them.
+    ///
+    /// With this wired the node reads a CORPUS rather than one file, and each
+    /// document is streamed straight out of the artifact reader - the pull
+    /// parser does not seek, so spooling it to disk first would buy nothing.
+    /// `path` is the single-document fallback when nothing is wired in.
+    pub input: ArtifactInput,
+    /// "fail" or "skip" for a document in the corpus that cannot be read or
+    /// parsed. One malformed file in forty thousand should not have to end the
+    /// run, and pretending it parsed would be worse than either.
+    pub on_error: String,
 }
 
 /// snk.xml: write rows as

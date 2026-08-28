@@ -835,6 +835,34 @@ the audit log with the value they replaced, because "somebody cleared it" is not
 reviewable and the number it held is. The same four operations exist over the
 HTTP API and MCP.
 
+### A corpus, not one file (`src.xml` on the artifact contract)
+
+Wire an artifact relation into `src.xml` and it reads every document that
+relation names, instead of one configured path - so change detection, an
+immutable landing copy and the parser compose instead of each needing its own
+notion of "where the file is":
+
+```
+src.changed  ->  xf.artifact.copy  ->  src.xml  ->  DuckLake
+```
+
+Each document is **streamed straight out of the artifact reader**. The pull
+parser never seeks, so spooling every file to disk first would buy nothing and
+cost a full local copy of the corpus. Object storage works on this route (it
+goes through the signed S3 read), which the configured-path route still cannot
+do. A zip is refused with a pointer to `xf.archive.extract`, because a zip
+directory is at the END of the file and cannot be streamed.
+
+`carryColumns` copies the business keys - `company_id`, `filing_id` - onto every
+row the parser emits, so a row can be joined back to the document it came from
+without a second lookup, and `source_sha256` is carried rather than recomputed.
+
+One writer serves the whole corpus, so the bounded-parts machinery below bounds
+**all** the documents rather than each one: a million small files cannot do what
+one huge file already could not. `onError: skip` keeps going past a document
+that will not read, and says how many it skipped - a corpus that quietly lost
+documents is the failure this contract exists to prevent.
+
 ### Bounded materialization for large XML (`src.xml`)
 
 The XML parser is a pull parser, so live memory is one row plus the nesting
