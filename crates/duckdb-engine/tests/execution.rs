@@ -17818,6 +17818,9 @@ fn archive_extract_streams_a_tar_gz_without_spooling_it() {
 /// to survive the round trip, and nothing may be left on the temp volume.
 #[test]
 fn xml_larger_than_one_batch_is_materialized_in_parts_without_losing_rows() {
+    /// Unique to this test, so its spool can be told apart from the ones other
+    /// tests are writing at the same moment.
+    const SPILL_NODE: &str = "xmlspillcheck";
     let engine = engine_or_skip!();
     let tmp = tempfile::tempdir().unwrap();
     let xml = tmp.path().join("big.xml");
@@ -17832,9 +17835,31 @@ fn xml_larger_than_one_batch_is_materialized_in_parts_without_losing_rows() {
     }
     let out = out_path(tmp.path(), "xml.csv");
 
-    let spools_before = std::fs::read_dir(std::env::temp_dir())
-        .map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().contains(".parts")).count())
-        .unwrap_or(0);
+    // The spool directory is <temp>/duckle-rest-<node_id>-<pid>-<nanos>-<tid>.parts
+    // (see unique_rest_tmp_path + spilling_every). Counting every ".parts" in
+    // the shared temp volume counts the ones OTHER tests are spilling into
+    // right now, which is a race that fails on whichever machine is slowest -
+    // it failed on Windows CI. Naming this node uniquely makes the assertion
+    // about this run.
+    let spools_of_this_test = || -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(std::env::temp_dir())
+            .map(|d| {
+                d.flatten()
+                    .filter(|e| {
+                        let n = e.file_name().to_string_lossy().to_string();
+                        n.contains(".parts") && n.contains(SPILL_NODE)
+                    })
+                    .map(|e| e.path())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    // Clear rather than assert: a run that was killed mid-spill would otherwise
+    // fail this test on every future run until somebody emptied the temp
+    // directory by hand, which is a worse failure than the one being guarded.
+    for stale in spools_of_this_test() {
+        let _ = std::fs::remove_dir_all(&stale);
+    }
 
     // A declared schema is what turns bounded materialization on, and a batch
     // far smaller than the input is what makes several parts.
@@ -17845,10 +17870,10 @@ fn xml_larger_than_one_batch_is_materialized_in_parts_without_losing_rows() {
     });
     let mut doc_json = doc(
         json!([
-            node("x", "src.xml", node_json),
+            node(SPILL_NODE, "src.xml", node_json),
             node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
         ]),
-        json!([main_edge("e1", "x", "k")]),
+        json!([main_edge("e1", SPILL_NODE, "k")]),
     );
     // The declared schema lives on the node's Schema tab rather than in props.
     doc_json.nodes[0].data.schema = Some(
@@ -17864,7 +17889,7 @@ fn xml_larger_than_one_batch_is_materialized_in_parts_without_losing_rows() {
 
     // It really was written in parts - without this the test passes whether
     // spilling happened or not, which is the shape of test that proves nothing.
-    let note = r.nodes.get("x").and_then(|n| n.note.clone()).unwrap_or_default();
+    let note = r.nodes.get(SPILL_NODE).and_then(|n| n.note.clone()).unwrap_or_default();
     assert!(
         note.contains("7 bounded part(s)"),
         "2500 rows at 400 per part is seven parts: {note}"
@@ -17877,10 +17902,11 @@ fn xml_larger_than_one_batch_is_materialized_in_parts_without_losing_rows() {
 
     // Nothing left behind. Parts that outlive the run are the temp volume this
     // exists to protect.
-    let spools_after = std::fs::read_dir(std::env::temp_dir())
-        .map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().contains(".parts")).count())
-        .unwrap_or(0);
-    assert_eq!(spools_after, spools_before, "parts were left on the temp volume");
+    assert!(
+        spools_of_this_test().is_empty(),
+        "parts were left on the temp volume: {:?}",
+        spools_of_this_test()
+    );
 }
 
 /// The declared schema still pins the types, which is the property that makes
