@@ -41,6 +41,7 @@ pub mod s3;
 pub mod batch;
 pub mod audit;
 pub mod baseline;
+pub mod budget;
 pub mod checkpoint;
 pub mod outcache;
 pub mod plans;
@@ -1116,6 +1117,8 @@ impl DuckdbEngine {
         // recent ctl.try (no stacked nesting yet - DAG block refactor
         // would add that).
         let mut installed_fallback: Option<String> = None;
+        // #258: set by the first stage that stops at a ceiling it was given.
+        let mut incomplete_reason: Option<String> = None;
         let mut was_cancelled = false;
         let mut preview: Vec<NodePreview> = Vec::new();
         // xf.incremental high-water marks to persist - but only if the WHOLE
@@ -2109,9 +2112,21 @@ impl DuckdbEngine {
             let stage_unchanged = matches!(&result, Ok(m) if m.starts_with(UNCHANGED_MARKER));
             // The sentence the connector returned, with the internal marker
             // taken off. Pure-SQL stages return an empty string and get None.
+            // #258: a stage that stopped at a ceiling. Recorded before the
+            // note is rendered so the marker never reaches a person.
+            let stage_incomplete = match &result {
+                Ok(m) => split_incomplete(m),
+                Err(_) => None,
+            };
+            if let Some((reason, _)) = &stage_incomplete {
+                incomplete_reason.get_or_insert_with(|| reason.clone());
+            }
             let stage_note = match &result {
                 Ok(m) => {
-                    let (_, text) = split_unchanged(m);
+                    let text = match &stage_incomplete {
+                        Some((_, text)) => text.clone(),
+                        None => split_unchanged(m).1,
+                    };
                     Some(text).filter(|t| !t.trim().is_empty())
                 }
                 Err(_) => None,
@@ -2302,6 +2317,35 @@ impl DuckdbEngine {
             if let Some(RuntimeSpec::InstallFallback(p)) = stage.runtime.as_ref() {
                 installed_fallback = Some(p.clone());
             }
+            // #258: a stage that stopped at a ceiling leaves a partial relation
+            // behind. Nothing after it may run, because the damage a budget
+            // stop does is not the stopping - it is a downstream sink
+            // publishing a tenth of a dataset as if it were all of it.
+            if incomplete_reason.is_some() {
+                break;
+            }
+        }
+        // Every stage after the stop is recorded as skipped, so the run report
+        // says which work did not happen rather than simply omitting it.
+        if incomplete_reason.is_some() {
+            for stage in &compiled.stages {
+                if nodes.contains_key(&stage.node_id) {
+                    continue;
+                }
+                nodes.insert(
+                    stage.node_id.clone(),
+                    NodeRunStatus {
+                        status: "skipped".into(),
+                        kind: None,
+                        note: Some("not run: an earlier stage stopped at its budget".into()),
+                        rows: None,
+                        duration_ms: None,
+                        error: None,
+                        category: None,
+                        sql: None,
+                    },
+                );
+            }
         }
 
         let mut final_status = if was_cancelled {
@@ -2322,7 +2366,11 @@ impl DuckdbEngine {
         // would make the next full run skip rows that were never written to any
         // sink, and registering a model there would publish one from a run that
         // never reached its sink either.
-        if final_status == "ok" && target.is_none() {
+        // An incomplete run must NOT advance a watermark. It read a window and
+        // processed part of it; recording the end of that window would make the
+        // next run skip everything the budget stopped, permanently. This is the
+        // one place where "not a failure" must still behave like one.
+        if final_status == "ok" && target.is_none() && incomplete_reason.is_none() {
             // A failure here is NOT ignorable, which is what it used to be.
             // "ok" from a pipeline that registered a model means the card is on
             // disk; if the write failed, saying ok is a lie a later run acts on -
@@ -2409,6 +2457,8 @@ impl DuckdbEngine {
             error: overall_error,
             category,
             unchanged,
+            incomplete: incomplete_reason.is_some(),
+            incomplete_reason,
             // Capped so one copy of a hundred thousand files cannot put a
             // hundred thousand entries in a signed manifest. The flag says the
             // list is partial, so a truncated one never reads as complete.
@@ -2944,6 +2994,10 @@ impl DuckdbEngine {
             error: overall_error,
             category,
             unchanged,
+            // A stage with a runtime spec is not pure SQL, so an inference
+            // budget can never stop a batched run.
+            incomplete: false,
+            incomplete_reason: None,
             // Nothing here observes an artifact: a stage with a runtime spec is
             // not pure SQL, so it never reaches the batched path.
             artifacts: Vec::new(),
@@ -5633,6 +5687,22 @@ pub enum PipelineEvent {
 /// the console, the desktop UI - can misread a quiet poll as a failure.
 pub(crate) const UNCHANGED_MARKER: &str = "\u{1}unchanged\u{1}";
 
+/// #258: a stage stopped at a ceiling it was given. What follows the second
+/// marker is the machine-readable reason (`budget:maxRequests`), then a space,
+/// then the sentence for a person.
+///
+/// A marker rather than a status value, for the same reason `unchanged` is one:
+/// `status` is read in about forty places and a value none of them know turns a
+/// deliberate stop into a page or a red CI job.
+pub(crate) const INCOMPLETE_MARKER: &str = "\u{1}incomplete\u{1}";
+
+/// Split an `INCOMPLETE_MARKER` message into (reason, text).
+pub(crate) fn split_incomplete(msg: &str) -> Option<(String, String)> {
+    let rest = msg.strip_prefix(INCOMPLETE_MARKER)?;
+    let (reason, text) = rest.split_once(' ').unwrap_or((rest, ""));
+    Some((reason.to_string(), text.to_string()))
+}
+
 /// Split an `unchanged` marker off a stage message.
 pub(crate) fn split_unchanged(msg: &str) -> (bool, String) {
     match msg.strip_prefix(UNCHANGED_MARKER) {
@@ -5861,6 +5931,20 @@ pub struct RunResult {
     /// opposite meaning (a step an earlier failure stopped from running).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unchanged: bool,
+    /// #258: the run produced rows, they are correct, and they are not all of
+    /// them - a stage stopped at a ceiling it was given.
+    ///
+    /// Beside `status` for the same reason as `unchanged`, and distinct from it
+    /// in the one way that matters: `unchanged` does not stop anything
+    /// downstream, because there was nothing to stop. This does, because there
+    /// is a partial dataset that must not be published.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub incomplete: bool,
+    /// Why, machine-readable (`budget:maxRequests`). Alerting has to tell "we
+    /// hit the ceiling" apart from "it broke", and a sentence cannot be matched
+    /// on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incomplete_reason: Option<String>,
     /// Remote objects this run read or wrote, for the provenance manifest.
     /// Capped at ARTIFACT_RECORD_CAP; `artifacts_truncated` says how many more
     /// there were.
@@ -5882,6 +5966,8 @@ impl RunResult {
             category: Some(category.into()),
             // A failure is never "nothing to do".
             unchanged: false,
+            incomplete: false,
+            incomplete_reason: None,
             artifacts: Vec::new(),
             artifacts_truncated: false,
         }

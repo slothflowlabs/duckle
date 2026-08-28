@@ -201,6 +201,8 @@ fn failed_run(started: DateTime<Utc>, error: &str) -> RunResult {
         category: Some(duckle_duckdb_engine::error_category::categorize_error(error).to_string()),
         error: Some(error.to_string()),
     unchanged: false,
+    incomplete: false,
+    incomplete_reason: None,
     artifacts: Vec::new(),
     artifacts_truncated: false,
     }
@@ -521,6 +523,8 @@ impl Scheduler {
             status: if run.failed() { "error".into() } else { "success".into() },
             // A plan rollup is not a source poll; it always did work or failed.
             unchanged: false,
+            incomplete: false,
+            incomplete_reason: None,
             artifacts: Vec::new(),
             artifacts_truncated: false,
             duration_ms: elapsed,
@@ -652,6 +656,8 @@ impl Scheduler {
             ),
             error: Some(e),
             unchanged: false,
+            incomplete: false,
+            incomplete_reason: None,
             artifacts: Vec::new(),
             artifacts_truncated: false,
         };

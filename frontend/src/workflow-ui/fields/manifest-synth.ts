@@ -6766,6 +6766,48 @@ const aiProviderField = (): Field => ({
 // scale. Parallel requests defaults to 1, which is exactly the sequential
 // behaviour these stages had before, so an existing pipeline does not change
 // until someone raises it.
+// #258: rate limiting controls how fast money leaves, not how much. Shared by
+// the three transforms that call an API, because a ceiling on one of them is
+// not a ceiling on the pipeline.
+const aiBudgetFields = (): Field[] => [
+    {
+        key: 'maxRequests',
+        label: 'Max requests',
+        kind: 'integer',
+        description: 'Stop this step once it has issued this many requests. Blank = no limit. This one works against any endpoint, including a self-hosted one with no price to quote.',
+    },
+    {
+        key: 'maxInputTokens',
+        label: 'Max input tokens',
+        kind: 'integer',
+        description: 'Stop once the provider has reported this many prompt tokens. Blank = no limit.',
+    },
+    {
+        key: 'maxOutputTokens',
+        label: 'Max output tokens',
+        kind: 'integer',
+        description: 'Stop once the provider has reported this many completion tokens. Blank = no limit.',
+    },
+    {
+        key: 'maxEstimatedCostUsd',
+        label: 'Max estimated cost (USD)',
+        kind: 'number',
+        description: 'Stop once the token counts multiplied by the prices below reach this. Needs at least one price: a cost ceiling with no prices could never be reached, so it is refused rather than accepted and never fired.',
+    },
+    {
+        key: 'inputUsdPerMillionTokens',
+        label: 'Input price per million tokens (USD)',
+        kind: 'number',
+        description: 'From your provider\'s price list. Only used for the cost ceiling.',
+    },
+    {
+        key: 'outputUsdPerMillionTokens',
+        label: 'Output price per million tokens (USD)',
+        kind: 'number',
+        description: 'From your provider\'s price list. Only used for the cost ceiling.',
+    },
+];
+
 const aiThroughputFields = (): Field[] => [
     {
         key: 'concurrency',
@@ -7298,6 +7340,7 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                     { key: 'dimension', label: 'Dimensions', kind: 'integer', defaultValue: 1536 },
                     { key: 'batchSize', label: 'Batch size', kind: 'integer', defaultValue: 64 },
                     ...aiThroughputFields(),
+                    ...aiBudgetFields(),
                     ...aiCustomEndpointFields(),
                 ],
             },
@@ -7331,6 +7374,7 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                     { key: 'temperature', label: 'Temperature', kind: 'number', defaultValue: 0 },
                     { key: 'maxTokens', label: 'Max tokens', kind: 'integer', defaultValue: 256 },
                     ...aiThroughputFields(),
+                    ...aiBudgetFields(),
                 ],
             },
             // #258: extraction wants columns, not a paragraph that happens to
@@ -7449,6 +7493,7 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                     { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'label' },
                     ...aiCustomEndpointFields(),
                     ...aiThroughputFields(),
+                    ...aiBudgetFields(),
                 ],
             },
         ], 'declared');

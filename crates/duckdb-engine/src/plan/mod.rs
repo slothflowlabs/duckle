@@ -6078,6 +6078,7 @@ fn build_stage(
             )));
         }
         ai_classify = Some(AiClassifySpec {
+            budget: AiBudgetSpec::read(&props),
             checkpoint: props
                 .get("checkpoint")
                 .and_then(JsonValue::as_bool)
@@ -6128,6 +6129,7 @@ fn build_stage(
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: apiKey required", component_id)))?;
         ai_llm = Some(AiLlmSpec {
+            budget: AiBudgetSpec::read(&props),
             node_id: node.id.clone(),
             checkpoint: props
                 .get("checkpoint")
@@ -6216,6 +6218,7 @@ fn build_stage(
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: apiKey required (OpenAI / compatible)", component_id)))?;
         ai_embed = Some(AiEmbedSpec {
+            budget: AiBudgetSpec::read(&props),
             checkpoint: props
                 .get("checkpoint")
                 .and_then(JsonValue::as_bool)
@@ -6725,6 +6728,14 @@ fn build_stage(
             sql = format!("{}{}DETACH {};", trimmed, sep, effective);
         }
     }
+    // #258: a cost ceiling with no prices could never be reached, so it is a
+    // configuration mistake rather than a setting. Caught HERE, at compile
+    // time, so `duckle validate` reports it before a run rather than a run
+    // discovering it after the first stage has already started spending.
+    if matches!(component_id, "xf.ai.llm" | "xf.ai.classify" | "xf.ai.embed") {
+        AiBudgetSpec::read(&props).build()?;
+    }
+
     // #252 slice 1: opt-in reuse of this stage's completed output.
     //
     // Restricted to components whose work is deterministic given their inputs

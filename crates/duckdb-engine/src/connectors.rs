@@ -10580,21 +10580,43 @@ impl DuckdbEngine {
     /// retry in the engine is per stage, which re-sends the whole dataset from
     /// row 0. Transport errors are deliberately not retried, so a wrong host
     /// still fails as fast as it always did.
+    /// Send one request, retrying 429 and 5xx, under an optional ceiling.
+    ///
+    /// `Ok(None)` means the budget stopped it BEFORE anything was sent. That is
+    /// not an error and must not be turned into one: the rows already bought
+    /// are correct and paid for, and the caller reports an incomplete stage.
+    ///
+    /// The slot is claimed before the first attempt and not re-claimed per
+    /// retry: a retry is the same purchase, and charging the ceiling twice for
+    /// one row would make the limit depend on how flaky the endpoint was.
     fn ai_send_with_retry(
         &self,
         make: &dyn Fn() -> ureq::Request,
         body: &str,
         what: &str,
         max_retries: u32,
-    ) -> Result<JsonValue, EngineError> {
+        budget: Option<&crate::budget::Budget>,
+    ) -> Result<Option<JsonValue>, EngineError> {
+        if let Some(b) = budget {
+            if b.claim_request().is_some() {
+                return Ok(None);
+            }
+        }
         let mut attempt = 0u32;
         loop {
             self.check_cancelled()?;
             match make().send_string(body) {
                 Ok(r) => {
-                    return r
+                    let parsed: JsonValue = r
                         .into_json()
-                        .map_err(|e| EngineError::Query(format!("{} parse: {}", what, e)))
+                        .map_err(|e| EngineError::Query(format!("{} parse: {}", what, e)))?;
+                    // What it actually cost, from the provider's own usage
+                    // block. Recorded after the fact because that is the only
+                    // moment the number exists.
+                    if let Some(b) = budget {
+                        b.record_usage(&parsed);
+                    }
+                    return Ok(Some(parsed));
                 }
                 Err(ureq::Error::Status(code, r)) => {
                     let retryable = code == 429 || (500..600).contains(&code);
@@ -10766,6 +10788,11 @@ impl DuckdbEngine {
         } else {
             None
         };
+        // #258: the ceiling for this stage, built once. `stopped` is set by
+        // whichever worker first found it reached - concurrent workers all have
+        // to see it, and the stage's own message is what tells the run.
+        let budget = spec.budget.build()?;
+        let stopped = std::sync::atomic::AtomicBool::new(false);
         let keys: Vec<Option<String>> = rows
             .iter()
             .map(|r| {
@@ -10818,7 +10845,16 @@ impl DuckdbEngine {
                 &body.to_string(),
                 "ai.embed",
                 spec.max_retries,
+                budget.as_ref(),
             )?;
+            // #258: the ceiling was reached, so nothing more is bought. The
+            // rows already done stay done and stay checkpointed; the stage
+            // reports itself INCOMPLETE and the run stops before anything
+            // downstream can publish a partial dataset.
+            let Some(response) = response else {
+                stopped.store(true, std::sync::atomic::Ordering::SeqCst);
+                return Ok(Vec::new());
+            };
             // OpenAI shape: response.data is an array of {index, embedding: [...]}.
             // Order is guaranteed to match the input order per the API contract.
             let data = response
@@ -10865,6 +10901,23 @@ impl DuckdbEngine {
             .collect();
         let count = out.len();
         materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &out)?;
+        // #258: the stage did real work and did not finish it. The marker
+        // makes that a first-class outcome rather than a quiet success.
+        if stopped.load(std::sync::atomic::Ordering::SeqCst) {
+            let reason = budget
+                .as_ref()
+                .and_then(|b| b.exhausted())
+                .unwrap_or("budget");
+            let spent = budget.as_ref().map(|b| b.spent_note()).unwrap_or_default();
+            return Ok(format!(
+                "{}{} ai.embed: stopped at the {} ceiling after {}; {} row(s) done, the rest not attempted",
+                crate::INCOMPLETE_MARKER,
+                reason,
+                reason,
+                spent,
+                count,
+            ));
+        }
         Ok(format!(
             "ai.embed ({}): embedded {} row(s) into {}{}",
             spec.model,
@@ -12286,6 +12339,11 @@ impl DuckdbEngine {
         } else {
             None
         };
+        // #258: the ceiling for this stage, built once. `stopped` is set by
+        // whichever worker first found it reached - concurrent workers all have
+        // to see it, and the stage's own message is what tells the run.
+        let budget = spec.budget.build()?;
+        let stopped = std::sync::atomic::AtomicBool::new(false);
         let reused = std::sync::atomic::AtomicUsize::new(0);
 
         let out = self.ai_map_concurrent(rows.len(), spec.concurrency, |engine, i| {
@@ -12323,7 +12381,16 @@ impl DuckdbEngine {
                 &body.to_string(),
                 "ai.classify",
                 spec.max_retries,
+                budget.as_ref(),
             )?;
+            // #258: the ceiling was reached, so nothing more is bought. The
+            // rows already done stay done and stay checkpointed; the stage
+            // reports itself INCOMPLETE and the run stops before anything
+            // downstream can publish a partial dataset.
+            let Some(response) = response else {
+                stopped.store(true, std::sync::atomic::Ordering::SeqCst);
+                return Ok(row.clone());
+            };
             let raw = response
                 .pointer("/choices/0/message/content")
                 .and_then(|v| v.as_str())
@@ -12355,6 +12422,23 @@ impl DuckdbEngine {
         let count = out.len();
         materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &out)?;
         let reused = reused.load(std::sync::atomic::Ordering::Relaxed);
+        // #258: the stage did real work and did not finish it. The marker
+        // makes that a first-class outcome rather than a quiet success.
+        if stopped.load(std::sync::atomic::Ordering::SeqCst) {
+            let reason = budget
+                .as_ref()
+                .and_then(|b| b.exhausted())
+                .unwrap_or("budget");
+            let spent = budget.as_ref().map(|b| b.spent_note()).unwrap_or_default();
+            return Ok(format!(
+                "{}{} ai.classify: stopped at the {} ceiling after {}; {} row(s) done, the rest not attempted",
+                crate::INCOMPLETE_MARKER,
+                reason,
+                reason,
+                spent,
+                count,
+            ));
+        }
         Ok(format!(
             "ai.classify ({}): {} row(s) -> {}{}",
             spec.model,
@@ -12468,6 +12552,11 @@ impl DuckdbEngine {
         } else {
             None
         };
+        // #258: the ceiling for this stage, built once. `stopped` is set by
+        // whichever worker first found it reached - concurrent workers all have
+        // to see it, and the stage's own message is what tells the run.
+        let budget = spec.budget.build()?;
+        let stopped = std::sync::atomic::AtomicBool::new(false);
         let reused = std::sync::atomic::AtomicUsize::new(0);
 
         let out = self.ai_map_concurrent(rows.len(), spec.concurrency, |engine, i| {
@@ -12538,7 +12627,16 @@ impl DuckdbEngine {
                 &body.to_string(),
                 "ai.llm",
                 spec.max_retries,
+                budget.as_ref(),
             )?;
+            // #258: the ceiling was reached, so nothing more is bought. The
+            // rows already done stay done and stay checkpointed; the stage
+            // reports itself INCOMPLETE and the run stops before anything
+            // downstream can publish a partial dataset.
+            let Some(response) = response else {
+                stopped.store(true, std::sync::atomic::Ordering::SeqCst);
+                return Ok(row.clone());
+            };
             let content = response
                 .pointer("/choices/0/message/content")
                 .and_then(|v| v.as_str())
@@ -12600,6 +12698,23 @@ impl DuckdbEngine {
         let count = out.len();
         materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &out)?;
         let reused = reused.load(std::sync::atomic::Ordering::Relaxed);
+        // #258: the stage did real work and did not finish it. The marker
+        // makes that a first-class outcome rather than a quiet success.
+        if stopped.load(std::sync::atomic::Ordering::SeqCst) {
+            let reason = budget
+                .as_ref()
+                .and_then(|b| b.exhausted())
+                .unwrap_or("budget");
+            let spent = budget.as_ref().map(|b| b.spent_note()).unwrap_or_default();
+            return Ok(format!(
+                "{}{} ai.llm: stopped at the {} ceiling after {}; {} row(s) done, the rest not attempted",
+                crate::INCOMPLETE_MARKER,
+                reason,
+                reason,
+                spent,
+                count,
+            ));
+        }
         Ok(format!(
             "ai.llm ({}): {} row(s) -> {}{}",
             spec.model,

@@ -27450,6 +27450,42 @@
                 "description": "Retries for a single request on HTTP 429 or 5xx, honouring Retry-After. Without this one rate limit throws away every row the stage already paid for. 0 disables retrying."
               },
               {
+                "key": "maxRequests",
+                "label": "Max requests",
+                "kind": "integer",
+                "description": "Stop this step once it has issued this many requests. Blank = no limit. This one works against any endpoint, including a self-hosted one with no price to quote."
+              },
+              {
+                "key": "maxInputTokens",
+                "label": "Max input tokens",
+                "kind": "integer",
+                "description": "Stop once the provider has reported this many prompt tokens. Blank = no limit."
+              },
+              {
+                "key": "maxOutputTokens",
+                "label": "Max output tokens",
+                "kind": "integer",
+                "description": "Stop once the provider has reported this many completion tokens. Blank = no limit."
+              },
+              {
+                "key": "maxEstimatedCostUsd",
+                "label": "Max estimated cost (USD)",
+                "kind": "number",
+                "description": "Stop once the token counts multiplied by the prices below reach this. Needs at least one price: a cost ceiling with no prices could never be reached, so it is refused rather than accepted and never fired."
+              },
+              {
+                "key": "inputUsdPerMillionTokens",
+                "label": "Input price per million tokens (USD)",
+                "kind": "number",
+                "description": "From your provider's price list. Only used for the cost ceiling."
+              },
+              {
+                "key": "outputUsdPerMillionTokens",
+                "label": "Output price per million tokens (USD)",
+                "kind": "number",
+                "description": "From your provider's price list. Only used for the cost ceiling."
+              },
+              {
                 "key": "baseUrl",
                 "label": "Base URL",
                 "kind": "text",
@@ -27664,6 +27700,42 @@
                 "kind": "integer",
                 "defaultValue": 3,
                 "description": "Retries for a single request on HTTP 429 or 5xx, honouring Retry-After. Without this one rate limit throws away every row the stage already paid for. 0 disables retrying."
+              },
+              {
+                "key": "maxRequests",
+                "label": "Max requests",
+                "kind": "integer",
+                "description": "Stop this step once it has issued this many requests. Blank = no limit. This one works against any endpoint, including a self-hosted one with no price to quote."
+              },
+              {
+                "key": "maxInputTokens",
+                "label": "Max input tokens",
+                "kind": "integer",
+                "description": "Stop once the provider has reported this many prompt tokens. Blank = no limit."
+              },
+              {
+                "key": "maxOutputTokens",
+                "label": "Max output tokens",
+                "kind": "integer",
+                "description": "Stop once the provider has reported this many completion tokens. Blank = no limit."
+              },
+              {
+                "key": "maxEstimatedCostUsd",
+                "label": "Max estimated cost (USD)",
+                "kind": "number",
+                "description": "Stop once the token counts multiplied by the prices below reach this. Needs at least one price: a cost ceiling with no prices could never be reached, so it is refused rather than accepted and never fired."
+              },
+              {
+                "key": "inputUsdPerMillionTokens",
+                "label": "Input price per million tokens (USD)",
+                "kind": "number",
+                "description": "From your provider's price list. Only used for the cost ceiling."
+              },
+              {
+                "key": "outputUsdPerMillionTokens",
+                "label": "Output price per million tokens (USD)",
+                "kind": "number",
+                "description": "From your provider's price list. Only used for the cost ceiling."
               }
             ]
           },
@@ -28127,6 +28199,42 @@
                 "kind": "integer",
                 "defaultValue": 3,
                 "description": "Retries for a single request on HTTP 429 or 5xx, honouring Retry-After. Without this one rate limit throws away every row the stage already paid for. 0 disables retrying."
+              },
+              {
+                "key": "maxRequests",
+                "label": "Max requests",
+                "kind": "integer",
+                "description": "Stop this step once it has issued this many requests. Blank = no limit. This one works against any endpoint, including a self-hosted one with no price to quote."
+              },
+              {
+                "key": "maxInputTokens",
+                "label": "Max input tokens",
+                "kind": "integer",
+                "description": "Stop once the provider has reported this many prompt tokens. Blank = no limit."
+              },
+              {
+                "key": "maxOutputTokens",
+                "label": "Max output tokens",
+                "kind": "integer",
+                "description": "Stop once the provider has reported this many completion tokens. Blank = no limit."
+              },
+              {
+                "key": "maxEstimatedCostUsd",
+                "label": "Max estimated cost (USD)",
+                "kind": "number",
+                "description": "Stop once the token counts multiplied by the prices below reach this. Needs at least one price: a cost ceiling with no prices could never be reached, so it is refused rather than accepted and never fired."
+              },
+              {
+                "key": "inputUsdPerMillionTokens",
+                "label": "Input price per million tokens (USD)",
+                "kind": "number",
+                "description": "From your provider's price list. Only used for the cost ceiling."
+              },
+              {
+                "key": "outputUsdPerMillionTokens",
+                "label": "Output price per million tokens (USD)",
+                "kind": "number",
+                "description": "From your provider's price list. Only used for the cost ceiling."
               }
             ]
           }

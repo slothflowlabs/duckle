@@ -1098,6 +1098,8 @@ pub struct WebSocketSinkSpec {
 /// llama.cpp embedding server, etc) - just change base_url.
 #[derive(Debug, Clone)]
 pub struct AiEmbedSpec {
+    /// #258: a hard ceiling on what this stage may spend.
+    pub budget: AiBudgetSpec,
     pub node_id: String,
     pub from_view: String,
     pub input_column: String,
@@ -1232,6 +1234,50 @@ pub struct AiPiiSpec {
 /// `prompt_template` with {column_name} substitution; if empty, the
 /// row's `input_column` text is sent as the user message verbatim.
 /// Optional `system_prompt`. Result lands in `output_column`.
+/// #258: a hard ceiling on what one inference stage may spend.
+///
+/// Declared numbers rather than a built [`crate::budget::Budget`], so a spec
+/// stays plain data: the budget itself holds live counters and is constructed
+/// once per run.
+#[derive(Debug, Clone, Default)]
+pub struct AiBudgetSpec {
+    pub max_requests: Option<u64>,
+    pub max_input_tokens: Option<u64>,
+    pub max_output_tokens: Option<u64>,
+    pub max_cost_usd: Option<f64>,
+    pub input_usd_per_mtok: f64,
+    pub output_usd_per_mtok: f64,
+}
+
+impl AiBudgetSpec {
+    pub fn read(props: &serde_json::Value) -> Self {
+        // Zero is a real value, not "unset": a ceiling of zero has to mean
+        // zero. Absent is what `None` means.
+        let n = |k: &str| props.get(k).and_then(serde_json::Value::as_u64);
+        let f = |k: &str| props.get(k).and_then(serde_json::Value::as_f64);
+        AiBudgetSpec {
+            max_requests: n("maxRequests"),
+            max_input_tokens: n("maxInputTokens"),
+            max_output_tokens: n("maxOutputTokens"),
+            max_cost_usd: f("maxEstimatedCostUsd"),
+            input_usd_per_mtok: f("inputUsdPerMillionTokens").unwrap_or(0.0),
+            output_usd_per_mtok: f("outputUsdPerMillionTokens").unwrap_or(0.0),
+        }
+    }
+
+    /// Build the live budget, or `None` when nothing was capped.
+    pub fn build(&self) -> Result<Option<crate::budget::Budget>, crate::EngineError> {
+        crate::budget::Budget::new(
+            self.max_requests,
+            self.max_input_tokens,
+            self.max_output_tokens,
+            self.max_cost_usd,
+            self.input_usd_per_mtok,
+            self.output_usd_per_mtok,
+        )
+    }
+}
+
 /// #258: how the model is asked to shape its reply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiResponseFormat {
@@ -1259,6 +1305,8 @@ pub enum AiOnInvalid {
 
 #[derive(Debug, Clone)]
 pub struct AiLlmSpec {
+    /// #258: a hard ceiling on what this stage may spend.
+    pub budget: AiBudgetSpec,
     pub node_id: String,
     pub from_view: String,
     /// #252: reuse a row's answer when the same row was already paid for.
@@ -1321,6 +1369,8 @@ pub struct AiLlmSpec {
 /// not in the category list).
 #[derive(Debug, Clone)]
 pub struct AiClassifySpec {
+    /// #258: a hard ceiling on what this stage may spend.
+    pub budget: AiBudgetSpec,
     pub node_id: String,
     pub from_view: String,
     pub input_column: String,

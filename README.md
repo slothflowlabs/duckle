@@ -747,6 +747,64 @@ row.
 quietly stops early is the exact failure this feature exists to remove, so a
 schema that pulls in another one says so and asks for a self-contained file.
 
+### A ceiling on the bill, not just on the rate
+
+Rate limiting controls how fast money leaves. It does not control how much. A
+prompt template that accidentally embeds a whole document, over a source that
+grew tenfold overnight, is a bill nobody approved.
+
+`xf.ai.llm`, `xf.ai.classify` and `xf.ai.embed` take a **Budget**:
+
+```
+Max requests                      : 1000000
+Max input tokens                  : 500000000
+Max output tokens                 : 30000000
+Max estimated cost (USD)          : 50
+Input price per million tokens    : 0.15
+Output price per million tokens   : 0.60
+```
+
+Reaching one stops the stage. What happens then is the part worth reading:
+
+```
+status     : ok
+incomplete : budget:maxRequests - the rows produced are correct and are not all
+             of them; nothing downstream ran
+  l   ok (5 rows) - ai.llm: stopped at the budget:maxRequests ceiling after
+                    2 request(s), 20 input + 10 output token(s)
+  k   skipped     - not run: an earlier stage stopped at its budget
+```
+
+- **Not a failure.** The rows already bought are correct and paid for. `status`
+  stays `ok`, and a Plan step does not fail.
+- **Not a plain success either.** `incomplete` sits beside `status` with a
+  machine-readable reason, because alerting has to tell "we hit the ceiling"
+  apart from "it broke", and a sentence cannot be matched on.
+- **Everything downstream is skipped.** This is the point. Stopping is only the
+  mechanism; the damage a budget stop prevents is a sink publishing two rows of
+  five as if they were the answer.
+- **No watermark advances.** An incomplete run read a window and processed part
+  of it. Recording the end of that window would make the next run skip
+  everything the budget stopped, permanently. This is the one place where "not
+  a failure" still has to behave like one.
+- **The checkpoint keeps what was bought.** Tick **Remember completed rows** and
+  a rerun after raising the ceiling calls the API only for what is missing.
+
+**How exact is it?** The request ceiling is exact: no request past the Nth is
+ever issued, and it holds under concurrency (the slot is claimed with a
+compare-and-swap, so eight workers cannot all take the same last one). Token and
+cost ceilings cannot be, because tokens are only knowable after a reply. The
+guarantee is precisely: **no request starts once the recorded totals have
+reached the limit**, so the last one may carry the total past it by at most one
+request's worth. Anything stronger would need a local tokenizer per model and
+would still be an estimate.
+
+A cost ceiling **with no prices does not compile**. It could never be reached,
+and a limit that cannot fire is worse than no limit: it is a limit somebody
+believes in. `duckle validate` catches it before a run rather than a run
+discovering it after the first stage has started spending. Request and token
+ceilings need no prices and work against a self-hosted endpoint.
+
 ### Extraction should produce columns, not a paragraph containing the answer
 
 `xf.ai.llm` can ask for a shape instead of prose. Pick **A JSON Schema you

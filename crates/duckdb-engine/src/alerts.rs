@@ -509,6 +509,8 @@ mod tests {
             error: error.map(str::to_string),
             category: None,
             unchanged: false,
+            incomplete: false,
+            incomplete_reason: None,
             artifacts: Vec::new(),
             artifacts_truncated: false,
         }

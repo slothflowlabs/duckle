@@ -463,6 +463,15 @@ fn run() -> Result<bool, String> {
     if let Some(err) = &result.error {
         println!("error    : {err}");
     }
+    // #258: a run that stopped at a ceiling is not a failure, and must not read
+    // like a clean success either. Everything downstream was skipped, so the
+    // sinks hold what they held before.
+    if result.incomplete {
+        println!(
+            "incomplete: {} - the rows produced are correct and are not all of them; nothing downstream ran",
+            result.incomplete_reason.as_deref().unwrap_or("stopped early")
+        );
+    }
     for (id, st) in &result.nodes {
         let rows = st.rows.map(|r| format!(" ({r} rows)")).unwrap_or_default();
         // What the stage said about itself - which page it stopped at, that it
@@ -808,6 +817,15 @@ fn run_artifact(payload: Vec<u8>) -> ExitCode {
     println!("duration : {} ms", result.duration_ms);
     if let Some(err) = &result.error {
         println!("error    : {err}");
+    }
+    // #258: a run that stopped at a ceiling is not a failure, and must not read
+    // like a clean success either. Everything downstream was skipped, so the
+    // sinks hold what they held before.
+    if result.incomplete {
+        println!(
+            "incomplete: {} - the rows produced are correct and are not all of them; nothing downstream ran",
+            result.incomplete_reason.as_deref().unwrap_or("stopped early")
+        );
     }
     for (id, st) in &result.nodes {
         let rows = st.rows.map(|r| format!(" ({r} rows)")).unwrap_or_default();

@@ -380,6 +380,8 @@ mod tests {
         let r = RunResult {
             status: "ok".into(),
             unchanged: false,
+            incomplete: false,
+            incomplete_reason: None,
             artifacts: Vec::new(),
             artifacts_truncated: false,
             duration_ms: 1,

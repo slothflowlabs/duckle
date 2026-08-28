@@ -10542,6 +10542,159 @@ fn src_webhook_collects_inbound_http_requests() {
     assert_eq!(ev2, "login");
 }
 
+/// #258: a cost ceiling with no prices could never fire. Caught at COMPILE
+/// time, so `duckle validate` reports it rather than a run discovering it after
+/// the first stage has started spending.
+#[test]
+fn a_cost_ceiling_with_no_prices_does_not_compile() {
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": "x.csv", "hasHeader": true })),
+            node("l", "xf.ai.llm", json!({
+                "promptTemplate": "Greet {name}",
+                "outputColumn": "reply",
+                "model": "mock",
+                "apiKey": "sk-test",
+                "maxEstimatedCostUsd": 50.0,
+            })),
+        ]),
+        json!([main_edge("e1", "s", "l")]),
+    );
+    let e = duckle_duckdb_engine::compile_pipeline_sql(&d)
+        .expect_err("a ceiling that can never fire must not compile")
+        .to_string();
+    assert!(e.contains("never"), "must say why; got: {e}");
+
+    // With a price it compiles, so the refusal is about the missing price and
+    // not about cost ceilings generally.
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": "x.csv", "hasHeader": true })),
+            node("l", "xf.ai.llm", json!({
+                "promptTemplate": "Greet {name}",
+                "outputColumn": "reply",
+                "model": "mock",
+                "apiKey": "sk-test",
+                "maxEstimatedCostUsd": 50.0,
+                "inputUsdPerMillionTokens": 0.15,
+            })),
+        ]),
+        json!([main_edge("e1", "s", "l")]),
+    );
+    assert!(duckle_duckdb_engine::compile_pipeline_sql(&d).is_ok());
+}
+
+/// #258: a request ceiling stops the stage, and the STOP is what matters more
+/// than the counting.
+///
+/// Five rows, a ceiling of two. The run must:
+///
+/// - end "ok", not "error" - the two rows bought are correct and paid for
+/// - report itself incomplete, with a machine-readable reason
+/// - issue exactly two requests, never a third
+/// - leave the downstream sink SKIPPED and its file unwritten
+///
+/// That last one is the whole point. A partial dataset published as if it were
+/// the whole thing is the damage; stopping is only the mechanism.
+#[test]
+fn an_inference_budget_stops_the_run_before_a_partial_dataset_is_published() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let served = Arc::new(AtomicUsize::new(0));
+    let count_seen = served.clone();
+    let handle = std::thread::spawn(move || {
+        // Offer more than the ceiling allows. If the budget leaks, the extra
+        // connections are there to be taken and the count assertion catches it.
+        for stream in listener.incoming().take(5) {
+            let mut stream = match stream {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+            stream.set_nodelay(true).ok();
+            let mut buf = Vec::with_capacity(8192);
+            let mut chunk = [0u8; 4096];
+            for _ in 0..32 {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+            }
+            let n = count_seen.fetch_add(1, Ordering::SeqCst);
+            let body = format!(
+                r#"{{"choices":[{{"message":{{"content":"answer-{}"}}}}],"usage":{{"prompt_tokens":10,"completion_tokens":5}}}}"#,
+                n
+            );
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let in_csv = write_file(tmp.path(), "in.csv", "id,name\n1,a\n2,b\n3,c\n4,d\n5,e\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let base_url = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": in_csv, "hasHeader": true })),
+            node("l", "xf.ai.llm", json!({
+                "promptTemplate": "Greet {name}",
+                "outputColumn": "reply",
+                "model": "mock",
+                "apiKey": "sk-test",
+                "baseUrl": base_url,
+                "concurrency": 1,
+                "maxRequests": 2,
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "l"), main_edge("e2", "l", "k")]),
+    ));
+    drop(handle);
+
+    assert_eq!(r.status, "ok", "a budget stop is not a failure: {:?}", r.error);
+    assert!(r.incomplete, "the run must say it did not finish");
+    assert_eq!(
+        r.incomplete_reason.as_deref(),
+        Some("budget:maxRequests"),
+        "the reason must be matchable by alerting, not just readable"
+    );
+    assert_eq!(
+        served.load(Ordering::SeqCst),
+        2,
+        "exactly the ceiling, never a third request"
+    );
+    let sink = r.nodes.get("k").expect("the sink is still reported");
+    assert_eq!(
+        sink.status, "skipped",
+        "the sink must not run: publishing 2 of 5 rows as the answer is the damage"
+    );
+    assert!(
+        !std::path::Path::new(&out).exists(),
+        "and it must not have written a file"
+    );
+    let note = r.nodes.get("l").and_then(|n| n.note.clone()).unwrap_or_default();
+    assert!(
+        note.contains("budget:maxRequests") && note.contains("2 request(s)"),
+        "the stage must say what it spent; got {:?}",
+        note
+    );
+}
+
 /// xf.ai.llm: stand up a mock /v1/chat/completions endpoint, pipe 2
 /// rows through with a prompt template, verify each row got the
 /// completion text written back. Also asserts the prompt template
