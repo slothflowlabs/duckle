@@ -2271,6 +2271,49 @@ impl Default for ArtifactInput {
     }
 }
 
+/// One run-to-run rule: what to watch, and how far it may move.
+#[derive(Debug, Clone)]
+pub struct BaselineRule {
+    /// "row_count", "null_pct", "distinct_count", "min", "max", "mean".
+    pub metric: String,
+    /// The column the metric is about. None for dataset-level metrics.
+    pub column: Option<String>,
+    /// Fail when the value drops by more than this fraction of the baseline.
+    pub max_decrease_pct: Option<f64>,
+    pub max_increase_pct: Option<f64>,
+    /// Absolute movement limits, for metrics where a percentage is meaningless
+    /// - a null rate going from 0% to 5% is an infinite percentage increase.
+    pub max_increase: Option<f64>,
+    pub max_decrease: Option<f64>,
+    pub max_difference: Option<f64>,
+}
+
+/// `qa.baseline`: compare this run against what previous runs looked like.
+///
+/// #281: every row can satisfy the schema and every row-level rule while the
+/// dataset is nothing like what normally arrives - 842,114 rows where five
+/// million usually come, a null rate that went from 4% to 71%, a country
+/// partition that vanished. Those are more dangerous than a crash, because the
+/// pipeline stays green and the wrong data gets published.
+#[derive(Debug, Clone)]
+pub struct BaselineSpec {
+    pub node_id: String,
+    pub from_view: String,
+    /// How many accepted profiles to keep and compare against. The comparison
+    /// uses their MEDIAN, so one odd day does not move the baseline much.
+    pub history: usize,
+    /// Columns to profile. Empty means every column of the input.
+    pub columns: Vec<String>,
+    /// Compare per group as well as overall, so a partition disappearing is
+    /// caught even when the total stays in range.
+    pub group_by: Vec<String>,
+    /// Fail the run when a group that used to be there is missing.
+    pub require_existing_groups: bool,
+    pub rules: Vec<BaselineRule>,
+    /// "gate" fails the run on a violation; "report" only emits the rows.
+    pub mode: String,
+}
+
 /// `xf.archive.extract`: turn one archive artifact into one artifact per member.
 ///
 /// #284: bulk data is published as archives far more often than as readable

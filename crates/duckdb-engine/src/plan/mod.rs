@@ -322,6 +322,7 @@ pub enum RuntimeSpec {
     ChangedSource(ChangedSourceSpec),
     ArtifactCopy(ArtifactCopySpec),
     ArchiveExtract(ArchiveExtractSpec),
+    Baseline(BaselineSpec),
     DuckLakeMaintain(DuckLakeMaintainSpec),
     Tumble(TumbleSpec),
     Neo4jSource(Neo4jSourceSpec),
@@ -1688,6 +1689,7 @@ fn build_stage(
     let mut changed_source: Option<ChangedSourceSpec> = None;
     let mut artifact_copy: Option<ArtifactCopySpec> = None;
     let mut archive_extract: Option<ArchiveExtractSpec> = None;
+    let mut baseline: Option<BaselineSpec> = None;
     let mut ducklake_maintain: Option<DuckLakeMaintainSpec> = None;
     let mut tumble: Option<TumbleSpec> = None;
     let mut neo4j_source: Option<Neo4jSourceSpec> = None;
@@ -4870,6 +4872,89 @@ fn build_stage(
             }),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "qa.baseline" {
+        // #281: the failure that stays green. Every row can be structurally
+        // valid while the dataset is nothing like what normally arrives, and
+        // that publishes successfully.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let list = |key: &str| -> Vec<String> {
+            props
+                .get(key)
+                .and_then(JsonValue::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .or_else(|| {
+                    string_prop(&props, key).map(|s| {
+                        s.split(',')
+                            .map(str::trim)
+                            .filter(|p| !p.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                })
+                .unwrap_or_default()
+        };
+        let rules: Vec<BaselineRule> = props
+            .get("rules")
+            .and_then(JsonValue::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|r| {
+                        let num = |k: &str| -> Option<f64> {
+                            r.get(k).and_then(|v| {
+                                v.as_f64()
+                                    .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+                            })
+                        };
+                        Some(BaselineRule {
+                            metric: r
+                                .get("metric")
+                                .and_then(JsonValue::as_str)
+                                .unwrap_or("row_count")
+                                .to_string(),
+                            column: r
+                                .get("column")
+                                .and_then(JsonValue::as_str)
+                                .map(str::to_string)
+                                .filter(|c| !c.trim().is_empty()),
+                            max_decrease_pct: num("maxDecreasePct"),
+                            max_increase_pct: num("maxIncreasePct"),
+                            max_increase: num("maxIncrease"),
+                            max_decrease: num("maxDecrease"),
+                            max_difference: num("maxDifference"),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        baseline = Some(BaselineSpec {
+            node_id: node.id.clone(),
+            from_view: from_view.to_string(),
+            history: props
+                .get("history")
+                .and_then(|v| {
+                    v.as_u64()
+                        .or_else(|| v.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
+                })
+                .filter(|n| *n > 0)
+                .unwrap_or(7) as usize,
+            columns: list("columns"),
+            group_by: list("groupBy"),
+            require_existing_groups: props
+                .get("requireExistingGroups")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            rules,
+            mode: string_prop(&props, "mode")
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "gate".to_string()),
+        });
+        (String::new(), StageKind::View, Some(from_view.to_string()))
     } else if component_id == "xf.archive.extract" {
         // #284: one artifact in, one artifact per member out. Generic on
         // purpose - a ZIP of CSVs and a TAR of JSON differ only in how the
@@ -6387,6 +6472,7 @@ fn build_stage(
         .or_else(|| changed_source.map(RuntimeSpec::ChangedSource))
         .or_else(|| artifact_copy.map(RuntimeSpec::ArtifactCopy))
         .or_else(|| archive_extract.map(RuntimeSpec::ArchiveExtract))
+        .or_else(|| baseline.map(RuntimeSpec::Baseline))
         .or_else(|| ducklake_maintain.map(RuntimeSpec::DuckLakeMaintain))
         .or_else(|| tumble.map(RuntimeSpec::Tumble))
         .or_else(|| neo4j_source.map(RuntimeSpec::Neo4jSource))

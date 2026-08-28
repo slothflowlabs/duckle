@@ -719,6 +719,7 @@ export const PALETTE: Category[] = [
                 id: 'qa.validation',
                 label: 'Validation',
                 components: [
+                    qa('baseline', 'Run Baseline', 'available', 'Compare this run against what previous runs looked like. Every row can satisfy the schema and every row-level rule while the dataset is nothing like what normally arrives - 842,114 rows where five million usually come, a null rate that went from 4 percent to 71, a country partition that vanished - and that publishes successfully, which is more dangerous than a crash. Profiles row count, and per column the null count, null rate, distinct count, min, max and mean; compares against the MEDIAN of the last N accepted profiles so one odd day does not move the baseline. Rules take percentage or absolute limits in either direction. groupBy with requireExistingGroups catches a partition disappearing even when the total stays in range. Gate fails the run; report only emits the findings. Deterministic - rolling statistics and explicit thresholds, no model. The new profile is accepted only if the whole run succeeds, so a run that failed downstream never leaves today numbers as the new normal.'),
                     qa('schemavalidate', 'Schema Validate', 'available', 'Reject rows where any expected column is null'),
                     qa('regex', 'Regex Match', 'available', 'Pass rows matching a pattern; rest to reject'),
                     qa('range', 'Range Check', 'available', 'Pass in-range rows; rest to reject'),

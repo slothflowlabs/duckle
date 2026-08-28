@@ -6575,6 +6575,251 @@ impl DuckdbEngine {
         Ok(std::path::Path::new(dest).exists())
     }
 
+    /// qa.baseline: compare this run against what previous runs looked like.
+    ///
+    /// #281: the dangerous failure is the one that stays green. Every row can
+    /// satisfy the schema and every row-level rule while the dataset is nothing
+    /// like what normally arrives, and that publishes successfully.
+    ///
+    /// Deterministic on purpose - rolling summary statistics and explicit
+    /// thresholds, no model. What it compares against is the MEDIAN of the last
+    /// N accepted profiles, so one odd day does not drag the baseline with it.
+    pub(crate) fn run_baseline(
+        &self,
+        db: &Path,
+        secret_prefix: &str,
+        spec: &plan::BaselineSpec,
+        pipeline_name: Option<&str>,
+        pending: &mut Vec<crate::PendingWrite>,
+    ) -> Result<String, EngineError> {
+        let current = self.profile_relation(db, secret_prefix, spec)?;
+        let path = baseline_state_path(pipeline_name, &spec.node_id);
+        let prior = path.as_deref().and_then(crate::read_state_snapshot);
+        let history: Vec<JsonValue> = prior
+            .as_deref()
+            .and_then(|t| serde_json::from_str::<JsonValue>(t).ok())
+            .and_then(|v| v.get("profiles").cloned())
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+
+        let mut rows: Vec<JsonValue> = Vec::new();
+        let mut violations: Vec<String> = Vec::new();
+
+        if history.is_empty() {
+            // Nothing to compare against yet. This is the first run, not a
+            // pass: saying "ok" would let the very first run establish any
+            // baseline at all, including a broken one, and look verified doing
+            // it.
+            rows.push(serde_json::json!({
+                "metric": "baseline",
+                "column": JsonValue::Null,
+                "group": JsonValue::Null,
+                "baseline_value": JsonValue::Null,
+                "current_value": JsonValue::Null,
+                "change": JsonValue::Null,
+                "change_pct": JsonValue::Null,
+                "status": "first_run",
+                "detail": "no accepted profile yet - this run becomes the first baseline",
+            }));
+        } else {
+            for rule in &spec.rules {
+                let key = metric_key(&rule.metric, rule.column.as_deref());
+                let cur = current.get(&key).and_then(JsonValue::as_f64);
+                let base = median_of(&history, &key);
+                let (status, detail) = match (base, cur) {
+                    (Some(b), Some(c)) => judge(rule, b, c),
+                    (None, _) => (
+                        "unknown".to_string(),
+                        format!("no baseline for {key} in the accepted history"),
+                    ),
+                    (_, None) => (
+                        "unknown".to_string(),
+                        format!("{key} could not be measured on this run"),
+                    ),
+                };
+                let change = match (base, cur) {
+                    (Some(b), Some(c)) => Some(c - b),
+                    _ => None,
+                };
+                let change_pct = match (base, cur) {
+                    (Some(b), Some(c)) if b != 0.0 => Some((c - b) / b * 100.0),
+                    _ => None,
+                };
+                if status == "violation" {
+                    violations.push(detail.clone());
+                }
+                rows.push(serde_json::json!({
+                    "metric": rule.metric,
+                    "column": rule.column,
+                    "group": JsonValue::Null,
+                    "baseline_value": base,
+                    "current_value": cur,
+                    "change": change,
+                    "change_pct": change_pct,
+                    "status": status,
+                    "detail": detail,
+                }));
+            }
+
+            // A partition that disappeared is the case a row count cannot see:
+            // the total can stay in range while a whole country stops arriving.
+            if spec.require_existing_groups && !spec.group_by.is_empty() {
+                let cur_groups = group_set(&current);
+                let base_groups: std::collections::BTreeSet<String> = history
+                    .iter()
+                    .filter_map(|p| p.as_object())
+                    .flat_map(|p| group_set(p).into_iter())
+                    .collect();
+                for missing in base_groups.difference(&cur_groups) {
+                    let detail = format!("group '{missing}' was in the baseline and is not here");
+                    violations.push(detail.clone());
+                    rows.push(serde_json::json!({
+                        "metric": "group_present",
+                        "column": JsonValue::Null,
+                        "group": missing,
+                        "baseline_value": 1.0,
+                        "current_value": 0.0,
+                        "change": -1.0,
+                        "change_pct": -100.0,
+                        "status": "violation",
+                        "detail": detail,
+                    }));
+                }
+            }
+        }
+
+        materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &rows)?;
+
+        // The new profile is accepted only if the whole run succeeds - the same
+        // deferred flush a watermark gets, and for the same reason: a run that
+        // failed downstream must not leave today's numbers as the new normal.
+        if let Some(p) = path {
+            let mut kept = history.clone();
+            kept.push(JsonValue::Object(current.clone().into_iter().collect()));
+            let keep_from = kept.len().saturating_sub(spec.history);
+            let kept: Vec<JsonValue> = kept[keep_from..].to_vec();
+            pending.push(crate::PendingWrite::state(
+                p,
+                serde_json::json!({ "profiles": kept }),
+                prior,
+            ));
+        }
+
+        if !violations.is_empty() && spec.mode == "gate" {
+            return Err(EngineError::Query(format!(
+                "baseline: this run does not look like the ones before it. {}",
+                violations.join("; ")
+            )));
+        }
+        Ok(if violations.is_empty() {
+            format!("baseline: {} rule(s) checked, all within range", spec.rules.len())
+        } else {
+            format!(
+                "baseline: {} finding(s) reported - {}",
+                violations.len(),
+                violations.join("; ")
+            )
+        })
+    }
+
+    /// Measure this run: the dataset-level and per-column numbers a rule can be
+    /// written against, plus a row count per group when one is configured.
+    fn profile_relation(
+        &self,
+        db: &Path,
+        secret_prefix: &str,
+        spec: &plan::BaselineSpec,
+    ) -> Result<serde_json::Map<String, JsonValue>, EngineError> {
+        let view = plan::quote_ident(&spec.from_view);
+        let described = self.run_rows(
+            Some(db),
+            &format!("{}DESCRIBE SELECT * FROM {}", secret_prefix, view),
+        )?;
+        let all: Vec<String> = described
+            .iter()
+            .filter_map(|r| r.get("column_name").and_then(|v| v.as_str()))
+            .map(str::to_string)
+            .collect();
+        let columns: Vec<String> = if spec.columns.is_empty() {
+            all
+        } else {
+            spec.columns
+                .iter()
+                .filter(|c| all.iter().any(|a| a == *c))
+                .cloned()
+                .collect()
+        };
+
+        let mut selects: Vec<String> = vec!["COUNT(*) AS row_count".to_string()];
+        for c in &columns {
+            let q = plan::quote_ident(c);
+            let safe = metric_ident(c);
+            selects.push(format!("COUNT({q}) AS \"{safe}__nonnull\""));
+            selects.push(format!("approx_count_distinct({q}) AS \"{safe}__distinct\""));
+            // Cast through DOUBLE so a rule can be written against any column
+            // whose values are ordered; a non-numeric column simply yields NULL
+            // rather than failing the whole profile.
+            selects.push(format!("TRY_CAST(MIN({q}) AS DOUBLE) AS \"{safe}__min\""));
+            selects.push(format!("TRY_CAST(MAX({q}) AS DOUBLE) AS \"{safe}__max\""));
+            selects.push(format!("TRY_CAST(AVG(TRY_CAST({q} AS DOUBLE)) AS DOUBLE) AS \"{safe}__mean\""));
+        }
+        let sql = format!(
+            "{}SELECT {} FROM {}",
+            secret_prefix,
+            selects.join(", "),
+            view
+        );
+        let measured = self.run_rows(Some(db), &sql)?;
+        let first = measured.first().cloned().unwrap_or(JsonValue::Null);
+
+        let num = |v: Option<&JsonValue>| -> Option<f64> {
+            v.and_then(|v| {
+                v.as_f64()
+                    .or_else(|| v.as_str().and_then(|s| s.trim().parse::<f64>().ok()))
+            })
+        };
+        let row_count = num(first.get("row_count")).unwrap_or(0.0);
+        let mut out = serde_json::Map::new();
+        out.insert("row_count".into(), serde_json::json!(row_count));
+        for c in &columns {
+            let safe = metric_ident(c);
+            let nonnull = num(first.get(format!("{safe}__nonnull").as_str())).unwrap_or(0.0);
+            let nulls = (row_count - nonnull).max(0.0);
+            out.insert(metric_key("null_count", Some(c)), serde_json::json!(nulls));
+            out.insert(
+                metric_key("null_pct", Some(c)),
+                serde_json::json!(if row_count > 0.0 { nulls / row_count } else { 0.0 }),
+            );
+            for m in ["distinct", "min", "max", "mean"] {
+                let name = if m == "distinct" { "distinct_count" } else { m };
+                if let Some(v) = num(first.get(format!("{safe}__{m}").as_str())) {
+                    out.insert(metric_key(name, Some(c)), serde_json::json!(v));
+                }
+            }
+        }
+
+        if !spec.group_by.is_empty() {
+            let keys: Vec<String> = spec.group_by.iter().map(|g| plan::quote_ident(g)).collect();
+            let label = keys
+                .iter()
+                .map(|k| format!("COALESCE({k}::VARCHAR, '')"))
+                .collect::<Vec<_>>()
+                .join(" || '|' || ");
+            let sql = format!(
+                "{}SELECT {} AS g, COUNT(*) AS n FROM {} GROUP BY 1",
+                secret_prefix, label, view
+            );
+            let mut groups = serde_json::Map::new();
+            for r in self.run_rows(Some(db), &sql)? {
+                if let Some(g) = r.get("g").and_then(|v| v.as_str()) {
+                    groups.insert(g.to_string(), serde_json::json!(num(r.get("n")).unwrap_or(0.0)));
+                }
+            }
+            out.insert("__groups".into(), JsonValue::Object(groups));
+        }
+        Ok(out)
+    }
+
     /// Every entry in a remote directory.
     fn list_remote_entries(
         &self,
@@ -19656,4 +19901,147 @@ fn member_wanted(name: &str, spec: &plan::ArchiveExtractSpec) -> bool {
         return false;
     }
     !spec.exclude.iter().any(matches)
+}
+
+/// Where a node's accepted profiles live.
+///
+/// A sub-directory, so `watermark::list` - which reads the top level and takes
+/// `*.json` - does not report a profile history as a resume position that could
+/// then be hand-edited.
+fn baseline_state_path(pipeline_name: Option<&str>, node_id: &str) -> Option<std::path::PathBuf> {
+    let ws = std::env::var("DUCKLE_WORKSPACE").ok().filter(|s| !s.is_empty())?;
+    let folder = sanitize_path_segment(pipeline_name.unwrap_or(UNNAMED_RUN_FOLDER));
+    Some(
+        std::path::Path::new(&ws)
+            .join("state")
+            .join(folder)
+            .join("baselines")
+            .join(format!("{}.json", sanitize_path_segment(node_id))),
+    )
+}
+
+/// The key one metric is stored under.
+fn metric_key(metric: &str, column: Option<&str>) -> String {
+    match column {
+        Some(c) => format!("{c}::{metric}"),
+        None => metric.to_string(),
+    }
+}
+
+/// A column name reduced to something safe inside a generated alias.
+fn metric_ident(column: &str) -> String {
+    column
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .collect()
+}
+
+/// The middle value of this metric across the accepted history.
+///
+/// Median rather than mean: one bad Tuesday should not drag the baseline
+/// towards itself, and the whole point is to notice a day that is unlike the
+/// others.
+fn median_of(history: &[JsonValue], key: &str) -> Option<f64> {
+    let mut vals: Vec<f64> = history
+        .iter()
+        .filter_map(|p| p.get(key).and_then(JsonValue::as_f64))
+        .collect();
+    if vals.is_empty() {
+        return None;
+    }
+    vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = vals.len() / 2;
+    Some(if vals.len() % 2 == 0 {
+        (vals[mid - 1] + vals[mid]) / 2.0
+    } else {
+        vals[mid]
+    })
+}
+
+/// The groups a profile saw.
+fn group_set(profile: &serde_json::Map<String, JsonValue>) -> std::collections::BTreeSet<String> {
+    profile
+        .get("__groups")
+        .and_then(JsonValue::as_object)
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Does this movement break the rule?
+fn judge(rule: &plan::BaselineRule, base: f64, cur: f64) -> (String, String) {
+    let label = match &rule.column {
+        Some(c) => format!("{} {}", c, rule.metric),
+        None => rule.metric.clone(),
+    };
+    let diff = cur - base;
+    let pct = if base != 0.0 { diff / base * 100.0 } else { f64::INFINITY };
+
+    let fail = |why: String| ("violation".to_string(), why);
+    if let Some(limit) = rule.max_decrease_pct {
+        if base != 0.0 && -pct > limit {
+            return fail(format!(
+                "{label} decreased {:.1}% ({} -> {}), limit {:.1}%",
+                -pct,
+                pretty(base),
+                pretty(cur),
+                limit
+            ));
+        }
+    }
+    if let Some(limit) = rule.max_increase_pct {
+        if base != 0.0 && pct > limit {
+            return fail(format!(
+                "{label} increased {:.1}% ({} -> {}), limit {:.1}%",
+                pct,
+                pretty(base),
+                pretty(cur),
+                limit
+            ));
+        }
+    }
+    // Absolute limits, for metrics where a percentage says nothing: a null rate
+    // going from 0% to 5% is an infinite percentage increase.
+    if let Some(limit) = rule.max_increase {
+        if diff > limit {
+            return fail(format!(
+                "{label} rose by {} ({} -> {}), limit {}",
+                pretty(diff),
+                pretty(base),
+                pretty(cur),
+                pretty(limit)
+            ));
+        }
+    }
+    if let Some(limit) = rule.max_decrease {
+        if -diff > limit {
+            return fail(format!(
+                "{label} fell by {} ({} -> {}), limit {}",
+                pretty(-diff),
+                pretty(base),
+                pretty(cur),
+                pretty(limit)
+            ));
+        }
+    }
+    if let Some(limit) = rule.max_difference {
+        if diff.abs() > limit {
+            return fail(format!(
+                "{label} moved by {} ({} -> {}), limit {}",
+                pretty(diff.abs()),
+                pretty(base),
+                pretty(cur),
+                pretty(limit)
+            ));
+        }
+    }
+    ("ok".to_string(), format!("{label} within range"))
+}
+
+/// A number as a person reads it in a run log.
+fn pretty(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 {
+        format!("{}", v as i64)
+    } else {
+        format!("{:.4}", v)
+    }
 }

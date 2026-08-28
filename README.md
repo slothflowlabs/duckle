@@ -664,6 +664,41 @@ Two maintenance runs against one catalog serialise on a lock rather than
 racing, so a weekly compaction overlapping a monthly cleanup waits instead of
 failing a two-hour job at its commit.
 
+### Catch the run that looks fine and is not (`qa.baseline`)
+
+Absolute rules catch a NULL where one is not allowed. They cannot catch this:
+
+```
+Monday       5,120,310 rows
+Tuesday      5,131,244 rows
+Wednesday    5,129,991 rows
+Thursday       842,114 rows
+```
+
+Every one of those 842,114 rows can satisfy the schema and every row-level
+rule. The pipeline stays green and publishes, which is more dangerous than a
+crash - a crash is noticed.
+
+`qa.baseline` profiles the current input, compares it against the **median** of
+the last N accepted profiles, and either reports the comparison as rows or
+fails the run. Median rather than mean, so one odd day does not drag the
+baseline towards itself.
+
+Row count, and per column the null count, null rate, distinct count, min, max
+and mean. Rules take limits in either direction, as a percentage or as an
+absolute: a null rate going from 0% to 5% is an infinite percentage increase,
+so a percentage says nothing about it.
+
+`groupBy` with `requireExistingGroups` catches a partition that stopped
+arriving - a country missing from a feed - **even when the total row count is
+unchanged**, because the other partitions grew to cover it. A dataset-level
+rule cannot see that at all.
+
+Deterministic throughout: rolling summary statistics and explicit thresholds,
+no model. Only compact numbers are stored, never copies of the data. And the
+new profile is accepted **only if the whole run succeeds**, so a bad day never
+teaches the gate that bad is normal.
+
 ### Bounded materialization for large XML (`src.xml`)
 
 The XML parser is a pull parser, so live memory is one row plus the nesting

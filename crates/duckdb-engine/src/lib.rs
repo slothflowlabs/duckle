@@ -1742,6 +1742,13 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::ArchiveExtract(spec)) => {
                         self.run_archive_extract(&db_path, &secret_prefix, spec, &mut artifacts)
                     }
+                    Some(RuntimeSpec::Baseline(spec)) => self.run_baseline(
+                        &db_path,
+                        &secret_prefix,
+                        spec,
+                        pipeline_name,
+                        &mut pending_writes,
+                    ),
                     Some(RuntimeSpec::DuckLakeMaintain(spec)) => {
                         self.run_ducklake_maintain(&db_path, spec)
                     }

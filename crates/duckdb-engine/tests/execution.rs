@@ -17925,3 +17925,209 @@ fn xml_parts_keep_the_declared_types() {
     ));
     assert!(t.contains("INT"), "the declared type survived the parts: {t}");
 }
+
+// ---------------------------------------------------------------------------
+// #281 - the failure that stays green. Every row can satisfy the schema and
+// every row-level rule while the dataset is nothing like what normally
+// arrives, and that publishes successfully.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+fn baseline_pipeline(rows_sql: &str, out: &str, props: serde_json::Value) -> PipelineDoc {
+    doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": rows_sql })),
+            node("b", "qa.baseline", props),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "b"), main_edge("e2", "b", "k")]),
+    )
+}
+
+/// The headline case: five million rows on Monday to Wednesday, then eight
+/// hundred thousand. Structurally perfect, and most of the source is gone.
+#[test]
+fn baseline_catches_a_row_count_collapse_the_schema_cannot_see() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "b.csv");
+    let name = "baseline_drop";
+    let rules = json!([{ "metric": "row_count", "maxDecreasePct": 20 }]);
+
+    // Three normal days build the baseline.
+    for _ in 0..3 {
+        let r = engine.execute_pipeline_named(
+            &baseline_pipeline(
+                "SELECT i AS id FROM range(1000) t(i)",
+                &out,
+                json!({ "rules": rules.clone() }),
+            ),
+            name,
+        );
+        assert_eq!(r.status, "ok", "a normal day: {:?}", r.error);
+    }
+
+    // The first run has nothing to compare against and says so rather than
+    // passing - otherwise the very first run could establish any baseline at
+    // all, including a broken one, and look verified doing it.
+    let first_body = std::fs::read_to_string(&out).unwrap_or_default();
+    let _ = first_body;
+
+    // Then a day where most of the source did not arrive.
+    let r = engine.execute_pipeline_named(
+        &baseline_pipeline(
+            "SELECT i AS id FROM range(100) t(i)",
+            &out,
+            json!({ "rules": rules }),
+        ),
+        name,
+    );
+    assert_eq!(r.status, "error", "a 90% row loss must not publish");
+    let err = r.error.unwrap_or_default();
+    assert!(
+        err.contains("row_count") && err.contains("decreased"),
+        "the message has to say what moved and by how much: {err}"
+    );
+}
+
+/// A rule that is not broken must not fire, or the gate gets turned off.
+#[test]
+fn baseline_lets_an_ordinary_day_through() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "ok.csv");
+    let name = "baseline_ok";
+    let rules = json!([{ "metric": "row_count", "maxDecreasePct": 20 }]);
+
+    for _ in 0..3 {
+        let r = engine.execute_pipeline_named(
+            &baseline_pipeline("SELECT i AS id FROM range(1000) t(i)", &out, json!({ "rules": rules.clone() })),
+            name,
+        );
+        assert_eq!(r.status, "ok", "{:?}", r.error);
+    }
+    // 950 is a 5% dip - normal variation, not a finding.
+    let r = engine.execute_pipeline_named(
+        &baseline_pipeline("SELECT i AS id FROM range(950) t(i)", &out, json!({ "rules": rules })),
+        name,
+    );
+    assert_eq!(r.status, "ok", "a 5% dip is not an anomaly: {:?}", r.error);
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(body.contains("ok"), "the comparison still comes out as rows: {body}");
+}
+
+/// A null rate going from 0% to 5% is an infinite percentage increase, so a
+/// percentage limit says nothing about it. That is why absolute limits exist.
+#[test]
+fn baseline_catches_a_null_rate_that_percentages_cannot_describe() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "n.csv");
+    let name = "baseline_nulls";
+    let rules = json!([{ "column": "postcode", "metric": "null_pct", "maxIncrease": 0.10 }]);
+
+    for _ in 0..3 {
+        let r = engine.execute_pipeline_named(
+            &baseline_pipeline(
+                "SELECT i AS id, 'AB12' AS postcode FROM range(100) t(i)",
+                &out,
+                json!({ "rules": rules.clone() }),
+            ),
+            name,
+        );
+        assert_eq!(r.status, "ok", "{:?}", r.error);
+    }
+    // Now 70% of postcodes are missing.
+    let r = engine.execute_pipeline_named(
+        &baseline_pipeline(
+            "SELECT i AS id, CASE WHEN i % 10 < 7 THEN NULL ELSE 'AB12' END AS postcode FROM range(100) t(i)",
+            &out,
+            json!({ "rules": rules }),
+        ),
+        name,
+    );
+    assert_eq!(r.status, "error", "a null rate going from 0 to 70% is an anomaly");
+    assert!(
+        r.error.unwrap_or_default().contains("postcode"),
+        "the failing column belongs in the message"
+    );
+}
+
+/// A partition disappearing is invisible to a dataset-level row count when the
+/// remaining partitions grow to cover it.
+#[test]
+fn baseline_catches_a_group_that_stopped_arriving() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "g.csv");
+    let name = "baseline_groups";
+    let props = json!({
+        "groupBy": ["country"],
+        "requireExistingGroups": true,
+        "rules": [{ "metric": "row_count", "maxDecreasePct": 20 }]
+    });
+
+    let three = "SELECT i AS id, CASE WHEN i % 3 = 0 THEN 'BE' WHEN i % 3 = 1 THEN 'NL' ELSE 'GB' END AS country FROM range(300) t(i)";
+    for _ in 0..3 {
+        let r = engine.execute_pipeline_named(&baseline_pipeline(three, &out, props.clone()), name);
+        assert_eq!(r.status, "ok", "{:?}", r.error);
+    }
+    // GB stops arriving, and BE/NL grow to cover it - the total is UNCHANGED,
+    // so a row-count rule sees nothing at all.
+    let two = "SELECT i AS id, CASE WHEN i % 2 = 0 THEN 'BE' ELSE 'NL' END AS country FROM range(300) t(i)";
+    let r = engine.execute_pipeline_named(&baseline_pipeline(two, &out, props), name);
+    assert_eq!(r.status, "error", "a vanished partition must be caught");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("GB"), "the missing group has to be named: {err}");
+}
+
+/// A failed run must not leave today's numbers as the new normal - otherwise a
+/// bad day teaches the gate that bad is normal, and the next one passes.
+#[test]
+fn baseline_does_not_accept_a_profile_from_a_failed_run() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "f.csv");
+    let name = "baseline_failed";
+    let rules = json!([{ "metric": "row_count", "maxDecreasePct": 20 }]);
+
+    for _ in 0..3 {
+        let r = engine.execute_pipeline_named(
+            &baseline_pipeline("SELECT i AS id FROM range(1000) t(i)", &out, json!({ "rules": rules.clone() })),
+            name,
+        );
+        assert_eq!(r.status, "ok", "{:?}", r.error);
+    }
+    let state = tmp.path().join("state").join(name).join("baselines").join("b.json");
+    let after_good = std::fs::read_to_string(&state).expect("profiles were saved");
+
+    // A run that reports rather than gates, so the node itself succeeds - and
+    // then fails downstream.
+    let blocker = tmp.path().join("blocked");
+    std::fs::write(&blocker, b"not a directory").unwrap();
+    let broken = format!("{}/out.csv", blocker.to_string_lossy().replace('\\', "/"));
+    let r = engine.execute_pipeline_named(
+        &baseline_pipeline(
+            "SELECT i AS id FROM range(50) t(i)",
+            &broken,
+            json!({ "rules": rules, "mode": "report" }),
+        ),
+        name,
+    );
+    assert_eq!(r.status, "error", "the broken sink should fail the run");
+    assert_eq!(
+        std::fs::read_to_string(&state).unwrap(),
+        after_good,
+        "a failed run taught the gate that 50 rows is normal"
+    );
+}

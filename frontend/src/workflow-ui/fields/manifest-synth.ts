@@ -1846,6 +1846,46 @@ function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
             },
         ]);
     }
+    if (comp.id === 'qa.baseline') {
+        return base(comp, [
+            {
+                label: 'Baseline',
+                fields: [
+                    { key: 'history', label: 'Profiles to keep', kind: 'integer', defaultValue: 7,
+                      description: 'How many accepted profiles to keep and compare against. The comparison uses their MEDIAN, so one odd day does not drag the baseline towards itself. Only compact numbers are stored, never copies of the data.' },
+                    { key: 'columns', label: 'Columns to profile', kind: 'columns',
+                      description: 'Blank profiles every column. Naming a few keeps the stored profile small on a very wide table.' },
+                    {
+                        key: 'mode',
+                        label: 'On a finding',
+                        kind: 'select',
+                        defaultValue: 'gate',
+                        options: [
+                            { label: 'Gate - fail the run', value: 'gate' },
+                            { label: 'Report - emit the rows only', value: 'report' },
+                        ],
+                        description: 'Gate is the point of the component: an incomplete dataset that publishes successfully is worse than a crash. Report is for the first weeks, while the normal range is still being learned.',
+                    },
+                ],
+            },
+            {
+                label: 'Rules',
+                fields: [
+                    { key: 'rules', label: 'Rules', kind: 'expression', rows: 8,
+                      description: 'A JSON array. Each rule names a metric - row_count, null_pct, distinct_count, min, max or mean - optionally a column, and a limit: maxDecreasePct, maxIncreasePct, maxIncrease, maxDecrease or maxDifference. Absolute limits exist because a percentage says nothing about some metrics: a null rate going from 0 to 5 percent is an infinite percentage increase. Example: [{"metric":"row_count","maxDecreasePct":20},{"column":"postcode","metric":"null_pct","maxIncrease":0.10}]' },
+                ],
+            },
+            {
+                label: 'Groups',
+                fields: [
+                    { key: 'groupBy', label: 'Group by', kind: 'columns',
+                      description: 'Profile a row count per group as well as overall.' },
+                    { key: 'requireExistingGroups', label: 'Every known group must still be present', kind: 'bool', defaultValue: false,
+                      description: 'Catches a partition disappearing - a country that stops arriving - even when the total row count stays inside its normal range, which a dataset-level rule cannot see.' },
+                ],
+            },
+        ], 'upstream');
+    }
     if (comp.id === 'xf.archive.extract') {
         return base(comp, [
             {
