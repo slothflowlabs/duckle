@@ -179,6 +179,52 @@ pub fn http_agent() -> ureq::Agent {
     http_agent_with(&HttpTransport::default())
 }
 
+/// Enforce `network.allowedDomains` at the moment a request is made, not only
+/// when the pipeline was compiled.
+///
+/// Two hooks, because neither alone is enough:
+///
+/// * the **resolver** fires once per connection AND once for every redirect hop
+///   (ureq handles redirects inside `unit::connect`), so it is the only place
+///   that sees where a 302 actually went;
+/// * the **middleware** fires once, before anything is sent, and sees the
+///   request URL - which the resolver does NOT when a proxy is configured,
+///   because ureq then resolves the PROXY's netloc instead
+///   (ureq-2.12.1 src/stream.rs:359).
+///
+/// That last asymmetry leaves one case the resolver cannot cover: a redirect
+/// while a proxy is in use. Rather than document a hole, redirects are turned
+/// off for that combination - a 3xx is then returned to the caller instead of
+/// being followed somewhere nobody checked.
+fn with_network_policy(builder: ureq::AgentBuilder, via_proxy: bool) -> ureq::AgentBuilder {
+    use std::net::ToSocketAddrs;
+    let builder = builder
+        .resolver(|netloc: &str| {
+            crate::policy::outbound_host_allowed(netloc)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+            ToSocketAddrs::to_socket_addrs(netloc).map(|i| i.collect())
+        })
+        .middleware(
+            |req: ureq::Request, next: ureq::MiddlewareNext| -> Result<ureq::Response, ureq::Error> {
+                if let Err(e) = crate::policy::outbound_host_allowed(req.url()) {
+                    // ureq's own error constructors are crate-private; the
+                    // io::Error conversion is the public way in.
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        e,
+                    )
+                    .into());
+                }
+                next.handle(req)
+            },
+        );
+    if via_proxy {
+        builder.redirects(0)
+    } else {
+        builder
+    }
+}
+
 /// #256: the agent for one set of transport settings.
 ///
 /// Every HTTP-backed component in the engine goes through here, so a timeout or
@@ -215,6 +261,9 @@ pub fn http_agent_with(transport: &HttpTransport) -> ureq::Agent {
         }
     }
     let mut builder = ureq::AgentBuilder::new().tls_config(Arc::new(build_client_config()));
+    if crate::policy::network_is_restricted() {
+        builder = with_network_policy(builder, want.proxy.is_some());
+    }
     if let Some(url) = &want.proxy {
         match ureq::Proxy::new(url) {
             Ok(p) => builder = builder.proxy(p),

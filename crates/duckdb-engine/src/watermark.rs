@@ -152,6 +152,7 @@ pub fn set_incremental(
     value: &str,
     value_type: Option<&str>,
 ) -> std::io::Result<()> {
+    guard_policy(workspace)?;
     guard_kind(workspace, pipeline, node_id, "incremental")?;
     write_state(
         workspace,
@@ -159,6 +160,17 @@ pub fn set_incremental(
         node_id,
         &json!({ "value": value, "type": value_type.unwrap_or("VARCHAR") }),
     )
+}
+
+/// Refuse a change the environment's policy does not permit.
+///
+/// The run-time check in `policy::check` stops a PIPELINE from advancing state.
+/// It cannot see this path: `duckle-runner backfill --clear`, the HTTP API, MCP
+/// and the desktop panel all arrive here directly. Since all four already share
+/// these three functions, one guard here covers every one of them.
+fn guard_policy(workspace: &Path) -> std::io::Result<()> {
+    crate::policy::state_mutation_allowed(workspace)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string()))
 }
 
 /// Refuse a write that would replace state of a DIFFERENT kind.
@@ -216,6 +228,7 @@ pub fn set_snapshot(
     node_id: &str,
     snapshot_id: u64,
 ) -> std::io::Result<()> {
+    guard_policy(workspace)?;
     guard_kind(workspace, pipeline, node_id, "snapshot")?;
     write_state(workspace, pipeline, node_id, &json!({ "snapshot_id": snapshot_id }))
 }
@@ -224,6 +237,7 @@ pub fn set_snapshot(
 /// (incremental) / earliest snapshot (CDC) - i.e. a full reload. A missing
 /// file is treated as success.
 pub fn clear(workspace: &Path, pipeline: &str, node_id: &str) -> std::io::Result<()> {
+    guard_policy(workspace)?;
     let path = state_path(workspace, pipeline, node_id);
     // xf.tumble keeps the rows in its open windows in a sibling directory.
     // Removing only the pointer would leave those buffers orphaned on disk

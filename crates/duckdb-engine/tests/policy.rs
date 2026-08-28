@@ -258,3 +258,167 @@ fn no_policy_configured_changes_nothing() {
     assert_eq!(r.status, "ok", "{:?}", r.error);
     assert!(std::path::Path::new(&out).exists());
 }
+
+/// The control plane is not a way around the policy.
+///
+/// `state.allowMutation: false` refuses a PIPELINE that advances a watermark.
+/// It is worth nothing if `duckle-runner backfill --clear`, the HTTP API, MCP
+/// and the desktop panel can clear the same file, and all four arrive at these
+/// three functions directly rather than through a compiled pipeline.
+#[test]
+fn the_control_plane_cannot_change_state_the_policy_withholds() {
+    use duckle_duckdb_engine::watermark as wm;
+    let _lock = serialised();
+    let (tmp, _env) = setup("mode: enforce\nstate:\n  allowMutation: false\n");
+    let ws = tmp.path();
+
+    // Seed a watermark by hand, so clearing it has something to destroy. This
+    // writes the file directly rather than through the gated API.
+    let dir = ws.join("state").join("orders");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mark = dir.join("inc.json");
+    std::fs::write(&mark, r#"{"value":"2026-08-01","type":"DATE"}"#).unwrap();
+
+    let set = wm::set_incremental(ws, "orders", "inc", "2020-01-01", Some("DATE"));
+    assert!(set.is_err(), "backfill --set walked past state.allowMutation");
+    let snap = wm::set_snapshot(ws, "orders", "cdc", 1);
+    assert!(snap.is_err(), "backfill --set-snapshot walked past state.allowMutation");
+    let cleared = wm::clear(ws, "orders", "inc");
+    assert!(cleared.is_err(), "backfill --clear walked past state.allowMutation");
+
+    // The refusal has to be real: the file is untouched, not just reported on.
+    assert_eq!(
+        std::fs::read_to_string(&mark).unwrap(),
+        r#"{"value":"2026-08-01","type":"DATE"}"#,
+        "the watermark was changed despite the refusal"
+    );
+    // And it says which policy said no, not just 'denied'.
+    let msg = set.unwrap_err().to_string();
+    assert!(msg.contains("server-policy.yaml"), "names the policy: {msg}");
+
+    // Reading is NOT gated - an operator has to see what they cannot change.
+    let entries = wm::list(ws, "orders");
+    assert_eq!(entries.len(), 1, "listing state must still work: {entries:?}");
+}
+
+/// The same surfaces work normally when the policy permits it, so the guard
+/// cannot be a blanket refusal that happens to pass the test above.
+#[test]
+fn the_control_plane_still_works_when_mutation_is_permitted() {
+    use duckle_duckdb_engine::watermark as wm;
+    let _lock = serialised();
+    let (tmp, _env) = setup("mode: enforce\nstate:\n  allowMutation: true\n");
+    let ws = tmp.path();
+
+    wm::set_incremental(ws, "orders", "inc", "2026-01-01", Some("DATE"))
+        .expect("an allowed set must go through");
+    assert_eq!(wm::list(ws, "orders").len(), 1);
+    wm::clear(ws, "orders", "inc").expect("an allowed clear must go through");
+    assert!(wm::list(ws, "orders").is_empty());
+}
+
+/// A tiny HTTP server. `redirect_to` makes it answer 302 instead of 200, which
+/// is how the redirect hop gets tested without the network.
+fn stub_http(redirect_to: Option<String>) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let seen = hits.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(std::time::Duration::from_millis(400))).ok();
+            // Drain the request before answering it, or the client sees a
+            // connection reset instead of the status line.
+            let mut buf = [0u8; 4096];
+            loop {
+                match stream.read(&mut buf) {
+                    Ok(n) if n == buf.len() => continue,
+                    _ => break,
+                }
+            }
+            seen.fetch_add(1, Ordering::SeqCst);
+            let resp = match &redirect_to {
+                Some(to) => format!(
+                    "HTTP/1.1 302 Found\r\nLocation: {to}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                ),
+                None => "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi"
+                    .to_string(),
+            };
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (port, hits)
+}
+
+/// The compile-time domain check reads a URL out of a node's properties. The
+/// request is made somewhere else entirely, so the boundary has to exist there
+/// too - this is the run-time half.
+#[test]
+fn a_request_to_a_host_outside_the_allowlist_is_never_sent() {
+    let _lock = serialised();
+    let (_tmp, _env) = setup("mode: enforce\nnetwork:\n  allowedDomains:\n    - example.com\n");
+    let (port, hits) = stub_http(None);
+
+    let err = duckle_duckdb_engine::tls::http_agent()
+        .get(&format!("http://127.0.0.1:{port}/data"))
+        .call()
+        .expect_err("a host outside the allowlist must not be reachable");
+
+    assert_eq!(
+        hits.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the request reached the server, so nothing was actually enforced"
+    );
+    let msg = err.to_string();
+    assert!(msg.contains("127.0.0.1"), "names the host it refused: {msg}");
+}
+
+/// The case the compile-time check structurally cannot see: the configured URL
+/// is allowed, and the server answers 302 to somewhere that is not.
+#[test]
+fn a_redirect_out_of_the_allowlist_is_refused_at_the_hop() {
+    let _lock = serialised();
+    // `localhost` and `127.0.0.1` are the same machine and DIFFERENT host
+    // strings, which is exactly the shape of a redirect that leaves the
+    // allowed domain.
+    let (elsewhere, offsite) = stub_http(None);
+    let (port, first) = stub_http(Some(format!("http://127.0.0.1:{elsewhere}/next")));
+    let (_tmp, _env) = setup("mode: enforce\nnetwork:\n  allowedDomains:\n    - localhost\n");
+
+    let err = duckle_duckdb_engine::tls::http_agent()
+        .get(&format!("http://localhost:{port}/start"))
+        .call()
+        .expect_err("the redirect target is outside the allowlist");
+
+    assert_eq!(
+        first.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the allowed first hop should still have happened"
+    );
+    assert_eq!(
+        offsite.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the redirect was followed off the allowlist"
+    );
+    let msg = err.to_string();
+    assert!(msg.contains("127.0.0.1"), "names the host it refused: {msg}");
+}
+
+/// The gate is a boundary, not a blanket refusal: an allowed host still works.
+#[test]
+fn an_allowed_host_is_still_reachable() {
+    let _lock = serialised();
+    let (port, hits) = stub_http(None);
+    let (_tmp, _env) = setup("mode: enforce\nnetwork:\n  allowedDomains:\n    - localhost\n");
+
+    let resp = duckle_duckdb_engine::tls::http_agent()
+        .get(&format!("http://localhost:{port}/ok"))
+        .call()
+        .expect("an allowed host must still be reachable");
+    assert_eq!(resp.status(), 200);
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+}

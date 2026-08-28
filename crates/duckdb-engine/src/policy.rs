@@ -209,6 +209,119 @@ pub fn load(workspace: Option<&Path>) -> Result<Policy, EngineError> {
     Ok(policy)
 }
 
+/// May the control plane change saved state here?
+///
+/// `state.allowMutation` has to mean the same thing on every surface, or it
+/// means nothing: a pipeline that is refused permission to advance a watermark
+/// while `duckle-runner backfill --clear`, the HTTP API, MCP and the web panel
+/// can all clear the same file is not a boundary, it is a speed bump. So the
+/// three mutators go through here, and every surface reaches them.
+///
+/// Reading state is not gated - an operator has to be able to SEE what they
+/// are not allowed to change.
+pub fn state_mutation_allowed(workspace: &Path) -> Result<(), EngineError> {
+    let policy = load(Some(workspace))?;
+    if policy.allow_state_mutation {
+        return Ok(());
+    }
+    let from = policy.sources.join(", ");
+    if policy.mode == "report" {
+        eprintln!(
+            "duckle: policy findings (mode: report, from {from}): saved state was changed, {}",
+            "and state mutation is not permitted here"
+        );
+        return Ok(());
+    }
+    Err(EngineError::Config(format!(
+        concat!(
+            "policy: changing saved state is not permitted in this environment ",
+            "(policy from {}). Clearing a watermark is a silent full reload, ",
+            "which is why it is its own permission."
+        ),
+        from
+    )))
+}
+
+/// The outbound network allowlist, as the HTTP layer needs it.
+///
+/// Cached, keyed on the two environment values that decide it, so a process
+/// does not re-read the policy file on every connection and a test that swaps
+/// the policy is not answered from a stale cache.
+fn network_allowlist() -> Option<BTreeSet<String>> {
+    static CACHE: std::sync::Mutex<Option<(String, Option<BTreeSet<String>>)>> =
+        std::sync::Mutex::new(None);
+    let key = format!(
+        "{}|{}",
+        std::env::var("DUCKLE_POLICY_FILE").unwrap_or_default(),
+        std::env::var("DUCKLE_WORKSPACE").unwrap_or_default()
+    );
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((have, list)) = cache.as_ref() {
+        if *have == key {
+            return list.clone();
+        }
+    }
+    let ws = std::env::var("DUCKLE_WORKSPACE").ok().filter(|w| !w.is_empty()).map(PathBuf::from);
+    // A policy that cannot be read is handled at compile time, where the error
+    // can be reported. Here, an unreadable policy leaves no allowlist rather
+    // than an empty one, because refusing every host from a DNS callback is
+    // indistinguishable from the network being down.
+    let list = load(ws.as_deref()).ok().and_then(|p| p.allowed_domains);
+    *cache = Some((key, list.clone()));
+    list
+}
+
+/// Is there a network boundary to enforce at run time at all?
+pub fn network_is_restricted() -> bool {
+    network_allowlist().is_some()
+}
+
+/// May we open a connection to this host, RIGHT NOW?
+///
+/// `check` reads a URL out of a node's properties. That is where an operator
+/// can see the refusal, and it is not where the request happens. A URL built at
+/// run time from a row, a paginated `next` link, and above all a 302 to
+/// somewhere else all reach the socket without passing that check again. So the
+/// HTTP agent calls this from its resolver - which fires once per connection
+/// and again for every redirect hop - and from a middleware that sees the
+/// request URL before anything is sent.
+///
+/// `netloc` may be a bare host or `host:port`.
+pub fn outbound_host_allowed(netloc: &str) -> Result<(), String> {
+    let Some(allowed) = network_allowlist() else {
+        return Ok(());
+    };
+    let host = netloc_host(netloc);
+    if host_allowed(&allowed, &host) {
+        return Ok(());
+    }
+    Err(format!(
+        "policy: {host} is outside every allowed domain, so this request was not sent"
+    ))
+}
+
+/// The host out of a bare host, a `host:port`, or a URL.
+///
+/// Separate from `host_of` because that one is fed node PROPERTIES, which are
+/// always URLs, and returns None without a scheme. The resolver is handed a
+/// bare `host:port`, and a None there would mean "allowed".
+///
+/// IPv6 literals are unbracketed rather than cut at their first colon.
+fn netloc_host(netloc: &str) -> String {
+    let s = match netloc.split_once("://") {
+        Some((_, rest)) => rest,
+        None => netloc,
+    };
+    let s = s.split(['/', '?', '#']).next().unwrap_or(s);
+    let s = s.rsplit('@').next().unwrap_or(s);
+    let s = if let Some(rest) = s.strip_prefix('[') {
+        rest.split(']').next().unwrap_or(rest)
+    } else {
+        s.split(':').next().unwrap_or(s)
+    };
+    s.to_ascii_lowercase()
+}
+
 /// One thing a pipeline wanted to do that the environment does not permit.
 #[derive(Debug, Clone)]
 pub struct Violation {
@@ -329,7 +442,7 @@ pub fn check(policy: &Policy, doc: &PipelineDoc) -> Vec<Violation> {
                 let lower = target.to_ascii_lowercase();
                 if lower.starts_with("s3://") || lower.starts_with("s3a://") {
                     if let Some(allowed) = &policy.allowed_s3_prefixes {
-                        if !allowed.iter().any(|p| target.starts_with(p.as_str())) {
+                        if !allowed.iter().any(|p| within_prefix(&target, p)) {
                             out.push(Violation {
                                 node: node.id.clone(),
                                 detail: format!(
@@ -344,7 +457,7 @@ pub fn check(policy: &Policy, doc: &PipelineDoc) -> Vec<Violation> {
                     // that starts inside an allowed directory and climbs out
                     // would pass.
                     let normal = normalize(&target);
-                    if !allowed.iter().any(|p| normal.starts_with(&normalize(p))) {
+                    if !allowed.iter().any(|p| within_prefix(&normal, &normalize(p))) {
                         out.push(Violation {
                             node: node.id.clone(),
                             detail: format!(
@@ -375,6 +488,41 @@ pub fn check(policy: &Policy, doc: &PipelineDoc) -> Vec<Violation> {
         }
     }
     out
+}
+
+/// Is `target` inside `prefix`, at a real component boundary?
+///
+/// A string prefix is not a containment test, and the difference is a bypass:
+///
+/// ```text
+/// allowed: /var/lake/dev
+/// target:  /var/lake/development/file
+/// ```
+///
+/// which is lexically inside the prefix and is a different directory. The same
+/// applies to an S3 prefix that does not end in `/`:
+///
+/// ```text
+/// allowed: s3://co-development
+/// target:  s3://co-development-prod/x
+/// ```
+///
+/// So the target must either BE the prefix, or continue it with a separator.
+fn within_prefix(target: &str, prefix: &str) -> bool {
+    let prefix = prefix.trim_end_matches('/');
+    if prefix.is_empty() {
+        // An allowlist entry of "/" or "" allows everything below it, which is
+        // what it says. An empty allowLIST is a different thing and is handled
+        // by the Option being None.
+        return true;
+    }
+    if target == prefix {
+        return true;
+    }
+    target
+        .strip_prefix(prefix)
+        .map(|rest| rest.starts_with('/'))
+        .unwrap_or(false)
 }
 
 /// Collapse `.` and `..` and normalise separators, so a path cannot start
@@ -611,4 +759,70 @@ mod tests {
         let err = enforce(&p, &d).unwrap_err().to_string();
         assert!(err.contains("code.shell") && err.contains("production"), "{err}");
     }
+
+    /// A string prefix is not a containment test. `/var/lake/development` is
+    /// lexically inside `/var/lake/dev` and is a different directory - the
+    /// sibling-prefix bypass.
+    #[test]
+    fn a_sibling_directory_is_not_inside_the_allowed_path() {
+        let p = policy_from("filesystem:\n  allowedPaths:\n    - /var/lake/dev\n");
+        let sibling = doc_of(serde_json::json!([node(
+            "w",
+            "snk.csv",
+            serde_json::json!({ "path": "/var/lake/development/out.csv" })
+        )]));
+        assert!(
+            enforce(&p, &sibling).is_err(),
+            "/var/lake/development is not inside /var/lake/dev"
+        );
+        // The real directory still works, and so does the directory itself.
+        for ok in ["/var/lake/dev/out.csv", "/var/lake/dev/sub/deep.csv"] {
+            let d = doc_of(serde_json::json!([node(
+                "w",
+                "snk.csv",
+                serde_json::json!({ "path": ok })
+            )]));
+            assert!(enforce(&p, &d).is_ok(), "{ok} is inside and must pass");
+        }
+    }
+
+    /// The same bypass for an S3 prefix that does not end in a slash.
+    #[test]
+    fn a_sibling_bucket_is_not_inside_the_allowed_s3_prefix() {
+        let p = policy_from("sinks:\n  allowedS3Prefixes:\n    - s3://co-development\n");
+        let sibling = doc_of(serde_json::json!([node(
+            "w",
+            "snk.parquet",
+            serde_json::json!({ "path": "s3://co-development-prod/out.parquet" })
+        )]));
+        assert!(
+            enforce(&p, &sibling).is_err(),
+            "s3://co-development-prod is a different bucket"
+        );
+        let inside = doc_of(serde_json::json!([node(
+            "w",
+            "snk.parquet",
+            serde_json::json!({ "path": "s3://co-development/raw/out.parquet" })
+        )]));
+        assert!(enforce(&p, &inside).is_ok());
+    }
+
+    /// A key prefix inside one bucket has the same boundary requirement.
+    #[test]
+    fn a_sibling_key_prefix_is_not_inside_the_allowed_one() {
+        let p = policy_from("sinks:\n  allowedS3Prefixes:\n    - s3://lake/dev\n");
+        let sibling = doc_of(serde_json::json!([node(
+            "w",
+            "snk.parquet",
+            serde_json::json!({ "path": "s3://lake/development/out.parquet" })
+        )]));
+        assert!(enforce(&p, &sibling).is_err(), "dev and development are different prefixes");
+        let inside = doc_of(serde_json::json!([node(
+            "w",
+            "snk.parquet",
+            serde_json::json!({ "path": "s3://lake/dev/out.parquet" })
+        )]));
+        assert!(enforce(&p, &inside).is_ok());
+    }
+
 }

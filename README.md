@@ -741,12 +741,27 @@ state:
 `DUCKLE_POLICY_FILE` points at the authoritative one, from outside the
 workspace. `.duckle/policy.yaml` may then add restrictions.
 
-Three things make it a boundary rather than a check:
+Four things make it a boundary rather than a check:
 
-**Enforcement is at plan time.** An agent that can write the pipeline can also
-invoke a path that skips a validation step, so the check sits where a pipeline
-becomes executable - a denied capability has nowhere to run, rather than having
-failed a check somebody can route around. Nothing is written before the refusal.
+**Enforcement is at plan time, and again at the point of the act.** An agent
+that can write the pipeline can also invoke a path that skips a validation step,
+so the check sits where a pipeline becomes executable - a denied capability has
+nowhere to run, rather than having failed a check somebody can route around.
+Nothing is written before the refusal.
+
+Plan time alone is not enough, because a plan-time check reads a URL out of a
+node's properties and the request happens somewhere else entirely. So each rule
+also holds where it is actually exercised:
+
+| rule | also enforced at |
+|---|---|
+| `network.allowedDomains` | every connection, and every redirect hop |
+| `state.allowMutation` | the watermark writers, so `duckle-runner backfill`, the API, MCP and the panel all meet the same refusal |
+| `extensions.allowUnsigned` | the DuckDB launch, which can withhold `-unsigned` but never grant it |
+
+**Prefixes match at a boundary, not as strings.** An allowed path of
+`/var/lake/dev` does not admit `/var/lake/development`, and an allowed
+`s3://co-development` does not admit `s3://co-development-prod`.
 
 **Narrowing is the only operation the format has.** Denies union, allowlists
 intersect, permissions AND. There is no expressible way to remove a deny or

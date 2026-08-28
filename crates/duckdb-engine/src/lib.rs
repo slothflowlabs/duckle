@@ -3990,8 +3990,26 @@ fn apply_duckdb_sql(bin: &Path, db: &Path, sql: &str) -> Result<(), EngineError>
 /// has to be a process argument, not SQL. Default OFF preserves the signed-only
 /// security posture; set DUCKLE_ALLOW_UNSIGNED_EXTENSIONS=1 (or true/yes/on).
 fn allow_unsigned_extensions() -> bool {
-    std::env::var("DUCKLE_ALLOW_UNSIGNED_EXTENSIONS")
+    let asked = std::env::var("DUCKLE_ALLOW_UNSIGNED_EXTENSIONS")
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
+    if !asked {
+        return false;
+    }
+    // #285: `extensions.allowUnsigned: false` can WITHHOLD this; it can never
+    // grant it. An environment variable is set by whoever launches the run, so
+    // on its own it is not a boundary - the policy file lives outside the
+    // workspace precisely so that what writes pipelines cannot reach it.
+    //
+    // Only reached when someone actually asked for unsigned extensions, so the
+    // default path never touches the disk. A policy that cannot be read means
+    // no `-unsigned`, which is the safe direction.
+    let ws = std::env::var("DUCKLE_WORKSPACE")
+        .ok()
+        .filter(|w| !w.is_empty())
+        .map(std::path::PathBuf::from);
+    policy::load(ws.as_deref())
+        .map(|p| p.allow_unsigned_extensions)
         .unwrap_or(false)
 }
 
