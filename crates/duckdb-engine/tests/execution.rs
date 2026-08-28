@@ -16331,10 +16331,18 @@ fn an_edit_made_during_a_run_is_not_overwritten_by_its_flush() {
         "id,ts\n1,2026-01-01T00:00:00\n2,2026-01-02T00:00:00\n",
     );
     let out = out_path(&ws, "out.csv");
+    // The probe exists only once `i` has run, which is the moment that matters:
+    // the operator's edit has to land AFTER the incremental node read its
+    // state. Waiting a fixed 700ms instead assumed the first two stages always
+    // finish inside it, and on a loaded Windows CI runner they do not - the
+    // edit then landed BEFORE the read, the run legitimately advanced from it,
+    // and the test failed claiming a bug that had not happened.
+    let probe = out_path(&ws, "probe.csv");
     let pipeline = doc(
         json!([
             node("s", "src.csv", json!({ "path": src, "hasHeader": true })),
             node("i", "xf.incremental", json!({ "column": "ts" })),
+            node("p", "snk.csv", json!({ "path": probe, "hasHeader": true })),
             node("w", "ctl.wait", json!({ "duration": 2000, "unit": "ms" })),
             node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
         ]),
@@ -16342,6 +16350,7 @@ fn an_edit_made_during_a_run_is_not_overwritten_by_its_flush() {
             main_edge("e1", "s", "i"),
             main_edge("e2", "i", "w"),
             main_edge("e3", "w", "k"),
+            main_edge("e4", "i", "p"),
         ]),
     );
     let state = ws.join("state").join(name).join("i.json");
@@ -16349,8 +16358,17 @@ fn an_edit_made_during_a_run_is_not_overwritten_by_its_flush() {
     // The operator's edit lands while the run is inside the delay - after the
     // incremental node read its state, before the flush.
     let ws_for_thread = ws.clone();
+    let probe_path = std::path::PathBuf::from(&probe);
     let editor = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(700));
+        // Wait for the read to have happened, not for a guess at how long it
+        // takes. The ctl.wait then holds the run open long enough for this
+        // write to land before the flush, which is a file write against a two
+        // second window rather than a race.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !probe_path.exists() {
+            assert!(std::time::Instant::now() < deadline, "the incremental node never ran");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         duckle_duckdb_engine::watermark::set_incremental(
             &ws_for_thread,
             "midrun",
