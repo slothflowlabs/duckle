@@ -9801,7 +9801,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -10176,7 +10176,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -10545,7 +10545,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -10996,7 +10996,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -11365,7 +11365,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -11763,7 +11763,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -12132,7 +12132,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -12501,7 +12501,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -13948,7 +13948,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -45915,7 +45915,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -46517,7 +46517,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -46886,7 +46886,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -47255,7 +47255,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -47624,7 +47624,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -47993,7 +47993,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -48362,7 +48362,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -48731,7 +48731,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -49100,7 +49100,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -49469,7 +49469,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -49838,7 +49838,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -50207,7 +50207,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -50576,7 +50576,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -50945,7 +50945,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -51314,7 +51314,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -51683,7 +51683,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -52052,7 +52052,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -52421,7 +52421,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -52790,7 +52790,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -53159,7 +53159,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -53528,7 +53528,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -53897,7 +53897,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -54266,7 +54266,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -54635,7 +54635,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -55004,7 +55004,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -55373,7 +55373,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -55742,7 +55742,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
@@ -56111,7 +56111,7 @@
               {
                 "key": "rawResponseDestination",
                 "label": "Keep the original response at",
-                "kind": "string",
+                "kind": "text",
                 "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
