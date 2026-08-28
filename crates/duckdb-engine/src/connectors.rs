@@ -6495,7 +6495,40 @@ impl DuckdbEngine {
         // being read rather than after.
         let capped = CappedReader { inner: reader, remaining: budget.remaining_bytes };
         let (sha, size, remaining) = match spec.if_exists.as_str() {
-            "skip" if self.archive_dest_exists(spec, &dest)? => {
+            "skip" if self.archive_dest_size(spec, &dest)?.is_some() => {
+                // #284: a skipped member used to be emitted with a NULL size
+                // and sha256 and never reached the run manifest. That is the
+                // normal retry path - extract, downstream fails, source state
+                // does not advance, same archive arrives again - so the exact
+                // same logical input produced weaker provenance the second
+                // time round. It now carries the identity it had on the run
+                // that wrote it.
+                let existing = self.archive_dest_size(spec, &dest)?.unwrap_or(-1);
+                let mut capped = capped;
+                let (sha, size) = Self::hash_member(&mut capped)?;
+                if existing != size {
+                    return Err(EngineError::Query(format!(
+                        concat!(
+                            "archive: {} already exists at {} bytes but ",
+                            "this member is {}. 'skip' means the destination is ",
+                            "already this member; it is not. Use ifExists 'replace' to ",
+                            "overwrite it or 'error' to stop sooner."
+                        ),
+                        dest, existing, size
+                    )));
+                }
+                budget.remaining_bytes = capped.remaining;
+                artifacts.push(crate::ArtifactRef {
+                    node: spec.node_id.clone(),
+                    role: "output".into(),
+                    uri: dest.clone(),
+                    name: Some(leaf.clone()),
+                    media_type: Some(media_type_for(&leaf).to_string()),
+                    size_bytes: Some(size),
+                    sha256: Some(sha.clone()),
+                    etag: None,
+                    modified_at: None,
+                });
                 out.push(serde_json::json!({
                     "archive_uri": archive.uri,
                     "member_name": name,
@@ -6503,12 +6536,12 @@ impl DuckdbEngine {
                     "uri": dest,
                     "media_type": media_type_for(&leaf),
                     "compressed_size": compressed_size,
-                    "size_bytes": JsonValue::Null,
-                    "sha256": JsonValue::Null,
+                    "size_bytes": size,
+                    "sha256": sha,
                 }));
                 return Ok(());
             }
-            "error" if self.archive_dest_exists(spec, &dest)? => {
+            "error" if self.archive_dest_size(spec, &dest)?.is_some() => {
                 return Err(EngineError::Query(format!(
                     "archive: {} already exists and ifExists is 'error'",
                     dest
@@ -6556,23 +6589,41 @@ impl DuckdbEngine {
         Ok(())
     }
 
-    fn archive_dest_exists(
+    /// The destination's size if it is already there.
+    ///
+    /// Size rather than a bare bool because `skip` has to report the artifact
+    /// it skipped, and "something is at this path" is not an identity.
+    fn archive_dest_size(
         &self,
         spec: &plan::ArchiveExtractSpec,
         dest: &str,
-    ) -> Result<bool, EngineError> {
+    ) -> Result<Option<i64>, EngineError> {
         if dest.starts_with("s3://") || dest.starts_with("s3a://") {
             let Some(cfg) = spec.input.auth.s3.as_ref() else {
-                return Ok(false);
+                return Ok(None);
             };
             let (bucket, key) = crate::s3::parse_s3_uri(dest)?;
             return match cfg.head(&bucket, &key) {
-                Ok(_) => Ok(true),
-                Err(e) if e.to_string().contains("HTTP 404") => Ok(false),
+                Ok(o) => Ok(Some(o.size.unwrap_or(-1))),
+                Err(e) if e.to_string().contains("HTTP 404") => Ok(None),
                 Err(e) => Err(e),
             };
         }
-        Ok(std::path::Path::new(dest).exists())
+        Ok(std::fs::metadata(dest).ok().map(|m| m.len() as i64))
+    }
+
+    /// Read a member to its end, hashing it, writing nothing.
+    ///
+    /// This is what makes a skipped member keep its identity. The bytes have to
+    /// come off a streaming archive anyway to reach the next member, so hashing
+    /// them costs no extra I/O against the source, and it means a retry reports
+    /// the same sha256 as the run that actually wrote the file.
+    fn hash_member(reader: &mut impl std::io::Read) -> Result<(String, i64), EngineError> {
+        let mut hashing = crate::s3::HashingReader::new(reader);
+        std::io::copy(&mut hashing, &mut std::io::sink())
+            .map_err(|e| EngineError::Query(format!("archive: reading member: {e}")))?;
+        let (sha, size) = hashing.finish();
+        Ok((sha, size as i64))
     }
 
     /// qa.baseline: compare this run against what previous runs looked like.
@@ -11807,8 +11858,11 @@ impl DuckdbEngine {
                 )?),
                 None => {
                     return Err(EngineError::Config(
-                        "ai.llm: checkpointing needs a workspace (DUCKLE_WORKSPACE) to keep                          completed items in"
-                            .into(),
+                        concat!(
+                            "ai.llm: checkpointing needs a workspace (DUCKLE_WORKSPACE) ",
+                            "to keep completed items in"
+                        )
+                        .into(),
                     ))
                 }
             }

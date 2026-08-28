@@ -18604,3 +18604,104 @@ fn ai_llm_still_reprices_on_any_column_when_no_fingerprint_is_named() {
         "the default must stay whole-row: any change is different work"
     );
 }
+
+/// #284: a retry must not report weaker provenance than the run that wrote the
+/// file.
+///
+/// The failure path is the normal one: extract, downstream fails, the source
+/// state does not advance, the same archive arrives again. The members are
+/// already there, `ifExists: skip` leaves them alone - and it used to emit them
+/// with a NULL size and hash, and never add them to the run's artifacts. So the
+/// same logical input produced a different, weaker record on its second run.
+#[test]
+fn archive_extract_keeps_the_member_identity_when_it_skips() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let zip_path = tmp.path().join("again.zip");
+    write_zip(&zip_path, &[("notes.txt", "hello world")]);
+    let dest = out_path(tmp.path(), "unpacked");
+    // sha256("hello world")
+    let sha = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+
+    let run = |out: &str| {
+        engine.execute_pipeline(&doc(
+            json!([
+                node("a", "code.sql", json!({
+                    "sql": format!("SELECT '{}' AS uri", zip_path.to_string_lossy().replace('\\', "/"))
+                })),
+                node("x", "xf.archive.extract", json!({
+                    "destination": dest, "ifExists": "skip"
+                })),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "a", "x"), main_edge("e2", "x", "k")]),
+        ))
+    };
+
+    let first_out = out_path(tmp.path(), "first.csv");
+    let first = run(&first_out);
+    assert_eq!(first.status, "ok", "{:?}", first.error);
+    let first_body = std::fs::read_to_string(&first_out).unwrap_or_default();
+    assert!(first_body.contains(sha), "the first run records the hash: {first_body}");
+
+    // Second run: the member is already at the destination, so it is skipped.
+    let second_out = out_path(tmp.path(), "second.csv");
+    let second = run(&second_out);
+    assert_eq!(second.status, "ok", "{:?}", second.error);
+    let second_body = std::fs::read_to_string(&second_out).unwrap_or_default();
+
+    assert!(
+        second_body.contains(sha),
+        "the skipped member lost its hash on the retry: {second_body}"
+    );
+    assert!(
+        !second_body.contains(",,"),
+        "size and hash must not come back empty on a skip: {second_body}"
+    );
+    // The whole row is identical, which is the actual requirement: the same
+    // logical input produces the same provenance whichever run it lands on.
+    assert_eq!(
+        first_body, second_body,
+        "a retry produced a different record for the same input"
+    );
+
+    // And it reaches the run's artifact list, not just the rows.
+    let named: Vec<_> = second
+        .artifacts
+        .iter()
+        .filter(|a| a.uri.ends_with("notes.txt"))
+        .collect();
+    assert_eq!(named.len(), 1, "the skipped member is missing from the run manifest");
+    assert_eq!(named[0].sha256.as_deref(), Some(sha));
+    assert_eq!(named[0].size_bytes, Some(11));
+}
+
+/// `skip` claims the destination already IS this member. When it is not, that
+/// is a real conflict and staying quiet about it would hide a corrupted or
+/// half-written file behind a green run.
+#[test]
+fn archive_extract_refuses_to_skip_a_destination_that_is_a_different_file() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let zip_path = tmp.path().join("conflict.zip");
+    write_zip(&zip_path, &[("notes.txt", "hello world")]);
+    let dest = out_path(tmp.path(), "unpacked");
+    std::fs::create_dir_all(&dest).unwrap();
+    // Something else is already sitting at that path.
+    std::fs::write(format!("{}/notes.txt", dest), "not the same content at all").unwrap();
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("a", "code.sql", json!({
+                "sql": format!("SELECT '{}' AS uri", zip_path.to_string_lossy().replace('\\', "/"))
+            })),
+            node("x", "xf.archive.extract", json!({
+                "destination": dest, "ifExists": "skip"
+            })),
+        ]),
+        json!([main_edge("e1", "a", "x")]),
+    ));
+    assert_eq!(r.status, "error", "a different file at the destination is not a skip");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("notes.txt"), "names the file: {err}");
+}
