@@ -5440,6 +5440,9 @@ fn build_stage(
         rest_source = Some(RestSourceSpec {
             transport: http_transport_from_props(&props),
             node_id: node.id.clone(),
+            raw_response_destination: string_prop(&props, "rawResponseDestination")
+                .map(|v| v.trim().to_string())
+                .unwrap_or_default(),
             response_metadata: props
                 .get("responseMetadata")
                 .and_then(JsonValue::as_bool)
@@ -5695,6 +5698,9 @@ fn build_stage(
             None
         };
         rest_source = Some(RestSourceSpec {
+            raw_response_destination: string_prop(&props, "rawResponseDestination")
+                .map(|v| v.trim().to_string())
+                .unwrap_or_default(),
             transport: http_transport_from_props(&props),
             node_id: node.id.clone(),
             response_metadata: props

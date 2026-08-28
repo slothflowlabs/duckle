@@ -1688,6 +1688,15 @@ pub struct RestSourceSpec {
     /// source changed or because the parser did", and an API that quietly
     /// starts paginating differently looks identical downstream.
     pub response_metadata: bool,
+    /// #260: where to persist the ORIGINAL response body, before parsing.
+    ///
+    /// Empty = do not capture. `{sha256}` in the path is replaced with the hash
+    /// of the body, which is the default and the safe one: a URL is a name that
+    /// can be rebound, so naming a capture after its URL and skipping when the
+    /// file exists keeps the OLD body when the resource changed. Content
+    /// addressing makes a changed body a new object and an unchanged one a
+    /// genuine no-op.
+    pub raw_response_destination: String,
     /// #166: when set (src.salesforce with OAuth client-credentials auth), the
     /// runner mints a fresh access token per run and injects
     /// `Authorization: Bearer <token>` before the request loop, overriding any

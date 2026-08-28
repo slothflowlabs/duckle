@@ -19282,6 +19282,33 @@ fn drain_http_request(stream: &mut std::net::TcpStream) -> String {
     String::from_utf8_lossy(&req).into_owned()
 }
 
+/// A stub that answers every request with one fixed JSON body.
+fn stub_http_json(body: &str) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let seen = hits.clone();
+    let body = body.to_string();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(std::time::Duration::from_millis(400))).ok();
+            let _ = drain_http_request(&mut stream);
+            seen.fetch_add(1, Ordering::SeqCst);
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nETag: \"v1\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (port, hits)
+}
+
 /// A chat-completions stub that always answers with one fixed category and
 /// counts how many times it was actually asked.
 fn stub_fixed_answer(answer: &str) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
@@ -19495,4 +19522,72 @@ fn ai_embed_only_embeds_the_rows_it_has_not_embedded_before() {
     let body = std::fs::read_to_string(&out).unwrap_or_default();
     let ids: Vec<&str> = body.lines().skip(1).filter_map(|l| l.split(',').next()).collect();
     assert_eq!(ids, vec!["0", "1", "2", "3"], "rows came back out of order: {body}");
+}
+
+/// #260: the original response is kept, named after its own content.
+///
+/// A URL is a name that can be rebound, so naming a capture after its URL and
+/// skipping when the file exists keeps the OLD body when the resource changed.
+/// Content addressing makes a changed body a new file and an unchanged one a
+/// genuine no-op.
+#[test]
+fn src_rest_keeps_the_original_response_named_by_its_hash() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let (port, _hits) = stub_http_json(r#"[{"id":1,"name":"Acme"}]"#);
+    let raw_dir = tmp.path().join("raw");
+    let dest = format!("{}/{{sha256}}.json", raw_dir.to_string_lossy().replace('\\', "/"));
+    let out = out_path(tmp.path(), "rest260.csv");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.rest", json!({
+                "url": format!("http://127.0.0.1:{}/companies", port),
+                "responseMetadata": true,
+                "rawResponseDestination": dest,
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+
+    // The body landed, under its own hash.
+    let captured: Vec<_> = std::fs::read_dir(&raw_dir)
+        .expect("raw directory")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(captured.len(), 1, "one response, one capture: {captured:?}");
+    let name = &captured[0];
+    assert!(name.ends_with(".json"), "{name}");
+    let hash = name.trim_end_matches(".json");
+    assert_eq!(hash.len(), 64, "named by a sha256, not by the URL: {name}");
+    assert_eq!(
+        std::fs::read_to_string(raw_dir.join(name)).unwrap(),
+        r#"[{"id":1,"name":"Acme"}]"#,
+        "the bytes kept are the bytes parsed"
+    );
+
+    // And the row carries the same hash, so a row can be traced to the capture.
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(body.contains(hash), "the row points at the capture: {body}");
+    assert!(body.contains("_response_sha256"), "{body}");
+    assert!(body.contains("_page_number"), "{body}");
+
+    // Re-running with the same body rewrites the same file rather than making a
+    // second one - an unchanged response is a genuine no-op.
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.rest", json!({
+                "url": format!("http://127.0.0.1:{}/companies", port),
+                "rawResponseDestination": dest,
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let after = std::fs::read_dir(&raw_dir).unwrap().flatten().count();
+    assert_eq!(after, 1, "the same body must not make a second capture");
 }

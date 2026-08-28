@@ -14393,6 +14393,33 @@ impl DuckdbEngine {
     /// cursor pagination by extracting a cursor token + appending it
     /// as a query string parameter to the next request. Stops when
     /// no cursor token is present or max_pages is hit.
+    /// #260: write one captured response body where it was asked for.
+    ///
+    /// Content-addressed by default, so an unchanged body rewrites the same
+    /// object and a changed one becomes a new object. That is the difference
+    /// from a normal copy: a URL is a NAME that can be rebound, so naming the
+    /// capture after its URL and skipping when the file exists silently keeps
+    /// the old body when the resource changed.
+    fn capture_raw_response(&self, dest: &str, body: &[u8]) -> Result<(), EngineError> {
+        if dest.starts_with("s3://") || dest.starts_with("s3a://") {
+            return Err(EngineError::Config(format!(
+                "rest: raw capture to {dest} needs object-storage credentials on this node, \
+                 which src.rest does not carry yet. Capture to a local path and copy it with \
+                 xf.artifact.copy, which does."
+            )));
+        }
+        let path = std::path::Path::new(dest);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                EngineError::Query(format!("rest: raw capture {}: {e}", parent.display()))
+            })?;
+        }
+        // Content-addressed: the same bytes are the same object, so rewriting is
+        // a no-op rather than a conflict.
+        std::fs::write(path, body)
+            .map_err(|e| EngineError::Query(format!("rest: raw capture {dest}: {e}")))
+    }
+
     pub(crate) fn run_rest_source(
         &self,
         db: &Path,
@@ -14504,15 +14531,46 @@ impl DuckdbEngine {
                 // what answered and with what has to be taken here or not at all.
                 let page_status = response_raw.status();
                 let page_url = url.clone();
+                // #260: the rest of the provenance, taken here for the same
+                // reason - once the body is read the response is gone.
+                let page_content_type = response_raw.header("content-type").map(String::from);
+                let page_etag = response_raw.header("etag").map(String::from);
+                let page_last_modified = response_raw.header("last-modified").map(String::from);
                 // For XML, parse as text + walk row_path; pagination is
                 // not meaningful (SOAP has no cross-envelope convention)
                 // so we treat the JSON-pointer/cursor variants as no-ops
                 // by returning a Null response from this branch.
+                // Read once. The hash has to be of the bytes that were actually
+                // parsed, and a second read would describe a second response.
+                let page_body = response_raw.into_string().map_err(|e| {
+                    EngineError::Query(format!("REST response read: {}", e))
+                })?;
+                let page_sha256 = {
+                    // Reuse the hasher the artifact side already uses, so a
+                    // captured body and a copied artifact are comparable by the
+                    // same hash rather than two hashes that happen to agree.
+                    let mut hashing = crate::s3::HashingReader::new(page_body.as_bytes());
+                    std::io::copy(&mut hashing, &mut std::io::sink()).map_err(|e| {
+                        EngineError::Query(format!("rest: hashing the response: {e}"))
+                    })?;
+                    hashing.finish().0
+                };
+                // #260: persist the original body before parsing, so a later
+                // question about whether the PARSER or the SOURCE changed can be
+                // answered from the bytes rather than argued about.
+                if !spec.raw_response_destination.trim().is_empty() {
+                    let dest = spec
+                        .raw_response_destination
+                        .replace("{sha256}", &page_sha256)
+                        .replace("{date}", &chrono::Utc::now().format("%Y-%m-%d").to_string());
+                    self.capture_raw_response(&dest, page_body.as_bytes())?;
+                }
                 let (rows, response): (Vec<JsonValue>, JsonValue) = match spec.response_format {
                     RestResponseFormat::Json => {
-                        let response: JsonValue = response_raw.into_json().map_err(|e| {
-                            EngineError::Query(format!("REST response not JSON: {}", e))
-                        })?;
+                        let response: JsonValue =
+                            serde_json::from_str(&page_body).map_err(|e| {
+                                EngineError::Query(format!("REST response not JSON: {}", e))
+                            })?;
                         // Locate the rows: the whole response when no responsePath
                         // is set, else the JSON pointer target. A located ARRAY is
                         // the row set; a single OBJECT is one row (issue #13: APIs
@@ -14537,10 +14595,8 @@ impl DuckdbEngine {
                         (rows, response)
                     }
                     RestResponseFormat::Xml => {
-                        let body = response_raw.into_string().map_err(|e| {
-                            EngineError::Query(format!("REST XML response read: {}", e))
-                        })?;
-                        let rows = walk_xml_to_rows(&body, &spec.response_path, &self.cancel)?;
+                        let rows =
+                            walk_xml_to_rows(&page_body, &spec.response_path, &self.cancel)?;
                         (rows, JsonValue::Null)
                     }
                 };
@@ -14561,6 +14617,35 @@ impl DuckdbEngine {
                                     o.insert("_http_url".into(), JsonValue::from(page_url.clone()));
                                     o.insert("_http_status".into(), JsonValue::from(page_status));
                                     o.insert("_fetched_at".into(), JsonValue::from(at));
+                                    // #260: enough to answer "did the parsed
+                                    // result change because the source changed
+                                    // or because the parser did".
+                                    o.insert(
+                                        "_response_content_type".into(),
+                                        match &page_content_type {
+                                            Some(v) => JsonValue::from(v.clone()),
+                                            None => JsonValue::Null,
+                                        },
+                                    );
+                                    o.insert(
+                                        "_response_etag".into(),
+                                        match &page_etag {
+                                            Some(v) => JsonValue::from(v.clone()),
+                                            None => JsonValue::Null,
+                                        },
+                                    );
+                                    o.insert(
+                                        "_response_last_modified".into(),
+                                        match &page_last_modified {
+                                            Some(v) => JsonValue::from(v.clone()),
+                                            None => JsonValue::Null,
+                                        },
+                                    );
+                                    o.insert(
+                                        "_response_sha256".into(),
+                                        JsonValue::from(page_sha256.clone()),
+                                    );
+                                    o.insert("_page_number".into(), JsonValue::from(pages + 1));
                                 }
                                 r
                             })

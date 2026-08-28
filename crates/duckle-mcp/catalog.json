@@ -9796,7 +9796,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -10165,7 +10171,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -10528,7 +10540,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -10973,7 +10991,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -11336,7 +11360,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -11728,7 +11758,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -12091,7 +12127,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -12454,7 +12496,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -13895,7 +13943,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -45856,7 +45910,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -46452,7 +46512,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -46815,7 +46881,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -47178,7 +47250,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -47541,7 +47619,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -47904,7 +47988,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -48267,7 +48357,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -48630,7 +48726,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -48993,7 +49095,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -49356,7 +49464,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -49719,7 +49833,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -50082,7 +50202,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -50445,7 +50571,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -50808,7 +50940,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -51171,7 +51309,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -51534,7 +51678,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -51897,7 +52047,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -52260,7 +52416,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -52623,7 +52785,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -52986,7 +53154,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -53349,7 +53523,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -53712,7 +53892,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -54075,7 +54261,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -54438,7 +54630,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -54801,7 +54999,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -55164,7 +55368,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -55527,7 +55737,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
@@ -55890,7 +56106,13 @@
                 "label": "Add response metadata",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status and _fetched_at. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did."
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "string",
+                "description": "A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           }
