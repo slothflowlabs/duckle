@@ -648,6 +648,21 @@ pub fn compile(pipeline: &PipelineDoc) -> Result<CompiledPipeline, EngineError> 
 /// in the source stage's process, would not exist when the next stage runs in
 /// its own process, giving `Catalog "duckle_src_..." does not exist` (#87).
 fn compile_impl(pipeline: &PipelineDoc, allow_view_upgrade: bool) -> Result<CompiledPipeline, EngineError> {
+    // #285: the environment's policy, enforced HERE rather than in a validation
+    // step. An agent that can write the pipeline can also invoke a path that
+    // skips validation, so the check belongs where a pipeline becomes something
+    // executable: a denied capability then has nowhere to run, instead of
+    // merely having failed a check somebody could route around.
+    //
+    // Read every time rather than cached. A cached security policy is a policy
+    // that can be stale, and the file is small next to the work a compile does.
+    let workspace = std::env::var("DUCKLE_WORKSPACE")
+        .ok()
+        .filter(|w| !w.is_empty())
+        .map(std::path::PathBuf::from);
+    let policy = crate::policy::load(workspace.as_deref())?;
+    crate::policy::enforce(&policy, pipeline)?;
+
     let node_index: HashMap<&str, &PipelineNode> = pipeline
         .nodes
         .iter()

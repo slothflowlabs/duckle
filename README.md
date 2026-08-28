@@ -664,6 +664,55 @@ Two maintenance runs against one catalog serialise on a lock rather than
 racing, so a weekly compaction overlapping a monthly cleanup waits instead of
 failing a two-hour job at its commit.
 
+### Make forbidden things impossible, not discouraged (workspace policy)
+
+Roles answer *which control-plane actions may this key invoke*. A different
+question matters once an AI agent or a CI job can write pipelines: **which
+capabilities may a pipeline in this environment contain at all**. An agent with
+legitimate write access to the repository defeats the first entirely.
+
+"Do not modify production data" in a prompt is guidance. A policy file is a
+boundary.
+
+```yaml
+mode: enforce
+components:
+  deny: [code.shell]
+network:
+  allowedDomains: [api.registry.example]
+sinks:
+  allowedConnections: [dev_lake]
+  allowedS3Prefixes: ["s3://company-development/"]
+  deniedSchemas: [production]
+filesystem:
+  allowedPaths: [/var/lake/dev]
+state:
+  allowMutation: false
+```
+
+`DUCKLE_POLICY_FILE` points at the authoritative one, from outside the
+workspace. `.duckle/policy.yaml` may then add restrictions.
+
+Three things make it a boundary rather than a check:
+
+**Enforcement is at plan time.** An agent that can write the pipeline can also
+invoke a path that skips a validation step, so the check sits where a pipeline
+becomes executable - a denied capability has nowhere to run, rather than having
+failed a check somebody can route around. Nothing is written before the refusal.
+
+**Narrowing is the only operation the format has.** Denies union, allowlists
+intersect, permissions AND. There is no expressible way to remove a deny or
+extend an allowlist, so "a workspace may never widen a server policy" is
+structural rather than a merge rule somebody has to keep getting right.
+
+**`mode` comes from the server policy alone.** The workspace file is writable by
+whatever writes the pipelines, so a workspace that could set `mode: report`
+could switch the boundary off from inside the thing being bounded.
+
+A policy file that is named and cannot be read **refuses the run**. Falling back
+to "no policy" would mean a typo in the environment silently removes the
+boundary. With no policy configured at all, nothing changes.
+
 ### Catch the run that looks fine and is not (`qa.baseline`)
 
 Absolute rules catch a NULL where one is not allowed. They cannot catch this:

@@ -40,6 +40,7 @@ pub mod runlock;
 pub mod s3;
 pub mod batch;
 pub mod plans;
+pub mod policy;
 pub mod schedules;
 pub mod talend;
 pub mod trust;
