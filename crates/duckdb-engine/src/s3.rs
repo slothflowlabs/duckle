@@ -1369,9 +1369,27 @@ mod tests {
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_millis(400)))
                     .ok();
+                // Drain the whole request, body included, before answering.
+                // Replying to a PUT while its body is still being written makes
+                // the client see a connection reset instead of the status - the
+                // test then fails on a network error rather than on what it is
+                // actually about.
+                let mut req = String::new();
                 let mut buf = [0u8; 8192];
-                let n = stream.read(&mut buf).unwrap_or(0);
-                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                loop {
+                    match stream.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            req.push_str(&String::from_utf8_lossy(&buf[..n]));
+                            // Headers seen and nothing more waiting: a request
+                            // with no body is complete here.
+                            if n < buf.len() {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
                 let _ = tx.send(req.lines().next().unwrap_or_default().to_string());
                 let _ = stream.write_all(replies[i].as_bytes());
                 let _ = stream.flush();
