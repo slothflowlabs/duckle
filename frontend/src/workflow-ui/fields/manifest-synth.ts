@@ -1609,6 +1609,23 @@ function fileFormatSection(comp: ComponentDef): FormSection[] {
                 ],
             },
         ];
+        if (id === 'src.xml') {
+            // #286: government and registry feeds publish an XSD beside the
+            // data. Retyping a deeply nested one into the Schema tab by hand is
+            // repetitive, and a typo in it is a silently mistyped column.
+            sections.push({
+                label: 'Schema from XSD (optional)',
+                fields: [
+                    {
+                        key: 'xsdPath',
+                        label: 'XSD file',
+                        kind: 'file-path',
+                        filters: [{ name: 'XML Schema', extensions: ['xsd'] }],
+                        description: 'A local path or an https:// URL to the published schema. The columns and their types are read from it, so the Schema tab does not have to be filled in by hand. Only used when the Schema tab is empty, so anything you declare there wins. Nothing is validated against the XSD at run time; it is read for types, not as a gate.',
+                    },
+                ],
+            });
+        }
         if (id.startsWith('src.')) {
             // src.xml streams the file, so the path may be a local file, an
             // http(s):// URL, or an sftp://user@host/path URL (both decompress

@@ -1906,6 +1906,25 @@
             ]
           },
           {
+            "label": "Schema from XSD (optional)",
+            "fields": [
+              {
+                "key": "xsdPath",
+                "label": "XSD file",
+                "kind": "file-path",
+                "filters": [
+                  {
+                    "name": "XML Schema",
+                    "extensions": [
+                      "xsd"
+                    ]
+                  }
+                ],
+                "description": "A local path or an https:// URL to the published schema. The columns and their types are read from it, so the Schema tab does not have to be filled in by hand. Only used when the Schema tab is empty, so anything you declare there wins. Nothing is validated against the XSD at run time; it is read for types, not as a gate."
+              }
+            ]
+          },
+          {
             "label": "Remote / SFTP auth (optional)",
             "fields": [
               {

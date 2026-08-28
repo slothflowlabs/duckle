@@ -8565,6 +8565,33 @@ impl DuckdbEngine {
     /// keys, text content goes to "_text" (or the value directly if
     /// the element has no children), nested elements nest naturally
     /// and convert to arrays when the same tag repeats.
+    /// #286: read an XSD and turn it into a declared schema.
+    ///
+    /// Local path or `http(s)://` - the same two the XML source itself takes
+    /// for a single document. A schema file is small and is read whole, unlike
+    /// the data it describes.
+    fn derive_schema_from_xsd(
+        &self,
+        xsd_path: &str,
+        row_path: &str,
+    ) -> Result<Vec<duckle_metadata::Column>, EngineError> {
+        let path = xsd_path.trim();
+        let text = if path.starts_with("http://") || path.starts_with("https://") {
+            let agent = crate::tls::http_agent();
+            agent
+                .get(path)
+                .call()
+                .map_err(|e| EngineError::Config(format!("xsd: fetch {path}: {e}")))?
+                .into_string()
+                .map_err(|e| EngineError::Config(format!("xsd: read {path}: {e}")))?
+        } else {
+            std::fs::read_to_string(path)
+                .map_err(|e| EngineError::Config(format!("xsd: read {path}: {e}")))?
+        };
+        let cols = crate::xsd::derive(&text, row_path)?;
+        Ok(cols)
+    }
+
     pub(crate) fn run_xml_source(
         &self,
         db: &Path,
@@ -8598,7 +8625,19 @@ impl DuckdbEngine {
         // 30 GB compressed source can put hundreds of gigabytes on the temp
         // volume. With it, the text is rolled to a compressed Parquet part every
         // `spec.batch_rows` rows and the NDJSON only ever holds the tail.
-        let mut writer = match &spec.declared_schema {
+        // #286: a published XSD already says what the feed contains, so a
+        // deeply nested schema does not have to be retyped by hand. Only
+        // consulted when the Schema tab is empty - a hand-written schema wins,
+        // because the person who typed it may know something the XSD does not.
+        let declared_schema: Option<Vec<duckle_metadata::Column>> =
+            match spec.declared_schema.as_ref().filter(|s| !s.is_empty()) {
+                Some(s) => Some(s.clone()),
+                None if !spec.xsd_path.trim().is_empty() => {
+                    Some(self.derive_schema_from_xsd(&spec.xsd_path, &spec.row_path)?)
+                }
+                None => None,
+            };
+        let mut writer = match &declared_schema {
             Some(schema) if !schema.is_empty() => {
                 let (columns_spec, _) = xml_declared_columns(schema);
                 JsonLinesWriter::open_with_schema(&spec.node_id, Some(schema.clone()))?
@@ -8771,7 +8810,7 @@ impl DuckdbEngine {
                 }
             }
         }
-        let parts = match &spec.declared_schema {
+        let parts = match &declared_schema {
             Some(schema) if !schema.is_empty() => {
                 let (columns_spec, select_list) = xml_declared_columns(schema);
                 writer.finalize_typed(&self.bin, db, &spec.node_id, &columns_spec, &select_list)?

@@ -708,6 +708,45 @@ duckle-runner checkpoint prune --retain-days 30      # bound it
 Pruning is explicit. These entries are results that were already paid for, so
 nothing is dropped on a default nobody chose.
 
+### The feed already published its schema (XSD)
+
+A national register hands you a 400-element XSD next to the data. Retyping it
+into the Schema tab is repetitive, and a typo in it is a silently mistyped
+column rather than an error.
+
+Point `src.xml` at the XSD instead:
+
+```
+XSD file : schemas/cbe.xsd
+Row path : Root/Enterprises/Enterprise
+```
+
+```
+@id       bigint      <- xs:long attribute, use="required" so NOT NULL
+Number    varchar     <- a named simple type, followed down to xs:string
+Employees integer     <- xs:int
+Turnover  decimal     <- xs:decimal stays exact; these feeds carry money
+StartDate date        <- xs:date
+Active    boolean     <- xs:boolean
+```
+
+Only read when the Schema tab is empty, so anything you declare by hand wins.
+
+**It is read for types, not as a gate.** Nothing is validated against the XSD at
+run time: full-document validation on every production load is expensive and is
+not what the schema is wanted for. It is wanted so the bounded Parquet path can
+skip per-batch inference and a daily run keeps the same column types.
+
+The derived schema describes what Duckle's reader **produces**, which is not
+quite what the XSD describes: attributes arrive as `@name`, a repeated child as
+an array and a nested child as an object, so those are declared as text.
+Deriving the abstract XSD shape instead would produce casts that fail on every
+row.
+
+**An `xs:import` or `xs:include` is refused**, not followed. A column list that
+quietly stops early is the exact failure this feature exists to remove, so a
+schema that pulls in another one says so and asks for a self-contained file.
+
 ### Extraction should produce columns, not a paragraph containing the answer
 
 `xf.ai.llm` can ask for a shape instead of prose. Pick **A JSON Schema you

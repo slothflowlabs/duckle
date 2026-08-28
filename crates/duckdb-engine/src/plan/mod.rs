@@ -4661,6 +4661,7 @@ fn build_stage(
             )));
         }
         xml_source = Some(XmlSourceSpec {
+                xsd_path: string_prop(&props, "xsdPath").unwrap_or_default(),
             input: artifact_input_from_props(&props, upstream),
             on_error: string_prop(&props, "onError")
                 .filter(|s| !s.trim().is_empty())

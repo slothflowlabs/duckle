@@ -665,6 +665,12 @@ pub struct XmlSourceSpec {
     /// #283: rows per Parquet part when a schema is declared. Bounds the
     /// UNCOMPRESSED intermediate to one part rather than the whole result.
     pub batch_rows: usize,
+    /// #286: a published XSD to derive the declared schema from.
+    ///
+    /// Empty = none. Only read when the Schema tab is empty, so a hand-written
+    /// schema always wins: the person who typed it knows something the XSD may
+    /// not, and having the file quietly override them would be a surprise.
+    pub xsd_path: String,
     /// #282: the documents to parse, when an upstream relation names them.
     ///
     /// With this wired the node reads a CORPUS rather than one file, and each

@@ -51,6 +51,7 @@ pub mod talend;
 pub mod trust;
 pub mod tls;
 pub mod watermark;
+pub mod xsd;
 mod connectors;
 pub use connectors::remote_fingerprint;
 mod run_log;
