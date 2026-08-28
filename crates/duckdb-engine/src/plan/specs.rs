@@ -1216,6 +1216,10 @@ pub struct AiLlmSpec {
     /// Columns forming the logical identity of a row. Optional: with none, the
     /// whole row is the key.
     pub checkpoint_key: Vec<String>,
+    /// Columns that decide whether the INPUT changed. Optional: with none, the
+    /// whole row does, which never reuses a stale answer and never reuses
+    /// anything at all when a volatile column is present.
+    pub checkpoint_fingerprint: Vec<String>,
     pub input_column: String,
     pub output_column: String,
     pub model: String,

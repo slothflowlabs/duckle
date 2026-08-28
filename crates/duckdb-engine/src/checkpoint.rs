@@ -206,7 +206,20 @@ fn feed(h: &mut sha2::Sha256, v: &JsonValue) {
 /// All three parts, deliberately. A logical key alone would reuse a result for
 /// a row whose content changed; an input fingerprint alone would miss that the
 /// prompt or the model changed underneath it.
-pub fn item_key(row: &JsonValue, key_columns: &[String], config_fp: &str) -> String {
+///
+/// `fingerprint_columns` narrows the second part. With none named, the whole
+/// row decides whether the input changed - which is safe but pessimistic: one
+/// `run_id` or `ingested_at` column moving every run means nothing is ever
+/// reused. Naming the columns that actually feed the work restores the hits.
+/// The default is the pessimistic one on purpose, because the failure it
+/// avoids is silently reusing an answer for content that changed, and the
+/// failure it causes is paying again.
+pub fn item_key(
+    row: &JsonValue,
+    key_columns: &[String],
+    fingerprint_columns: &[String],
+    config_fp: &str,
+) -> String {
     let logical = if key_columns.is_empty() {
         // No key configured: the whole row IS the key. A volatile column costs
         // cache hits rather than causing wrong reuse.
@@ -219,9 +232,19 @@ pub fn item_key(row: &JsonValue, key_columns: &[String], config_fp: &str) -> Str
                 .collect(),
         )
     };
+    let input = if fingerprint_columns.is_empty() {
+        fingerprint(row)
+    } else {
+        fingerprint(&JsonValue::Array(
+            fingerprint_columns
+                .iter()
+                .map(|c| row.get(c).cloned().unwrap_or(JsonValue::Null))
+                .collect(),
+        ))
+    };
     fingerprint(&serde_json::json!({
         "logical": logical,
-        "input": fingerprint(row),
+        "input": input,
         "config": config_fp,
     }))
 }
@@ -364,7 +387,7 @@ mod tests {
         let store = Store::open(tmp.path(), "p", "n").unwrap();
         let cfg = "model-a";
         let row = json!({ "company_id": 123, "description": "old" });
-        let key = item_key(&row, &["company_id".into()], cfg);
+        let key = item_key(&row, &["company_id".into()], &[], cfg);
         assert!(store.get(&key).is_none(), "nothing done yet");
         store.record(&key, &json!({ "answer": "first" })).unwrap();
 
@@ -375,7 +398,7 @@ mod tests {
         // Same business key, different content: the old answer describes the
         // old description and reusing it would be silently wrong.
         let changed = json!({ "company_id": 123, "description": "new" });
-        let changed_key = item_key(&changed, &["company_id".into()], cfg);
+        let changed_key = item_key(&changed, &["company_id".into()], &[], cfg);
         assert_ne!(changed_key, key, "content changed, so identity must change");
         assert!(store.get(&changed_key).is_none());
     }
@@ -385,8 +408,8 @@ mod tests {
     #[test]
     fn changing_the_configuration_invalidates_the_checkpoint() {
         let row = json!({ "id": 1 });
-        let a = item_key(&row, &[], "model=gpt-4,prompt=summarise");
-        let b = item_key(&row, &[], "model=gpt-4,prompt=translate");
+        let a = item_key(&row, &[], &[], "model=gpt-4,prompt=summarise");
+        let b = item_key(&row, &[], &[], "model=gpt-4,prompt=translate");
         assert_ne!(a, b, "a different prompt is a different job");
     }
 
@@ -421,11 +444,11 @@ mod tests {
     fn without_a_key_a_volatile_column_costs_reuse_rather_than_correctness() {
         let a = json!({ "id": 1, "run_id": "r1" });
         let b = json!({ "id": 1, "run_id": "r2" });
-        assert_ne!(item_key(&a, &[], "c"), item_key(&b, &[], "c"));
+        assert_ne!(item_key(&a, &[], &[], "c"), item_key(&b, &[], &[], "c"));
         // Naming the logical key is what buys the reuse back.
         assert_ne!(
-            item_key(&a, &["id".into()], "c"),
-            item_key(&b, &["id".into()], "c"),
+            item_key(&a, &["id".into()], &[], "c"),
+            item_key(&b, &["id".into()], &[], "c"),
             "the input fingerprint is still part of identity, by design"
         );
     }
@@ -469,4 +492,42 @@ mod tests {
         assert_eq!(store.completed(), 1);
         assert!(store.get("good").is_some(), "the intact record survives");
     }
+
+    /// Naming the input columns narrows what counts as a change, so a volatile
+    /// column stops destroying every cache hit.
+    #[test]
+    fn a_column_nobody_named_as_input_does_not_change_the_identity() {
+        let a = serde_json::json!({ "id": 1, "text": "hello", "ingested_at": "run-a" });
+        let b = serde_json::json!({ "id": 1, "text": "hello", "ingested_at": "run-b" });
+        let key = ["id".to_string()];
+        let fp = ["text".to_string()];
+
+        // Whole-row default: the run stamp makes it a different item.
+        assert_ne!(
+            item_key(&a, &key, &[], "c"),
+            item_key(&b, &key, &[], "c"),
+            "the default has to stay whole-row"
+        );
+        // Narrowed: only `text` decides, so the two are the same work.
+        assert_eq!(item_key(&a, &key, &fp, "c"), item_key(&b, &key, &fp, "c"));
+
+        // And it is a narrowing, not an ignore: a named column still counts.
+        let c = serde_json::json!({ "id": 1, "text": "goodbye", "ingested_at": "run-b" });
+        assert_ne!(item_key(&b, &key, &fp, "c"), item_key(&c, &key, &fp, "c"));
+
+        // The config still overrides everything, narrowed or not.
+        assert_ne!(item_key(&a, &key, &fp, "c1"), item_key(&a, &key, &fp, "c2"));
+    }
+
+    /// A named column that is absent is Null rather than "skip this column", so
+    /// a row that HAS the column and one that does not are different items.
+    #[test]
+    fn a_missing_fingerprint_column_is_not_a_wildcard() {
+        let present = serde_json::json!({ "id": 1, "text": "x" });
+        let absent = serde_json::json!({ "id": 1 });
+        let key = ["id".to_string()];
+        let fp = ["text".to_string()];
+        assert_ne!(item_key(&present, &key, &fp, "c"), item_key(&absent, &key, &fp, "c"));
+    }
+
 }

@@ -6746,6 +6746,13 @@ const aiThroughputFields = (): Field[] => [
             'The columns that say which row this IS - a company id, a document id. Identity is those columns AND the whole input row AND the model/prompt configuration, so a row whose text changed is recomputed rather than answered from the old text, and changing the prompt or model invalidates everything. Leave blank and the whole row is the key: a volatile column like a run id then costs reuse rather than causing a wrong answer, which is the safe direction.',
     },
     {
+        key: 'checkpointFingerprint',
+        label: 'Columns that decide the input changed',
+        kind: 'columns',
+        description:
+            'Which columns count as the work when deciding whether a stored answer still applies. Leave blank and the whole row decides, which never reuses a stale answer and also never reuses anything at all if one volatile column - a run id, an ingestion timestamp - moves every run. Name the columns that actually feed the request and the reuse comes back. Narrowing this is the one setting here that can cause a wrong answer: a column left out is a column whose change goes unnoticed.',
+    },
+    {
         key: 'maxRetries',
         label: 'Retries on rate limit',
         kind: 'integer',

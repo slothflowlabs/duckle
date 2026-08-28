@@ -11824,7 +11824,14 @@ impl DuckdbEngine {
             // was done with this exact setup.
             let ck = store
                 .as_ref()
-                .map(|_| crate::checkpoint::item_key(row, &spec.checkpoint_key, &config_fp));
+                .map(|_| {
+                    crate::checkpoint::item_key(
+                        row,
+                        &spec.checkpoint_key,
+                        &spec.checkpoint_fingerprint,
+                        &config_fp,
+                    )
+                });
             if let (Some(store), Some(key)) = (store.as_ref(), ck.as_ref()) {
                 if let Some(done) = store.get(key) {
                     reused.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

@@ -18286,15 +18286,40 @@ fn stub_llm(fail_after: usize) -> (u16, std::sync::Arc<std::sync::atomic::Atomic
             // Drain the whole request, body included, before answering.
             // Replying to a POST while its body is still being written makes
             // the client see a connection reset instead of the response, and
-            // the test then fails on a network error rather than on what it
-            // is about - intermittently, depending on how much went out.
-            let mut buf = [0u8; 8192];
-            loop {
+            // the test then fails on a network error rather than on what it is
+            // about - intermittently, depending on how much went out.
+            //
+            // Read to the header terminator, then exactly Content-Length more.
+            // "a read shorter than the buffer means the request is finished"
+            // is a heuristic, not a guarantee: TCP is free to deliver a short
+            // read with more still coming, which is a flake nobody can
+            // reproduce on demand.
+            let mut req: Vec<u8> = Vec::new();
+            let mut buf = [0u8; 4096];
+            let head_end = loop {
                 match stream.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) if n < buf.len() => break,
-                    Ok(_) => {}
-                    Err(_) => break,
+                    Ok(0) | Err(_) => break None,
+                    Ok(n) => {
+                        req.extend_from_slice(&buf[..n]);
+                        if let Some(i) = req.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break Some(i + 4);
+                        }
+                    }
+                }
+            };
+            if let Some(head_end) = head_end {
+                let head = String::from_utf8_lossy(&req[..head_end]).to_ascii_lowercase();
+                let want: usize = head
+                    .split("content-length:")
+                    .nth(1)
+                    .and_then(|rest| rest.split(['\r', '\n']).next())
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                while req.len() - head_end < want {
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => req.extend_from_slice(&buf[..n]),
+                    }
                 }
             }
             let n = seen.fetch_add(1, Ordering::SeqCst) + 1;
@@ -18504,5 +18529,78 @@ fn ai_llm_without_checkpointing_behaves_exactly_as_before() {
     assert!(
         !tmp.path().join("state").join("off").join("checkpoints").exists(),
         "and nothing is written that nobody asked for"
+    );
+}
+
+/// A volatile column must not silently destroy every cache hit.
+///
+/// The whole-row fingerprint is the safe default and it is pessimistic: one
+/// `ingested_at` moving every run means nothing is ever reused, and the stage
+/// pays full price forever while looking like it has a checkpoint.
+/// `checkpointFingerprint` names the columns that actually feed the work.
+#[test]
+fn ai_llm_ignores_a_volatile_column_when_told_which_columns_matter() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "fp.csv");
+    let (port, calls) = stub_llm(0);
+    let props = json!({
+        "checkpoint": true,
+        "checkpointKey": ["id"],
+        "checkpointFingerprint": ["text"],
+    });
+
+    // Same id, same text, DIFFERENT run stamp on the second run.
+    let first = "SELECT 1 AS id, 'hello' AS text, 'run-a' AS ingested_at";
+    let r = engine.execute_pipeline_named(&llm_pipeline(port, first, &out, props.clone()), "fp");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let second = "SELECT 1 AS id, 'hello' AS text, 'run-b' AS ingested_at";
+    let r = engine.execute_pipeline_named(&llm_pipeline(port, second, &out, props.clone()), "fp");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "a column nobody named as input still invalidated the checkpoint"
+    );
+
+    // And it is a narrowing, not a blanket ignore: a named column changing is
+    // still different work.
+    let changed = "SELECT 1 AS id, 'goodbye' AS text, 'run-b' AS ingested_at";
+    let r = engine.execute_pipeline_named(&llm_pipeline(port, changed, &out, props), "fp");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "a change in a NAMED column was answered from the old content"
+    );
+}
+
+/// Without the setting, the whole row still decides - the safe default is not
+/// quietly loosened by adding the option.
+#[test]
+fn ai_llm_still_reprices_on_any_column_when_no_fingerprint_is_named() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "fpdef.csv");
+    let (port, calls) = stub_llm(0);
+    let props = json!({ "checkpoint": true, "checkpointKey": ["id"] });
+
+    for sql in [
+        "SELECT 1 AS id, 'hello' AS text, 'run-a' AS ingested_at",
+        "SELECT 1 AS id, 'hello' AS text, 'run-b' AS ingested_at",
+    ] {
+        let r = engine.execute_pipeline_named(&llm_pipeline(port, sql, &out, props.clone()), "fpd");
+        assert_eq!(r.status, "ok", "{:?}", r.error);
+    }
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the default must stay whole-row: any change is different work"
     );
 }

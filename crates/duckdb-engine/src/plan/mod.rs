@@ -6037,14 +6037,11 @@ fn build_stage(
         let api_key = string_prop(&props, "apiKey")
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: apiKey required", component_id)))?;
-        ai_llm = Some(AiLlmSpec {
-            node_id: node.id.clone(),
-            checkpoint: props
-                .get("checkpoint")
-                .and_then(JsonValue::as_bool)
-                .unwrap_or(false),
-            checkpoint_key: props
-                .get("checkpointKey")
+        // A column list the GUI may hand over either as an array or as the
+        // comma-separated string a hand-written pipeline uses.
+        fn column_list(props: &JsonValue, key: &str) -> Vec<String> {
+            props
+                .get(key)
                 .and_then(JsonValue::as_array)
                 .map(|a| {
                     a.iter()
@@ -6054,7 +6051,7 @@ fn build_stage(
                         .collect()
                 })
                 .or_else(|| {
-                    string_prop(&props, "checkpointKey").map(|s| {
+                    string_prop(props, key).map(|s| {
                         s.split(',')
                             .map(str::trim)
                             .filter(|p| !p.is_empty())
@@ -6062,7 +6059,16 @@ fn build_stage(
                             .collect()
                     })
                 })
-                .unwrap_or_default(),
+                .unwrap_or_default()
+        }
+        ai_llm = Some(AiLlmSpec {
+            node_id: node.id.clone(),
+            checkpoint: props
+                .get("checkpoint")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            checkpoint_key: column_list(&props, "checkpointKey"),
+            checkpoint_fingerprint: column_list(&props, "checkpointFingerprint"),
             from_view: from_view.to_string(),
             input_column: string_prop(&props, "inputColumn")
                 .filter(|s| !s.is_empty())
