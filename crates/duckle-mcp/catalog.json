@@ -1302,6 +1302,12 @@
                 "description": "Wire an artifact relation in and each row names a document to read. Changed?, Artifact and Copy Artifact all emit a uri column, so the default already lines up with them. With nothing wired in, the Path above is used and nothing changes."
               },
               {
+                "key": "carryColumns",
+                "label": "Carry these columns onto every row",
+                "kind": "columns",
+                "description": "Upstream columns copied onto every row the parser emits. The business keys that say what a document IS - company_id, filing_id - live on the artifact row and are lost the moment pages come out instead, so carrying them is what lets a page be joined back to the thing it came from without a second lookup."
+              },
+              {
                 "key": "shaColumn",
                 "label": "Hash column",
                 "kind": "column",

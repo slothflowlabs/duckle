@@ -2257,6 +2257,13 @@ pub struct ArtifactInput {
     /// exactly those bytes, and re-hashing would both cost a second full read
     /// and produce the hash of whatever is at that URI NOW.
     pub sha_column: String,
+    /// Upstream columns to copy onto every row the parser emits.
+    ///
+    /// The business keys that say what a document IS - company_id, filing_id -
+    /// live on the artifact row and are lost the moment a parser emits pages
+    /// instead. Carrying them is what lets the pages be joined back to the
+    /// thing they came from without a second lookup.
+    pub carry: Vec<String>,
     pub auth: ArtifactAuth,
 }
 
@@ -2266,6 +2273,7 @@ impl Default for ArtifactInput {
             from_view: None,
             uri_column: "uri".into(),
             sha_column: "sha256".into(),
+            carry: Vec::new(),
             auth: ArtifactAuth::default(),
         }
     }

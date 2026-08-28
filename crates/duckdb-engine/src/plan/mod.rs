@@ -1614,6 +1614,26 @@ fn artifact_input_from_props(props: &JsonValue, from_view: Option<&str>) -> Arti
         sha_column: string_prop(props, "shaColumn")
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "sha256".to_string()),
+        carry: props
+            .get("carryColumns")
+            .and_then(JsonValue::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .or_else(|| {
+                string_prop(props, "carryColumns").map(|s| {
+                    s.split(',')
+                        .map(str::trim)
+                        .filter(|p| !p.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+            })
+            .unwrap_or_default(),
         auth: artifact_auth_from_props(props),
     }
 }

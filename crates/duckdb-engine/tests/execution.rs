@@ -18131,3 +18131,42 @@ fn baseline_does_not_accept_a_profile_from_a_failed_run() {
         "a failed run taught the gate that 50 rows is normal"
     );
 }
+
+/// #282: the business keys that say what a document IS live on the artifact
+/// row. Emitting pages loses them unless they are carried, and then the pages
+/// cannot be joined back to the filing they came from without a second lookup.
+#[test]
+fn src_pdf_carries_the_upstream_business_keys_onto_every_page() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let pdf = tmp.path().join("filing.pdf");
+    std::fs::write(&pdf, minimal_pdf(&["Page one", "Page two"])).unwrap();
+    let out = out_path(tmp.path(), "carried.csv");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("art", "code.sql", json!({
+                "sql": format!(
+                    "SELECT '{}' AS uri, 'C-42' AS company_id, 'F-7' AS filing_id",
+                    pdf.to_string_lossy().replace('\\', "/")
+                )
+            })),
+            node("s", "src.pdf", json!({ "carryColumns": ["company_id", "filing_id"] })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "art", "s"), main_edge("e2", "s", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2, "two pages");
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(body.contains("company_id") && body.contains("filing_id"), "columns: {body}");
+    // On EVERY page, not just the first.
+    assert_eq!(
+        count(&format!(
+            "read_csv_auto('{}') WHERE company_id = 'C-42' AND filing_id = 'F-7'",
+            out
+        )),
+        2,
+        "both pages carry the keys: {body}"
+    );
+}

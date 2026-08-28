@@ -7845,15 +7845,15 @@ impl DuckdbEngine {
         // #282: the documents are whatever an upstream relation names, or the
         // configured path when nothing is wired in.
         let from_upstream = spec.input.from_view.is_some();
-        let docs: Vec<(String, Option<String>)> = if from_upstream {
+        let docs: Vec<(String, Option<String>, JsonValue)> = if from_upstream {
             self.resolve_artifact_inputs(db, secret_prefix, &spec.input)?
                 .into_iter()
-                .map(|a| (a.uri, a.sha256))
+                .map(|a| (a.uri, a.sha256, a.row))
                 .collect()
         } else {
             expand_pdf_paths(&spec.path, spec.recursive)
                 .into_iter()
-                .map(|f| (f, None))
+                .map(|f| (f, None, JsonValue::Null))
                 .collect()
         };
         // An upstream that named nothing is a legitimate quiet run - a change
@@ -7877,7 +7877,7 @@ impl DuckdbEngine {
         };
         let mut count: usize = 0;
         let mut skipped: usize = 0;
-        for (uri, source_sha) in &docs {
+        for (uri, source_sha, upstream_row) in &docs {
             self.check_cancelled()?;
             // A PDF reader SEEKS - the cross-reference table is at the end of
             // the file - so a remote document has to become a local one. One at
@@ -7964,6 +7964,16 @@ impl DuckdbEngine {
                 // pipeline joining on `document_id` keeps working.
                 row.insert("document_id".into(), JsonValue::String(uri.clone()));
                 row.insert("document_uri".into(), JsonValue::String(uri.clone()));
+                // #282: the business keys that say what this document IS -
+                // company_id, filing_id - live on the artifact row and are lost
+                // the moment pages are emitted instead. Carrying them is what
+                // lets a page be joined back to the thing it came from.
+                for key in &spec.input.carry {
+                    row.insert(
+                        key.clone(),
+                        upstream_row.get(key).cloned().unwrap_or(JsonValue::Null),
+                    );
+                }
                 row.insert(
                     "source_sha256".into(),
                     match source_sha {
