@@ -27009,6 +27009,19 @@
                 "description": "How many requests to keep in flight at once. 1 sends them one at a time. Output row order is the input row order either way."
               },
               {
+                "key": "checkpoint",
+                "label": "Remember completed rows",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Store each row answer as it arrives, and reuse it on a later run instead of paying for it again. The failure this prevents: 399,999 successful paid calls, request 400,000 fails permanently, and a rerun buys all 399,999 a second time. A row is recorded the moment it succeeds, not when the stage finishes. Off by default, because a cache nobody knows is there is worse than paying twice."
+              },
+              {
+                "key": "checkpointKey",
+                "label": "Row identity columns",
+                "kind": "columns",
+                "description": "The columns that say which row this IS - a company id, a document id. Identity is those columns AND the whole input row AND the model/prompt configuration, so a row whose text changed is recomputed rather than answered from the old text, and changing the prompt or model invalidates everything. Leave blank and the whole row is the key: a volatile column like a run id then costs reuse rather than causing a wrong answer, which is the safe direction."
+              },
+              {
                 "key": "maxRetries",
                 "label": "Retries on rate limit",
                 "kind": "integer",
@@ -27204,6 +27217,19 @@
                 "kind": "integer",
                 "defaultValue": 1,
                 "description": "How many requests to keep in flight at once. 1 sends them one at a time. Output row order is the input row order either way."
+              },
+              {
+                "key": "checkpoint",
+                "label": "Remember completed rows",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Store each row answer as it arrives, and reuse it on a later run instead of paying for it again. The failure this prevents: 399,999 successful paid calls, request 400,000 fails permanently, and a rerun buys all 399,999 a second time. A row is recorded the moment it succeeds, not when the stage finishes. Off by default, because a cache nobody knows is there is worse than paying twice."
+              },
+              {
+                "key": "checkpointKey",
+                "label": "Row identity columns",
+                "kind": "columns",
+                "description": "The columns that say which row this IS - a company id, a document id. Identity is those columns AND the whole input row AND the model/prompt configuration, so a row whose text changed is recomputed rather than answered from the old text, and changing the prompt or model invalidates everything. Leave blank and the whole row is the key: a volatile column like a run id then costs reuse rather than causing a wrong answer, which is the safe direction."
               },
               {
                 "key": "maxRetries",
@@ -27582,6 +27608,19 @@
                 "kind": "integer",
                 "defaultValue": 1,
                 "description": "How many requests to keep in flight at once. 1 sends them one at a time. Output row order is the input row order either way."
+              },
+              {
+                "key": "checkpoint",
+                "label": "Remember completed rows",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Store each row answer as it arrives, and reuse it on a later run instead of paying for it again. The failure this prevents: 399,999 successful paid calls, request 400,000 fails permanently, and a rerun buys all 399,999 a second time. A row is recorded the moment it succeeds, not when the stage finishes. Off by default, because a cache nobody knows is there is worse than paying twice."
+              },
+              {
+                "key": "checkpointKey",
+                "label": "Row identity columns",
+                "kind": "columns",
+                "description": "The columns that say which row this IS - a company id, a document id. Identity is those columns AND the whole input row AND the model/prompt configuration, so a row whose text changed is recomputed rather than answered from the old text, and changing the prompt or model invalidates everything. Leave blank and the whole row is the key: a volatile column like a run id then costs reuse rather than causing a wrong answer, which is the safe direction."
               },
               {
                 "key": "maxRetries",

@@ -1207,6 +1207,15 @@ pub struct AiPiiSpec {
 pub struct AiLlmSpec {
     pub node_id: String,
     pub from_view: String,
+    /// #252: reuse a row's answer when the same row was already paid for.
+    ///
+    /// Off by default, because a checkpoint that nobody asked for is a cache
+    /// nobody knows is there - and a stale answer that looks fresh is worse
+    /// than paying twice.
+    pub checkpoint: bool,
+    /// Columns forming the logical identity of a row. Optional: with none, the
+    /// whole row is the key.
+    pub checkpoint_key: Vec<String>,
     pub input_column: String,
     pub output_column: String,
     pub model: String,

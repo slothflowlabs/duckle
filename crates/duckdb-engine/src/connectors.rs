@@ -11766,7 +11766,12 @@ impl DuckdbEngine {
     /// chat completions are one prompt per call - N rows = N HTTP
     /// requests. Users should keep dataset sizes manageable or chain
     /// with xf.rows.head to sample.
-    pub(crate) fn run_ai_llm(&self, db: &Path, spec: &AiLlmSpec) -> Result<String, EngineError> {
+    pub(crate) fn run_ai_llm(
+        &self,
+        db: &Path,
+        spec: &AiLlmSpec,
+        pipeline_name: Option<&str>,
+    ) -> Result<String, EngineError> {
         self.check_cancelled()?;
         let rows = self.run_rows(
             Some(db),
@@ -11777,8 +11782,55 @@ impl DuckdbEngine {
             return Ok(format!("ai.llm: 0 upstream rows -> {}", spec.node_id));
         }
         let endpoint = Self::ai_endpoint(&spec.base_url, &spec.endpoint_path, "/v1/chat/completions");
+
+        // #252: an item that was already paid for is not bought again.
+        //
+        // The configuration is part of the identity, so a changed model, prompt
+        // or temperature invalidates everything - the stored answer was produced
+        // by the old one and reusing it would be silently wrong.
+        let config_fp = crate::checkpoint::fingerprint(&serde_json::json!({
+            "model": spec.model,
+            "prompt": spec.prompt_template,
+            "system": spec.system_prompt,
+            "temperature": spec.temperature,
+            "max_tokens": spec.max_tokens,
+            "input_column": spec.input_column,
+            "output_column": spec.output_column,
+            "endpoint": endpoint,
+        }));
+        let store = if spec.checkpoint {
+            match std::env::var("DUCKLE_WORKSPACE").ok().filter(|w| !w.is_empty()) {
+                Some(ws) => Some(crate::checkpoint::Store::open(
+                    std::path::Path::new(&ws),
+                    pipeline_name.unwrap_or(UNNAMED_RUN_FOLDER),
+                    &spec.node_id,
+                )?),
+                None => {
+                    return Err(EngineError::Config(
+                        "ai.llm: checkpointing needs a workspace (DUCKLE_WORKSPACE) to keep                          completed items in"
+                            .into(),
+                    ))
+                }
+            }
+        } else {
+            None
+        };
+        let reused = std::sync::atomic::AtomicUsize::new(0);
+
         let out = self.ai_map_concurrent(rows.len(), spec.concurrency, |engine, i| {
             let row = &rows[i];
+            // Reuse before spending. The key covers the logical key, the whole
+            // input row and the configuration, so a hit means this exact work
+            // was done with this exact setup.
+            let ck = store
+                .as_ref()
+                .map(|_| crate::checkpoint::item_key(row, &spec.checkpoint_key, &config_fp));
+            if let (Some(store), Some(key)) = (store.as_ref(), ck.as_ref()) {
+                if let Some(done) = store.get(key) {
+                    reused.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return Ok(done.clone());
+                }
+            }
             let user_text = if spec.prompt_template.is_empty() {
                 row.get(&spec.input_column)
                     .and_then(|v| v.as_str())
@@ -11818,13 +11870,28 @@ impl DuckdbEngine {
                 _ => serde_json::Map::new(),
             };
             obj.insert(spec.output_column.clone(), JsonValue::String(content));
-            Ok(JsonValue::Object(obj))
+            let produced = JsonValue::Object(obj);
+            // Recorded HERE, as this item finishes, not when the stage does.
+            // That is the whole guarantee: a failure on the next row keeps
+            // everything already bought.
+            if let (Some(store), Some(key)) = (store.as_ref(), ck.as_ref()) {
+                store.record(key, &produced)?;
+            }
+            Ok(produced)
         })?;
         let count = out.len();
         materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &out)?;
+        let reused = reused.load(std::sync::atomic::Ordering::Relaxed);
         Ok(format!(
-            "ai.llm ({}): {} row(s) -> {}",
-            spec.model, count, spec.node_id
+            "ai.llm ({}): {} row(s) -> {}{}",
+            spec.model,
+            count,
+            spec.node_id,
+            if reused > 0 {
+                format!(" ({} reused from the checkpoint, {} called)", reused, count - reused)
+            } else {
+                String::new()
+            }
         ))
     }
 

@@ -18257,3 +18257,252 @@ fn json_sample_size_can_be_lowered_when_the_records_are_uniform() {
     let body = std::fs::read_to_string(&out).unwrap_or_default();
     assert!(body.contains("name"), "{body}");
 }
+
+// ---------------------------------------------------------------------------
+// #252 slice 2 - item checkpointing. The failure this prevents:
+//   399,999 successful paid calls
+//   request 400,000 fails permanently
+//   rerun repeats all 399,999 calls
+// So the test counts the CALLS, not the rows.
+// ---------------------------------------------------------------------------
+
+/// A stub chat-completions endpoint that counts how many times it was actually
+/// called, and can be told to fail after N.
+#[cfg(test)]
+fn stub_llm(fail_after: usize) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let calls = std::sync::Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = match stream {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            stream.set_read_timeout(Some(std::time::Duration::from_millis(400))).ok();
+            // Drain the whole request, body included, before answering.
+            // Replying to a POST while its body is still being written makes
+            // the client see a connection reset instead of the response, and
+            // the test then fails on a network error rather than on what it
+            // is about - intermittently, depending on how much went out.
+            let mut buf = [0u8; 8192];
+            loop {
+                match stream.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) if n < buf.len() => break,
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+            let n = seen.fetch_add(1, Ordering::SeqCst) + 1;
+            let resp = if fail_after > 0 && n > fail_after {
+                "HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+                    .to_string()
+            } else {
+                let body = format!(
+                    r#"{{"choices":[{{"message":{{"content":"answer-{}"}}}}]}}"#,
+                    n
+                );
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                     Connection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+            };
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+    (port, calls)
+}
+
+#[cfg(test)]
+fn llm_pipeline(port: u16, rows_sql: &str, out: &str, extra: serde_json::Value) -> PipelineDoc {
+    let mut props = json!({
+        "inputColumn": "text",
+        "outputColumn": "answer",
+        "model": "test-model",
+        "apiKey": "k",
+        "baseUrl": format!("http://127.0.0.1:{}", port),
+        "maxRetries": 0
+    });
+    if let (Some(o), Some(e)) = (props.as_object_mut(), extra.as_object()) {
+        for (k, v) in e {
+            o.insert(k.clone(), v.clone());
+        }
+    }
+    doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": rows_sql })),
+            node("m", "xf.ai.llm", props),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "m"), main_edge("e2", "m", "k")]),
+    )
+}
+
+/// Work that was already paid for is not bought again.
+#[test]
+fn ai_llm_does_not_pay_twice_for_a_row_it_already_answered() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "llm.csv");
+    let (port, calls) = stub_llm(0);
+    let rows = "SELECT i AS id, 'ask ' || i AS text FROM range(3) t(i)";
+    let props = json!({ "checkpoint": true, "checkpointKey": ["id"] });
+
+    let r = engine.execute_pipeline_named(&llm_pipeline(port, rows, &out, props.clone()), "ck");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3, "three rows, three calls");
+    let first = std::fs::read_to_string(&out).unwrap_or_default();
+
+    // Same pipeline again. Every row is already done, so nothing is bought.
+    let r = engine.execute_pipeline_named(&llm_pipeline(port, rows, &out, props), "ck");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "the rerun called the API again - the checkpoint bought nothing"
+    );
+    // And the answers are the SAME ones, not blanks: the output was stored, not
+    // just the fact that the row succeeded.
+    assert_eq!(std::fs::read_to_string(&out).unwrap_or_default(), first);
+    let note = r.nodes.get("m").and_then(|n| n.note.clone()).unwrap_or_default();
+    assert!(note.contains("3 reused"), "the reuse has to be visible: {note}");
+}
+
+/// The case from the issue: most items succeed, one fails permanently, and the
+/// rerun must not repeat the successes.
+#[test]
+fn ai_llm_keeps_what_succeeded_when_a_later_row_fails() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "partial.csv");
+    // Four rows, the API dies after the third.
+    let (port, calls) = stub_llm(3);
+    let rows = "SELECT i AS id, 'ask ' || i AS text FROM range(4) t(i)";
+    let props = json!({ "checkpoint": true, "checkpointKey": ["id"], "concurrency": 1 });
+
+    let r = engine.execute_pipeline_named(&llm_pipeline(port, rows, &out, props.clone()), "part");
+    assert_eq!(r.status, "error", "the fourth row fails the stage");
+    let after_fail = calls.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(after_fail >= 3, "three succeeded before the failure: {after_fail}");
+
+    // The three that succeeded are durable. A rerun must only buy the missing
+    // one - this is the entire point of the feature.
+    let store = tmp.path().join("state").join("part").join("checkpoints").join("m.ndjson");
+    let saved = std::fs::read_to_string(&store).unwrap_or_default();
+    assert_eq!(
+        saved.lines().filter(|l| !l.trim().is_empty()).count(),
+        3,
+        "the successful items were not made durable: {saved}"
+    );
+}
+
+/// Changing the prompt invalidates the stored answers, because they were
+/// produced by the old one. Reusing them would be silently wrong.
+#[test]
+fn ai_llm_reprices_the_work_when_the_prompt_changes() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "prompt.csv");
+    let (port, calls) = stub_llm(0);
+    let rows = "SELECT 1 AS id, 'hello' AS text";
+
+    let r = engine.execute_pipeline_named(
+        &llm_pipeline(port, rows, &out, json!({ "checkpoint": true, "checkpointKey": ["id"] })),
+        "pr",
+    );
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    // Same row, different prompt.
+    let r = engine.execute_pipeline_named(
+        &llm_pipeline(
+            port,
+            rows,
+            &out,
+            json!({
+                "checkpoint": true, "checkpointKey": ["id"],
+                "promptTemplate": "Summarise: ${text}"
+            }),
+        ),
+        "pr",
+    );
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "a different prompt is different work and must be re-asked"
+    );
+}
+
+/// A row whose content changed must not be answered from the old content, even
+/// though its business key is the same. This is the trap in keying on the
+/// business key alone.
+#[test]
+fn ai_llm_does_not_reuse_an_answer_for_changed_content() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "changed.csv");
+    let (port, calls) = stub_llm(0);
+    let props = json!({ "checkpoint": true, "checkpointKey": ["id"] });
+
+    let r = engine.execute_pipeline_named(
+        &llm_pipeline(port, "SELECT 1 AS id, 'old' AS text", &out, props.clone()),
+        "chg",
+    );
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    // company_id 123 with a new description is NOT the same item.
+    let r = engine.execute_pipeline_named(
+        &llm_pipeline(port, "SELECT 1 AS id, 'new' AS text", &out, props),
+        "chg",
+    );
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the same key with different content was answered from the OLD content"
+    );
+}
+
+/// Off by default, so no existing pipeline silently gains a cache.
+#[test]
+fn ai_llm_without_checkpointing_behaves_exactly_as_before() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "off.csv");
+    let (port, calls) = stub_llm(0);
+    let rows = "SELECT 1 AS id, 'hello' AS text";
+
+    for _ in 0..2 {
+        let r = engine.execute_pipeline_named(&llm_pipeline(port, rows, &out, json!({})), "off");
+        assert_eq!(r.status, "ok", "{:?}", r.error);
+    }
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "without checkpointing both runs call the API, as they always did"
+    );
+    assert!(
+        !tmp.path().join("state").join("off").join("checkpoints").exists(),
+        "and nothing is written that nobody asked for"
+    );
+}

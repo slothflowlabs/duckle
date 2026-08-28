@@ -39,6 +39,7 @@ pub mod catalog;
 pub mod runlock;
 pub mod s3;
 pub mod batch;
+pub mod checkpoint;
 pub mod plans;
 pub mod policy;
 pub mod schedules;
@@ -1869,7 +1870,9 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::Python(spec)) => self.run_python(&db_path, spec),
                     Some(RuntimeSpec::AiChunk(spec)) => self.run_ai_chunk(&db_path, spec),
                     Some(RuntimeSpec::AiPii(spec)) => self.run_ai_pii(&db_path, spec),
-                    Some(RuntimeSpec::AiLlm(spec)) => self.run_ai_llm(&db_path, spec),
+                    Some(RuntimeSpec::AiLlm(spec)) => {
+                        self.run_ai_llm(&db_path, spec, pipeline_name)
+                    }
                     Some(RuntimeSpec::AiClassify(spec)) => self.run_ai_classify(&db_path, spec),
                     Some(RuntimeSpec::AiDedupe(spec)) => self.run_ai_dedupe(&db_path, spec),
                     Some(RuntimeSpec::EmailSource(spec)) => self.run_email_source(&db_path, spec),

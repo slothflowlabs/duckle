@@ -22,6 +22,7 @@ use std::process::ExitCode;
 
 mod audit;
 mod backfill;
+mod checkpoint;
 mod auth_store;
 mod catalog_cmd;
 mod branch;
@@ -1702,6 +1703,16 @@ fn main() -> ExitCode {
             Ok(code) => ExitCode::from(code as u8),
             Err(e) => {
                 eprintln!("duckle-runner backfill: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
+    // `checkpoint` -> see and bound the results a stage has already paid for.
+    if std::env::args().nth(1).as_deref() == Some("checkpoint") {
+        return match checkpoint::run() {
+            Ok(code) => ExitCode::from(code as u8),
+            Err(e) => {
+                eprintln!("duckle-runner checkpoint: {e}");
                 ExitCode::from(2)
             }
         };

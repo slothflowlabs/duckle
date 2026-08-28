@@ -6039,6 +6039,30 @@ fn build_stage(
             .ok_or_else(|| EngineError::Config(format!("{}: apiKey required", component_id)))?;
         ai_llm = Some(AiLlmSpec {
             node_id: node.id.clone(),
+            checkpoint: props
+                .get("checkpoint")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            checkpoint_key: props
+                .get("checkpointKey")
+                .and_then(JsonValue::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .or_else(|| {
+                    string_prop(&props, "checkpointKey").map(|s| {
+                        s.split(',')
+                            .map(str::trim)
+                            .filter(|p| !p.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                })
+                .unwrap_or_default(),
             from_view: from_view.to_string(),
             input_column: string_prop(&props, "inputColumn")
                 .filter(|s| !s.is_empty())

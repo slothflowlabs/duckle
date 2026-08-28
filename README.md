@@ -664,6 +664,43 @@ Two maintenance runs against one catalog serialise on a lock rather than
 racing, so a weekly compaction overlapping a monthly cleanup waits instead of
 failing a two-hour job at its commit.
 
+### Never buy the same row twice (item checkpointing)
+
+The failure this exists for:
+
+```
+399,999 successful paid calls
+request 400,000 fails permanently
+rerun repeats all 399,999 calls
+```
+
+Tick **Remember completed rows** on `xf.ai.llm` and each row's answer is stored
+**as it arrives** - not when the stage finishes - so a failure on the next row
+keeps everything already bought. A rerun reuses them and calls the API only for
+what is missing.
+
+The **output** is stored, not just the fact of success. A success marker without
+the output leaves the item unable to run again and unable to be rebuilt, which
+is not resumable at all.
+
+Identity is the logical key **and** the whole input row **and** the model,
+prompt and temperature. All three, because each alone is wrong:
+
+- a business key alone reuses the old answer for a row whose text changed
+- an input fingerprint alone misses that the prompt changed underneath it
+
+With no key named, the whole row is the key: a volatile column like a run id
+then costs reuse rather than causing a wrong answer, which is the safe
+direction.
+
+```bash
+duckle-runner checkpoint status                      # what each stage holds
+duckle-runner checkpoint prune --retain-days 30      # bound it
+```
+
+Pruning is explicit. These entries are results that were already paid for, so
+nothing is dropped on a default nobody chose.
+
 ### A JSON column that appears late is not a column you lose
 
 DuckDB decides what a JSON document's columns ARE from the first `sample_size`
