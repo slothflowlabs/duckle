@@ -664,6 +664,17 @@ Two maintenance runs against one catalog serialise on a lock rather than
 racing, so a weekly compaction overlapping a monthly cleanup waits instead of
 failing a two-hour job at its commit.
 
+### A JSON column that appears late is not a column you lose
+
+DuckDB decides what a JSON document's columns ARE from the first `sample_size`
+records - 20480 by default. On records that do not all carry the same keys, that
+**silently drops** every column first appearing later: the read succeeds, the
+rows look right, and a field is simply gone. No error, nothing to notice.
+
+`src.json` now scans everything by default (`sampleSize: -1`). That costs an
+extra pass over the file, which is the honest price of not losing columns. Set a
+number if you know your records are uniform and would rather have the speed.
+
 ### Make forbidden things impossible, not discouraged (workspace policy)
 
 Roles answer *which control-plane actions may this key invoke*. A different

@@ -5223,6 +5223,28 @@ fn json_read_extra_args(props: &JsonValue) -> String {
     {
         extra.push_str(", ignore_errors=true");
     }
+    // How many rows DuckDB reads before it decides what the columns ARE.
+    //
+    // Its default is 20480, and on a document whose records do not all carry the
+    // same keys that silently DROPS every column that first appears later - the
+    // read succeeds, the rows look right, and a field is simply missing. There
+    // is no error and nothing to notice, which makes it the worst shape of bug
+    // this reader can have.
+    //
+    // So the default here is -1: scan everything, and know the real schema. That
+    // costs an extra pass over the file, which is the honest price of not losing
+    // columns; a caller who knows their records are uniform can set a number and
+    // get the old behaviour back. The engine already made this exact call for
+    // its own intermediate NDJSON for the same reason (#141).
+    let sample = props
+        .get("sampleSize")
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+        })
+        .filter(|n| *n != 0)
+        .unwrap_or(-1);
+    extra.push_str(&format!(", sample_size={}", sample));
     extra
 }
 

@@ -1461,6 +1461,14 @@ function fileFormatSection(comp: ComponentDef): FormSection[] {
                     { key: 'flatten', label: 'Flatten nested objects', kind: 'bool', defaultValue: false, description: 'Expand nested objects into their own columns. With a records path set, the records are always expanded and this controls whether nesting inside them is expanded too (on unless you turn it off).' },
                     { key: 'keepParentNames', label: 'Keep parent names', kind: 'bool', defaultValue: false, description: 'Name a flattened column after the object it came from: owner.Id and account.Id rather than Id_1 and Id_2. Useful when the same key repeats at several levels.' },
                     {
+                        key: 'sampleSize',
+                        label: 'Rows to scan for the schema',
+                        kind: 'integer',
+                        defaultValue: -1,
+                        description:
+                            'How many records DuckDB reads before it decides what the columns ARE. -1 (the default here) scans everything. DuckDB own default is 20480, and on records that do not all carry the same keys that silently DROPS every column first appearing later: the read succeeds, the rows look right, and a field is simply missing with no error to notice. Scanning everything costs an extra pass over the file, which is the price of not losing columns. Set a number if you know your records are uniform and would rather have the speed.',
+                    },
+                    {
                         key: 'recordsPath',
                         label: 'Records path',
                         kind: 'text',

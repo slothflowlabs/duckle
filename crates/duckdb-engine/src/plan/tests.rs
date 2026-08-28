@@ -2451,11 +2451,13 @@
         assert!(whole.contains("unnest("), "got: {whole}");
         assert!(whole.contains("recursive := true"), "got: {whole}");
         assert!(whole.contains("keep_parent_names := true"), "got: {whole}");
-        // Not asked for, the read is exactly what it was.
+        // Not asked for, the read is a plain one - now carrying sample_size=-1,
+        // because DuckDB's 20480-row default silently DROPS a column that first
+        // appears later in a sparse document.
         let flat_off = build_json_source(&serde_json::json!({ "path": "d.json" }));
         assert_eq!(
             flat_off,
-            "SELECT * FROM read_json_auto('d.json', maximum_object_size=104857600)"
+            "SELECT * FROM read_json_auto('d.json', maximum_object_size=104857600, sample_size=-1)"
         );
     }
 

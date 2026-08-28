@@ -18170,3 +18170,90 @@ fn src_pdf_carries_the_upstream_business_keys_onto_every_page() {
         "both pages carry the keys: {body}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// src.json schema inference. DuckDB decides what the columns ARE from the first
+// `sample_size` rows (default 20480). On records that do not all carry the same
+// keys, every column that first appears later is silently DROPPED - the read
+// succeeds, the rows look right, and a field is simply gone.
+// ---------------------------------------------------------------------------
+
+/// A column that first appears past the default sample window must not vanish.
+/// There is no error to notice here, which is what makes it worth a test.
+#[test]
+fn json_keeps_a_column_that_first_appears_past_the_sample_window() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("sparse.json");
+    {
+        use std::io::Write;
+        let mut f = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+        write!(f, "[").unwrap();
+        // 20480 is DuckDB's default sample size, so the late key is past it.
+        for i in 0..20_500 {
+            if i > 0 {
+                write!(f, ",").unwrap();
+            }
+            if i == 20_490 {
+                write!(f, r#"{{"id":{i},"late_field":"found"}}"#).unwrap();
+            } else {
+                write!(f, r#"{{"id":{i}}}"#).unwrap();
+            }
+        }
+        write!(f, "]").unwrap();
+    }
+    let out = out_path(tmp.path(), "sparse.csv");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.json", json!({ "path": path.to_string_lossy(), "format": "array" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "src.json failed: {:?}", r.error);
+
+    let header = std::fs::read_to_string(&out)
+        .unwrap_or_default()
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        header.contains("late_field"),
+        "a column first seen at row 20490 was dropped without a word: header was [{header}]"
+    );
+    assert_eq!(
+        count(&format!(
+            "read_csv_auto('{}') WHERE late_field = 'found'",
+            out
+        )),
+        1,
+        "and its value has to survive too, not just the column"
+    );
+}
+
+/// The knob is there for a caller who knows their records are uniform and would
+/// rather not pay for the extra pass.
+#[test]
+fn json_sample_size_can_be_lowered_when_the_records_are_uniform() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("uniform.json");
+    std::fs::write(&path, r#"[{"id":1,"name":"a"},{"id":2,"name":"b"}]"#).unwrap();
+    let out = out_path(tmp.path(), "uniform.csv");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.json", json!({
+                "path": path.to_string_lossy(), "format": "array", "sampleSize": 100
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2);
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(body.contains("name"), "{body}");
+}
