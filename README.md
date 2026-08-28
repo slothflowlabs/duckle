@@ -857,6 +857,11 @@ directory is at the END of the file and cannot be streamed.
 row the parser emits, so a row can be joined back to the document it came from
 without a second lookup, and `source_sha256` is carried rather than recomputed.
 
+`src.html` takes the same contract, for the case where the corpus is pages
+rather than documents. It reads each page whole rather than streaming, because
+a CSS selector needs the DOM built before it can match anything - there is
+nothing streaming would save.
+
 One writer serves the whole corpus, so the bounded-parts machinery below bounds
 **all** the documents rather than each one: a million small files cannot do what
 one huge file already could not. `onError: skip` keeps going past a document

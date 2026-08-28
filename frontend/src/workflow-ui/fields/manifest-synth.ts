@@ -1031,7 +1031,7 @@ function synthFileSource(comp: ComponentDef): ComponentManifest {
             ],
         },
         ...fileFormatSection(comp),
-        ...(comp.id === 'src.pdf' || comp.id === 'src.xml'
+        ...(comp.id === 'src.pdf' || comp.id === 'src.xml' || comp.id === 'src.html'
             ? [artifactInputSection(), artifactAuthSection()]
             : []),
     ]);

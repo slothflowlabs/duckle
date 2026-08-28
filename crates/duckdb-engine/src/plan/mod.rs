@@ -4508,9 +4508,17 @@ fn build_stage(
         // #255: rows out of an HTML page. Not SQL - DuckDB cannot parse HTML -
         // so this is a runtime hook that materialises the relation itself, the
         // same shape as src.xml below.
-        let path = string_prop(&props, "path")
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| EngineError::Config(format!("{}: path required (a file, or an http(s) URL)", component_id)))?;
+        // #282: with an upstream relation wired in the pages are whatever it
+        // names, so `path` is not required. With nothing wired in it reads its
+        // configured path exactly as it always has.
+        let upstream = inputs.main();
+        let path = string_prop(&props, "path").filter(|s| !s.is_empty());
+        if path.is_none() && upstream.is_none() {
+            return Err(EngineError::Config(format!(
+                "{}: needs either a path (a file, or an http(s) URL) or an upstream relation naming the pages to read",
+                component_id
+            )));
+        }
         let row_selector = string_prop(&props, "rowSelector")
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -4570,9 +4578,13 @@ fn build_stage(
         let mut headers = headers_from_props(&props);
         push_rest_auth(&mut headers, &props);
         html_source = Some(HtmlSourceSpec {
+            input: artifact_input_from_props(&props, upstream),
+            on_error: string_prop(&props, "onError")
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "fail".to_string()),
             transport: http_transport_from_props(&props),
             node_id: node.id.clone(),
-            path,
+            path: path.unwrap_or_default(),
             row_selector,
             columns,
             headers,

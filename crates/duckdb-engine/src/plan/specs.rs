@@ -628,6 +628,11 @@ pub struct HtmlSourceSpec {
     /// result is pinned to exactly these columns and types, so a daily scrape
     /// keeps a stable shape even on a day the page renders a column empty.
     pub declared_schema: Option<Vec<duckle_metadata::Column>>,
+    /// #282: the pages to read, when an upstream relation names them.
+    /// `path` is the single-document fallback when nothing is wired in.
+    pub input: ArtifactInput,
+    /// "fail" or "skip" for a page in the corpus that cannot be read.
+    pub on_error: String,
 }
 
 /// src.xml: walk an XML document, find every element matching a

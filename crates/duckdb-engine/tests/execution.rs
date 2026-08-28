@@ -19050,3 +19050,122 @@ fn src_xml_can_skip_a_document_it_cannot_read_and_says_how_many() {
     let note = r.nodes.get("x").and_then(|n| n.note.clone()).unwrap_or_default();
     assert!(note.contains("1 document(s) skipped"), "the loss has to be visible: {note}");
 }
+
+/// #282: src.html on the same contract - a corpus of pages named upstream,
+/// with the business keys carried onto every extracted row.
+#[test]
+fn src_html_reads_every_page_an_upstream_relation_names() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let one = tmp.path().join("one.html");
+    let two = tmp.path().join("two.html");
+    std::fs::write(
+        &one,
+        "<html><body><table id=t><tr><th>Name</th></tr><tr><td>Acme</td></tr></table></body></html>",
+    )
+    .unwrap();
+    std::fs::write(
+        &two,
+        "<html><body><table id=t><tr><th>Name</th></tr><tr><td>Globex</td></tr></table></body></html>",
+    )
+    .unwrap();
+    let out = out_path(tmp.path(), "pages.csv");
+    let listing = format!(
+        "SELECT '{}' AS uri, 'sha-1' AS sha256, 11 AS filing_id \
+         UNION ALL SELECT '{}', 'sha-2', 22",
+        one.to_string_lossy().replace('\\', "/"),
+        two.to_string_lossy().replace('\\', "/")
+    );
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": listing })),
+            node("h", "src.html", json!({
+                "rowSelector": "table#t", "carryColumns": ["filing_id"]
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "h"), main_edge("e2", "h", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2, "one row per page: {body}");
+    assert!(body.contains("Acme") && body.contains("Globex"), "{body}");
+    assert!(body.contains("11") && body.contains("22"), "carried filing_id: {body}");
+    assert!(body.contains("sha-1") && body.contains("sha-2"), "carried sha256: {body}");
+}
+
+/// A configured path with nothing wired in is untouched by the corpus route.
+#[test]
+fn src_html_without_an_upstream_still_reads_its_configured_path() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let page = tmp.path().join("solo.html");
+    std::fs::write(
+        &page,
+        "<html><body><table id=t><tr><th>Name</th></tr><tr><td>Initech</td></tr></table></body></html>",
+    )
+    .unwrap();
+    let out = out_path(tmp.path(), "solo.csv");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("h", "src.html", json!({
+                "path": page.to_string_lossy(), "rowSelector": "table#t"
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "h", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(body.contains("Initech"), "{body}");
+    assert!(
+        !body.contains("source_uri"),
+        "the single-document shape gains no columns: {body}"
+    );
+}
+
+/// One unreadable page must not have to end a corpus run, and the skip has to
+/// be visible.
+#[test]
+fn src_html_can_skip_a_page_it_cannot_read_and_says_how_many() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let good = tmp.path().join("good.html");
+    std::fs::write(
+        &good,
+        "<html><body><table id=t><tr><th>Name</th></tr><tr><td>Acme</td></tr></table></body></html>",
+    )
+    .unwrap();
+    let missing = tmp.path().join("gone.html");
+    let out = out_path(tmp.path(), "htmlskip.csv");
+    let listing = format!(
+        "SELECT '{}' AS uri UNION ALL SELECT '{}'",
+        good.to_string_lossy().replace('\\', "/"),
+        missing.to_string_lossy().replace('\\', "/")
+    );
+
+    let strict = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": listing.clone() })),
+            node("h", "src.html", json!({ "rowSelector": "table#t" })),
+        ]),
+        json!([main_edge("e1", "s", "h")]),
+    ));
+    assert_eq!(strict.status, "error", "a missing page is not silently fine");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": listing })),
+            node("h", "src.html", json!({ "rowSelector": "table#t", "onError": "skip" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "h"), main_edge("e2", "h", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 1);
+    let note = r.nodes.get("h").and_then(|n| n.note.clone()).unwrap_or_default();
+    assert!(note.contains("1 page(s) skipped"), "the loss has to be visible: {note}");
+}

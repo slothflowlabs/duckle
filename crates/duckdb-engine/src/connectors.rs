@@ -8115,6 +8115,66 @@ impl DuckdbEngine {
         .map(|_| ())
     }
 
+    /// One document's text, however it is addressed.
+    ///
+    /// #282: through the shared artifact reader when an upstream relation
+    /// named it, which signs S3 reads and reuses the proxy- and CA-aware
+    /// agent. HTML needs the whole DOM built anyway, so unlike XML there is
+    /// nothing here that streaming would save.
+    fn html_text(
+        &self,
+        spec: &HtmlSourceSpec,
+        uri: &str,
+        from_upstream: bool,
+    ) -> Result<String, EngineError> {
+        if from_upstream {
+            let mut reader = self.open_artifact(&spec.input.auth, uri)?;
+            let mut buf = Vec::new();
+            std::io::Read::read_to_end(&mut reader, &mut buf)
+                .map_err(|e| EngineError::Query(format!("html: read {uri}: {e}")))?;
+            return Ok(String::from_utf8_lossy(&buf).into_owned());
+        }
+        let lower = uri.to_ascii_lowercase();
+        let html = if lower.starts_with("http://") || lower.starts_with("https://") {
+            let agent = match &spec.transport {
+                Some(t) => crate::tls::http_agent_with(t),
+                None => crate::tls::http_agent(),
+            };
+            let mut req = agent.get(uri);
+            for (k, v) in &spec.headers {
+                req = req.set(k, v);
+            }
+            match req.call() {
+                Ok(r) => r
+                    .into_string()
+                    .map_err(|e| EngineError::Query(format!("html: read {}: {}", uri, e)))?,
+                Err(ureq::Error::Status(code, r)) => {
+                    let body = r.into_string().unwrap_or_default();
+                    return Err(EngineError::Query(format!(
+                        "html: HTTP {} from {}: {}",
+                        code,
+                        uri,
+                        body.chars().take(300).collect::<String>()
+                    )));
+                }
+                Err(e) => {
+                    return Err(EngineError::Query(format!(
+                        "html: HTTP transport to {}: {}",
+                        uri, e
+                    )))
+                }
+            }
+        } else {
+            // Lossy rather than strict: plenty of real pages are still served
+            // as latin-1, and a replacement character in one cell beats
+            // refusing to read the document at all.
+            let bytes = std::fs::read(uri)
+                .map_err(|e| EngineError::Query(format!("html: read {}: {}", uri, e)))?;
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+        Ok(html)
+    }
+
     /// src.html: rows out of an HTML page, by CSS selector (#255).
     ///
     /// HTML is not XML. Real pages carry unclosed tags and unquoted attributes
@@ -8132,43 +8192,16 @@ impl DuckdbEngine {
         spec: &HtmlSourceSpec,
     ) -> Result<String, EngineError> {
         self.check_cancelled()?;
-        let lower = spec.path.to_ascii_lowercase();
-        let html = if lower.starts_with("http://") || lower.starts_with("https://") {
-            let agent = match &spec.transport {
-                Some(t) => crate::tls::http_agent_with(t),
-                None => crate::tls::http_agent(),
-            };
-            let mut req = agent.get(&spec.path);
-            for (k, v) in &spec.headers {
-                req = req.set(k, v);
-            }
-            match req.call() {
-                Ok(r) => r
-                    .into_string()
-                    .map_err(|e| EngineError::Query(format!("html: read {}: {}", spec.path, e)))?,
-                Err(ureq::Error::Status(code, r)) => {
-                    let body = r.into_string().unwrap_or_default();
-                    return Err(EngineError::Query(format!(
-                        "html: HTTP {} from {}: {}",
-                        code,
-                        spec.path,
-                        body.chars().take(300).collect::<String>()
-                    )));
-                }
-                Err(e) => {
-                    return Err(EngineError::Query(format!(
-                        "html: HTTP transport to {}: {}",
-                        spec.path, e
-                    )))
-                }
-            }
+        // #282: the pages are whatever an upstream artifact relation names,
+        // or the configured path when nothing is wired in.
+        let from_upstream = spec.input.from_view.is_some();
+        let docs: Vec<(String, Option<String>, JsonValue)> = if from_upstream {
+            self.resolve_artifact_inputs(db, "", &spec.input)?
+                .into_iter()
+                .map(|a| (a.uri, a.sha256, a.row))
+                .collect()
         } else {
-            // Lossy rather than strict: plenty of real pages are still served
-            // as latin-1, and a replacement character in one cell beats
-            // refusing to read the document at all.
-            let bytes = std::fs::read(&spec.path)
-                .map_err(|e| EngineError::Query(format!("html: read {}: {}", spec.path, e)))?;
-            String::from_utf8_lossy(&bytes).into_owned()
+            vec![(spec.path.clone(), None, JsonValue::Null)]
         };
 
         let compile = |sel: &str| -> Result<dom_query::Matcher, EngineError> {
@@ -8185,8 +8218,6 @@ impl DuckdbEngine {
                 Some(compile(&c.selector)?)
             });
         }
-
-        let doc = dom_query::Document::from(html);
         let mut writer = match &spec.declared_schema {
             Some(schema) if !schema.is_empty() => {
                 JsonLinesWriter::open_with_schema(&spec.node_id, Some(schema.clone()))?
@@ -8196,83 +8227,127 @@ impl DuckdbEngine {
         let mut count: usize = 0;
         let clean = |t: String| t.split_whitespace().collect::<Vec<_>>().join(" ");
 
-        if spec.columns.is_empty() {
-            // Table mode: the row selector names a table, its header cells name
-            // the columns, and each body row is a row. This is the shape most
-            // "the data is only published as an HTML table" pages have, and
-            // making the user write a selector per column for it would be busy
-            // work.
-            let th = compile("th")?;
-            let td = compile("td")?;
-            let tr = compile("tr")?;
-            for table in doc.select_matcher(&row_matcher).iter() {
-                let headers: Vec<String> = table
-                    .select_matcher(&th)
-                    .iter()
-                    .map(|h| clean(h.text().to_string()))
-                    .collect();
-                for (ri, row) in table.select_matcher(&tr).iter().enumerate() {
-                    self.check_cancelled()?;
-                    let cells: Vec<String> = row
-                        .select_matcher(&td)
+        // The business keys that say what a page IS live on the artifact row
+        // and are lost the moment extracted rows come out instead. Nothing is
+        // added on the single-document route, so that shape is unchanged.
+        let decorate = |obj: &mut serde_json::Map<String, JsonValue>,
+                        uri: &str,
+                        source_sha: &Option<String>,
+                        upstream_row: &JsonValue| {
+            if !from_upstream {
+                return;
+            }
+            for key in &spec.input.carry {
+                obj.insert(
+                    key.clone(),
+                    upstream_row.get(key).cloned().unwrap_or(JsonValue::Null),
+                );
+            }
+            obj.insert("source_uri".into(), JsonValue::String(uri.to_string()));
+            obj.insert(
+                "source_sha256".into(),
+                match source_sha {
+                    // Carried, never recomputed: re-hashing would describe
+                    // whatever is at that URI now, not what was parsed.
+                    Some(h) => JsonValue::String(h.clone()),
+                    None => JsonValue::Null,
+                },
+            );
+        };
+        let mut skipped: usize = 0;
+
+        for (uri, source_sha, upstream_row) in &docs {
+            self.check_cancelled()?;
+            let html = match self.html_text(spec, uri, from_upstream) {
+                Ok(h) => h,
+                Err(e) if spec.on_error == "skip" => {
+                    eprintln!("duckle: html: skipping {uri}: {e}");
+                    skipped += 1;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            let doc = dom_query::Document::from(html);
+            if spec.columns.is_empty() {
+                // Table mode: the row selector names a table, its header cells name
+                // the columns, and each body row is a row. This is the shape most
+                // "the data is only published as an HTML table" pages have, and
+                // making the user write a selector per column for it would be busy
+                // work.
+                let th = compile("th")?;
+                let td = compile("td")?;
+                let tr = compile("tr")?;
+                for table in doc.select_matcher(&row_matcher).iter() {
+                    let headers: Vec<String> = table
+                        .select_matcher(&th)
                         .iter()
-                        .map(|c| clean(c.text().to_string()))
+                        .map(|h| clean(h.text().to_string()))
                         .collect();
-                    // The header row itself has no td cells; skip it rather than
-                    // emitting a row of nulls.
-                    if cells.is_empty() {
-                        continue;
+                    for (ri, row) in table.select_matcher(&tr).iter().enumerate() {
+                        self.check_cancelled()?;
+                        let cells: Vec<String> = row
+                            .select_matcher(&td)
+                            .iter()
+                            .map(|c| clean(c.text().to_string()))
+                            .collect();
+                        // The header row itself has no td cells; skip it rather than
+                        // emitting a row of nulls.
+                        if cells.is_empty() {
+                            continue;
+                        }
+                        let mut obj = serde_json::Map::new();
+                        for (i, cell) in cells.iter().enumerate() {
+                            let name = headers
+                                .get(i)
+                                .filter(|h| !h.is_empty())
+                                .cloned()
+                                .unwrap_or_else(|| format!("column_{}", i + 1));
+                            obj.insert(name, JsonValue::String(cell.clone()));
+                        }
+                        let _ = ri;
+                        decorate(&mut obj, uri, source_sha, upstream_row);
+                        writer.write_row(&JsonValue::Object(obj))?;
+                        count += 1;
                     }
+                }
+            } else {
+                for row in doc.select_matcher(&row_matcher).iter() {
+                    self.check_cancelled()?;
                     let mut obj = serde_json::Map::new();
-                    for (i, cell) in cells.iter().enumerate() {
-                        let name = headers
-                            .get(i)
-                            .filter(|h| !h.is_empty())
-                            .cloned()
-                            .unwrap_or_else(|| format!("column_{}", i + 1));
-                        obj.insert(name, JsonValue::String(cell.clone()));
+                    for (col, matcher) in spec.columns.iter().zip(col_matchers.iter()) {
+                        // An empty selector means the row element itself, which is
+                        // how you read an attribute off the matched element.
+                        let value = match matcher {
+                            None => match &col.attr {
+                                Some(a) => row.attr(a).map(|v| v.to_string()),
+                                None => Some(row.text().to_string()),
+                            },
+                            Some(m) => {
+                                let found = row.select_matcher(m);
+                                if found.is_empty() {
+                                    None
+                                } else {
+                                    match &col.attr {
+                                        Some(a) => found.attr(a).map(|v| v.to_string()),
+                                        None => Some(found.text().to_string()),
+                                    }
+                                }
+                            }
+                        };
+                        // A column that did not match is NULL, not an empty string:
+                        // a missing price and a blank price are different facts.
+                        obj.insert(
+                            col.name.clone(),
+                            match value {
+                                Some(v) => JsonValue::String(clean(v)),
+                                None => JsonValue::Null,
+                            },
+                        );
                     }
-                    let _ = ri;
+                    decorate(&mut obj, uri, source_sha, upstream_row);
                     writer.write_row(&JsonValue::Object(obj))?;
                     count += 1;
                 }
-            }
-        } else {
-            for row in doc.select_matcher(&row_matcher).iter() {
-                self.check_cancelled()?;
-                let mut obj = serde_json::Map::new();
-                for (col, matcher) in spec.columns.iter().zip(col_matchers.iter()) {
-                    // An empty selector means the row element itself, which is
-                    // how you read an attribute off the matched element.
-                    let value = match matcher {
-                        None => match &col.attr {
-                            Some(a) => row.attr(a).map(|v| v.to_string()),
-                            None => Some(row.text().to_string()),
-                        },
-                        Some(m) => {
-                            let found = row.select_matcher(m);
-                            if found.is_empty() {
-                                None
-                            } else {
-                                match &col.attr {
-                                    Some(a) => found.attr(a).map(|v| v.to_string()),
-                                    None => Some(found.text().to_string()),
-                                }
-                            }
-                        }
-                    };
-                    // A column that did not match is NULL, not an empty string:
-                    // a missing price and a blank price are different facts.
-                    obj.insert(
-                        col.name.clone(),
-                        match value {
-                            Some(v) => JsonValue::String(clean(v)),
-                            None => JsonValue::Null,
-                        },
-                    );
-                }
-                writer.write_row(&JsonValue::Object(obj))?;
-                count += 1;
             }
         }
 
@@ -8304,8 +8379,16 @@ impl DuckdbEngine {
             _ => writer.finalize_into_table(&self.bin, db, &spec.node_id)?,
         }
         Ok(format!(
-            "html: materialized {} rows into {}",
-            count, spec.node_id
+            "html: materialized {} rows into {}{}",
+            count,
+            spec.node_id,
+            if skipped > 0 {
+                // Named, not silent: a corpus that quietly lost pages is the
+                // failure this contract exists to make visible.
+                format!(" ({} page(s) skipped)", skipped)
+            } else {
+                String::new()
+            }
         ))
     }
 
