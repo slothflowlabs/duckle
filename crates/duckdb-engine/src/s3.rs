@@ -586,7 +586,7 @@ impl S3Config {
                 // The parts could not be cleaned up either. Name the upload id,
                 // because it is the only handle anyone has to remove them.
                 Err(abort) => EngineError::Query(format!(
-                    "{e}. The parts already uploaded could NOT be cleaned up ({abort}); they                      will be billed until upload id {upload_id} is aborted or the bucket's                      lifecycle rule removes it."
+                    "{e}. The parts already uploaded could NOT be cleaned up ({abort}); they will be billed until upload id {upload_id} is aborted or the bucket's lifecycle rule removes it."
                 )),
             }),
         }
@@ -787,7 +787,7 @@ fn ok_2xx(
         .map(|m| format!(": {m}"))
         .unwrap_or_default();
     Err(EngineError::Query(format!(
-        "s3 {op} {bucket}/{key}: HTTP {code}{hint}{detail}. A redirect is not followed here          on purpose - the signature is bound to the host it was made for, so following one          would turn a clear message into a 403."
+        "s3 {op} {bucket}/{key}: HTTP {code}{hint}{detail}. A redirect is not followed here on purpose - the signature is bound to the host it was made for, so following one would turn a clear message into a 403."
     )))
 }
 

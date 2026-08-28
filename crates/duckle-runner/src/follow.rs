@@ -366,6 +366,7 @@ mod tests {
         let mut nodes = std::collections::BTreeMap::new();
         let mk = |rows: Option<u64>, kind: &str| NodeRunStatus {
             status: "ok".into(),
+                    note: None,
             kind: Some(kind.to_string()),
             rows,
             duration_ms: None,

@@ -1270,6 +1270,7 @@ impl DuckdbEngine {
                     NodeRunStatus {
                         status: "ok".into(),
                         kind: Some("sink".into()),
+                        note: None,
                         rows,
                         duration_ms: Some(0),
                         error: None,
@@ -1618,6 +1619,7 @@ impl DuckdbEngine {
                                         NodeRunStatus {
                                             status: st.status.clone(),
                                             kind: st.kind.clone(),
+                                            note: None,
                                             rows: st.rows,
                                             duration_ms: st.duration_ms,
                                             error: st.error.clone(),
@@ -1736,6 +1738,9 @@ impl DuckdbEngine {
                     }
                     Some(RuntimeSpec::ArtifactCopy(spec)) => {
                         self.run_artifact_copy(&db_path, &secret_prefix, spec, &mut artifacts)
+                    }
+                    Some(RuntimeSpec::DuckLakeMaintain(spec)) => {
+                        self.run_ducklake_maintain(&db_path, spec)
                     }
                     Some(RuntimeSpec::SpoolSource(spec)) => {
                         self.run_spool_source(&db_path, spec, pipeline_name, &mut pending_writes)
@@ -1971,6 +1976,15 @@ impl DuckdbEngine {
             // nothing to do. The marker is stripped here so the message shown
             // is the plain one, and only the node's status carries the fact.
             let stage_unchanged = matches!(&result, Ok(m) if m.starts_with(UNCHANGED_MARKER));
+            // The sentence the connector returned, with the internal marker
+            // taken off. Pure-SQL stages return an empty string and get None.
+            let stage_note = match &result {
+                Ok(m) => {
+                    let (_, text) = split_unchanged(m);
+                    Some(text).filter(|t| !t.trim().is_empty())
+                }
+                Err(_) => None,
+            };
             match result {
                 Ok(_) => {
                     // snk.excel post-write: DuckDB's xlsx writer drops
@@ -2042,6 +2056,7 @@ impl DuckdbEngine {
                         NodeRunStatus {
                             status: if stage_unchanged { "unchanged" } else { "ok" }.into(),
                             kind: Some(kind_label.into()),
+                            note: stage_note.clone(),
                             rows: rows_opt,
                             duration_ms: Some(elapsed_ms),
                             error: None,
@@ -2107,6 +2122,7 @@ impl DuckdbEngine {
                         NodeRunStatus {
                             status: "error".into(),
                             kind: Some(kind_label.into()),
+                            note: None,
                             rows: None,
                             duration_ms: Some(elapsed_ms),
                             error: Some(msg.clone()),
@@ -2720,6 +2736,7 @@ impl DuckdbEngine {
                     NodeRunStatus {
                         status: "error".into(),
                         kind: Some(kind.into()),
+                        note: None,
                         rows: None,
                         duration_ms: Some(elapsed),
                         error: Some(msg.clone()),
@@ -3139,6 +3156,7 @@ fn drain_batched_markers(
             NodeRunStatus {
                 status: "ok".into(),
                 kind: Some(kind.into()),
+                note: None,
                 rows,
                 duration_ms: Some(elapsed),
                 error: None,
@@ -5591,6 +5609,16 @@ pub struct NodeRunStatus {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// What the node reported on SUCCESS, when it had something to say.
+    ///
+    /// Driver connectors already return a sentence describing what they did -
+    /// "compact: files 4 -> 1", "changed: 2 of 40 entries changed" - and it was
+    /// being thrown away for every successful stage, so the only way to see it
+    /// was to read stderr. A maintenance run that has to record what it did
+    /// (#279) needs somewhere for that to live, and so does every other node
+    /// that was already producing one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rows: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]

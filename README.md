@@ -629,6 +629,41 @@ What was processed advances only when the whole run succeeds, and only for
 rows that were actually emitted - so a failure downstream re-offers the same
 files, and a run capped by `maxEntries` does not mark the remainder as done.
 
+### Maintain a DuckLake through the same pipelines (`src.ducklake.maintain`)
+
+A lakehouse that is written to continuously eventually needs maintaining as
+well as filling: frequent incremental writes leave many small files, snapshots
+accumulate, and files stay referenced longer than they need to be. Those
+operations used to live outside Duckle.
+
+Each operation is **one DuckLake function**, and its options are that
+function's options - compact, rewrite files heavy with deletes, expire
+snapshots, clean up files an expired snapshot released, delete orphaned files,
+flush inlined data, or read per-table storage statistics. Nothing here invents
+storage semantics, so what it does follows the installed DuckLake rather than
+anything Duckle decided.
+
+The result comes back as **ordinary rows**, which is what lets a quality check
+or an alert read a compaction the way it reads anything else, and the node
+reports what changed: `ducklake compact: 1 row(s) - files 4 -> 1, 1.1 KB ->
+513 B`.
+
+Three things about deleting, since that is where this gets dangerous:
+
+- The three destructive operations support **dry run**, which lists exactly
+  what would go and changes nothing.
+- Ticking dry run on an operation DuckLake cannot dry-run is **refused, not
+  ignored** - an ignored dry run deletes while the operator believes nothing
+  will happen.
+- **Snapshot expiry does nothing without an explicit retention boundary.**
+  That is DuckLake's own default and it is surfaced rather than replaced, so a
+  scheduled job that forgot its boundary does nothing instead of deleting
+  history.
+
+Two maintenance runs against one catalog serialise on a lock rather than
+racing, so a weekly compaction overlapping a monthly cleanup waits instead of
+failing a two-hour job at its commit.
+
 ### Land the bytes somewhere durable (`xf.artifact.copy`)
 
 An artifact is a reference - a uri, a media type, a size, a hash - so a

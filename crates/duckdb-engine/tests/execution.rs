@@ -17158,3 +17158,229 @@ fn artifact_copy_cannot_escape_the_destination_prefix() {
         "it should land INSIDE the prefix, with the climbing segments dropped"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #279 - DuckLake maintenance. A thin surface over DuckLake's own operations,
+// so these tests check that the right function runs with the right options and
+// that its result reaches the pipeline as ordinary rows - not that DuckLake's
+// storage semantics are what we think they are.
+// ---------------------------------------------------------------------------
+
+/// Build a lake with several small files, so there is something to compact.
+#[cfg(test)]
+fn lake_with_small_files(tmp: &Path, name: &str, inserts: usize) -> String {
+    let catalog = out_path(tmp, name);
+    let data = out_path(tmp, &format!("{name}-data"));
+    let mut sql = format!(
+        "INSTALL ducklake; LOAD ducklake; ATTACH 'ducklake:{}' AS lake (DATA_PATH '{}/');\n\
+         CALL ducklake_set_option('lake', 'data_inlining_row_limit', '0');\n\
+         CREATE TABLE lake.t(id INT, v VARCHAR);\n",
+        catalog, data
+    );
+    for i in 0..inserts {
+        // One statement per file: DuckLake writes a file per insert once
+        // inlining is off, which is exactly the many-small-files shape
+        // compaction exists for.
+        sql.push_str(&format!("INSERT INTO lake.t VALUES ({i}, 'v{i}');\n"));
+    }
+    duckdb_exec(":memory:", &sql);
+    catalog
+}
+
+#[cfg(test)]
+fn maintain_node(catalog: &str, props: serde_json::Value) -> serde_json::Value {
+    let mut p = json!({ "path": catalog });
+    if let (Some(o), Some(extra)) = (p.as_object_mut(), props.as_object()) {
+        for (k, v) in extra {
+            o.insert(k.clone(), v.clone());
+        }
+    }
+    p
+}
+
+/// Compaction is the headline operation: many small files become fewer large
+/// ones, and the node reports what DuckLake actually did rather than a guess.
+#[test]
+fn ducklake_maintain_compacts_small_files_and_reports_what_it_did() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let catalog = lake_with_small_files(tmp.path(), "compact.duckdb", 4);
+    let out = out_path(tmp.path(), "compact.csv");
+
+    let files_now = |c: &str| -> i64 {
+        let rows = duckdb_json(&format!(
+            "INSTALL ducklake; LOAD ducklake; ATTACH 'ducklake:{}' AS l (READ_ONLY); \
+             SELECT COALESCE(SUM(file_count), 0) AS n FROM ducklake_table_info('l')",
+            c
+        ));
+        // DuckDB's -json emits a SUM / COUNT as a STRING (they are HUGEINT),
+        // so reading it only as a number quietly yields -1 and the assertion
+        // fails for a reason that has nothing to do with the lake.
+        rows.first()
+            .and_then(|r| r.get("n"))
+            .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+            .unwrap_or(-1)
+    };
+    assert_eq!(files_now(&catalog), 4, "four inserts, four files");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("m", "src.ducklake.maintain", maintain_node(&catalog, json!({ "operation": "compact" }))),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "m", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(files_now(&catalog), 1, "the small files were not compacted");
+
+    // DuckLake's own result rows reach the pipeline, so a quality gate or an
+    // alert can read a compaction like anything else.
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(body.contains("files_processed"), "the report's columns: {body}");
+    assert!(body.contains("4"), "four files went in: {body}");
+
+    // And the node says what changed, for the run log.
+    let msg = r.nodes.get("m").and_then(|n| n.note.clone()).unwrap_or_default();
+    assert!(msg.contains("files 4 -> 1"), "the before/after belongs in the message: {msg}");
+}
+
+/// Expiring snapshots is destructive, so the dry run has to be real: it must
+/// list what WOULD go and change nothing.
+#[test]
+fn ducklake_maintain_dry_run_lists_snapshots_without_removing_them() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let catalog = lake_with_small_files(tmp.path(), "expire.duckdb", 3);
+    let out = out_path(tmp.path(), "expire.csv");
+
+    let snaps = |c: &str| -> i64 {
+        let rows = duckdb_json(&format!(
+            "INSTALL ducklake; LOAD ducklake; ATTACH 'ducklake:{}' AS l (READ_ONLY); \
+             SELECT COUNT(*) AS n FROM ducklake_snapshots('l')",
+            c
+        ));
+        // DuckDB's -json emits a SUM / COUNT as a STRING (they are HUGEINT),
+        // so reading it only as a number quietly yields -1 and the assertion
+        // fails for a reason that has nothing to do with the lake.
+        rows.first()
+            .and_then(|r| r.get("n"))
+            .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+            .unwrap_or(-1)
+    };
+    let before = snaps(&catalog);
+    assert!(before > 3, "there should be snapshots to expire: {before}");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("m", "src.ducklake.maintain", maintain_node(&catalog, json!({
+                "operation": "expireSnapshots", "dryRun": true, "olderThan": "2099-01-01"
+            }))),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "m", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(snaps(&catalog), before, "a DRY run removed snapshots");
+
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    let listed =
+        body.replace("\r\n", "\n").lines().skip(1).filter(|l| !l.trim().is_empty()).count();
+    assert!(listed > 0, "a dry run has to say what it WOULD remove: {body}");
+    let msg = r.nodes.get("m").and_then(|n| n.note.clone()).unwrap_or_default();
+    assert!(msg.contains("dry run"), "the message must not read like a real deletion: {msg}");
+}
+
+/// Without a retention boundary DuckLake expires nothing. That is the right
+/// behaviour and it is surfaced rather than replaced: a scheduled job that
+/// forgot its boundary does nothing instead of deleting history.
+#[test]
+fn ducklake_maintain_expires_nothing_without_a_retention_boundary() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let catalog = lake_with_small_files(tmp.path(), "noboundary.duckdb", 3);
+    let out = out_path(tmp.path(), "nb.csv");
+
+    let snaps = |c: &str| -> i64 {
+        let rows = duckdb_json(&format!(
+            "INSTALL ducklake; LOAD ducklake; ATTACH 'ducklake:{}' AS l (READ_ONLY); \
+             SELECT COUNT(*) AS n FROM ducklake_snapshots('l')",
+            c
+        ));
+        // DuckDB's -json emits a SUM / COUNT as a STRING (they are HUGEINT),
+        // so reading it only as a number quietly yields -1 and the assertion
+        // fails for a reason that has nothing to do with the lake.
+        rows.first()
+            .and_then(|r| r.get("n"))
+            .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+            .unwrap_or(-1)
+    };
+    let before = snaps(&catalog);
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("m", "src.ducklake.maintain", maintain_node(&catalog, json!({
+                "operation": "expireSnapshots"
+            }))),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "m", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(snaps(&catalog), before, "history was deleted with no boundary set");
+}
+
+/// Ticking "dry run" on an operation DuckLake cannot dry-run must be refused,
+/// not ignored. Ignoring it would delete files while the operator believed
+/// nothing would happen, which is the worst possible outcome here.
+#[test]
+fn ducklake_maintain_refuses_a_dry_run_it_cannot_honour() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let catalog = out_path(tmp.path(), "x.duckdb");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("m", "src.ducklake.maintain", maintain_node(&catalog, json!({
+                "operation": "compact", "dryRun": true
+            }))),
+            node("k", "snk.csv", json!({ "path": out_path(tmp.path(), "x.csv") })),
+        ]),
+        json!([main_edge("e1", "m", "k")]),
+    ));
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(
+        err.contains("dry run") && err.contains("expireSnapshots"),
+        "the message must say which operations DO have one: {err}"
+    );
+}
+
+/// Statistics come back as an ordinary relation, which is what makes a quality
+/// check or an alert on file counts possible at all.
+#[test]
+fn ducklake_maintain_stats_are_an_ordinary_relation() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let catalog = lake_with_small_files(tmp.path(), "stats.duckdb", 2);
+    let out = out_path(tmp.path(), "stats.csv");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("m", "src.ducklake.maintain", maintain_node(&catalog, json!({ "operation": "stats" }))),
+            node("f", "xf.filter", json!({ "condition": "file_count > 0" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "m", "f"), main_edge("e2", "f", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "stats must be filterable like any other rows: {:?}", r.error);
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(body.contains("table_name") && body.contains("file_size_bytes"), "{body}");
+    assert!(body.contains("t"), "the table should be in there: {body}");
+}

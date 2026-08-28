@@ -3018,7 +3018,7 @@ impl DuckdbEngine {
             // DECIMAL(4,2), and using the total would silently truncate it.
             let bare = format!("replace({}, '-', '')", c);
             aggs.push(format!(
-                "max(CASE WHEN {c} IS NULL THEN 0                    WHEN strpos({c}, '.') > 0 OR strpos(upper({c}), 'E') > 0 THEN 2                    ELSE 1 END), max(CASE WHEN strpos({b}, '.') > 0 THEN strpos({b}, '.') - 1                    ELSE length({b}) END), max(CASE WHEN strpos({c}, '.') > 0                    THEN length({c}) - strpos({c}, '.') ELSE 0 END), max(CASE WHEN strpos(upper({c}), 'E') > 0 THEN 1 ELSE 0 END)",
+                "max(CASE WHEN {c} IS NULL THEN 0 WHEN strpos({c}, '.') > 0 OR strpos(upper({c}), 'E') > 0 THEN 2 ELSE 1 END), max(CASE WHEN strpos({b}, '.') > 0 THEN strpos({b}, '.') - 1 ELSE length({b}) END), max(CASE WHEN strpos({c}, '.') > 0 THEN length({c}) - strpos({c}, '.') ELSE 0 END), max(CASE WHEN strpos(upper({c}), 'E') > 0 THEN 1 ELSE 0 END)",
                 c = c,
                 b = bare
             ));
@@ -6077,6 +6077,105 @@ impl DuckdbEngine {
         // The guard removes the file when the reader is dropped, whether the
         // copy succeeded or not.
         Ok(Box::new(SpooledArtifact { path, file }))
+    }
+
+    /// src.ducklake.maintain: run one DuckLake maintenance operation and emit
+    /// what it did.
+    ///
+    /// Deliberately thin. Each operation is one DuckLake function, its options
+    /// are that function's options, and its output relation is that function's
+    /// own result rows - so a compaction can be alerted on, quality-gated or
+    /// joined exactly like anything else, and nothing here has to be kept in
+    /// step with DuckLake's storage semantics as they change.
+    pub(crate) fn run_ducklake_maintain(
+        &self,
+        db: &Path,
+        spec: &plan::DuckLakeMaintainSpec,
+    ) -> Result<String, EngineError> {
+        // Two maintenance runs against one catalog must not race. DuckLake
+        // itself would refuse the second commit, but a conflict error at the
+        // end of a two-hour compaction is a worse answer than waiting, and a
+        // scheduled weekly compact overlapping a monthly cleanup is exactly the
+        // shape #279 asks to be serialised rather than raced.
+        let _lock = std::env::var("DUCKLE_WORKSPACE")
+            .ok()
+            .filter(|w| !w.is_empty())
+            .map(|w| {
+                crate::runlock::lock_store(
+                    std::path::Path::new(&w),
+                    &format!("ducklake-maintain-{}", lock_key(&spec.catalog_path)),
+                )
+            })
+            .transpose()
+            .map_err(EngineError::Config)?;
+
+        let before = self.ducklake_totals(db, spec).ok();
+        let call = maintenance_call(spec)?;
+        let sql = format!(
+            "{}CREATE OR REPLACE TABLE {} AS SELECT * FROM {};",
+            spec.attach,
+            plan::quote_ident(&spec.node_id),
+            call
+        );
+        self.run(Some(db), &sql, false)?;
+
+        let rows = self
+            .run_rows(
+                Some(db),
+                &format!("SELECT COUNT(*) AS n FROM {}", plan::quote_ident(&spec.node_id)),
+            )
+            .ok()
+            .and_then(|r| r.first().and_then(|v| v.get("n")).and_then(|v| v.as_i64()))
+            .unwrap_or(0);
+        let after = self.ducklake_totals(db, spec).ok();
+
+        Ok(format!(
+            "ducklake {}{}: {} row(s){}",
+            spec.operation,
+            if spec.dry_run { " (dry run, nothing was deleted)" } else { "" },
+            rows,
+            match (before, after) {
+                // What the operation actually changed, which is the part an
+                // operator is reading the log for.
+                (Some(b), Some(a)) if b != a => format!(
+                    " - files {} -> {}, {} -> {}",
+                    b.0,
+                    a.0,
+                    human_bytes(b.1),
+                    human_bytes(a.1)
+                ),
+                _ => String::new(),
+            }
+        ))
+    }
+
+    /// Total files and bytes across the catalog, for the before/after line.
+    /// Best-effort: a failure here must not fail the maintenance itself.
+    fn ducklake_totals(
+        &self,
+        db: &Path,
+        spec: &plan::DuckLakeMaintainSpec,
+    ) -> Result<(u64, u64), EngineError> {
+        let sql = format!(
+            "{}SELECT COALESCE(SUM(file_count), 0) AS f, COALESCE(SUM(file_size_bytes), 0) AS b \
+             FROM ducklake_table_info({});",
+            spec.attach,
+            sql_string(catalog_alias(&spec.attach).as_deref().unwrap_or("duckle_dst"))
+        );
+        let rows = self.run_rows(Some(db), &sql)?;
+        let first = rows.first().ok_or_else(|| {
+            EngineError::Query("ducklake: catalog reported no table info".into())
+        })?;
+        // A SUM comes back from DuckDB's JSON output as a STRING, because it
+        // is a HUGEINT. Reading it only as a number yields 0 for both sides,
+        // they compare equal, and the before/after line silently disappears.
+        let num = |k: &str| -> u64 {
+            first
+                .get(k)
+                .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0)
+        };
+        Ok((num("f"), num("b")))
     }
 
     /// Every entry in a remote directory.
@@ -18819,4 +18918,133 @@ impl Drop for SpooledArtifact {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
     }
+}
+
+/// A stable, filesystem-safe key for one catalog, so two runs against the same
+/// lake take the same lock and two runs against different lakes do not.
+fn lock_key(catalog_path: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let h = Sha256::digest(catalog_path.as_bytes());
+    h.iter().take(8).map(|b| format!("{:02x}", b)).collect()
+}
+
+/// The alias the attach prelude bound the catalog to.
+fn catalog_alias(attach: &str) -> Option<String> {
+    let after = attach.rsplit_once(" AS ")?.1;
+    Some(
+        after
+            .split(|c: char| c == ' ' || c == ';' || c == '(')
+            .next()?
+            .trim()
+            .to_string(),
+    )
+}
+
+fn sql_string(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// The DuckLake call for one operation, with only the options that were set.
+///
+/// Every argument is passed by NAME. DuckLake's overloads take their options in
+/// different orders - `merge_adjacent_files` has two signatures whose second
+/// argument differs - so a positional call would bind the wrong option to the
+/// wrong meaning depending on which overload matched.
+fn maintenance_call(spec: &plan::DuckLakeMaintainSpec) -> Result<String, EngineError> {
+    let alias = catalog_alias(&spec.attach).unwrap_or_else(|| "duckle_dst".to_string());
+    let cat = sql_string(&alias);
+    let mut args: Vec<String> = vec![cat];
+
+    // A table-scoped operation takes the table as its second positional
+    // argument; a catalog-wide one must not be given one at all.
+    let table_scoped = matches!(spec.operation.as_str(), "compact" | "rewrite");
+    if table_scoped {
+        if let Some(t) = &spec.table_name {
+            args.push(sql_string(t));
+            if let Some(sc) = &spec.schema_name {
+                args.push(format!("schema => {}", sql_string(sc)));
+            }
+        } else if spec.schema_name.is_some() {
+            return Err(EngineError::Config(format!(
+                "ducklake {}: a schema without a table has nothing to scope - name the table \
+                 too, or leave both blank to maintain the whole catalog",
+                spec.operation
+            )));
+        }
+    }
+
+    let mut named: Vec<String> = Vec::new();
+    let mut push = |k: &str, v: String| named.push(format!("{k} => {v}"));
+
+    match spec.operation.as_str() {
+        "compact" => {
+            if let Some(n) = spec.min_file_size {
+                push("min_file_size", n.to_string());
+            }
+            if let Some(n) = spec.max_file_size {
+                push("max_file_size", n.to_string());
+            }
+            if let Some(n) = spec.max_compacted_files {
+                push("max_compacted_files", n.to_string());
+            }
+        }
+        "rewrite" => {
+            if let Some(t) = spec.delete_threshold {
+                push("delete_threshold", t.to_string());
+            }
+        }
+        "expireSnapshots" => {
+            if let Some(o) = &spec.older_than {
+                push("older_than", sql_string(o));
+            }
+            if let Some(v) = &spec.versions {
+                // A list literal, so several versions can be named at once.
+                let items: Vec<String> = v
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect();
+                if !items.is_empty() {
+                    push("versions", format!("[{}]", items.join(", ")));
+                }
+            }
+            push("dry_run", spec.dry_run.to_string());
+        }
+        "cleanupFiles" | "deleteOrphans" => {
+            if let Some(o) = &spec.older_than {
+                push("older_than", sql_string(o));
+            }
+            if spec.cleanup_all {
+                push("cleanup_all", "true".to_string());
+            }
+            push("dry_run", spec.dry_run.to_string());
+        }
+        "flushInlined" => {
+            if let Some(t) = &spec.table_name {
+                push("table_name", sql_string(t));
+            }
+            if let Some(sc) = &spec.schema_name {
+                push("schema_name", sql_string(sc));
+            }
+        }
+        "stats" => {}
+        other => {
+            return Err(EngineError::Config(format!(
+                "ducklake: unknown maintenance operation '{other}'"
+            )))
+        }
+    }
+    args.extend(named);
+
+    let func = match spec.operation.as_str() {
+        "compact" => "ducklake_merge_adjacent_files",
+        "rewrite" => "ducklake_rewrite_data_files",
+        "expireSnapshots" => "ducklake_expire_snapshots",
+        "cleanupFiles" => "ducklake_cleanup_old_files",
+        "deleteOrphans" => "ducklake_delete_orphaned_files",
+        "flushInlined" => "ducklake_flush_inlined_data",
+        _ => "ducklake_table_info",
+    };
+    Ok(format!("{}({})", func, args.join(", ")))
 }

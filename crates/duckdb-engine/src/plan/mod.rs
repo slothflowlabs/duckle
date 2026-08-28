@@ -321,6 +321,7 @@ pub enum RuntimeSpec {
     SpoolSource(SpoolSourceSpec),
     ChangedSource(ChangedSourceSpec),
     ArtifactCopy(ArtifactCopySpec),
+    DuckLakeMaintain(DuckLakeMaintainSpec),
     Tumble(TumbleSpec),
     Neo4jSource(Neo4jSourceSpec),
     Neo4jSink(Neo4jSinkSpec),
@@ -1651,6 +1652,7 @@ fn build_stage(
     let mut spool_source: Option<SpoolSourceSpec> = None;
     let mut changed_source: Option<ChangedSourceSpec> = None;
     let mut artifact_copy: Option<ArtifactCopySpec> = None;
+    let mut ducklake_maintain: Option<DuckLakeMaintainSpec> = None;
     let mut tumble: Option<TumbleSpec> = None;
     let mut neo4j_source: Option<Neo4jSourceSpec> = None;
     let mut neo4j_sink: Option<Neo4jSinkSpec> = None;
@@ -4721,6 +4723,80 @@ fn build_stage(
             encrypt: props.get("encrypt").and_then(|v| v.as_bool()).unwrap_or(true),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.ducklake.maintain" {
+        // #279: a thin surface over DuckLake's own maintenance functions. The
+        // options are that function's options - nothing here invents storage
+        // semantics, and an operation this build's DuckLake does not have fails
+        // with DuckDB's own message rather than a guess of ours.
+        let operation = string_prop(&props, "operation")
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "stats".to_string());
+        const OPERATIONS: &[&str] = &[
+            "compact",
+            "rewrite",
+            "expireSnapshots",
+            "cleanupFiles",
+            "deleteOrphans",
+            "flushInlined",
+            "stats",
+        ];
+        if !OPERATIONS.contains(&operation.as_str()) {
+            return Err(EngineError::Config(format!(
+                "{}: unknown operation '{}' - expected one of {}",
+                component_id,
+                operation,
+                OPERATIONS.join(", ")
+            )));
+        }
+        let dry_run = props.get("dryRun").and_then(|v| v.as_bool()).unwrap_or(false);
+        // DuckLake offers dry_run on the three destructive operations only.
+        // Accepting it elsewhere would let someone tick "dry run" on a
+        // compaction and have it rewrite their files anyway.
+        const DRY_RUNNABLE: &[&str] = &["expireSnapshots", "cleanupFiles", "deleteOrphans"];
+        if dry_run && !DRY_RUNNABLE.contains(&operation.as_str()) {
+            return Err(EngineError::Config(format!(
+                "{}: '{}' has no dry run in DuckLake, so ticking it would be ignored and the                  operation would happen anyway. Dry run is available on: {}",
+                component_id,
+                operation,
+                DRY_RUNNABLE.join(", ")
+            )));
+        }
+        let num = |key: &str| -> Option<u64> {
+            props.get(key).and_then(|v| {
+                v.as_u64()
+                    .or_else(|| v.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
+            })
+        };
+        let attach = builders::ducklake_attach(&props, false);
+        if attach.is_empty() {
+            return Err(EngineError::Config(format!(
+                "{}: path required - the DuckLake catalog to maintain",
+                component_id
+            )));
+        }
+        ducklake_maintain = Some(DuckLakeMaintainSpec {
+            node_id: node.id.clone(),
+            attach,
+            catalog_path: string_prop(&props, "path").unwrap_or_default(),
+            operation,
+            schema_name: string_prop(&props, "schemaName").filter(|s| !s.trim().is_empty()),
+            table_name: string_prop(&props, "tableName").filter(|s| !s.trim().is_empty()),
+            dry_run,
+            older_than: string_prop(&props, "olderThan").filter(|s| !s.trim().is_empty()),
+            versions: string_prop(&props, "versions").filter(|s| !s.trim().is_empty()),
+            cleanup_all: props
+                .get("cleanupAll")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            min_file_size: num("minFileSize"),
+            max_file_size: num("maxFileSize"),
+            max_compacted_files: num("maxCompactedFiles"),
+            delete_threshold: props.get("deleteThreshold").and_then(|v| {
+                v.as_f64()
+                    .or_else(|| v.as_str().and_then(|s| s.trim().parse::<f64>().ok()))
+            }),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "xf.artifact.copy" {
         // #247: land the BYTES of the artifacts named upstream somewhere durable
         // and emit a row per landed copy, so a change feed becomes a raw zone
@@ -6172,6 +6248,7 @@ fn build_stage(
         .or_else(|| spool_source.map(RuntimeSpec::SpoolSource))
         .or_else(|| changed_source.map(RuntimeSpec::ChangedSource))
         .or_else(|| artifact_copy.map(RuntimeSpec::ArtifactCopy))
+        .or_else(|| ducklake_maintain.map(RuntimeSpec::DuckLakeMaintain))
         .or_else(|| tumble.map(RuntimeSpec::Tumble))
         .or_else(|| neo4j_source.map(RuntimeSpec::Neo4jSource))
         .or_else(|| neo4j_sink.map(RuntimeSpec::Neo4jSink))

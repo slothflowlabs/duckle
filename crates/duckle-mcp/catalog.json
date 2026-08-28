@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 406,
+  "componentCount": 407,
   "components": [
     {
       "id": "src.csv",
@@ -860,6 +860,205 @@
                     "value": "false"
                   }
                 ]
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "reject",
+              "type": "reject",
+              "optional": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.ducklake.maintain",
+      "label": "DuckLake Maintenance",
+      "kind": "source",
+      "availability": "available",
+      "summary": "Run one of the maintenance operations DuckLake itself provides and emit what it did as ordinary rows. Compact small files, rewrite files heavy with deletes, expire snapshots, clean up files an expired snapshot released, delete orphaned files, flush inlined data, or read per-table storage statistics. Deliberately thin: each operation is one DuckLake function and its options are the options of that function, so nothing here invents storage semantics. The three destructive operations support DRY RUN, which lists exactly what would go and changes nothing; ticking it on an operation DuckLake cannot dry-run is REFUSED rather than ignored. Snapshot expiry does nothing without an explicit retention boundary. Two maintenance runs against one catalog serialise on a lock rather than racing.",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "reject",
+            "type": "reject",
+            "optional": true
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.ducklake.maintain",
+        "kind": "source",
+        "label": "DuckLake Maintenance",
+        "description": "Run one of the maintenance operations DuckLake itself provides and emit what it did as ordinary rows. Compact small files, rewrite files heavy with deletes, expire snapshots, clean up files an expired snapshot released, delete orphaned files, flush inlined data, or read per-table storage statistics. Deliberately thin: each operation is one DuckLake function and its options are the options of that function, so nothing here invents storage semantics. The three destructive operations support DRY RUN, which lists exactly what would go and changes nothing; ticking it on an operation DuckLake cannot dry-run is REFUSED rather than ignored. Snapshot expiry does nothing without an explicit retention boundary. Two maintenance runs against one catalog serialise on a lock rather than racing.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Catalog",
+            "fields": [
+              {
+                "key": "path",
+                "label": "Catalog path",
+                "kind": "text",
+                "required": true,
+                "placeholder": "/var/lakes/catalog.ducklake",
+                "description": "The DuckLake catalog to maintain. A .ducklake file, or a postgres: / mysql: / sqlite: DSN."
+              },
+              {
+                "key": "dataPath",
+                "label": "Data path",
+                "kind": "text",
+                "placeholder": "s3://bucket/lake/ or data_files/",
+                "description": "Required when the catalog is a DSN and the lake does not exist yet; an existing lake reads its own stored path."
+              },
+              {
+                "key": "metadataSchema",
+                "label": "Catalog schema",
+                "kind": "text",
+                "placeholder": "ducklake_catalog"
+              },
+              {
+                "key": "attachOptions",
+                "label": "Catalog parameters",
+                "kind": "key-value",
+                "description": "Anything else the catalog takes, passed to ATTACH as written - META_SECRET and the other META_* options."
+              }
+            ]
+          },
+          {
+            "label": "Operation",
+            "fields": [
+              {
+                "key": "operation",
+                "label": "Operation",
+                "kind": "select",
+                "defaultValue": "stats",
+                "options": [
+                  {
+                    "label": "Statistics (read-only)",
+                    "value": "stats"
+                  },
+                  {
+                    "label": "Compact small files",
+                    "value": "compact"
+                  },
+                  {
+                    "label": "Rewrite files heavy with deletes",
+                    "value": "rewrite"
+                  },
+                  {
+                    "label": "Expire snapshots",
+                    "value": "expireSnapshots"
+                  },
+                  {
+                    "label": "Clean up released files",
+                    "value": "cleanupFiles"
+                  },
+                  {
+                    "label": "Delete orphaned files",
+                    "value": "deleteOrphans"
+                  },
+                  {
+                    "label": "Flush inlined data",
+                    "value": "flushInlined"
+                  }
+                ],
+                "description": "Each one is a single DuckLake function, so what it does follows the installed DuckLake rather than anything Duckle decides. Its result rows become the output of this node, which is what lets a quality check or an alert read a compaction like any other relation."
+              },
+              {
+                "key": "dryRun",
+                "label": "Dry run",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Lists exactly what WOULD be removed and changes nothing. Available on expire snapshots, clean up released files and delete orphaned files - the three that delete. Ticking it on any other operation is refused rather than ignored, because an ignored dry run deletes while the operator believes nothing will happen."
+              },
+              {
+                "key": "schemaName",
+                "label": "Schema",
+                "kind": "text",
+                "placeholder": "main",
+                "description": "Scope compaction, rewrite or flush to one schema. Blank means the whole catalog."
+              },
+              {
+                "key": "tableName",
+                "label": "Table",
+                "kind": "text",
+                "placeholder": "orders",
+                "description": "Scope compaction, rewrite or flush to one table. Blank means every table."
+              }
+            ]
+          },
+          {
+            "label": "Retention",
+            "fields": [
+              {
+                "key": "olderThan",
+                "label": "Older than",
+                "kind": "text",
+                "placeholder": "2026-01-01 or now() - INTERVAL 30 DAY",
+                "description": "The retention boundary. DuckLake expires NOTHING without one, so a scheduled job that forgot its boundary does nothing rather than deleting history - that default is surfaced here, not replaced."
+              },
+              {
+                "key": "versions",
+                "label": "Snapshot versions",
+                "kind": "text",
+                "placeholder": "3, 4, 5",
+                "description": "Expire these snapshot ids specifically, instead of everything older than a date."
+              },
+              {
+                "key": "cleanupAll",
+                "label": "Include files still inside the retention window",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "For the two cleanup operations. Off is the safe reading of what is no longer referenced."
+              }
+            ]
+          },
+          {
+            "label": "Compaction tuning",
+            "fields": [
+              {
+                "key": "minFileSize",
+                "label": "Min file size (bytes)",
+                "kind": "integer",
+                "description": "Files smaller than this are candidates for merging."
+              },
+              {
+                "key": "maxFileSize",
+                "label": "Max file size (bytes)",
+                "kind": "integer",
+                "description": "A merged file stops growing at this size."
+              },
+              {
+                "key": "maxCompactedFiles",
+                "label": "Max files per run",
+                "kind": "integer",
+                "description": "Bounds how much work one scheduled compaction does."
+              },
+              {
+                "key": "deleteThreshold",
+                "label": "Delete threshold",
+                "kind": "text",
+                "placeholder": "0.5",
+                "description": "For rewrite: the fraction of a file that must be deleted rows before it is worth rewriting."
               }
             ]
           }

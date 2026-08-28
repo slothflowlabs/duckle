@@ -2205,6 +2205,43 @@ pub struct ChangedSourceSpec {
     pub s3: Option<crate::s3::S3Config>,
 }
 
+/// `src.ducklake.maintain`: run one of DuckLake's own maintenance operations
+/// and emit what it did as an ordinary relation.
+///
+/// #279 asks for a THIN surface over what the installed DuckLake supports,
+/// rather than a lakehouse optimiser of our own. So every operation here is one
+/// DuckLake function, its options are that function's options, and its output
+/// is that function's own result rows - which means a quality gate or an alert
+/// can read a compaction the same way it reads anything else.
+#[derive(Debug, Clone)]
+pub struct DuckLakeMaintainSpec {
+    pub node_id: String,
+    /// The ATTACH prelude for the catalog, built the same way every other
+    /// DuckLake node builds it, so one saved lake is described once.
+    pub attach: String,
+    /// For the message and the lock: which catalog this is.
+    pub catalog_path: String,
+    /// compact | rewrite | expireSnapshots | cleanupFiles | deleteOrphans |
+    /// flushInlined | stats
+    pub operation: String,
+    pub schema_name: Option<String>,
+    pub table_name: Option<String>,
+    /// Only meaningful where DuckLake offers it: expireSnapshots,
+    /// cleanupFiles, deleteOrphans. Elsewhere it is refused rather than
+    /// ignored, because a dry run that silently deleted things is the worst
+    /// possible outcome for this component.
+    pub dry_run: bool,
+    /// The retention boundary. DuckLake expires NOTHING without one, which is
+    /// the right default and is surfaced rather than replaced.
+    pub older_than: Option<String>,
+    pub versions: Option<String>,
+    pub cleanup_all: bool,
+    pub min_file_size: Option<u64>,
+    pub max_file_size: Option<u64>,
+    pub max_compacted_files: Option<u64>,
+    pub delete_threshold: Option<f64>,
+}
+
 /// `xf.artifact.copy`: take artifact rows in, land the BYTES somewhere durable,
 /// and emit a row per landed copy.
 ///

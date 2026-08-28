@@ -162,7 +162,7 @@ pub fn list_tools() -> Value {
                 },
                 "required": ["workspace", "pipelineName"] })),
         tool("backfill_set",
-            "Set an incremental watermark (`value` + optional `valueType`) or a DuckLake snapshot id              (`snapshotId`) so the next run resumes from there. REFUSED when the node holds a different kind of state - a Kafka offset, a spool position or a tumbling window cannot be set by hand, because overwriting them destroys what they were holding. Clear those instead.",
+            "Set an incremental watermark (`value` + optional `valueType`) or a DuckLake snapshot id (`snapshotId`) so the next run resumes from there. REFUSED when the node holds a different kind of state - a Kafka offset, a spool position or a tumbling window cannot be set by hand, because overwriting them destroys what they were holding. Clear those instead.",
             json!({ "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },

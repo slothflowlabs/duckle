@@ -3358,7 +3358,7 @@ pub(crate) fn build_quality(
     if stop {
         let msg = format!("{component_id}: a row failed the check and On failure is set to fail");
         return Ok(format!(
-            "SELECT * FROM {from} WHERE COALESCE(({predicate}), FALSE) AND CASE WHEN (SELECT count(*) FROM {from} WHERE NOT COALESCE(({predicate}), FALSE)) > 0              THEN error('{}') ELSE TRUE END",
+            "SELECT * FROM {from} WHERE COALESCE(({predicate}), FALSE) AND CASE WHEN (SELECT count(*) FROM {from} WHERE NOT COALESCE(({predicate}), FALSE)) > 0 THEN error('{}') ELSE TRUE END",
             sql_escape(&msg)
         ));
     }
