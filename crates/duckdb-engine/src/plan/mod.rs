@@ -6175,6 +6175,27 @@ fn build_stage(
                 .unwrap_or(3) as u32,
             // #258: only sent when the user actually set it, so a pipeline
             // that never touched the field still sends no max_tokens.
+            response_format: match string_prop(&props, "responseFormat")
+                .unwrap_or_default()
+                .trim()
+            {
+                "json_object" => AiResponseFormat::JsonObject,
+                "json_schema" => AiResponseFormat::JsonSchema,
+                _ => AiResponseFormat::Text,
+            },
+            json_schema: string_prop(&props, "jsonSchema").unwrap_or_default(),
+            schema_name: string_prop(&props, "schemaName")
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| "extraction".to_string()),
+            expand_columns: props
+                .get("expandColumns")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            on_invalid: match string_prop(&props, "onInvalid").unwrap_or_default().trim() {
+                "null" => AiOnInvalid::Null,
+                _ => AiOnInvalid::Fail,
+            },
             max_tokens: props
                 .get("maxTokens")
                 .and_then(|v| v.as_u64())

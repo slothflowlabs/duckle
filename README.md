@@ -708,6 +708,37 @@ duckle-runner checkpoint prune --retain-days 30      # bound it
 Pruning is explicit. These entries are results that were already paid for, so
 nothing is dropped on a default nobody chose.
 
+### Extraction should produce columns, not a paragraph containing the answer
+
+`xf.ai.llm` can ask for a shape instead of prose. Pick **A JSON Schema you
+define**, paste the schema, and the provider enforces it while it writes
+(`strict: true`). Tick **Turn the reply fields into columns** and each top-level
+field lands as its own column, ready for a join, rather than a JSON blob a
+downstream stage has to unpack.
+
+The reply is checked again locally, and that is the point. An
+OpenAI-**compatible** endpoint may accept `response_format` and ignore it, and a
+silently unstructured answer is exactly the failure this removes. What is
+checked: the reply parses, every `required` field is present, and each declared
+top-level field is the type the schema says. Nested schemas are enforced by the
+provider during decoding; re-implementing draft 2020-12 here to check them a
+second time would be a large dependency for a second opinion, and it is not
+claimed.
+
+Three things are refused before a single request is billed:
+
+- a schema that does not parse
+- a reply shape of JSON Schema with no schema given
+- a schema field with the same name as an incoming column, which expansion would
+  silently overwrite
+
+**When a reply does not match** defaults to stopping the run. An extraction that
+quietly produced nulls for a tenth of its rows is worse than one that stopped;
+the other setting is there for genuinely messy input.
+
+The schema is part of the checkpoint identity, so adding a field to it does not
+hand back yesterday's answers, which do not have it.
+
 ### Two machines that both look correct (Python environments)
 
 ```

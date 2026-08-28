@@ -12355,6 +12355,38 @@ impl DuckdbEngine {
             return Ok(format!("ai.llm: 0 upstream rows -> {}", spec.node_id));
         }
         let endpoint = Self::ai_endpoint(&spec.base_url, &spec.endpoint_path, "/v1/chat/completions");
+        // #258: parsed once, before a single request is paid for. A schema
+        // that does not parse is a configuration mistake, and finding it after
+        // 400,000 calls would be an expensive way to learn it.
+        let schema: Option<JsonValue> = match spec.response_format {
+            AiResponseFormat::JsonSchema => {
+                let text = spec.json_schema.trim();
+                if text.is_empty() {
+                    return Err(EngineError::Config(
+                        "ai.llm: response format is JSON Schema but no schema was given".into(),
+                    ));
+                }
+                Some(serde_json::from_str(text).map_err(|e| {
+                    EngineError::Config(format!("ai.llm: the JSON Schema does not parse: {e}"))
+                })?)
+            }
+            _ => None,
+        };
+        // The columns a validated reply is allowed to introduce. Checked here
+        // rather than per row so a collision is reported before any spending.
+        if spec.expand_columns {
+            if let Some(first) = rows.first().and_then(|r| r.as_object()) {
+                for field in schema_top_level_fields(schema.as_ref()) {
+                    if first.contains_key(&field) {
+                        return Err(EngineError::Config(format!(
+                            "ai.llm: the schema field {field:?} has the same name as an upstream \
+                             column, so expanding it would silently overwrite the input. Rename \
+                             one of them."
+                        )));
+                    }
+                }
+            }
+        }
 
         // #252: an item that was already paid for is not bought again.
         //
@@ -12370,6 +12402,12 @@ impl DuckdbEngine {
             "input_column": spec.input_column,
             "output_column": spec.output_column,
             "endpoint": endpoint,
+            // #258: asking for a different shape is different work. Without
+            // this, adding a field to the schema would hand back yesterday's
+            // answers, which do not have it.
+            "response_format": format!("{:?}", spec.response_format),
+            "json_schema": spec.json_schema,
+            "expand_columns": spec.expand_columns,
         }));
         let store = if spec.checkpoint {
             match std::env::var("DUCKLE_WORKSPACE").ok().filter(|w| !w.is_empty()) {
@@ -12437,6 +12475,25 @@ impl DuckdbEngine {
             if let Some(max) = spec.max_tokens {
                 body["max_tokens"] = serde_json::json!(max);
             }
+            // #258: ask the provider to enforce the shape while it decodes,
+            // which is the only way to get it reliably. A provider that ignores
+            // the field is why the reply is re-checked below regardless.
+            match spec.response_format {
+                AiResponseFormat::Text => {}
+                AiResponseFormat::JsonObject => {
+                    body["response_format"] = serde_json::json!({"type": "json_object"});
+                }
+                AiResponseFormat::JsonSchema => {
+                    body["response_format"] = serde_json::json!({
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": spec.schema_name,
+                            "strict": true,
+                            "schema": schema.clone().unwrap_or(JsonValue::Null),
+                        }
+                    });
+                }
+            }
             let response = engine.ai_send_with_retry(
                 &|| Self::ai_post(&endpoint, &spec.headers, &spec.api_key),
                 &body.to_string(),
@@ -12452,7 +12509,46 @@ impl DuckdbEngine {
                 JsonValue::Object(m) => m.clone(),
                 _ => serde_json::Map::new(),
             };
-            obj.insert(spec.output_column.clone(), JsonValue::String(content));
+            match spec.response_format {
+                AiResponseFormat::Text => {
+                    obj.insert(spec.output_column.clone(), JsonValue::String(content));
+                }
+                _ => {
+                    // The reply is checked here even though the provider was
+                    // asked to enforce the schema: an OpenAI-compatible
+                    // endpoint may accept response_format and ignore it, and a
+                    // silently unstructured answer is exactly the failure this
+                    // feature exists to remove.
+                    match validate_structured_reply(&content, schema.as_ref()) {
+                        Ok(value) => {
+                            if spec.expand_columns {
+                                if let Some(fields) = value.as_object() {
+                                    for (k, v) in fields {
+                                        obj.insert(k.clone(), v.clone());
+                                    }
+                                } else {
+                                    // A schema whose root is not an object has
+                                    // no fields to become columns.
+                                    obj.insert(spec.output_column.clone(), value);
+                                }
+                            } else {
+                                obj.insert(spec.output_column.clone(), value);
+                            }
+                        }
+                        Err(why) => match spec.on_invalid {
+                            AiOnInvalid::Fail => {
+                                return Err(EngineError::Query(format!(
+                                    "ai.llm: row {i}: {why}. The reply was: {}",
+                                    tail_chars(&content, 400)
+                                )))
+                            }
+                            AiOnInvalid::Null => {
+                                obj.insert(spec.output_column.clone(), JsonValue::Null);
+                            }
+                        },
+                    }
+                }
+            }
             let produced = JsonValue::Object(obj);
             // Recorded HERE, as this item finishes, not when the stage does.
             // That is the whole guarantee: a failure on the next row keeps
@@ -16343,6 +16439,110 @@ pub(crate) fn python_in_workspace(ws: &Path) -> Option<String> {
     None
 }
 
+/// #258: the top-level property names a JSON Schema declares.
+///
+/// Used to spot a collision with an upstream column BEFORE any request is paid
+/// for. An empty list when the schema has no object root, which is the honest
+/// answer rather than a guess.
+pub(crate) fn schema_top_level_fields(schema: Option<&JsonValue>) -> Vec<String> {
+    schema
+        .and_then(|s| s.get("properties"))
+        .and_then(|p| p.as_object())
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// #258: is this reply the shape it was asked for?
+///
+/// Deliberately NOT a full JSON Schema validator. It checks that the reply
+/// parses, that every `required` property is present, and that each present
+/// property matches the `type` the schema declares for it at the top level.
+/// Nested schemas are sent to the provider, which enforces them during
+/// decoding under `strict: true`; re-implementing draft 2020-12 here to check
+/// them a second time would be a large dependency for a second opinion.
+///
+/// The local check exists for one specific failure: an OpenAI-COMPATIBLE
+/// endpoint that accepts `response_format` and ignores it. Prose where an
+/// object was expected has to be caught, and it is.
+pub(crate) fn validate_structured_reply(
+    content: &str,
+    schema: Option<&JsonValue>,
+) -> Result<JsonValue, String> {
+    let text = strip_code_fence(content.trim());
+    let value: JsonValue = serde_json::from_str(text)
+        .map_err(|e| format!("the reply is not JSON ({e})"))?;
+    let Some(schema) = schema else {
+        return Ok(value);
+    };
+    let Some(props) = schema.get("properties").and_then(|p| p.as_object()) else {
+        return Ok(value);
+    };
+    let Some(obj) = value.as_object() else {
+        return Err("the reply is JSON but not an object, and the schema declares one".into());
+    };
+    if let Some(req) = schema.get("required").and_then(|r| r.as_array()) {
+        for name in req.iter().filter_map(|v| v.as_str()) {
+            if !obj.contains_key(name) {
+                return Err(format!("the reply is missing the required field {name:?}"));
+            }
+        }
+    }
+    for (name, decl) in props {
+        let Some(got) = obj.get(name) else { continue };
+        let Some(want) = decl.get("type").and_then(|t| t.as_str()) else {
+            continue;
+        };
+        if !json_matches_type(got, want) {
+            return Err(format!(
+                "field {name:?} should be {want} and is {}",
+                json_type_name(got)
+            ));
+        }
+    }
+    Ok(value)
+}
+
+/// A model told to answer in JSON often wraps it in a ```json fence anyway.
+/// Unwrapping it is not leniency about the shape - the shape is still checked -
+/// it just avoids failing on punctuation.
+fn strip_code_fence(text: &str) -> &str {
+    let Some(rest) = text.strip_prefix("```") else {
+        return text;
+    };
+    // Skip an optional language tag on the opening fence.
+    let rest = rest.split_once('\n').map(|(_, r)| r).unwrap_or(rest);
+    rest.trim_end().strip_suffix("```").unwrap_or(rest).trim()
+}
+
+fn json_type_name(v: &JsonValue) -> &'static str {
+    match v {
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "boolean",
+        JsonValue::Number(n) if n.is_i64() || n.is_u64() => "integer",
+        JsonValue::Number(_) => "number",
+        JsonValue::String(_) => "string",
+        JsonValue::Array(_) => "array",
+        JsonValue::Object(_) => "object",
+    }
+}
+
+fn json_matches_type(v: &JsonValue, want: &str) -> bool {
+    match want {
+        // A whole number arriving as `2.0` is still an integer to every
+        // producer that matters, and rejecting it would fail correct replies.
+        "integer" => v.as_i64().is_some() || v.as_f64().is_some_and(|f| f.fract() == 0.0),
+        "number" => v.is_number(),
+        "string" => v.is_string(),
+        "boolean" => v.is_boolean(),
+        "array" => v.is_array(),
+        "object" => v.is_object(),
+        "null" => v.is_null(),
+        // A type the checker does not know is not a reason to reject an answer
+        // the provider already validated.
+        _ => true,
+    }
+}
+
 /// Last `max` characters of `s` (UTF-8-safe) - used to keep the useful end
 /// of a long tool log (dbt prints the failing model last) in error messages.
 fn tail_chars(s: &str, max: usize) -> &str {
@@ -17946,6 +18146,88 @@ mod connector_helper_tests {
         // An HTTP-date Retry-After is not a number: fall back to backoff
         // rather than reading it as zero and hammering the provider.
         assert_eq!(w(Some("Wed, 21 Oct 2026 07:28:00 GMT"), 1), 1_000);
+    }
+
+    #[test]
+    /// #258: an OpenAI-COMPATIBLE endpoint may accept `response_format` and
+    /// ignore it, so the reply is re-checked here. Prose where an object was
+    /// asked for is the failure this exists to catch.
+    #[test]
+    fn prose_where_an_object_was_asked_for_is_rejected() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "vendor": { "type": "string" } },
+            "required": ["vendor"]
+        });
+        let err = super::validate_structured_reply("Sure! The vendor is Acme.", Some(&schema))
+            .expect_err("prose must not pass as an object");
+        assert!(err.contains("not JSON"), "got: {err}");
+    }
+
+    #[test]
+    fn a_missing_required_field_is_named() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "vendor": {"type": "string"}, "total": {"type": "number"} },
+            "required": ["vendor", "total"]
+        });
+        let err = super::validate_structured_reply(r#"{"vendor":"Acme"}"#, Some(&schema)).unwrap_err();
+        assert!(err.contains("total"), "the error must name the field; got: {err}");
+    }
+
+    #[test]
+    fn a_field_of_the_wrong_type_is_named_with_both_types() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "total": {"type": "number"} }
+        });
+        let err =
+            super::validate_structured_reply(r#"{"total":"forty two"}"#, Some(&schema)).unwrap_err();
+        assert!(err.contains("total"), "got: {err}");
+        assert!(err.contains("number") && err.contains("string"), "got: {err}");
+    }
+
+    /// A model told to answer in JSON often wraps it in a fence anyway.
+    /// Unwrapping that is not leniency about the shape, which is still checked.
+    #[test]
+    fn a_fenced_reply_is_still_the_object_it_contains() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "vendor": {"type": "string"} },
+            "required": ["vendor"]
+        });
+        let v = super::validate_structured_reply(
+            "```json\n{\"vendor\":\"Acme\"}\n```",
+            Some(&schema),
+        )
+        .expect("a fenced object is an object");
+        assert_eq!(v["vendor"], "Acme");
+    }
+
+    /// A whole number arriving as 2.0 is an integer to every producer that
+    /// matters; rejecting it would fail correct replies.
+    #[test]
+    fn a_whole_number_written_as_a_float_satisfies_integer() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "count": {"type": "integer"} }
+        });
+        assert!(super::validate_structured_reply(r#"{"count":2.0}"#, Some(&schema)).is_ok());
+        assert!(super::validate_structured_reply(r#"{"count":2.5}"#, Some(&schema)).is_err());
+    }
+
+    /// Expanding a field over an upstream column would silently overwrite the
+    /// input, so the collision has to be found before it happens.
+    #[test]
+    fn the_top_level_fields_are_what_expansion_would_add() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "vendor": {"type": "string"}, "total": {"type": "number"} }
+        });
+        let mut got = super::schema_top_level_fields(Some(&schema));
+        got.sort();
+        assert_eq!(got, vec!["total".to_string(), "vendor".to_string()]);
+        assert!(super::schema_top_level_fields(None).is_empty());
     }
 
     #[test]

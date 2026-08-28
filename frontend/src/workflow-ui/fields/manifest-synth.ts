@@ -7316,6 +7316,59 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                     ...aiThroughputFields(),
                 ],
             },
+            // #258: extraction wants columns, not a paragraph that happens to
+            // contain the answer.
+            {
+                label: 'Structured output',
+                fields: [
+                    {
+                        key: 'responseFormat',
+                        label: 'Reply shape',
+                        kind: 'select',
+                        defaultValue: 'text',
+                        options: [
+                            { label: 'Free text', value: 'text' },
+                            { label: 'Any JSON object', value: 'json_object' },
+                            { label: 'A JSON Schema you define', value: 'json_schema' },
+                        ],
+                        description: 'With a schema, the provider enforces the shape while it writes, and the reply is checked again here in case the endpoint accepted the setting and ignored it.',
+                    },
+                    {
+                        key: 'jsonSchema',
+                        label: 'JSON Schema',
+                        kind: 'textarea',
+                        rows: 10,
+                        monospace: true,
+                        placeholder: '{\n  "type": "object",\n  "properties": {\n    "vendor": { "type": "string" },\n    "total": { "type": "number" }\n  },\n  "required": ["vendor", "total"]\n}',
+                        description: 'Only used when the reply shape is a JSON Schema. Parsed before the first request, so a mistake here costs nothing.',
+                    },
+                    {
+                        key: 'schemaName',
+                        label: 'Schema name',
+                        kind: 'text',
+                        defaultValue: 'extraction',
+                        description: 'Sent alongside the schema; providers require one.',
+                    },
+                    {
+                        key: 'expandColumns',
+                        label: 'Turn the reply fields into columns',
+                        kind: 'bool',
+                        defaultValue: false,
+                        description: 'Each top-level field of the reply becomes its own column instead of one JSON column downstream has to unpack. A field with the same name as an incoming column is refused before the run starts rather than overwriting it.',
+                    },
+                    {
+                        key: 'onInvalid',
+                        label: 'When a reply does not match',
+                        kind: 'select',
+                        defaultValue: 'fail',
+                        options: [
+                            { label: 'Stop the run', value: 'fail' },
+                            { label: 'Leave the row empty and carry on', value: 'null' },
+                        ],
+                        description: 'Stopping is the default: an extraction that quietly produced nulls for a tenth of its rows is worse than one that stopped.',
+                    },
+                ],
+            },
         ], 'declared');
     }
     if (id === 'xf.ai.chunk') {

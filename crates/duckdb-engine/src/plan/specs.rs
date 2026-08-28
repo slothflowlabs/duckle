@@ -1226,6 +1226,31 @@ pub struct AiPiiSpec {
 /// `prompt_template` with {column_name} substitution; if empty, the
 /// row's `input_column` text is sent as the user message verbatim.
 /// Optional `system_prompt`. Result lands in `output_column`.
+/// #258: how the model is asked to shape its reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiResponseFormat {
+    /// Whatever the model writes. What this stage has always done.
+    Text,
+    /// `response_format: {"type":"json_object"}` - valid JSON, any shape.
+    JsonObject,
+    /// `response_format: {"type":"json_schema", ..., "strict": true}` - the
+    /// provider enforces the shape during decoding, which is the only way to
+    /// get it reliably. Falls back to nothing on a provider that ignores the
+    /// field, which is why the reply is re-checked locally as well.
+    JsonSchema,
+}
+
+/// #258: what to do with a reply that is not the shape it was asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiOnInvalid {
+    /// Stop the run. An extraction that silently produced nulls for a tenth of
+    /// its rows is worse than one that stopped.
+    Fail,
+    /// Null the output for that row and carry on. For a run over messy input
+    /// where some rows genuinely have no answer.
+    Null,
+}
+
 #[derive(Debug, Clone)]
 pub struct AiLlmSpec {
     pub node_id: String,
@@ -1267,6 +1292,19 @@ pub struct AiLlmSpec {
     /// while the request body never carried it, so an unbounded reply was
     /// billed on every row. None = send no max_tokens, exactly as before.
     pub max_tokens: Option<u32>,
+    /// #258: the shape the reply must take.
+    pub response_format: AiResponseFormat,
+    /// The JSON Schema, as written. Only read for [`AiResponseFormat::JsonSchema`].
+    pub json_schema: String,
+    /// The name the provider requires alongside the schema.
+    pub schema_name: String,
+    /// Turn the reply's top-level fields into their own columns.
+    ///
+    /// The point of extraction is columns, not a JSON blob a downstream stage
+    /// has to unpack again.
+    pub expand_columns: bool,
+    /// What a reply that does not validate does to the run.
+    pub on_invalid: AiOnInvalid,
 }
 
 /// xf.ai.classify: per-row LLM-backed classifier. Pins each row's
