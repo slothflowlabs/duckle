@@ -6236,6 +6236,138 @@ impl DuckdbEngine {
         Ok(out)
     }
 
+    /// How many artifact rows are read back at a time.
+    ///
+    /// Each batch is one DuckDB invocation, so a small batch pays a process
+    /// spawn per few documents and a huge one is the unbounded read this
+    /// exists to remove. Five thousand rows is a few MB of JSON and, on a
+    /// million-document corpus, two hundred spawns against a million parses.
+    pub(crate) const ARTIFACT_BATCH: usize = 5_000;
+
+    /// The batch actually used, so the paging can be exercised.
+    ///
+    /// A bound nobody can cross in a test is a bound nobody has checked: a
+    /// corpus of five thousand documents is not something a test suite should
+    /// build, so the size is overridable and the test drives it down to a
+    /// handful instead.
+    fn artifact_batch() -> usize {
+        std::env::var("DUCKLE_ARTIFACT_BATCH")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(Self::ARTIFACT_BATCH)
+    }
+
+    /// The artifacts a parser should read, handed over in bounded batches.
+    ///
+    /// #282: `resolve_artifact_inputs` loads the whole relation into a Vec
+    /// before the first document is opened, so a corpus of a million rows costs
+    /// memory proportional to the CORPUS even though every individual parse is
+    /// bounded. Bounding each parser and leaving that in place would be a fix
+    /// that looks complete and is not.
+    ///
+    /// The list is materialised ONCE into a numbered table in the run database
+    /// - on disk, which is where a list that size belongs - and read back a
+    /// batch at a time. Numbered rather than paged with a bare LIMIT/OFFSET,
+    /// because a view with no ORDER BY may hand back a different order on the
+    /// next call and a corpus that silently repeated or skipped documents is
+    /// worse than one that would not fit in memory.
+    pub(crate) fn for_each_artifact_input(
+        &self,
+        db: &Path,
+        secret_prefix: &str,
+        input: &plan::ArtifactInput,
+        tag: &str,
+        mut visit: impl FnMut(ResolvedArtifact) -> Result<(), EngineError>,
+    ) -> Result<usize, EngineError> {
+        let Some(view) = input.from_view.as_deref() else {
+            return Ok(0);
+        };
+        // Per node, so two artifact-reading nodes in one pipeline cannot
+        // overwrite each other's list.
+        let list = format!("duckle_artifacts_{}", metric_ident(tag));
+        crate::apply_duckdb_sql(
+            &self.bin,
+            db,
+            &format!(
+                "CREATE OR REPLACE TABLE {} AS SELECT row_number() OVER () AS duckle_rn, * FROM {}",
+                plan::quote_ident(&list),
+                plan::quote_ident(view)
+            ),
+        )?;
+
+        let result = self.drain_artifact_list(db, secret_prefix, input, &list, &mut visit);
+        // Dropped whether the walk succeeded or not: the list is scratch, and
+        // leaving it behind would grow the run database every time.
+        let _ = crate::apply_duckdb_sql(
+            &self.bin,
+            db,
+            &format!("DROP TABLE IF EXISTS {}", plan::quote_ident(&list)),
+        );
+        result
+    }
+
+    fn drain_artifact_list(
+        &self,
+        db: &Path,
+        secret_prefix: &str,
+        input: &plan::ArtifactInput,
+        list: &str,
+        visit: &mut impl FnMut(ResolvedArtifact) -> Result<(), EngineError>,
+    ) -> Result<usize, EngineError> {
+        let batch_size = Self::artifact_batch();
+        let mut seen = 0usize;
+        let mut offset = 0usize;
+        loop {
+            self.check_cancelled()?;
+            let rows = self.run_rows(
+                Some(db),
+                &format!(
+                    "{}SELECT * FROM {} WHERE duckle_rn > {} AND duckle_rn <= {} ORDER BY duckle_rn",
+                    secret_prefix,
+                    plan::quote_ident(list),
+                    offset,
+                    offset + batch_size
+                ),
+            )?;
+            if rows.is_empty() {
+                break;
+            }
+            let batch = rows.len();
+            for mut row in rows {
+                // The paging column is ours, not the pipeline's, and must not
+                // reach a parsed row or a carried column.
+                if let Some(o) = row.as_object_mut() {
+                    o.remove("duckle_rn");
+                }
+                let uri = row
+                    .get(&input.uri_column)
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .filter(|s| !s.trim().is_empty())
+                    .ok_or_else(|| {
+                        EngineError::Query(format!(
+                            "no '{}' to read on an upstream row. Set the URI column to whichever \
+                             column names the artifact.",
+                            input.uri_column
+                        ))
+                    })?;
+                let sha256 = row
+                    .get(&input.sha_column)
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_string);
+                visit(ResolvedArtifact { uri, sha256, row })?;
+                seen += 1;
+            }
+            if batch < batch_size {
+                break;
+            }
+            offset += batch_size;
+        }
+        Ok(seen)
+    }
+
     /// A local path for an artifact, fetching it first if it is remote.
     ///
     /// A format that can be parsed from a stream should be; this is for the
@@ -7916,28 +8048,43 @@ impl DuckdbEngine {
         spec: &PdfSourceSpec,
     ) -> Result<String, EngineError> {
         self.check_cancelled()?;
-        // #282: the documents are whatever an upstream relation names, or the
-        // configured path when nothing is wired in.
+        // #282: the documents are whatever an upstream relation names, or
+        // the configured path when nothing is wired in.
+        //
+        // The upstream list is NOT collected: a corpus of a million rows
+        // would cost memory proportional to the corpus before the first
+        // document was opened. It is counted here and walked in bounded
+        // batches below. A folder listing is bounded by the folder, so that
+        // side stays a plain Vec.
         let from_upstream = spec.input.from_view.is_some();
-        let docs: Vec<(String, Option<String>, JsonValue)> = if from_upstream {
-            self.resolve_artifact_inputs(db, secret_prefix, &spec.input)?
-                .into_iter()
-                .map(|a| (a.uri, a.sha256, a.row))
-                .collect()
+        let local: Vec<String> = if from_upstream {
+            Vec::new()
         } else {
             expand_pdf_paths(&spec.path, spec.recursive)
-                .into_iter()
-                .map(|f| (f, None, JsonValue::Null))
-                .collect()
         };
         // An upstream that named nothing is a legitimate quiet run - a change
         // feed with no new documents - and must produce the empty typed
         // relation rather than an error or a relation of unknown shape.
-        if docs.is_empty() && from_upstream {
-            self.pdf_empty_relation(db, spec)?;
-            return Ok(format!("{}pdf: 0 documents to read", crate::UNCHANGED_MARKER));
-        }
-        if docs.is_empty() {
+        if from_upstream {
+            let view = spec.input.from_view.as_deref().unwrap_or_default();
+            let n = self
+                .run_rows(
+                    Some(db),
+                    &format!(
+                        "{}SELECT count(*) AS n FROM {}",
+                        secret_prefix,
+                        plan::quote_ident(view)
+                    ),
+                )?
+                .first()
+                .and_then(|r| r.get("n").cloned())
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0);
+            if n == 0 {
+                self.pdf_empty_relation(db, spec)?;
+                return Ok(format!("{}pdf: 0 documents to read", crate::UNCHANGED_MARKER));
+            }
+        } else if local.is_empty() {
             return Err(EngineError::Config(format!(
                 "pdf: no .pdf files at {}",
                 spec.path
@@ -7951,7 +8098,10 @@ impl DuckdbEngine {
         };
         let mut count: usize = 0;
         let mut skipped: usize = 0;
-        for (uri, source_sha, upstream_row) in &docs {
+        let mut handle = |uri: &str,
+                          source_sha: &Option<String>,
+                          upstream_row: &JsonValue|
+         -> Result<(), EngineError> {
             self.check_cancelled()?;
             // A PDF reader SEEKS - the cross-reference table is at the end of
             // the file - so a remote document has to become a local one. One at
@@ -7961,7 +8111,7 @@ impl DuckdbEngine {
                 Err(e) if spec.on_error == "skip" => {
                     eprintln!("duckle: pdf: skipping {uri}: {e}");
                     skipped += 1;
-                    continue;
+                    return Ok(());
                 }
                 Err(e) => return Err(e),
             };
@@ -7971,7 +8121,7 @@ impl DuckdbEngine {
                 Err(e) if spec.on_error == "skip" => {
                     eprintln!("duckle: pdf: skipping {uri}: {e}");
                     skipped += 1;
-                    continue;
+                    return Ok(());
                 }
                 Err(e) => {
                     return Err(EngineError::Query(format!("pdf: open {}: {}", uri, e)))
@@ -8036,8 +8186,8 @@ impl DuckdbEngine {
                 // The URI, not the spool path: a temp file nobody can look at
                 // afterwards is not provenance. Both names carry it, so a
                 // pipeline joining on `document_id` keeps working.
-                row.insert("document_id".into(), JsonValue::String(uri.clone()));
-                row.insert("document_uri".into(), JsonValue::String(uri.clone()));
+                row.insert("document_id".into(), JsonValue::String(uri.to_string()));
+                row.insert("document_uri".into(), JsonValue::String(uri.to_string()));
                 // #282: the business keys that say what this document IS -
                 // company_id, filing_id - live on the artifact row and are lost
                 // the moment pages are emitted instead. Carrying them is what
@@ -8078,7 +8228,18 @@ impl DuckdbEngine {
                 writer.write_row(&JsonValue::Object(row))?;
                 count += 1;
             }
-        }
+            Ok(())
+        };
+        let seen = if from_upstream {
+            self.for_each_artifact_input(db, secret_prefix, &spec.input, &spec.node_id, |a| {
+                handle(&a.uri, &a.sha256, &a.row)
+            })?
+        } else {
+            for path in &local {
+                handle(path, &None, &JsonValue::Null)?;
+            }
+            local.len()
+        };
         match &spec.declared_schema {
             Some(schema) if !schema.is_empty() => {
                 let (columns_spec, select_list) = xml_declared_columns(schema);
@@ -8089,7 +8250,7 @@ impl DuckdbEngine {
         Ok(format!(
             "pdf: materialized {} page(s) from {} document(s){}",
             count,
-            docs.len() - skipped,
+            seen - skipped,
             if skipped > 0 {
                 format!(" ({} skipped as unreadable)", skipped)
             } else {
@@ -8195,14 +8356,6 @@ impl DuckdbEngine {
         // #282: the pages are whatever an upstream artifact relation names,
         // or the configured path when nothing is wired in.
         let from_upstream = spec.input.from_view.is_some();
-        let docs: Vec<(String, Option<String>, JsonValue)> = if from_upstream {
-            self.resolve_artifact_inputs(db, "", &spec.input)?
-                .into_iter()
-                .map(|a| (a.uri, a.sha256, a.row))
-                .collect()
-        } else {
-            vec![(spec.path.clone(), None, JsonValue::Null)]
-        };
 
         let compile = |sel: &str| -> Result<dom_query::Matcher, EngineError> {
             dom_query::Matcher::new(sel).map_err(|_| {
@@ -8256,14 +8409,20 @@ impl DuckdbEngine {
         };
         let mut skipped: usize = 0;
 
-        for (uri, source_sha, upstream_row) in &docs {
+        // One body, two drivers. The corpus walks it in bounded batches so
+        // the artifact list never lands in memory whole; a configured path
+        // with nothing wired in calls it exactly once.
+        let mut handle = |uri: &str,
+                          source_sha: &Option<String>,
+                          upstream_row: &JsonValue|
+         -> Result<(), EngineError> {
             self.check_cancelled()?;
             let html = match self.html_text(spec, uri, from_upstream) {
                 Ok(h) => h,
                 Err(e) if spec.on_error == "skip" => {
                     eprintln!("duckle: html: skipping {uri}: {e}");
                     skipped += 1;
-                    continue;
+                    return Ok(());
                 }
                 Err(e) => return Err(e),
             };
@@ -8349,6 +8508,14 @@ impl DuckdbEngine {
                     count += 1;
                 }
             }
+            Ok(())
+        };
+        if from_upstream {
+            self.for_each_artifact_input(db, "", &spec.input, &spec.node_id, |a| {
+                handle(&a.uri, &a.sha256, &a.row)
+            })?;
+        } else {
+            handle(&spec.path, &None, &JsonValue::Null)?;
         }
 
         match &spec.declared_schema {
@@ -8407,14 +8574,6 @@ impl DuckdbEngine {
         // #282: the documents are whatever an upstream relation names, or
         // the configured path when nothing is wired in.
         let from_upstream = spec.input.from_view.is_some();
-        let docs: Vec<(String, Option<String>, JsonValue)> = if from_upstream {
-            self.resolve_artifact_inputs(db, "", &spec.input)?
-                .into_iter()
-                .map(|a| (a.uri, a.sha256, a.row))
-                .collect()
-        } else {
-            vec![(spec.path.clone(), None, JsonValue::Null)]
-        };
         // Object storage on the CONFIGURED PATH still has no signed streaming
         // GET here (DuckDB's httpfs cannot parse XML), so it fails early with a
         // pointer rather than opening a temp file we would leak. Reached through
@@ -8460,7 +8619,9 @@ impl DuckdbEngine {
             // bounded-parts machinery from #283 then bounds the WHOLE corpus
             // rather than each file, so a million small documents cannot do
             // what one huge document already could not.
-            for (uri, source_sha, upstream_row) in &docs {
+            self.for_each_artifact_input(db, "", &spec.input, &spec.node_id, |artifact| {
+                let (uri, source_sha, upstream_row) =
+                    (&artifact.uri, &artifact.sha256, &artifact.row);
                 self.check_cancelled()?;
                 let mut emit = |row: &JsonValue| -> Result<(), EngineError> {
                     let mut obj = match row {
@@ -8526,7 +8687,8 @@ impl DuckdbEngine {
                         Err(e) => return Err(e),
                     }
                 }
-            }
+                Ok(())
+            })?;
         } else {
             let mut emit = |row: &JsonValue| -> Result<(), EngineError> {
                 writer.write_row(row)?;

@@ -857,6 +857,15 @@ directory is at the END of the file and cannot be streamed.
 row the parser emits, so a row can be joined back to the document it came from
 without a second lookup, and `source_sha256` is carried rather than recomputed.
 
+**The corpus list is bounded too**, not just each parse. Reading the artifact
+relation into memory before opening the first document would make a million-row
+corpus cost memory proportional to the corpus - a fix that looks complete and is
+not. The list is materialised once into the run database and read back a batch
+at a time, numbered rather than paged with a bare `LIMIT`/`OFFSET`: a view with
+no `ORDER BY` can hand back a different order on the next call, and a corpus
+that silently repeated or skipped documents is worse than one that would not fit
+in memory. `src.pdf`, `src.xml` and `src.html` all go through it.
+
 `src.html` takes the same contract, for the case where the corpus is pages
 rather than documents. It reads each page whole rather than streaming, because
 a CSS selector needs the DOM built before it can match anything - there is

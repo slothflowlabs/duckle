@@ -3947,7 +3947,7 @@ pub(crate) fn write_arrayrows_to(
 /// the DUCKLE_DUCKDB_BIN environment variable being set - the engine can be
 /// constructed with a valid binary and still materialize results even when
 /// the process env is empty (tests, embedded hosts).
-fn apply_duckdb_sql(bin: &Path, db: &Path, sql: &str) -> Result<(), EngineError> {
+pub(crate) fn apply_duckdb_sql(bin: &Path, db: &Path, sql: &str) -> Result<(), EngineError> {
     use std::process::Command;
     let mut cmd = Command::new(bin);
     #[cfg(windows)]

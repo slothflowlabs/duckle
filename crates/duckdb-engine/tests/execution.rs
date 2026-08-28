@@ -19169,3 +19169,74 @@ fn src_html_can_skip_a_page_it_cannot_read_and_says_how_many() {
     let note = r.nodes.get("h").and_then(|n| n.note.clone()).unwrap_or_default();
     assert!(note.contains("1 page(s) skipped"), "the loss has to be visible: {note}");
 }
+
+/// #282 item 3: the corpus LIST is bounded too, not just each parse.
+///
+/// Bounding every parser and leaving the resolver collecting the whole relation
+/// into a Vec would be a fix that looks complete and is not: a pipeline handed
+/// a million artifact rows still held all of them before it opened the first
+/// document. The list is now materialised once into the run database and read
+/// back a batch at a time.
+///
+/// The batch is driven down to 2 here because a corpus big enough to cross the
+/// real 5,000 is not something a test suite should build - and a bound nobody
+/// can cross in a test is a bound nobody has checked.
+#[test]
+fn a_corpus_larger_than_one_batch_is_read_completely_and_exactly_once() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_ARTIFACT_BATCH", "2");
+
+    // Five documents against a batch of two: three batches, the last short.
+    let mut uris = Vec::new();
+    for i in 0..5 {
+        let f = tmp.path().join(format!("doc{i}.xml"));
+        std::fs::write(&f, format!("<rows><row><id>{i}</id></row></rows>")).unwrap();
+        uris.push(f.to_string_lossy().replace('\\', "/"));
+    }
+    let listing = uris
+        .iter()
+        .map(|u| format!("SELECT '{u}' AS uri"))
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
+    let out = out_path(tmp.path(), "batched.csv");
+
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": listing })),
+            node("x", "src.xml", json!({ "rowPath": "/rows/row" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "x"), main_edge("e2", "x", "k")]),
+    ));
+    std::env::remove_var("DUCKLE_ARTIFACT_BATCH");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+
+    // Every document exactly once. Paging a relation with no stable order is
+    // how a corpus silently repeats or skips, which is worse than not fitting
+    // in memory, so this is the property that matters.
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    assert_eq!(
+        count(&format!("read_csv_auto('{}')", out)),
+        5,
+        "five documents across three batches: {body}"
+    );
+    for i in 0..5 {
+        assert_eq!(
+            body.matches(&format!("doc{i}.xml")).count(),
+            1,
+            "doc{i} appears exactly once: {body}"
+        );
+    }
+
+    // And the scratch list does not outlive the run.
+    let leftovers = std::fs::read_dir(tmp.path())
+        .map(|d| {
+            d.flatten()
+                .filter(|e| e.file_name().to_string_lossy().contains("duckle_artifacts"))
+                .count()
+        })
+        .unwrap_or(0);
+    assert_eq!(leftovers, 0, "the artifact list was left behind");
+}
