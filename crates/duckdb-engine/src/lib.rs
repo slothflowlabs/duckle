@@ -359,6 +359,13 @@ impl DuckdbEngine {
         if !stage.cache_output {
             return None;
         }
+        // One run that must not touch the cache, without editing the pipeline.
+        // Set by `duckle-runner --no-cache`. It neither reads nor writes: a run
+        // taken to settle whether the cache is lying should not then overwrite
+        // the evidence.
+        if std::env::var("DUCKLE_NO_CACHE").map(|v| v != "0").unwrap_or(false) {
+            return None;
+        }
         let view = stage.cache_input_view.as_deref()?;
         let ws = std::env::var("DUCKLE_WORKSPACE")
             .ok()

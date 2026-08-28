@@ -139,6 +139,75 @@ pub fn store(bin: &Path, db: &Path, node_id: &str, key: &Key) {
     }
 }
 
+/// One stage's cached outputs, for `duckle-runner cache list`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Entry {
+    pub pipeline: String,
+    pub node: String,
+    pub files: usize,
+    pub bytes: u64,
+}
+
+/// Every cached output in a workspace.
+///
+/// A missing cache directory is an empty list, not an error: a workspace that
+/// has never cached anything is the normal case, not a broken one.
+pub fn entries(workspace: &Path) -> Vec<Entry> {
+    let mut out = Vec::new();
+    let Ok(pipelines) = std::fs::read_dir(workspace.join("cache")) else {
+        return out;
+    };
+    for p in pipelines.flatten() {
+        let Ok(nodes) = std::fs::read_dir(p.path()) else {
+            continue;
+        };
+        for n in nodes.flatten() {
+            let mut files = 0usize;
+            let mut bytes = 0u64;
+            if let Ok(rd) = std::fs::read_dir(n.path()) {
+                for f in rd.flatten() {
+                    if f.path().extension().map(|x| x == "parquet").unwrap_or(false) {
+                        files += 1;
+                        bytes += f.metadata().map(|m| m.len()).unwrap_or(0);
+                    }
+                }
+            }
+            if files > 0 {
+                out.push(Entry {
+                    pipeline: p.file_name().to_string_lossy().to_string(),
+                    node: n.file_name().to_string_lossy().to_string(),
+                    files,
+                    bytes,
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| (&a.pipeline, &a.node).cmp(&(&b.pipeline, &b.node)));
+    out
+}
+
+/// Drop cached outputs, optionally narrowed to one pipeline.
+///
+/// Safe to call at any time: everything here can be recomputed, which is the
+/// difference from the item checkpoint, where an entry is a result that was
+/// already paid for and pruning it costs money.
+pub fn clear(workspace: &Path, pipeline: Option<&str>) -> usize {
+    let mut removed = 0usize;
+    for e in entries(workspace) {
+        if pipeline.map(|p| p != e.pipeline).unwrap_or(false) {
+            continue;
+        }
+        let d = workspace
+            .join("cache")
+            .join(crate::connectors::sanitize_path_segment(&e.pipeline))
+            .join(crate::connectors::sanitize_path_segment(&e.node));
+        if std::fs::remove_dir_all(&d).is_ok() {
+            removed += e.files;
+        }
+    }
+    removed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

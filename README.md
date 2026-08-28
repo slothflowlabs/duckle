@@ -738,8 +738,18 @@ It is off unless you ask for it, and it is deliberately hard to fool:
   second time, and reusing the first one would be wrong rather than fast.
 - A cache that cannot be read or written is a slower run, never a failed one.
 
+```bash
+duckle-runner cache list                    # what is cached, by pipeline and node
+duckle-runner cache clear --pipeline daily  # drop it
+duckle-runner --pipeline p.json --no-cache  # distrust it for one run
+```
+
+`--no-cache` neither reads nor writes, so a run taken to settle whether the
+cache is lying does not then overwrite the evidence.
+
 Cached output lives under `<workspace>/cache/<pipeline>/<node>/` and can be
-deleted at any time.
+deleted at any time. Unlike the checkpoint above, nothing here was paid for -
+it can all be recomputed, which is why clearing it needs no ceremony.
 
 ### A JSON column that appears late is not a column you lose
 

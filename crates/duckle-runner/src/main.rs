@@ -23,6 +23,7 @@ use std::process::ExitCode;
 mod audit;
 mod backfill;
 mod baseline;
+mod cache;
 mod checkpoint;
 mod auth_store;
 mod catalog_cmd;
@@ -49,6 +50,7 @@ USAGE:
     duckle-runner quickstart [--force]
     duckle-runner mcp                      (stdio MCP server for AI agents)
     duckle-runner test [<file.test.json> ...]
+    duckle-runner cache <list|clear>       (stage outputs kept for reuse)
 
 TEST:
     Run a pipeline against a fixed input and assert the rows out of one node.
@@ -99,6 +101,9 @@ OPTIONS:
     --max-temp-size <sz> e.g. 300GB. DuckDB's own default is 90% of the disk,
                          so without this one large join can fill the volume
                          the OS is on.
+    --no-cache           Ignore any reused stage output for this run (see
+                         `cache`). Nothing is read from or written to it, so a
+                         run taken to check the cache does not overwrite it.
     --name <label>       Run-log + state folder name (default: pipeline file stem)
     --target <node>      Run only as far as this node, then stop and print its rows
                          (tab-separated, header first). Nothing downstream runs, so
@@ -209,6 +214,11 @@ fn parse_args() -> Result<Args, String> {
             "--max-temp-size" => {
                 std::env::set_var("DUCKLE_MAX_TEMP_DIR_SIZE", take("--max-temp-size")?)
             }
+            // Distrust the reuse cache for this run without editing the
+            // pipeline or dropping what is stored. Neither reads nor writes,
+            // so a run taken to settle whether the cache is lying does not
+            // then overwrite the evidence.
+            "--no-cache" => std::env::set_var("DUCKLE_NO_CACHE", "1"),
             "--name" => name = Some(take("--name")?),
             "--target" => target = Some(take("--target")?),
             "--list-watermarks" => list_watermarks = true,
@@ -453,7 +463,17 @@ fn run() -> Result<bool, String> {
     }
     for (id, st) in &result.nodes {
         let rows = st.rows.map(|r| format!(" ({r} rows)")).unwrap_or_default();
-        println!("  {:20} {}{}", id, st.status, rows);
+        // What the stage said about itself - which page it stopped at, that it
+        // found nothing to do, that it reused a cached output. Headless is
+        // where this matters most: with no panel to open, a run that skipped
+        // the work would otherwise look exactly like one that did it.
+        let note = st
+            .note
+            .as_deref()
+            .filter(|n| !n.trim().is_empty())
+            .map(|n| format!(" - {n}"))
+            .unwrap_or_default();
+        println!("  {:20} {}{}{}", id, st.status, rows, note);
     }
 
     // Stopping at a node is only useful if you can see what it produced, so its rows go
@@ -789,7 +809,17 @@ fn run_artifact(payload: Vec<u8>) -> ExitCode {
     }
     for (id, st) in &result.nodes {
         let rows = st.rows.map(|r| format!(" ({r} rows)")).unwrap_or_default();
-        println!("  {:20} {}{}", id, st.status, rows);
+        // What the stage said about itself - which page it stopped at, that it
+        // found nothing to do, that it reused a cached output. Headless is
+        // where this matters most: with no panel to open, a run that skipped
+        // the work would otherwise look exactly like one that did it.
+        let note = st
+            .note
+            .as_deref()
+            .filter(|n| !n.trim().is_empty())
+            .map(|n| format!(" - {n}"))
+            .unwrap_or_default();
+        println!("  {:20} {}{}{}", id, st.status, rows, note);
     }
     ExitCode::from(if result.status == "ok" { 0 } else { 1 })
 }
@@ -1715,6 +1745,18 @@ fn main() -> ExitCode {
             Ok(code) => ExitCode::from(code as u8),
             Err(e) => {
                 eprintln!("duckle-runner baseline: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
+    // `cache` -> see and drop the stage outputs kept for reuse. Separate from
+    // `checkpoint` because the two hold different things: a cached output can
+    // be recomputed, a checkpointed item was paid for.
+    if std::env::args().nth(1).as_deref() == Some("cache") {
+        return match cache::run() {
+            Ok(code) => ExitCode::from(code as u8),
+            Err(e) => {
+                eprintln!("duckle-runner cache: {e}");
                 ExitCode::from(2)
             }
         };
