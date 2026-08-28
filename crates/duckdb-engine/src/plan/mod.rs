@@ -123,6 +123,31 @@ impl Stage {
 /// come from the sasl* fields. Returns (tls, sasl). Both halves of the form
 /// were read by nothing before this, so a node configured for SASL_SSL
 /// connected in plaintext with no credentials and said nothing about it.
+/// A column list the GUI may hand over either as an array or as the
+/// comma-separated string a hand-written pipeline uses.
+fn column_list(props: &JsonValue, key: &str) -> Vec<String> {
+    props
+        .get(key)
+        .and_then(JsonValue::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .or_else(|| {
+            string_prop(props, key).map(|s| {
+                s.split(',')
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+
 fn kafka_security(props: &JsonValue) -> (bool, Option<KafkaSasl>) {
     let protocol = string_prop(props, "security")
         .unwrap_or_default()
@@ -6019,6 +6044,12 @@ fn build_stage(
             )));
         }
         ai_classify = Some(AiClassifySpec {
+            checkpoint: props
+                .get("checkpoint")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            checkpoint_key: column_list(&props, "checkpointKey"),
+            checkpoint_fingerprint: column_list(&props, "checkpointFingerprint"),
             node_id: node.id.clone(),
             from_view: from_view.to_string(),
             input_column: string_prop(&props, "inputColumn")
@@ -6062,30 +6093,6 @@ fn build_stage(
         let api_key = string_prop(&props, "apiKey")
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: apiKey required", component_id)))?;
-        // A column list the GUI may hand over either as an array or as the
-        // comma-separated string a hand-written pipeline uses.
-        fn column_list(props: &JsonValue, key: &str) -> Vec<String> {
-            props
-                .get(key)
-                .and_then(JsonValue::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str())
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect()
-                })
-                .or_else(|| {
-                    string_prop(props, key).map(|s| {
-                        s.split(',')
-                            .map(str::trim)
-                            .filter(|p| !p.is_empty())
-                            .map(str::to_string)
-                            .collect()
-                    })
-                })
-                .unwrap_or_default()
-        }
         ai_llm = Some(AiLlmSpec {
             node_id: node.id.clone(),
             checkpoint: props
@@ -6154,6 +6161,12 @@ fn build_stage(
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: apiKey required (OpenAI / compatible)", component_id)))?;
         ai_embed = Some(AiEmbedSpec {
+            checkpoint: props
+                .get("checkpoint")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            checkpoint_key: column_list(&props, "checkpointKey"),
+            checkpoint_fingerprint: column_list(&props, "checkpointFingerprint"),
             node_id: node.id.clone(),
             from_view: from_view.to_string(),
             input_column: string_prop(&props, "inputColumn")

@@ -674,17 +674,24 @@ request 400,000 fails permanently
 rerun repeats all 399,999 calls
 ```
 
-Tick **Remember completed rows** on `xf.ai.llm` and each row's answer is stored
-**as it arrives** - not when the stage finishes - so a failure on the next row
-keeps everything already bought. A rerun reuses them and calls the API only for
-what is missing.
+Tick **Remember completed rows** on `xf.ai.llm`, `xf.ai.classify` or
+`xf.ai.embed` and each row's result is stored **as it arrives** - not when the
+stage finishes - so a failure on the next row keeps everything already bought. A
+rerun reuses them and calls the API only for what is missing.
+
+`xf.ai.embed` needs one extra step, because its billable unit is the **batch**
+rather than the row: the rows it already has are taken out first, only what is
+left is chunked and sent, and everything goes back in the input order. An
+embedding attached to the wrong row would be worse than paying for it twice.
 
 The **output** is stored, not just the fact of success. A success marker without
 the output leaves the item unable to run again and unable to be rebuilt, which
 is not resumable at all.
 
-Identity is the logical key **and** the whole input row **and** the model,
-prompt and temperature. All three, because each alone is wrong:
+Identity is the logical key **and** the whole input row **and** the stage's own
+configuration - the model and prompt for `llm`, the model and **category list**
+for `classify`, the model for `embed`. Asking a different question of the same
+text is different work. All three, because each alone is wrong:
 
 - a business key alone reuses the old answer for a row whose text changed
 - an input fingerprint alone misses that the prompt changed underneath it

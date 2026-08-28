@@ -10672,7 +10672,12 @@ impl DuckdbEngine {
     /// Establishes the AI credential pattern the other xf.ai.* tiles
     /// will follow: apiKey lives in stage props for now (revisable
     /// later if we add a secure keystore - just rewires this one read).
-    pub(crate) fn run_ai_embed(&self, db: &Path, spec: &AiEmbedSpec) -> Result<String, EngineError> {
+    pub(crate) fn run_ai_embed(
+        &self,
+        db: &Path,
+        spec: &AiEmbedSpec,
+        pipeline_name: Option<&str>,
+    ) -> Result<String, EngineError> {
         self.check_cancelled()?;
         let rows = self.run_rows(
             Some(db),
@@ -10689,16 +10694,77 @@ impl DuckdbEngine {
         // #258: one request per batch as before, but up to `concurrency`
         // batches in flight. Results come back per chunk and are flattened in
         // chunk order, so the output row order is exactly the input order.
-        let chunks: Vec<&[JsonValue]> = rows.chunks(spec.batch_size).collect();
+        // #258: a row already embedded is not embedded again.
+        //
+        // Unlike the per-row transforms the billable unit here is the BATCH, so
+        // reuse cannot simply skip a call: the cached rows are taken out first
+        // and only what is left is chunked and sent. Rows are put back in their
+        // original positions afterwards, because the output order is the input
+        // order and an embedding against the wrong row is worse than paying.
+        let config_fp = crate::checkpoint::fingerprint(&serde_json::json!({
+            "model": spec.model,
+            "input_column": spec.input_column,
+            "output_column": spec.output_column,
+            "endpoint": endpoint,
+        }));
+        let store = if spec.checkpoint {
+            match std::env::var("DUCKLE_WORKSPACE").ok().filter(|w| !w.is_empty()) {
+                Some(ws) => Some(crate::checkpoint::Store::open(
+                    std::path::Path::new(&ws),
+                    pipeline_name.unwrap_or(UNNAMED_RUN_FOLDER),
+                    &spec.node_id,
+                )?),
+                None => {
+                    return Err(EngineError::Config(
+                        concat!(
+                            "ai.embed: checkpointing needs a workspace ",
+                            "(DUCKLE_WORKSPACE) to keep completed items in"
+                        )
+                        .into(),
+                    ))
+                }
+            }
+        } else {
+            None
+        };
+        let keys: Vec<Option<String>> = rows
+            .iter()
+            .map(|r| {
+                store.as_ref().map(|_| {
+                    crate::checkpoint::item_key(
+                        r,
+                        &spec.checkpoint_key,
+                        &spec.checkpoint_fingerprint,
+                        &config_fp,
+                    )
+                })
+            })
+            .collect();
+        let mut cached: Vec<Option<JsonValue>> = vec![None; rows.len()];
+        let mut todo: Vec<usize> = Vec::new();
+        for i in 0..rows.len() {
+            match (store.as_ref(), keys[i].as_ref()) {
+                (Some(st), Some(k)) => match st.get(k) {
+                    Some(v) => cached[i] = Some(v.clone()),
+                    None => todo.push(i),
+                },
+                _ => todo.push(i),
+            }
+        }
+        let reused = rows.len() - todo.len();
+
+        let chunks: Vec<Vec<usize>> =
+            todo.chunks(spec.batch_size.max(1)).map(|c| c.to_vec()).collect();
         let per_chunk = self.ai_map_concurrent(chunks.len(), spec.concurrency, |engine, ci| {
-            let chunk = chunks[ci];
+            let chunk: &[usize] = &chunks[ci];
             // Pull the text from each row; missing / non-string values
             // become empty strings so the API call doesn't fail on a
             // single bad row.
             let inputs: Vec<String> = chunk
                 .iter()
-                .map(|row| {
-                    row.get(&spec.input_column)
+                .map(|&i| {
+                    rows[i]
+                        .get(&spec.input_column)
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string()
@@ -10729,23 +10795,47 @@ impl DuckdbEngine {
                 )));
             }
             let mut chunk_out = Vec::with_capacity(chunk.len());
-            for (row, item) in chunk.iter().zip(data.iter()) {
+            for (&i, item) in chunk.iter().zip(data.iter()) {
                 let embedding = item.get("embedding").cloned().unwrap_or(JsonValue::Null);
-                let mut obj = match row {
+                let mut obj = match &rows[i] {
                     JsonValue::Object(m) => m.clone(),
                     _ => serde_json::Map::new(),
                 };
                 obj.insert(spec.output_column.clone(), embedding);
-                chunk_out.push(JsonValue::Object(obj));
+                let produced = JsonValue::Object(obj);
+                // Recorded as this row's embedding arrives, so a later chunk
+                // failing keeps everything already bought.
+                if let (Some(store), Some(key)) = (store.as_ref(), keys[i].as_ref()) {
+                    store.record(key, &produced)?;
+                }
+                chunk_out.push((i, produced));
             }
             Ok(chunk_out)
         })?;
-        let out: Vec<JsonValue> = per_chunk.into_iter().flatten().collect();
+        // Back into input order. A cached row keeps its position; a freshly
+        // embedded one goes back where it came from.
+        let mut fresh: std::collections::BTreeMap<usize, JsonValue> =
+            per_chunk.into_iter().flatten().collect();
+        let out: Vec<JsonValue> = (0..rows.len())
+            .map(|i| {
+                cached[i]
+                    .take()
+                    .or_else(|| fresh.remove(&i))
+                    .unwrap_or_else(|| rows[i].clone())
+            })
+            .collect();
         let count = out.len();
         materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &out)?;
         Ok(format!(
-            "ai.embed ({}): embedded {} row(s) into {}",
-            spec.model, count, spec.node_id
+            "ai.embed ({}): embedded {} row(s) into {}{}",
+            spec.model,
+            count,
+            spec.node_id,
+            if reused > 0 {
+                format!(" ({} reused from the checkpoint, {} embedded)", reused, count - reused)
+            } else {
+                String::new()
+            }
         ))
     }
 
@@ -12106,6 +12196,7 @@ impl DuckdbEngine {
         &self,
         db: &Path,
         spec: &AiClassifySpec,
+        pipeline_name: Option<&str>,
     ) -> Result<String, EngineError> {
         self.check_cancelled()?;
         let rows = self.run_rows(
@@ -12123,8 +12214,58 @@ impl DuckdbEngine {
              Reply with only the category name and nothing else.",
             cat_list
         );
+        // #258: a row already classified is not classified again.
+        //
+        // The categories are part of the identity as much as the model is: the
+        // same text against a different category list is a different question,
+        // and reusing the old answer would be silently wrong.
+        let config_fp = crate::checkpoint::fingerprint(&serde_json::json!({
+            "model": spec.model,
+            "categories": spec.categories,
+            "system": system_prompt,
+            "input_column": spec.input_column,
+            "output_column": spec.output_column,
+            "endpoint": endpoint,
+        }));
+        let store = if spec.checkpoint {
+            match std::env::var("DUCKLE_WORKSPACE").ok().filter(|w| !w.is_empty()) {
+                Some(ws) => Some(crate::checkpoint::Store::open(
+                    std::path::Path::new(&ws),
+                    pipeline_name.unwrap_or(UNNAMED_RUN_FOLDER),
+                    &spec.node_id,
+                )?),
+                None => {
+                    return Err(EngineError::Config(
+                        concat!(
+                            "ai.classify: checkpointing needs a workspace ",
+                            "(DUCKLE_WORKSPACE) to keep completed items in"
+                        )
+                        .into(),
+                    ))
+                }
+            }
+        } else {
+            None
+        };
+        let reused = std::sync::atomic::AtomicUsize::new(0);
+
         let out = self.ai_map_concurrent(rows.len(), spec.concurrency, |engine, i| {
             let row = &rows[i];
+            // Reuse before spending.
+            let ck = store.as_ref().map(|_| {
+                crate::checkpoint::item_key(
+                    row,
+                    &spec.checkpoint_key,
+                    &spec.checkpoint_fingerprint,
+                    &config_fp,
+                )
+            });
+            if let (Some(store), Some(key)) = (store.as_ref(), ck.as_ref()) {
+                if let Some(done) = store.get(key) {
+                    reused.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return Ok(done.clone());
+                }
+            }
             let text = row
                 .get(&spec.input_column)
                 .and_then(|v| v.as_str())
@@ -12164,13 +12305,27 @@ impl DuckdbEngine {
                 _ => serde_json::Map::new(),
             };
             obj.insert(spec.output_column.clone(), JsonValue::String(chosen));
-            Ok(JsonValue::Object(obj))
+            let produced = JsonValue::Object(obj);
+            // Recorded as this item finishes, not when the stage does: a
+            // failure on the next row keeps everything already bought.
+            if let (Some(store), Some(key)) = (store.as_ref(), ck.as_ref()) {
+                store.record(key, &produced)?;
+            }
+            Ok(produced)
         })?;
         let count = out.len();
         materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &out)?;
+        let reused = reused.load(std::sync::atomic::Ordering::Relaxed);
         Ok(format!(
-            "ai.classify ({}): {} row(s) -> {}",
-            spec.model, count, spec.node_id
+            "ai.classify ({}): {} row(s) -> {}{}",
+            spec.model,
+            count,
+            spec.node_id,
+            if reused > 0 {
+                format!(" ({} reused from the checkpoint, {} called)", reused, count - reused)
+            } else {
+                String::new()
+            }
         ))
     }
 

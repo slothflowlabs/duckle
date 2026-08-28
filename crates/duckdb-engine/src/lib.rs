@@ -1865,7 +1865,9 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::ClipboardSource(spec)) => {
                         self.run_clipboard_source(&db_path, spec)
                     }
-                    Some(RuntimeSpec::AiEmbed(spec)) => self.run_ai_embed(&db_path, spec),
+                    Some(RuntimeSpec::AiEmbed(spec)) => {
+                        self.run_ai_embed(&db_path, spec, pipeline_name)
+                    }
                     Some(RuntimeSpec::Wasm(spec)) => self.run_wasm(&db_path, spec),
                     Some(RuntimeSpec::Javascript(spec)) => self.run_javascript(&db_path, spec),
                     Some(RuntimeSpec::Jq(spec)) => self.run_jq(&db_path, spec),
@@ -1875,7 +1877,9 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::AiLlm(spec)) => {
                         self.run_ai_llm(&db_path, spec, pipeline_name)
                     }
-                    Some(RuntimeSpec::AiClassify(spec)) => self.run_ai_classify(&db_path, spec),
+                    Some(RuntimeSpec::AiClassify(spec)) => {
+                        self.run_ai_classify(&db_path, spec, pipeline_name)
+                    }
                     Some(RuntimeSpec::AiDedupe(spec)) => self.run_ai_dedupe(&db_path, spec),
                     Some(RuntimeSpec::EmailSource(spec)) => self.run_email_source(&db_path, spec),
                     Some(RuntimeSpec::WebhookSource(spec)) => {

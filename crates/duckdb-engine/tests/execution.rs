@@ -19240,3 +19240,259 @@ fn a_corpus_larger_than_one_batch_is_read_completely_and_exactly_once() {
         .unwrap_or(0);
     assert_eq!(leftovers, 0, "the artifact list was left behind");
 }
+
+// ---------------------------------------------------------------------------
+// #258: the checkpoint xf.ai.llm got in bda903e, for the other two AI
+// transforms. The GUI already offered the fields on all three; only llm read
+// them, which is a setting that looks like it works and does nothing.
+// ---------------------------------------------------------------------------
+
+/// Read headers then exactly Content-Length more, so a reply never races the
+/// request body still being written.
+fn drain_http_request(stream: &mut std::net::TcpStream) -> String {
+    use std::io::Read;
+    let mut req: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 4096];
+    let head_end = loop {
+        match stream.read(&mut buf) {
+            Ok(0) | Err(_) => break None,
+            Ok(n) => {
+                req.extend_from_slice(&buf[..n]);
+                if let Some(i) = req.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break Some(i + 4);
+                }
+            }
+        }
+    };
+    if let Some(head_end) = head_end {
+        let head = String::from_utf8_lossy(&req[..head_end]).to_ascii_lowercase();
+        let want: usize = head
+            .split("content-length:")
+            .nth(1)
+            .and_then(|r| r.split(['\r', '\n']).next())
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
+        while req.len() - head_end < want {
+            match stream.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => req.extend_from_slice(&buf[..n]),
+            }
+        }
+    }
+    String::from_utf8_lossy(&req).into_owned()
+}
+
+/// A chat-completions stub that always answers with one fixed category and
+/// counts how many times it was actually asked.
+fn stub_fixed_answer(answer: &str) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let calls = std::sync::Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let answer = answer.to_string();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(std::time::Duration::from_millis(400))).ok();
+            let _ = drain_http_request(&mut stream);
+            seen.fetch_add(1, Ordering::SeqCst);
+            let body = format!(
+                "{{\"choices\":[{{\"message\":{{\"content\":\"{}\"}}}}]}}",
+                answer
+            );
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (port, calls)
+}
+
+/// An embeddings stub returning one vector per input, counting the INPUTS it
+/// was asked to embed - which is what the bill is, not the call count.
+fn stub_embeddings() -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let embedded = std::sync::Arc::new(AtomicUsize::new(0));
+    let seen = embedded.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(std::time::Duration::from_millis(400))).ok();
+            let req = drain_http_request(&mut stream);
+            let n = req
+                .split("\r\n\r\n")
+                .nth(1)
+                .and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok())
+                .and_then(|v| v.get("input").and_then(|i| i.as_array()).map(|a| a.len()))
+                .unwrap_or(0);
+            seen.fetch_add(n, Ordering::SeqCst);
+            let items: Vec<String> = (0..n)
+                .map(|i| format!("{{\"index\":{},\"embedding\":[0.1,0.2,0.3]}}", i))
+                .collect();
+            let body = format!("{{\"data\":[{}]}}", items.join(","));
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (port, embedded)
+}
+
+/// A row already classified is not classified again.
+#[test]
+fn ai_classify_does_not_pay_twice_for_a_row_it_already_categorised() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "cls.csv");
+    let (port, calls) = stub_fixed_answer("billing");
+    let rows = "SELECT i AS id, 'ask ' || i AS text FROM range(3) t(i)";
+    let props = json!({
+        "inputColumn": "text",
+        "outputColumn": "category",
+        "categories": "billing,support",
+        "model": "test-model",
+        "apiKey": "k",
+        "baseUrl": format!("http://127.0.0.1:{}", port),
+        "maxRetries": 0,
+        "checkpoint": true,
+        "checkpointKey": ["id"],
+    });
+    let pipeline = |p: serde_json::Value| {
+        doc(
+            json!([
+                node("s", "code.sql", json!({ "sql": rows })),
+                node("c", "xf.ai.classify", p),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+        )
+    };
+
+    let r = engine.execute_pipeline_named(&pipeline(props.clone()), "cls");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3, "three rows, three calls");
+    let first = std::fs::read_to_string(&out).unwrap_or_default();
+
+    let r = engine.execute_pipeline_named(&pipeline(props), "cls");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "the rerun classified again - the checkpoint bought nothing"
+    );
+    assert_eq!(std::fs::read_to_string(&out).unwrap_or_default(), first);
+    let note = r.nodes.get("c").and_then(|n| n.note.clone()).unwrap_or_default();
+    assert!(note.contains("3 reused"), "the reuse has to be visible: {note}");
+}
+
+/// Changing the categories is a different question, so the stored answer for
+/// the same text must not be reused.
+#[test]
+fn ai_classify_reprices_when_the_categories_change() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "cls2.csv");
+    let (port, calls) = stub_fixed_answer("billing");
+    let base = |cats: serde_json::Value| {
+        json!({
+            "inputColumn": "text", "outputColumn": "category", "categories": cats,
+            "model": "m", "apiKey": "k",
+            "baseUrl": format!("http://127.0.0.1:{}", port),
+            "maxRetries": 0, "checkpoint": true, "checkpointKey": ["id"],
+        })
+    };
+    let run = |p: serde_json::Value| {
+        doc(
+            json!([
+                node("s", "code.sql", json!({ "sql": "SELECT 1 AS id, 'hello' AS text" })),
+                node("c", "xf.ai.classify", p),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+        )
+    };
+
+    let r = engine.execute_pipeline_named(&run(base(json!("billing,support"))), "c2");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let r = engine.execute_pipeline_named(&run(base(json!("billing,support,sales"))), "c2");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "a different category list is a different question and must be re-asked"
+    );
+}
+
+/// Embedding is different: the billable unit is the BATCH, so reuse has to take
+/// the cached rows out and send only what is left - then put everything back in
+/// the original order.
+#[test]
+fn ai_embed_only_embeds_the_rows_it_has_not_embedded_before() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "emb.csv");
+    let (port, embedded) = stub_embeddings();
+    let pipeline = |sql: &str| {
+        doc(
+            json!([
+                node("s", "code.sql", json!({ "sql": sql })),
+                node("e", "xf.ai.embed", json!({
+                    "inputColumn": "text",
+                    "outputColumn": "vec",
+                    "model": "test-embed",
+                    "apiKey": "k",
+                    "baseUrl": format!("http://127.0.0.1:{}", port),
+                    "batchSize": 2,
+                    "maxRetries": 0,
+                    "checkpoint": true,
+                    "checkpointKey": ["id"],
+                })),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "s", "e"), main_edge("e2", "e", "k")]),
+        )
+    };
+
+    let three = "SELECT i AS id, 'text ' || i AS text FROM range(3) t(i)";
+    let r = engine.execute_pipeline_named(&pipeline(three), "emb");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(embedded.load(std::sync::atomic::Ordering::SeqCst), 3, "three rows embedded");
+
+    // Three of the four are unchanged; only the new one should be paid for.
+    let four = "SELECT i AS id, 'text ' || i AS text FROM range(4) t(i)";
+    let r = engine.execute_pipeline_named(&pipeline(four), "emb");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        embedded.load(std::sync::atomic::Ordering::SeqCst),
+        4,
+        "only the one new row should have been embedded, not all four again"
+    );
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 4, "every row still comes out");
+
+    // Input order: a cached row goes back where it came from, because an
+    // embedding against the wrong row is worse than paying again.
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    let ids: Vec<&str> = body.lines().skip(1).filter_map(|l| l.split(',').next()).collect();
+    assert_eq!(ids, vec!["0", "1", "2", "3"], "rows came back out of order: {body}");
+}

@@ -1114,6 +1114,13 @@ pub struct AiEmbedSpec {
     /// Retry-After. A rate limit at row 400,000 must not discard the 399,999
     /// rows already paid for.
     pub max_retries: u32,
+    /// #258: reuse an embedding this row already has rather than paying for
+    /// it a second time. Off by default.
+    pub checkpoint: bool,
+    /// Columns forming the logical identity of a row.
+    pub checkpoint_key: Vec<String>,
+    /// Columns that decide whether the INPUT changed. Empty = the whole row.
+    pub checkpoint_fingerprint: Vec<String>,
 }
 
 /// code.wasm: per-row WASM transform. The user supplies bytes (via
@@ -1290,6 +1297,13 @@ pub struct AiClassifySpec {
     /// Retry-After. A rate limit at row 400,000 must not discard the 399,999
     /// rows already paid for.
     pub max_retries: u32,
+    /// #258: reuse a category this row was already classified into rather
+    /// than paying for it a second time. Off by default.
+    pub checkpoint: bool,
+    /// Columns forming the logical identity of a row.
+    pub checkpoint_key: Vec<String>,
+    /// Columns that decide whether the INPUT changed. Empty = the whole row.
+    pub checkpoint_fingerprint: Vec<String>,
 }
 
 /// xf.ai.dedupe: semantic dedupe via cosine similarity over a
