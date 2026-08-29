@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import { useTranslation } from 'react-i18next';
 import type { Edge, Node } from '@xyflow/react';
 import { CheckCircle2, ChevronLeft, ChevronRight, MousePointer2, Workflow } from 'lucide-react';
-import { resolveUpstreamSchema, resolveUpstreamSampleRows, resolveOutputSchema } from '../schema-resolve';
+import { resolveUpstreamSchema, resolveUpstreamSampleRows, resolveOutputSchema, deriveSchemaFromEngine } from '../schema-resolve';
+import { invoke } from '@tauri-apps/api/core';
 import { buildContextVars, builtinVars, substituteDeep } from '../run-resolve';
 import type { Column, DuckleNodeData } from '../pipeline-types';
 import type {
@@ -168,9 +169,29 @@ export default function PropertiesPanel({
     // Rename node's Schema tab keeps showing the old names while the Preview and
     // every downstream node already see the renamed ones. resolveOutputSchema is
     // the same per-component derivation downstream nodes already rely on.
+    // #226: the per-component rules above cannot see a transform that adds
+    // several columns, removes one, or adds a column that is not text - and
+    // there are far more components than rules. Ask the engine what this node
+    // really produces, then re-render so the tab shows the answer rather than
+    // the guess. Reads nothing, so it is safe to do on every selection.
+    const [derivedTick, setDerivedTick] = useState(0);
+    useEffect(() => {
+        if (!selected) return;
+        let live = true;
+        void deriveSchemaFromEngine(selected.id, allNodes, edges, invoke).then(changed => {
+            if (live && changed) setDerivedTick(t => t + 1);
+        });
+        return () => {
+            live = false;
+        };
+    }, [selected, allNodes, edges]);
+
     const outputSchema = useMemo<Column[]>(
         () => (selected ? resolveOutputSchema(selected.id, allNodes, edges) : []),
-        [selected, edges, allNodes],
+        // derivedTick is a dependency on purpose: the engine's answer lands in
+        // a cache the resolver reads, so the memo has to be told it changed.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [selected, edges, allNodes, derivedTick],
     );
 
     const upstreamSampleRows = useMemo<Record<string, unknown>[]>(

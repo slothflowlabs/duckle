@@ -968,6 +968,104 @@ fn text_to_columns_splits_into_named_columns() {
 
 /// A row with fewer parts than there are output columns must yield NULL, not an
 /// empty string. split_part returns '' for a missing part and ''::DOUBLE aborts
+/// #226: the columns a node produces, without running it and without reading
+/// anything.
+///
+/// The GUI derives each node's schema from a per-component table, and there are
+/// far more components than entries in it - a component that is missing falls
+/// through to "schema unchanged", so its new columns never appear and a dropped
+/// one stays listed and renders empty. Rather than add entries forever, the
+/// node's own compiled SQL is run against a ZERO-ROW typed stub of its inputs
+/// and DuckDB is asked what came out.
+///
+/// Asserted on components the resolver does NOT model, because those are the
+/// ones this exists for.
+#[test]
+fn a_node_reports_its_real_columns_without_running() {
+    let engine = engine_or_skip!();
+    let upstream = vec![
+        duckle_duckdb_engine::Column {
+            name: "id".into(),
+            data_type: duckle_duckdb_engine::DataType::Int64,
+            nullable: true,
+            primary_key: None,
+            format: None,
+        },
+        duckle_duckdb_engine::Column {
+            name: "location".into(),
+            data_type: duckle_duckdb_engine::DataType::String,
+            nullable: true,
+            primary_key: None,
+            format: None,
+        },
+    ];
+    let names = |cols: &[duckle_duckdb_engine::Column]| {
+        cols.iter().map(|c| c.name.clone()).collect::<Vec<_>>().join(",")
+    };
+
+    // xf.hash appends a column and has no entry in the GUI resolver.
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": "unread.csv", "hasHeader": true })),
+            node("h", "xf.hash", json!({
+                "column": "location", "outputColumn": "loc_hash", "algorithm": "md5"
+            })),
+        ]),
+        json!([main_edge("e1", "s", "h")]),
+    );
+    let cols = engine
+        .describe_node_columns(&d, "h", &[("s".to_string(), upstream.clone())])
+        .expect("xf.hash must describe");
+    assert_eq!(
+        names(&cols),
+        "id,location,loc_hash",
+        "the appended column is reported, and the source file was never opened"
+    );
+
+    // Text to Columns with dropSource: the split column must be GONE, which is
+    // the half the GUI got wrong.
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": "unread.csv", "hasHeader": true })),
+            node("t", "xf.text.tocolumns", json!({
+                "column": "location", "delimiter": " ",
+                "outputColumns": "latitude, longitude", "dropSource": true
+            })),
+        ]),
+        json!([main_edge("e1", "s", "t")]),
+    );
+    let cols = engine
+        .describe_node_columns(&d, "t", &[("s".to_string(), upstream.clone())])
+        .expect("tocolumns must describe");
+    assert_eq!(names(&cols), "id,latitude,longitude");
+
+    // And the types are DuckDB's own, not a guess: split_part returns text.
+    assert!(
+        cols.iter().all(|c| c.name == "id" || c.data_type == duckle_duckdb_engine::DataType::String),
+        "{cols:?}"
+    );
+
+    // The type case, which a name-based guess gets wrong. The GUI's generic
+    // fall-through types every added column as text; length() is a BIGINT, so
+    // the Schema tab said string where the relation says int64.
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": "unread.csv", "hasHeader": true })),
+            node("L", "xf.length", json!({ "column": "location", "outputColumn": "loc_len" })),
+        ]),
+        json!([main_edge("e1", "s", "L")]),
+    );
+    let cols = engine
+        .describe_node_columns(&d, "L", &[("s".to_string(), upstream)])
+        .expect("xf.length must describe");
+    let len_col = cols.iter().find(|c| c.name == "loc_len").expect("the added column");
+    assert_eq!(
+        len_col.data_type,
+        duckle_duckdb_engine::DataType::Int64,
+        "length() is a BIGINT - guessing text from the property name is how the tab lied"
+    );
+}
+
 /// #226: what Text to Columns actually PRODUCES, for both dropSource states.
 ///
 /// dropSource had no test at all, which is how the GUI came to disagree with

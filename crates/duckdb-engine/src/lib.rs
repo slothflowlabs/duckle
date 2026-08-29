@@ -3135,6 +3135,71 @@ impl DuckdbEngine {
         (count, preview)
     }
 
+    /// #226: the columns a node really produces, worked out without running it.
+    ///
+    /// The GUI derives each node's output schema from a per-component table, and
+    /// a component missing from that table falls through to "schema unchanged" -
+    /// so its new columns never appear in the Schema or Preview tabs, and a column
+    /// it dropped stays listed and renders empty. That is a whole CLASS of bug: it
+    /// is one entry per component, and there are far more components than entries.
+    ///
+    /// This removes the class instead of adding entries. The node's own compiled
+    /// SQL is run against a ZERO-ROW typed stub of its inputs, and DuckDB is asked
+    /// to DESCRIBE the result. The answer is whatever the transform actually
+    /// produces, for any component, including ones written after this code.
+    ///
+    /// Nothing is read: the stubs are `SELECT CAST(NULL AS ...) WHERE 1=0`, so no
+    /// file is opened, no credential is used and no network is touched. That is
+    /// what makes it usable for a Schema tab rather than only for a run.
+    pub fn describe_node_columns(
+        &self,
+        doc: &PipelineDoc,
+        node_id: &str,
+        inputs: &[(String, Vec<Column>)],
+    ) -> Result<Vec<Column>, EngineError> {
+        let stages = compile_pipeline_sql(doc)?;
+        let stage = stages
+            .iter()
+            .find(|s| s.node_id == node_id)
+            .ok_or_else(|| EngineError::Config(format!("no stage for node {node_id:?}")))?;
+
+        let mut sql = String::new();
+        for (name, cols) in inputs {
+            // A zero-row relation with the right column names and types. WHERE 1=0
+            // keeps it empty while still binding, so the transform sees the shape
+            // it would see at run time and none of the data.
+            let projected: Vec<String> = cols
+                .iter()
+                .map(|c| {
+                    format!(
+                        "CAST(NULL AS {}) AS {}",
+                        plan::data_type_to_duckdb_sql(&c.data_type),
+                        plan::quote_ident(&c.name)
+                    )
+                })
+                .collect();
+            if projected.is_empty() {
+                continue;
+            }
+            sql.push_str(&format!(
+                "CREATE OR REPLACE VIEW {} AS SELECT {} WHERE 1=0;\n",
+                plan::quote_ident(name),
+                projected.join(", ")
+            ));
+        }
+        sql.push_str(stage.sql.trim_end_matches(';'));
+        sql.push_str(";\n");
+        sql.push_str(&format!("DESCRIBE {};", plan::quote_ident(node_id)));
+
+        let out = self.run(None, &sql, true)?;
+        let arrays = parse_json_arrays(&out);
+        // The DESCRIBE is the last statement, so its rows are the last array.
+        let described = arrays
+            .last()
+            .ok_or_else(|| EngineError::Query("no schema came back".into()))?;
+        Ok(described.iter().filter_map(parse_describe_row).collect())
+    }
+
     /// Run a single read-only SELECT and return its schema + up to `row_limit`
     /// rows in ONE DuckDB spawn. A lock-free read for dives: it does not take the
     /// run_lock or create a temp db (so it can run alongside a pipeline run), and

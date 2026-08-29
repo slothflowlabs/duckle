@@ -184,6 +184,7 @@ pub fn run() {
             watermark_clear,
             cancel_pipeline,
             compile_pipeline,
+            describe_node_columns,
             pipeline_column_lineage,
             pipeline_trust_report,
             schedule_set_workspace,
@@ -609,6 +610,27 @@ fn cancel_pipeline() -> Result<(), String> {
 #[tauri::command]
 fn compile_pipeline(pipeline: PipelineDoc) -> Result<Vec<StageSql>, String> {
     compile_pipeline_sql(&pipeline).map_err(|e| e.to_string())
+}
+
+/// #226: the columns a node really produces, without running it.
+///
+/// The editor derives each node's schema from a per-component table in the
+/// frontend, and there are far more components than entries in it. A component
+/// that is missing falls through to "schema unchanged", so columns it adds
+/// never reach the Schema or Preview tabs and a column it drops stays listed
+/// and renders empty. This asks DuckDB instead, by running the node's own
+/// compiled SQL against a zero-row typed stub of its inputs.
+///
+/// Reads nothing: no file is opened, no credential used, no network touched.
+#[tauri::command]
+fn describe_node_columns(
+    pipeline: PipelineDoc,
+    node_id: String,
+    inputs: Vec<(String, Vec<duckle_duckdb_engine::Column>)>,
+) -> Result<Vec<duckle_duckdb_engine::Column>, String> {
+    engine()?
+        .describe_node_columns(&pipeline, &node_id, &inputs)
+        .map_err(|e| e.to_string())
 }
 
 /// Column-level lineage for the whole pipeline: each node's output columns
