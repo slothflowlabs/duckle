@@ -67,6 +67,18 @@ impl Drift {
     }
 }
 
+/// The distributions that BUILD an environment rather than live in it.
+///
+/// `python -m venv` seeds pip, and setuptools and wheel before 3.12. This
+/// module supports a stdlib venv on purpose, so treating the tooling as a lock
+/// violation would refuse every correct workspace built that way - and a check
+/// that fires on a correct setup is a check somebody turns off.
+///
+/// They are still REPORTED by `installed_packages` and still counted in the
+/// environment hash: two machines on different pip versions are genuinely
+/// different environments. They are only exempt from being called drift.
+const BOOTSTRAP: &[&str] = &["pip", "setuptools", "wheel", "pkg-resources", "distribute"];
+
 /// PEP 503 normalisation, so `Foo.Bar_baz` and `foo-bar-baz` are one package.
 fn normalize(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
@@ -246,6 +258,9 @@ pub fn drift(env: &Env) -> Vec<Drift> {
                 installed: iv.to_string(),
                 locked: lv.to_string(),
             }),
+            // Scaffolding being present is never evidence that the
+            // environment is wrong.
+            None if BOOTSTRAP.contains(n) => {}
             None => out.push(Drift::Unlocked {
                 name: n.to_string(),
                 installed: iv.to_string(),
@@ -388,6 +403,29 @@ mod tests {
         assert!(!d[0].is_failure());
         let warned = guard(tmp.path()).expect("must not fail");
         assert!(warned.unwrap_or_default().contains("pywin32"), "but must be said out loud");
+    }
+
+    /// `python -m venv` seeds pip (and setuptools/wheel before 3.12), and this
+    /// module explicitly supports a stdlib venv - so a correct workspace would
+    /// have been refused for carrying the tools that built it.
+    ///
+    /// Scaffolding being present is never evidence that the environment is
+    /// wrong, and a check that fires on every correct setup gets turned off.
+    #[test]
+    fn the_tools_that_build_a_venv_are_not_drift() {
+        let tmp = tempfile::tempdir().unwrap();
+        venv_with(
+            tmp.path(),
+            &[("pyarrow", "17.0.0"), ("pip", "24.2"), ("setuptools", "75.1.0"), ("wheel", "0.44.0")],
+            "3.11.9",
+        );
+        lock_with(tmp.path(), &[("pyarrow", "17.0.0")]);
+        assert!(
+            drift(&inspect(tmp.path())).is_empty(),
+            "a stdlib venv's own tooling is not a lock violation: {:?}",
+            drift(&inspect(tmp.path()))
+        );
+        assert!(guard(tmp.path()).unwrap().is_none(), "and must not stop the run");
     }
 
     /// Something pip-installed on top is exactly what the lock is supposed to

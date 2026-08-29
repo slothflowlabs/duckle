@@ -130,6 +130,14 @@ impl Budget {
     /// requests run concurrently: checking and then incrementing would let N
     /// workers all pass the same last slot.
     pub fn claim_request(&self) -> Option<&'static str> {
+        // Token and cost first, and BEFORE the counter moves. They can only be
+        // known after a reply, so the contract is that no request STARTS once
+        // they are reached - and a request that never started must not be
+        // counted as one, least of all in the message a person reads to find
+        // out what they were charged for.
+        if let Some(reason) = self.exhausted().filter(|r| *r != REASON_REQUESTS) {
+            return Some(reason);
+        }
         if let Some(max) = self.max_requests {
             loop {
                 let now = self.requests.load(Ordering::Relaxed);
@@ -147,10 +155,7 @@ impl Budget {
         } else {
             self.requests.fetch_add(1, Ordering::Relaxed);
         }
-        // The token and cost ceilings are checked without claiming: they can
-        // only be known after the reply, so the honest contract is that no
-        // request STARTS once they are reached.
-        self.exhausted().filter(|r| *r != REASON_REQUESTS)
+        None
     }
 
     /// Record what a reply actually cost, from the provider's own `usage`.
@@ -240,6 +245,22 @@ mod tests {
         assert!(bud.claim_request().is_none(), "90 is under 100");
         bud.record(20, 5);
         assert_eq!(bud.claim_request(), Some(REASON_INPUT_TOKENS), "110 is over");
+    }
+
+    /// A stop is not a purchase. The counter was incremented BEFORE the token
+    /// and cost ceilings were consulted, so a run stopped by tokens reported one
+    /// more request than it had made - in the very message a person reads to
+    /// find out what they were charged for.
+    #[test]
+    fn a_stop_does_not_consume_a_request_slot() {
+        let bud = b(Some(10), Some(5), None, None, 0.0, 0.0);
+        bud.record(6, 0);
+        assert_eq!(bud.claim_request(), Some(REASON_INPUT_TOKENS));
+        assert!(
+            bud.spent_note().starts_with("0 request(s)"),
+            "no request went out, so none may be counted: {}",
+            bud.spent_note()
+        );
     }
 
     #[test]

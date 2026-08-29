@@ -121,6 +121,8 @@ fn parse(xsd: &str) -> Result<Schema, EngineError> {
     // The named complex type currently being filled, and the depth at which it
     // started so a nested inline type does not steal its children.
     let mut current: Option<(String, ComplexType)> = None;
+    // The named simple type whose base has not been seen yet.
+    let mut current_simple: Option<String> = None;
     let mut depth: i32 = 0;
     let mut current_depth: i32 = 0;
     // A global element's own inline complexType is stored under a private name.
@@ -221,19 +223,25 @@ fn parse(xsd: &str) -> Result<Schema, EngineError> {
                     "simpleType" => {
                         if let Some(n) = a.get("name") {
                             schema.simple.insert(n.clone(), None);
+                            current_simple = Some(n.clone());
                         }
                     }
                     "restriction" | "extension" => {
-                        // Record the base for the simple type most recently
-                        // named. Good enough for the common
-                        // `<xs:simpleType name="X"><xs:restriction base="xs:string">`.
-                        if let Some(base) = a.get("base") {
-                            if let Some((k, v)) = schema.simple.iter_mut().last() {
-                                if v.is_none() {
-                                    let _ = k;
-                                    *v = Some(base.clone());
-                                }
-                            }
+                        // The base belongs to the simple type currently OPEN,
+                        // held by name. It used to be written to
+                        // `simple.iter_mut().last()`, and a BTreeMap iterates by
+                        // KEY order rather than insertion order - so with two
+                        // named types the second one's base landed on whichever
+                        // sorted last, found it already set, and was dropped.
+                        // The type that lost its base fell back to text, which
+                        // for an xs:decimal is the money column this module
+                        // exists to keep exact.
+                        //
+                        // Taken, not just read: only the restriction directly
+                        // inside the named type counts, so an inline simpleType
+                        // nested within it cannot overwrite the answer.
+                        if let (Some(base), Some(name)) = (a.get("base"), current_simple.take()) {
+                            schema.simple.insert(name, Some(base.clone()));
                         }
                     }
                     "attribute" => {
@@ -524,6 +532,41 @@ mod tests {
         let cols = derive(CBE, "Root/Enterprises/Enterprise").unwrap();
         assert!(col(&cols, "Turnover").nullable);
         assert!(!col(&cols, "Employees").nullable);
+    }
+
+    /// Two named simple types, with the alphabetically LAST one declared FIRST.
+    ///
+    /// The base was recorded against `simple.iter_mut().last()`, and a BTreeMap
+    /// iterates by KEY order rather than insertion order - so the second type's
+    /// base landed on the first type (already set, so silently dropped) and the
+    /// second stayed unresolved. It then fell back to text, which for a money
+    /// column is exactly the loss `decimal_does_not_become_a_float` exists to
+    /// prevent - and that test passes with this bug present, because it declares
+    /// only ONE named simple type.
+    #[test]
+    fn a_second_named_simple_type_resolves_too() {
+        let xsd = r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+          <xs:simpleType name="ZipCode">
+            <xs:restriction base="xs:string"/>
+          </xs:simpleType>
+          <xs:simpleType name="Amount">
+            <xs:restriction base="xs:decimal"/>
+          </xs:simpleType>
+          <xs:complexType name="T">
+            <xs:sequence>
+              <xs:element name="zip" type="ZipCode"/>
+              <xs:element name="paid" type="Amount"/>
+            </xs:sequence>
+          </xs:complexType>
+          <xs:element name="R" type="T"/>
+        </xs:schema>"#;
+        let cols = derive(xsd, "R").unwrap();
+        assert_eq!(col(&cols, "zip").data_type, DataType::String);
+        assert_eq!(
+            col(&cols, "paid").data_type,
+            DataType::Decimal,
+            "the second named simple type must resolve to its base, not fall back to text"
+        );
     }
 
     /// A wrong path is a mistake worth naming, with the alternatives, rather
