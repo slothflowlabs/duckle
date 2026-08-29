@@ -8363,6 +8363,12 @@ impl DuckdbEngine {
             })
         };
         let row_matcher = compile(&spec.row_selector)?;
+        // #255: compiled once, and compiled EARLY - a bad selector should be a
+        // configuration error before the first request, not after it.
+        let next_matcher = match spec.next_page_selector.trim() {
+            "" => None,
+            sel => Some(compile(sel)?),
+        };
         let mut col_matchers: Vec<Option<dom_query::Matcher>> = Vec::with_capacity(spec.columns.len());
         for c in &spec.columns {
             col_matchers.push(if c.selector.is_empty() {
@@ -8420,17 +8426,20 @@ impl DuckdbEngine {
         // One body, two drivers. The corpus walks it in bounded batches so
         // the artifact list never lands in memory whole; a configured path
         // with nothing wired in calls it exactly once.
+        // #255: the returned value is the NEXT page's URL, when this page named
+        // one. Reported from here rather than found by the caller, because only
+        // this scope has the parsed document.
         let mut handle = |uri: &str,
                           source_sha: &Option<String>,
                           upstream_row: &JsonValue|
-         -> Result<(), EngineError> {
+         -> Result<Option<String>, EngineError> {
             self.check_cancelled()?;
             let html = match self.html_text(spec, uri, from_upstream) {
                 Ok(h) => h,
                 Err(e) if spec.on_error == "skip" => {
                     eprintln!("duckle: html: skipping {uri}: {e}");
                     skipped += 1;
-                    return Ok(());
+                    return Ok(None);
                 }
                 Err(e) => return Err(e),
             };
@@ -8538,14 +8547,67 @@ impl DuckdbEngine {
                     count += 1;
                 }
             }
-            Ok(())
+            // #255: where the next page is, if this one says. Resolved
+            // against <base href> when the document sets one and against
+            // this page otherwise, which is what a browser does - a bare
+            // `?p=2` means the same document with a different query.
+            let next = match (&next_matcher, from_upstream) {
+                // A corpus already names every document it wants; following
+                // links out of one would fetch pages nobody listed.
+                (_, true) => None,
+                (None, _) => None,
+                (Some(m), false) => {
+                    let base = doc
+                        .select("base[href]")
+                        .iter()
+                        .next()
+                        .and_then(|b| b.attr("href").map(|v| v.to_string()))
+                        .and_then(|href| crate::util::resolve_url(uri, &href))
+                        .unwrap_or_else(|| uri.to_string());
+                    doc.select_matcher(m)
+                        .iter()
+                        .next()
+                        .and_then(|el| el.attr(&spec.next_page_attribute).map(|v| v.to_string()))
+                        .and_then(|href| crate::util::resolve_url(&base, &href))
+                }
+            };
+            Ok(next)
         };
         if from_upstream {
             self.for_each_artifact_input(db, "", &spec.input, &spec.node_id, |a| {
-                handle(&a.uri, &a.sha256, &a.row)
+                handle(&a.uri, &a.sha256, &a.row).map(|_| ())
             })?;
         } else {
-            handle(&spec.path, &None, &JsonValue::Null)?;
+            // #255: server-rendered pagination. Follow the link this page
+            // names, then the one that page names, until there is none.
+            //
+            // Bounded three ways, because a pagination link is written by
+            // someone else: a hard page cap, a stop when the link does not
+            // move, and a stop when a URL repeats. The last one matters most
+            // - a 'next' that points back at page 1 is a cycle, not a long
+            // list, and without it the run never ends.
+            let mut url = spec.path.clone();
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut pages: u64 = 0;
+            loop {
+                seen.insert(url.clone());
+                pages += 1;
+                let next = handle(&url, &None, &JsonValue::Null)?;
+                let Some(next) = next else { break };
+                if pages >= spec.max_pages {
+                    // Said out loud: a truncated result that looks complete
+                    // is worse than one that says it stopped.
+                    eprintln!(
+                        "duckle: html: stopped at the {}-page limit with more pages to follow ({})",
+                        spec.max_pages, next
+                    );
+                    break;
+                }
+                if !seen.insert(next.clone()) {
+                    break;
+                }
+                url = next;
+            }
         }
 
         match &spec.declared_schema {

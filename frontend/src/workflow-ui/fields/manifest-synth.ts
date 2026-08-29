@@ -1036,6 +1036,31 @@ function synthFileSource(comp: ComponentDef): ComponentManifest {
             : []),
         ...(comp.id === 'src.html'
             ? [{
+                  label: 'Follow pagination',
+                  fields: [
+                      {
+                          key: 'nextPageSelector',
+                          label: 'Next-page link',
+                          kind: 'text' as const,
+                          placeholder: 'a.next',
+                          description: 'A CSS selector for the link to the next page. Duckle follows it, then the one that page names, until a page names none - so server-rendered pagination needs no loop. Relative links are resolved the way a browser does, against the page URL or a <base href> if the document sets one. Leave blank to read one page. Ignored when documents are wired in from upstream, since that list already names every page it wants.',
+                      },
+                      {
+                          key: 'nextPageAttribute',
+                          label: 'Link attribute',
+                          kind: 'text' as const,
+                          defaultValue: 'href',
+                          description: 'Which attribute of that element holds the URL.',
+                      },
+                      {
+                          key: 'maxPages',
+                          label: 'Max pages',
+                          kind: 'integer' as const,
+                          defaultValue: 100,
+                          description: 'A safety cap. A next link written by someone else can point back at page 1, which is a cycle rather than a long list; Duckle also stops on its own if a URL repeats.',
+                      },
+                  ],
+              }, {
                   label: 'Keep the original page',
                   fields: [{
                       key: 'rawResponseDestination',

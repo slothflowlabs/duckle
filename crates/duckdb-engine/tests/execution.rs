@@ -8,6 +8,9 @@ use duckle_duckdb_engine::{DuckdbEngine, PipelineDoc};
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::Path;
+
+/// Header line ending, as a constant so tests need no escapes for it.
+const CRLF: &str = "\r\n";
 use std::sync::Mutex;
 
 /// Serializes tests that mutate process-global env vars (DUCKLE_WORKSPACE /
@@ -15552,6 +15555,95 @@ fn src_html_extracts_columns_by_selector_including_attributes() {
 
 /// #255: the GUI writes its column list as a key-value map, so the engine has
 /// to read that shape too - otherwise the form works and the run produces
+/// #255: server-rendered pagination - follow the link the page names.
+///
+/// The next link is written RELATIVE, which is the shape real pagination uses
+/// and the one string concatenation gets wrong: `?p=2` means the same document
+/// with a different query, not a path segment appended.
+///
+/// The last page names no next link, which is how the walk ends.
+#[test]
+fn src_html_follows_the_next_page_link() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let asked = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let served = Arc::new(AtomicUsize::new(0));
+    let (seen, count) = (asked.clone(), served.clone());
+    let handle = std::thread::spawn(move || {
+        for stream in listener.incoming().take(4) {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            let line = req.lines().next().unwrap_or("").to_string();
+            seen.lock().unwrap().push(line.clone());
+            let i = count.fetch_add(1, Ordering::SeqCst);
+            // Page 1 and 2 name a RELATIVE next link; page 3 names none.
+            let body = if i < 2 {
+                format!(
+                    "<html><body><ul><li class=item>row{}</li></ul>\
+                     <a class=next href=\"?p={}\">next</a></body></html>",
+                    i + 1,
+                    i + 2
+                )
+            } else {
+                "<html><body><ul><li class=item>row3</li></ul></body></html>".to_string()
+            };
+            let resp = format!(
+                "HTTP/1.1 200 OK{}Content-Type: text/html{}Content-Length: {}{}Connection: close{}{}",
+                CRLF, CRLF, body.len(), CRLF, CRLF, CRLF
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "rows.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.html", json!({
+                "path": format!("http://127.0.0.1:{}/a/b/list.html", port),
+                "rowSelector": "li.item",
+                "columns": [{ "name": "v", "selector": "" }],
+                "nextPageSelector": "a.next",
+                "maxPages": 10,
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    drop(handle);
+    assert_eq!(r.status, "ok", "pagination failed: {:?}", r.error);
+
+    assert_eq!(
+        count_rows(&out),
+        3,
+        "one row per page, and the walk stopped when a page named no next link"
+    );
+    let reqs = asked.lock().unwrap().clone();
+    assert_eq!(reqs.len(), 3, "three pages, three requests: {reqs:?}");
+    // The relative link resolved against the DIRECTORY of the current
+    // document, keeping the path and replacing only the query.
+    assert!(reqs[0].contains("/a/b/list.html"), "{}", reqs[0]);
+    assert!(
+        reqs[1].contains("/a/b/list.html?p=2"),
+        "a relative ?p=2 must keep the path: {}",
+        reqs[1]
+    );
+    assert!(reqs[2].contains("/a/b/list.html?p=3"), "{}", reqs[2]);
+}
+
 /// #260: src.html archives the exact page it parsed, before parsing it.
 ///
 /// The point is not that a file appears - it is that the file is the bytes the

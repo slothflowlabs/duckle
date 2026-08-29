@@ -4630,6 +4630,18 @@ fn build_stage(
         let mut headers = headers_from_props(&props);
         push_rest_auth(&mut headers, &props);
         html_source = Some(HtmlSourceSpec {
+            next_page_selector: string_prop(&props, "nextPageSelector")
+                .map(|v| v.trim().to_string())
+                .unwrap_or_default(),
+            next_page_attribute: string_prop(&props, "nextPageAttribute")
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| "href".to_string()),
+            max_pages: props
+                .get("maxPages")
+                .and_then(JsonValue::as_u64)
+                .filter(|n| *n > 0)
+                .unwrap_or(100),
             raw_response_destination: string_prop(&props, "rawResponseDestination")
                 .map(|v| v.trim().to_string())
                 .unwrap_or_default(),

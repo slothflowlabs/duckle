@@ -609,6 +609,17 @@ pub struct HtmlColumn {
 /// outright, so this parses with a tolerant HTML parser instead.
 #[derive(Debug, Clone)]
 pub struct HtmlSourceSpec {
+    /// #255: a CSS selector for the link to the next page.
+    ///
+    /// Empty = one page, which is every pipeline that existed before. Only
+    /// followed on the configured-path route: a corpus wired in from upstream
+    /// already names every document it wants.
+    pub next_page_selector: String,
+    /// Which attribute of that element holds the URL. `href` by default.
+    pub next_page_attribute: String,
+    /// Hard cap on pages followed. A pagination link that points at itself is a
+    /// loop, and a loop with no cap is a run that never ends.
+    pub max_pages: u64,
     /// #260: where to persist the ORIGINAL page, before parsing.
     ///
     /// Same contract as `src.rest`: empty = capture nothing, `{sha256}` and

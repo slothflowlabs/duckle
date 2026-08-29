@@ -1579,3 +1579,171 @@ pub(crate) fn workspace_env_guard() -> std::sync::MutexGuard<'static, ()> {
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
+
+/// #255: resolve a link found in a page against the page it came from.
+///
+/// Server-rendered pagination puts a relative href in the markup - `?page=2`,
+/// `/companies?p=2`, `../next` - and following it means joining it to the
+/// current URL the way a browser would. Getting this wrong does not error, it
+/// fetches the WRONG page, so each shape is spelled out and tested rather than
+/// approximated with string concatenation.
+///
+/// `None` when there is nothing usable, which the caller treats as "no next
+/// page" rather than as a failure.
+pub(crate) fn resolve_url(base: &str, href: &str) -> Option<String> {
+    let href = href.trim();
+    if href.is_empty() {
+        return None;
+    }
+    // Already absolute: a scheme is `letter *( letter / digit / + / - / . ) :`.
+    if let Some(i) = href.find(':') {
+        let scheme = &href[..i];
+        if !scheme.is_empty()
+            && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+        {
+            return Some(href.to_string());
+        }
+    }
+    let (scheme, rest) = base.split_once("://")?;
+    // Protocol-relative: keep the page's own scheme.
+    if let Some(hostpath) = href.strip_prefix("//") {
+        return Some(format!("{scheme}://{hostpath}"));
+    }
+    let (authority, base_path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    // The base path without its query or fragment - a link is resolved against
+    // the document, not against the query that produced it.
+    let base_path = base_path
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("/");
+    let root = format!("{scheme}://{authority}");
+
+    if let Some(frag) = href.strip_prefix('#') {
+        return Some(format!("{root}{base_path}#{frag}"));
+    }
+    if href.starts_with('?') {
+        return Some(format!("{root}{base_path}{href}"));
+    }
+    if href.starts_with('/') {
+        return Some(format!("{root}{}", normalize_path(href)));
+    }
+    // Relative to the DIRECTORY of the current document, so `next` beside
+    // `/a/b/page.html` is `/a/b/next`, not `/a/b/page.html/next`.
+    let dir = match base_path.rfind('/') {
+        Some(i) => &base_path[..=i],
+        None => "/",
+    };
+    Some(format!("{root}{}", normalize_path(&format!("{dir}{href}"))))
+}
+
+/// Collapse `.` and `..` in a path, the way a browser does before requesting.
+///
+/// A `..` that would climb past the root is dropped rather than kept: no server
+/// can serve it, and keeping it would send a request that is certain to fail.
+fn normalize_path(path: &str) -> String {
+    let (path, tail) = match path.find(['?', '#']) {
+        Some(i) => (&path[..i], &path[i..]),
+        None => (path, ""),
+    };
+    let mut out: Vec<&str> = Vec::new();
+    for seg in path.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            s => out.push(s),
+        }
+    }
+    let trailing = path.ends_with('/') && !out.is_empty();
+    let mut s = String::from("/");
+    s.push_str(&out.join("/"));
+    if trailing {
+        s.push('/');
+    }
+    s.push_str(tail);
+    s
+}
+
+#[cfg(test)]
+mod url_resolve_tests {
+    use super::resolve_url;
+
+    const PAGE: &str = "https://example.com/a/b/list.html?p=1";
+
+    #[test]
+    fn an_absolute_link_is_left_alone() {
+        assert_eq!(
+            resolve_url(PAGE, "https://other.test/x").as_deref(),
+            Some("https://other.test/x")
+        );
+    }
+
+    #[test]
+    fn a_protocol_relative_link_keeps_the_pages_scheme() {
+        assert_eq!(
+            resolve_url(PAGE, "//cdn.test/x").as_deref(),
+            Some("https://cdn.test/x")
+        );
+    }
+
+    #[test]
+    fn a_root_relative_link_replaces_the_whole_path() {
+        assert_eq!(
+            resolve_url(PAGE, "/companies?p=2").as_deref(),
+            Some("https://example.com/companies?p=2")
+        );
+    }
+
+    /// The commonest shape in server-rendered pagination, and the one string
+    /// concatenation gets wrong: it belongs to the DIRECTORY, not to the file.
+    #[test]
+    fn a_relative_link_resolves_against_the_directory() {
+        assert_eq!(
+            resolve_url(PAGE, "page2.html").as_deref(),
+            Some("https://example.com/a/b/page2.html")
+        );
+    }
+
+    #[test]
+    fn a_query_only_link_keeps_the_path_and_replaces_the_query() {
+        assert_eq!(
+            resolve_url(PAGE, "?p=2").as_deref(),
+            Some("https://example.com/a/b/list.html?p=2")
+        );
+    }
+
+    #[test]
+    fn dot_segments_are_collapsed() {
+        assert_eq!(
+            resolve_url(PAGE, "../c/page2.html").as_deref(),
+            Some("https://example.com/a/c/page2.html")
+        );
+        assert_eq!(
+            resolve_url(PAGE, "./page2.html").as_deref(),
+            Some("https://example.com/a/b/page2.html")
+        );
+    }
+
+    /// Climbing past the root is not a URL any server can serve, so it is
+    /// clamped rather than sent.
+    #[test]
+    fn climbing_past_the_root_is_clamped() {
+        assert_eq!(
+            resolve_url(PAGE, "../../../../x").as_deref(),
+            Some("https://example.com/x")
+        );
+    }
+
+    #[test]
+    fn nothing_usable_is_none_rather_than_an_error() {
+        assert_eq!(resolve_url(PAGE, "   "), None);
+        assert_eq!(resolve_url("not a url", "x"), None);
+    }
+}

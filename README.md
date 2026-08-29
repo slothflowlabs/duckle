@@ -841,6 +841,32 @@ of, so nothing downstream re-derives the destination template - which `{date}`
 would not reproduce on a run that crossed midnight anyway. The artifact is
 written **before** the parse, so a row can never name a file that does not exist.
 
+### Following pagination a server rendered
+
+Set a **Next-page link** selector on `src.html` and Duckle follows the link the
+page names, then the one that page names, until a page names none:
+
+```
+Next-page link : a.next
+Link attribute : href
+Max pages      : 100
+```
+
+Relative links resolve the way a browser resolves them - against the page URL,
+or a `<base href>` when the document sets one. A bare `?p=2` keeps the path and
+replaces the query; `../next` climbs one directory. Getting that wrong does not
+error, it silently fetches the wrong page, so each shape has its own test.
+
+Bounded three ways, because the link is written by someone else: a page cap, a
+stop when a page names no link, and a stop when a URL **repeats**. That last one
+matters most - a next link pointing back at page 1 is a cycle, not a long list.
+
+Every page goes through the same transport, capture and provenance as the first,
+so `_response_uri` and `_response_sha256` identify the page a row came from.
+
+Ignored when documents are wired in from upstream: that list already names every
+page it wants, and following links out of it would fetch pages nobody asked for.
+
 ### Handing a scanned page to your own OCR
 
 Duckle does not do OCR, and will not: rasterising needs a native rendering
