@@ -82,6 +82,14 @@ pub fn list_tools() -> Value {
                 "workspace": { "type": "string", "description": "Workspace root for run logs + child-job resolution." },
                 "target": { "type": "string", "description": "Node id to stop at. Only this node and what feeds it run, so nothing downstream executes and no sink past it writes. Its rows come back in 'preview'." }
             }})),
+        tool("run_tests",
+            "Run the workspace's pipeline tests and return each case's result. A test asserts the rows out of one node against a fixture, so this catches a transform that compiles and computes the wrong thing - which validate_pipeline cannot. Runs every *.test.json under the workspace's tests/ directory, or just the files named. Needs a DuckDB binary.",
+            json!({ "type": "object", "properties": {
+                "workspace": { "type": "string", "description": "Workspace root. Defaults to the current directory." },
+                "paths": { "type": "array", "items": { "type": "string" },
+                           "description": "Specific .test.json files to run. Omit to run every test in the workspace." },
+                "duckdb": { "type": "string", "description": "Path to the DuckDB CLI. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb' on PATH." }
+            }})),
         tool("pipeline_lineage",
             "Resolve column-level lineage for a pipeline: for each node, map its output columns back to their root source columns. Read-only (writes nothing); needs a DuckDB binary.",
             json!({ "type": "object", "properties": {
@@ -272,6 +280,7 @@ pub fn call_tool(params: Value) -> Result<Value, (i64, String)> {
         "update_pipeline" => t_update_pipeline(&args),
         "validate_pipeline" => t_validate_pipeline(&args),
         "run_pipeline" => t_run_pipeline(&args),
+        "run_tests" => t_run_tests(&args),
         "pipeline_lineage" => t_pipeline_lineage(&args),
         "verify_pipeline" => t_verify_pipeline(&args),
         "suggest_contracts" => t_suggest_contracts(&args),
@@ -871,6 +880,63 @@ fn t_update_pipeline(args: &Value) -> Result<Value, String> {
         }
     }
     Ok(json!({ "ok": true, "path": path.to_string_lossy(), "registeredInRepository": registered, "validation": validation }))
+}
+
+/// #250: run the workspace's pipeline tests.
+///
+/// This SHELLS OUT to `duckle-runner test --json` rather than reimplementing
+/// the harness, and that is the point rather than a shortcut. The runner owns
+/// what a case means - how a fixture is resolved, how types are compared, what
+/// counts as unique - and a second implementation here would be a second answer
+/// to the same question. Those drift. The agent still needs no shell: it calls
+/// a tool, and the server runs the binary it ships beside.
+fn t_run_tests(args: &Value) -> Result<Value, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("locating this executable: {e}"))?;
+    let name = if cfg!(windows) { "duckle-runner.exe" } else { "duckle-runner" };
+    let runner = exe
+        .parent()
+        .map(|d| d.join(name))
+        .filter(|p| p.exists())
+        .ok_or_else(|| {
+            format!(
+                "{name} not found next to {}. The MCP server runs the test harness rather than \
+                 carrying its own copy, so the two cannot disagree about what a case means.",
+                exe.display()
+            )
+        })?;
+
+    let mut cmd = std::process::Command::new(&runner);
+    cmd.arg("test").arg("--json");
+    if let Some(paths) = args.get("paths").and_then(Value::as_array) {
+        for p in paths.iter().filter_map(Value::as_str) {
+            cmd.arg(p);
+        }
+    }
+    if let Some(ws) = args.get("workspace").and_then(Value::as_str) {
+        cmd.current_dir(ws);
+    }
+    if let Some(d) = args.get("duckdb").and_then(Value::as_str) {
+        cmd.env("DUCKLE_DUCKDB_BIN", d);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = cmd
+        .output()
+        .map_err(|e| format!("running {}: {e}", runner.display()))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The harness exits 1 on a failed assertion, which is a RESULT, not an
+    // error - the agent wants the failures, not a tool error that hides them.
+    match serde_json::from_str::<Value>(stdout.trim()) {
+        Ok(v) => Ok(v),
+        Err(_) => Err(format!(
+            "the test harness returned nothing readable (exit {}): {}",
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )),
+    }
 }
 
 fn t_run_pipeline(args: &Value) -> Result<Value, String> {
