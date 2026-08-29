@@ -1,0 +1,98 @@
+name: traffic-badge
+
+# GitHub's clone traffic is not public: /traffic/clones needs push access, so
+# shields.io cannot read it and there is no off-the-shelf clone badge. It is
+# also only retained for 14 DAYS, so a monthly figure has to be accumulated
+# rather than asked for.
+#
+# This job reads the window every day, merges it into a per-day history kept in
+# the repo, and writes a shields "endpoint" file the README badge points at.
+# Merging by date makes a re-run or a missed day harmless: the same date simply
+# overwrites itself rather than double-counting.
+
+on:
+  schedule:
+    # 03:20 UTC daily. Well inside the 14-day retention, so several days can be
+    # missed without leaving a hole in the history.
+    - cron: '20 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: traffic-badge
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read clone traffic and update the history
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p .github/badges
+          [ -f .github/badges/clones-history.json ] || echo '{}' > .github/badges/clones-history.json
+
+          gh api "repos/${GITHUB_REPOSITORY}/traffic/clones" > /tmp/window.json
+
+          # Merge the 14-day window into the history, keyed by date. Keeping 400
+          # days leaves room to report a longer window later without another
+          # migration; the badge only reads the last 30.
+          jq -n \
+            --slurpfile hist .github/badges/clones-history.json \
+            --slurpfile win /tmp/window.json \
+            '($hist[0] // {}) as $h
+             | reduce ($win[0].clones // [])[] as $d
+                 ($h; .[($d.timestamp | split("T")[0])] = {count: $d.count, uniques: $d.uniques})
+             | to_entries | sort_by(.key) | .[-400:] | from_entries' \
+            > /tmp/history.json
+          mv /tmp/history.json .github/badges/clones-history.json
+
+      - name: Write the badge endpoint
+        run: |
+          set -euo pipefail
+          # The last 30 dates present, summed. Dates rather than a rolling
+          # timestamp window, because the API reports whole days.
+          total=$(jq '[to_entries | sort_by(.key) | .[-30:] | .[].value.count] | add // 0' \
+            .github/badges/clones-history.json)
+          uniq=$(jq '[to_entries | sort_by(.key) | .[-30:] | .[].value.uniques] | add // 0' \
+            .github/badges/clones-history.json)
+          days=$(jq '[to_entries | .[-30:]] | length' .github/badges/clones-history.json)
+
+          # A short form, because a badge is read at a glance: 9860 -> 9.9k.
+          human=$(awk -v n="$total" 'BEGIN{
+            if (n >= 1000000) printf "%.1fM", n/1000000;
+            else if (n >= 1000) printf "%.1fk", n/1000;
+            else printf "%d", n
+          }')
+
+          # Say how many days the figure actually covers. Before a month of
+          # history exists the label would otherwise overstate the window.
+          label=$([ "$days" -ge 30 ] && echo "CLONES/MO" || echo "CLONES/${days}d")
+
+          jq -n --arg m "$human" --arg l "$label" \
+            '{schemaVersion: 1, label: $l, message: $m, color: "2b6cb0"}' \
+            > .github/badges/clones.json
+
+          echo "$label = $human ($total clones, $uniq unique, over $days day(s))"
+
+      - name: Commit if it changed
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- .github/badges; then
+            echo "no change"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/badges
+          git commit -m "chore(traffic): refresh the clone-count badge"
+          # Rebase rather than force: this job must never overwrite real work
+          # that landed while it was running.
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

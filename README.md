@@ -13,6 +13,7 @@
 <p>
 <img alt="status" src="https://img.shields.io/badge/status-beta-3b82f6?style=for-the-badge"/>
 <a href="https://github.com/slothflowlabs/duckle/releases"><img alt="downloads" src="https://img.shields.io/github/downloads/slothflowlabs/duckle/total?style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;label=DOWNLOADS&amp;color=2b6cb0"/></a>
+<img alt="clones" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fslothflowlabs%2Fduckle%2Fmain%2F.github%2Fbadges%2Fclones.json&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white"/>
 <img alt="stars" src="https://img.shields.io/github/stars/slothflowlabs/duckle?style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;label=STARS&amp;color=f59e0b"/>
 <a href="https://discord.com/invite/rUeAStJbWb"><img alt="discord" src="https://img.shields.io/discord/1498599942246109265?style=for-the-badge&amp;logo=discord&amp;logoColor=white&amp;label=DISCORD&amp;color=5865F2"/></a>
 <br/>
