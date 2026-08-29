@@ -841,6 +841,55 @@ of, so nothing downstream re-derives the destination template - which `{date}`
 would not reproduce on a run that crossed midnight anyway. The artifact is
 written **before** the parse, so a row can never name a file that does not exist.
 
+### Handing a scanned page to your own OCR
+
+Duckle does not do OCR, and will not: rasterising needs a native rendering
+engine plus per-language trained data, which would end the self-contained
+cross-OS build. What it owes instead is a page you can render **without
+guessing** - so a page with no text layer arrives carrying everything an
+external stage needs.
+
+```
+src.changed  ->  xf.artifact.copy  ->  src.pdf  ->  filter  ->  code.python
+                 (localise)            (pages)     (no text)   (your OCR)
+```
+
+```sql
+SELECT document_uri, page_number, source_sha256
+FROM pages
+WHERE has_text_layer = false
+```
+
+| column | what the OCR stage does with it |
+|---|---|
+| `document_uri` | opens it |
+| `page_number` | renders that page |
+| `source_sha256` | pins the bytes, so a re-render is reproducible |
+
+Then, in **your** locked environment - the one `uv.lock` pins, so the render is
+the same next month:
+
+```python
+import fitz  # PyMuPDF
+
+def process(row):
+    page = fitz.open(row["document_uri"])[int(row["page_number"]) - 1]
+    row["image_path"] = f"/work/{row['source_sha256']}-{row['page_number']}.png"
+    page.get_pixmap(dpi=300).save(row["image_path"])
+    return row
+```
+
+**Localise before OCR.** That is the one constraint. When `src.pdf` fetches a
+remote document it spools, parses and deletes - one document at a time, so the
+bound is a document rather than the corpus - and `document_uri` is then the
+remote URI, which a Python step cannot open. Re-fetching it would be neither
+stable nor reproducible: a URL is a name that can be rebound, so the second
+fetch may not be the bytes that were parsed. `xf.artifact.copy` first, and
+`document_uri` is a local path.
+
+PyMuPDF, Docling, PaddleOCR and Tesseract all work from that pair, and none of
+them become Duckle's problem.
+
 ### A cursor that reaches the request
 
 Filtering after the fetch is not incremental for an API. You still pay for the

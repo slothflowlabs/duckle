@@ -18172,6 +18172,77 @@ fn src_pdf_reads_the_documents_an_upstream_relation_names() {
     assert!(body.contains("a.pdf") && body.contains("b.pdf"), "document_uri names the source");
 }
 
+/// #248: the scanned-page handoff, as a contract.
+///
+/// Duckle does not do OCR and will not: rasterising needs a native rendering
+/// engine plus per-language trained data, which would end the self-contained
+/// cross-OS build. What it owes instead is a page a downstream stage can
+/// render WITHOUT guessing - so this pins the four things a `code.python`
+/// step needs, for a page that has no text layer:
+///
+///   document_uri    a path that stage can actually open
+///   page_number     which page to render
+///   has_text_layer  false, which is how the page was selected
+///   source_sha256   the bytes that were parsed, so the render is reproducible
+///
+/// Asserted on the page with NO text, because that is the only page anyone
+/// hands to OCR.
+#[test]
+fn a_scanned_page_carries_everything_an_ocr_stage_needs() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let pdf = tmp.path().join("scan.pdf");
+    // Page 2 has no text layer - a scan.
+    std::fs::write(&pdf, minimal_pdf(&["Readable page", ""])).unwrap();
+    let out = out_path(tmp.path(), "todo.csv");
+
+    // The realistic shape: an artifact relation naming documents already
+    // localised, which is what xf.artifact.copy produces.
+    let uri = pdf.to_string_lossy().replace('\\', "/");
+    let rows = format!("SELECT '{uri}' AS uri, 'sha-of-scan' AS sha256");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("art", "code.sql", json!({ "sql": rows })),
+            node("s", "src.pdf", json!({})),
+            // Exactly the filter a user writes to find work for OCR.
+            node("todo", "code.sql", json!({
+                "sql": "SELECT document_uri, page_number, source_sha256 FROM s WHERE has_text_layer = false"
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([
+            main_edge("e1", "art", "s"),
+            main_edge("e2", "s", "todo"),
+            main_edge("e3", "todo", "k"),
+        ]),
+    ));
+    assert_eq!(r.status, "ok", "the handoff pipeline failed: {:?}", r.error);
+
+    assert_eq!(
+        count(&format!("read_csv_auto('{}')", out)),
+        1,
+        "one page has no text layer, so exactly one page is OCR work"
+    );
+    let doc_uri = scalar_string(&format!(
+        "SELECT document_uri FROM read_csv_auto('{}')",
+        out
+    ));
+    assert!(
+        std::path::Path::new(&doc_uri).is_file(),
+        "the OCR stage must be able to OPEN this, not merely read it: {doc_uri:?}"
+    );
+    assert_eq!(
+        scalar_string(&format!("SELECT page_number FROM read_csv_auto('{}')", out)),
+        "2",
+        "and it must say WHICH page - page 1 has text and is not OCR work"
+    );
+    assert_eq!(
+        scalar_string(&format!("SELECT source_sha256 FROM read_csv_auto('{}')", out)),
+        "sha-of-scan",
+        "the hash of the bytes that were parsed travels, so a re-render is reproducible"
+    );
+}
+
 /// A raw zone is remote, so the parser has to fetch. The spool is one document
 /// at a time and must be gone afterwards - a long run that leaves every
 /// document behind fills the disk.
