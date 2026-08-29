@@ -14737,18 +14737,15 @@ impl DuckdbEngine {
         // aliases are untouched. The agent, the once-per-run OAuth token, the
         // headers, the row extraction and all five pagination strategies below
         // are shared across the fan-out rather than redone per request.
-        let parents: Vec<JsonValue> = match (&spec.from_view, &spec.url_template) {
-            (Some(view), Some(_)) => self.run_rows(
-                Some(db),
-                &format!("SELECT * FROM {};", quote_ident(view)),
-            )?,
-            _ => vec![JsonValue::Null],
+        let mut parents = match (&spec.from_view, &spec.url_template) {
+            (Some(view), Some(_)) => ParentStream::spill(&self.bin, db, view, &spec.node_id)?,
+            _ => ParentStream::single(),
         };
         // The mark is substituted before the parent-row pass, so an upstream
         // column of the same name would be shadowed without a word. Refuse
         // rather than pick one silently.
         if spec.incremental_field.is_some() {
-            if let Some(obj) = parents.first().and_then(|p| p.as_object()) {
+            if let Some(obj) = parents.peek_first().as_ref().and_then(|p| p.as_object()) {
                 if obj.contains_key(INCREMENTAL_NAME) {
                     return Err(EngineError::Config(format!(
                         "rest: the upstream has a column named {INCREMENTAL_NAME:?}, which is \
@@ -14758,10 +14755,13 @@ impl DuckdbEngine {
                 }
             }
         }
-        if spec.url_template.is_some() && parents.len() as u64 > spec.max_requests {
+        // Counted rather than measured from a list, so the cap still refuses
+        // BEFORE the first request rather than after the Nth.
+        let parent_count = parents.count()?;
+        if spec.url_template.is_some() && parent_count > spec.max_requests {
             return Err(EngineError::Query(format!(
                 "rest: {} upstream rows would each make a request, past the cap of {}. Filter the upstream, or raise Max requests.",
-                parents.len(),
+                parent_count,
                 spec.max_requests
             )));
         }
@@ -15114,8 +15114,8 @@ impl DuckdbEngine {
         let mut next_mark: Option<String> = None;
 
         if spec.concurrency <= 1 {
-            for parent in &parents {
-                match fetch_parent(parent) {
+            while let Some(parent) = parents.next()? {
+                match fetch_parent(&parent) {
                     Ok((rows, walked)) => {
                         pages += walked;
                         for r in &rows {
@@ -15129,7 +15129,7 @@ impl DuckdbEngine {
                         p => {
                             failed += 1;
                             if p == "reject" {
-                                rejects.push(parent_failure_row(spec, parent, &e));
+                                rejects.push(parent_failure_row(spec, &parent, &e));
                             }
                         }
                     },
@@ -15139,9 +15139,10 @@ impl DuckdbEngine {
             // Bounded pool. Workers pull the next parent index rather than
             // being handed a slice, so one slow endpoint does not leave the
             // other workers idle at the end of their share.
-            use std::sync::atomic::{AtomicUsize, Ordering};
             use std::sync::Mutex;
-            let next = AtomicUsize::new(0);
+            // Workers pull the next parent from the stream itself, so the list
+            // is never materialised even to hand work out.
+            let source = Mutex::new(&mut parents);
             let shared: Mutex<(
                 &mut JsonLinesWriter,
                 &mut Vec<JsonValue>,
@@ -15158,16 +15159,27 @@ impl DuckdbEngine {
                 &mut next_mark,
             ));
             let first_error: Mutex<Option<EngineError>> = Mutex::new(None);
-            let workers = spec.concurrency.min(parents.len().max(1));
+            let workers = spec.concurrency.min((parent_count as usize).max(1));
             std::thread::scope(|scope| {
                 for _ in 0..workers {
                     scope.spawn(|| loop {
                         if first_error.lock().map(|e| e.is_some()).unwrap_or(true) {
                             return;
                         }
-                        let i = next.fetch_add(1, Ordering::SeqCst);
-                        let Some(parent) = parents.get(i) else { return };
-                        let outcome = fetch_parent(parent);
+                        // The lock is held only to take one line, never
+                        // across a request.
+                        let taken = { source.lock().ok().map(|mut s| s.next()) };
+                        let parent = match taken {
+                            Some(Ok(Some(p))) => p,
+                            Some(Err(e)) => {
+                                if let Ok(mut slot) = first_error.lock() {
+                                    slot.get_or_insert(e);
+                                }
+                                return;
+                            }
+                            _ => return,
+                        };
+                        let outcome = fetch_parent(&parent);
                         let Ok(mut g) = shared.lock() else { return };
                         match outcome {
                             Ok((rows, walked)) => {
@@ -15200,7 +15212,7 @@ impl DuckdbEngine {
                                 p => {
                                     *g.4 += 1;
                                     if p == "reject" {
-                                        g.1.push(parent_failure_row(spec, parent, &e));
+                                        g.1.push(parent_failure_row(spec, &parent, &e));
                                     }
                                 }
                             },
@@ -16917,6 +16929,134 @@ fn json_matches_type(v: &JsonValue, want: &str) -> bool {
         // A type the checker does not know is not a reason to reject an answer
         // the provider already validated.
         _ => true,
+    }
+}
+
+/// #257: the parent rows a fan-out drives, one at a time.
+///
+/// The fan-out used to read every parent through `run_rows`, which parses the
+/// whole relation into a Vec of JsonValue. For a registry-scale walk that is a
+/// second thing sized by the total work rather than by the work in flight -
+/// and a parsed JsonValue is several times the size of the text it came from.
+///
+/// The relation is spilled once to newline-delimited JSON and then read a line
+/// at a time. It costs one DuckDB spawn, which is exactly what `run_rows` cost,
+/// so the small case is no slower; what changes is that a 2M-parent list is
+/// bytes on disk instead of objects in memory.
+///
+/// DuckDB escapes a newline inside a string as `\n`, so a physical newline
+/// always ends a record - which is what makes both the line count and the
+/// line-by-line read exact.
+pub(crate) struct ParentStream {
+    lines: Option<std::io::Lines<std::io::BufReader<std::fs::File>>>,
+    path: Option<std::path::PathBuf>,
+    /// The single synthetic parent for a node that is not fanning out. `None`
+    /// once taken, which is what ends that stream after one item.
+    single: Option<JsonValue>,
+}
+
+impl ParentStream {
+    /// A node with no fan-out: exactly one pass, no upstream, no spill.
+    fn single() -> Self {
+        ParentStream { lines: None, path: None, single: Some(JsonValue::Null) }
+    }
+
+    /// Spill `view` to NDJSON beside the run database and stream it.
+    fn spill(
+        bin: &Path,
+        db: &Path,
+        view: &str,
+        node_id: &str,
+    ) -> Result<Self, EngineError> {
+        let path = db.with_file_name(format!(
+            "{}.parents-{}.ndjson",
+            db.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+            sanitize_path_segment(node_id)
+        ));
+        let sql = format!(
+            "COPY (SELECT * FROM {}) TO '{}' (FORMAT JSON)",
+            quote_ident(view),
+            path.to_string_lossy().replace('\\', "/").replace('\'', "''")
+        );
+        crate::apply_duckdb_sql(bin, db, &sql)?;
+        let file = std::fs::File::open(&path)
+            .map_err(|e| EngineError::Query(format!("rest: read parents: {e}")))?;
+        Ok(ParentStream {
+            lines: Some(std::io::BufRead::lines(std::io::BufReader::with_capacity(
+                256 * 1024,
+                file,
+            ))),
+            path: Some(path),
+            single: None,
+        })
+    }
+
+    /// How many parents there are, without parsing any of them.
+    ///
+    /// Counted so the request cap can still refuse BEFORE the first request
+    /// rather than after N of them. A byte scan of a local file is far cheaper
+    /// than a second pass over the relation.
+    fn count(&self) -> Result<u64, EngineError> {
+        let Some(path) = self.path.as_ref() else {
+            return Ok(1);
+        };
+        use std::io::Read;
+        let mut file = std::fs::File::open(path)
+            .map_err(|e| EngineError::Query(format!("rest: count parents: {e}")))?;
+        let mut buf = [0u8; 256 * 1024];
+        let mut n = 0_u64;
+        loop {
+            match file.read(&mut buf) {
+                Ok(0) => break,
+                Ok(k) => n += buf[..k].iter().filter(|b| **b == b'\n').count() as u64,
+                Err(e) => return Err(EngineError::Query(format!("rest: count parents: {e}"))),
+            }
+        }
+        Ok(n)
+    }
+
+    /// The first parent, for the checks that need to see the upstream's shape.
+    /// Reads it without consuming the stream.
+    fn peek_first(&self) -> Option<JsonValue> {
+        let path = self.path.as_ref()?;
+        let file = std::fs::File::open(path).ok()?;
+        let mut lines = std::io::BufRead::lines(std::io::BufReader::new(file));
+        serde_json::from_str(&lines.next()?.ok()?).ok()
+    }
+
+    /// The next parent, or None at the end.
+    ///
+    /// A line that does not parse ends the stream rather than being skipped:
+    /// silently dropping a parent would silently drop its children, and a short
+    /// result that looks complete is the failure this whole node avoids.
+    fn next(&mut self) -> Result<Option<JsonValue>, EngineError> {
+        if let Some(v) = self.single.take() {
+            return Ok(Some(v));
+        }
+        let Some(lines) = self.lines.as_mut() else {
+            return Ok(None);
+        };
+        loop {
+            let Some(line) = lines.next() else { return Ok(None) };
+            let line = line.map_err(|e| EngineError::Query(format!("rest: read parents: {e}")))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            return serde_json::from_str(&line)
+                .map(Some)
+                .map_err(|e| EngineError::Query(format!("rest: parse parent row: {e}")));
+        }
+    }
+}
+
+impl Drop for ParentStream {
+    fn drop(&mut self) {
+        // The spill is scratch. Leaving it would put a copy of every parent
+        // list beside the run database for ever.
+        self.lines = None;
+        if let Some(p) = self.path.take() {
+            let _ = std::fs::remove_file(p);
+        }
     }
 }
 
