@@ -1374,22 +1374,57 @@ mod tests {
                 // the client see a connection reset instead of the status - the
                 // test then fails on a network error rather than on what it is
                 // actually about.
-                let mut req = String::new();
+                //
+                // Read until the headers END, then read exactly Content-Length
+                // more bytes. A SHORT READ IS NOT THE END OF A REQUEST: `read`
+                // may return fewer bytes than asked even when more are coming,
+                // which is routine once a body crosses a segment boundary on a
+                // loaded machine. Breaking on a short read replied before the
+                // body arrived, the client saw a reset, and the queued replies
+                // then landed one request out of step - so a test asserting a
+                // failure got the NEXT canned response and saw success. That
+                // was a macOS-only CI failure that reproduced nowhere else.
+                let mut raw: Vec<u8> = Vec::new();
                 let mut buf = [0u8; 8192];
-                loop {
+                let head_end = loop {
                     match stream.read(&mut buf) {
-                        Ok(0) => break,
+                        Ok(0) => break None,
                         Ok(n) => {
-                            req.push_str(&String::from_utf8_lossy(&buf[..n]));
-                            // Headers seen and nothing more waiting: a request
-                            // with no body is complete here.
-                            if n < buf.len() {
-                                break;
+                            raw.extend_from_slice(&buf[..n]);
+                            if let Some(i) = raw
+                                .windows(4)
+                                .position(|w| w == b"\r\n\r\n")
+                            {
+                                break Some(i + 4);
                             }
                         }
-                        Err(_) => break,
+                        Err(_) => break None,
+                    }
+                };
+                if let Some(head_end) = head_end {
+                    // Content-Length is the only framing the S3 client uses
+                    // here; absent means no body, and a body we cannot frame is
+                    // left to the read timeout rather than guessed at.
+                    let head = String::from_utf8_lossy(&raw[..head_end]).to_string();
+                    let want: usize = head
+                        .lines()
+                        .find_map(|l| {
+                            let (k, v) = l.split_once(':')?;
+                            k.trim()
+                                .eq_ignore_ascii_case("content-length")
+                                .then(|| v.trim().parse().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    while raw.len() < head_end + want {
+                        match stream.read(&mut buf) {
+                            Ok(0) => break,
+                            Ok(n) => raw.extend_from_slice(&buf[..n]),
+                            Err(_) => break,
+                        }
                     }
                 }
+                let req = String::from_utf8_lossy(&raw).to_string();
                 let _ = tx.send(req.lines().next().unwrap_or_default().to_string());
                 let _ = stream.write_all(replies[i].as_bytes());
                 let _ = stream.flush();
