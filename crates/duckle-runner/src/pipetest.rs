@@ -78,6 +78,28 @@ pub struct Case {
     ///
     /// The blunt version of `order_by`, for a result with no natural key.
     pub unordered: bool,
+    /// #250: how many rows the node must produce.
+    ///
+    /// Separate from listing them: a case that only cares about the count
+    /// should not have to write out every row, and one that lists rows gets
+    /// the count checked anyway.
+    pub row_count: Option<usize>,
+    /// #250: columns whose values must be distinct across the whole result.
+    pub unique: Vec<String>,
+    /// #250: columns that must have no NULL and no missing value.
+    pub not_null: Vec<String>,
+    /// #250: a SQL predicate over the result, with `{rows}` standing for it.
+    ///
+    /// The escape hatch for anything the fixed assertions do not cover -
+    /// `SELECT max(amount) < 100 FROM {rows}`. It must return one row whose
+    /// first column is true.
+    pub sql: Option<String>,
+    /// #250: how far two numbers may differ and still count as equal.
+    ///
+    /// A computed float that lands on 0.30000000000000004 is not a regression,
+    /// and a test that fails on it teaches people to stop writing tests. Off by
+    /// default, because an exact comparison is the right one until it is not.
+    pub tolerance: Option<f64>,
 }
 
 /// One failure, said in terms of the case rather than of the engine.
@@ -121,11 +143,23 @@ pub fn parse(path: &Path, text: &str) -> Result<(PathBuf, Vec<Case>), String> {
             .and_then(JsonValue::as_str)
             .ok_or_else(|| format!("{name}: {label}: \"expect\" needs a \"node\""))?
             .to_string();
-        let rows = expect
-            .get("rows")
-            .and_then(JsonValue::as_array)
-            .cloned()
-            .ok_or_else(|| format!("{name}: {label}: \"expect\" needs a \"rows\" array"))?;
+        // #250: rows are optional once the case asserts something else. A case
+        // that only cares about the row count, or a uniqueness property, should
+        // not have to write out every row - that is the whole reason those
+        // assertions exist. With nothing else asserted, an expectation still
+        // has to say what it expects.
+        let asserts_structure = ["rowCount", "unique", "notNull", "sql", "schema"]
+            .iter()
+            .any(|k| expect.get(*k).is_some());
+        let rows = match expect.get("rows").and_then(JsonValue::as_array) {
+            Some(r) => r.clone(),
+            None if asserts_structure => Vec::new(),
+            None => {
+                return Err(format!(
+                    "{name}: {label}: \"expect\" needs \"rows\", or one of rowCount / unique / notNull / sql / schema"
+                ))
+            }
+        };
         let given = c
             .get("given")
             .and_then(JsonValue::as_object)
@@ -160,6 +194,13 @@ pub fn parse(path: &Path, text: &str) -> Result<(PathBuf, Vec<Case>), String> {
             .get("unordered")
             .and_then(JsonValue::as_bool)
             .unwrap_or(false);
+        let strings = |k: &str| -> Vec<String> {
+            expect
+                .get(k)
+                .and_then(JsonValue::as_array)
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .unwrap_or_default()
+        };
         cases.push(Case {
             name: label,
             given,
@@ -169,6 +210,17 @@ pub fn parse(path: &Path, text: &str) -> Result<(PathBuf, Vec<Case>), String> {
             schema,
             order_by,
             unordered,
+            row_count: expect
+                .get("rowCount")
+                .and_then(JsonValue::as_u64)
+                .map(|n| n as usize),
+            unique: strings("unique"),
+            not_null: strings("notNull"),
+            sql: expect
+                .get("sql")
+                .and_then(JsonValue::as_str)
+                .map(str::to_string),
+            tolerance: expect.get("tolerance").and_then(JsonValue::as_f64),
         });
     }
     Ok((pipeline_path, cases))
@@ -329,7 +381,20 @@ fn describe(v: Option<&JsonValue>) -> String {
 ///
 /// `coerce` opts into comparing by rendered text, which is what a test asserting
 /// on a source whose every column is VARCHAR wants.
-fn same_cell(want: Option<&JsonValue>, got: Option<&JsonValue>, coerce: bool) -> bool {
+fn same_cell(
+    want: Option<&JsonValue>,
+    got: Option<&JsonValue>,
+    coerce: bool,
+    tolerance: Option<f64>,
+) -> bool {
+    // #250: two numbers within the declared tolerance are the same number. A
+    // computed float landing on 0.30000000000000004 is not a regression, and a
+    // test that fails on it teaches people to stop writing tests.
+    if let (Some(t), Some(w), Some(g)) = (tolerance, want, got) {
+        if let (Some(a), Some(b)) = (w.as_f64(), g.as_f64()) {
+            return (a - b).abs() <= t;
+        }
+    }
     if !coerce {
         return match (want, got) {
             // A field the expectation does not mention is not asserted on at
@@ -351,7 +416,26 @@ pub fn compare(expected: &[JsonValue], actual: &[JsonValue]) -> Option<String> {
     compare_with(expected, actual, false)
 }
 
+/// Like [`compare_with`], allowing two numbers within `tolerance` to match.
+pub fn compare_within(
+    expected: &[JsonValue],
+    actual: &[JsonValue],
+    coerce: bool,
+    tolerance: Option<f64>,
+) -> Option<String> {
+    compare_inner(expected, actual, coerce, tolerance)
+}
+
 pub fn compare_with(expected: &[JsonValue], actual: &[JsonValue], coerce: bool) -> Option<String> {
+    compare_inner(expected, actual, coerce, None)
+}
+
+fn compare_inner(
+    expected: &[JsonValue],
+    actual: &[JsonValue],
+    coerce: bool,
+    tolerance: Option<f64>,
+) -> Option<String> {
     if expected.len() != actual.len() {
         return Some(format!(
             "expected {} row(s), got {}",
@@ -366,7 +450,7 @@ pub fn compare_with(expected: &[JsonValue], actual: &[JsonValue], coerce: bool) 
             None => return Some(format!("row {}: expected an object", i + 1)),
         };
         for (k, wv) in obj {
-            if !same_cell(Some(wv), got.get(k), coerce) {
+            if !same_cell(Some(wv), got.get(k), coerce, tolerance) {
                 return Some(format!(
                     "row {}, {k}: expected {}, got {}",
                     i + 1,
@@ -478,7 +562,115 @@ fn run_case(
     // never promised - and the author does not have to hand-sort the
     // expectation to match whatever the planner happened to produce.
     let (want, got) = order_for_compare(&case.rows, &actual, case);
-    compare_with(&want, &got, case.coerce)
+    // #250: the cheap structural assertions before the row-by-row one, so a
+    // failure names the property that broke rather than the first cell that
+    // happened to differ because of it.
+    if let Some(why) = check_assertions(case, &got) {
+        return Some(why);
+    }
+    if let Some(why) = check_sql(engine, case, &dump) {
+        return Some(why);
+    }
+    // A case that listed no rows but DID assert structure has already been
+    // checked. Falling through would compare against an empty list and so
+    // demand an empty result, which is not what "I only asserted the count"
+    // means. With no structural assertion either, an empty expectation still
+    // asserts an empty result, exactly as it always did.
+    if case.rows.is_empty() && has_structural(case) {
+        return None;
+    }
+    compare_within(&want, &got, case.coerce, case.tolerance)
+}
+
+/// Does this case assert anything other than its rows?
+fn has_structural(case: &Case) -> bool {
+    case.row_count.is_some()
+        || !case.unique.is_empty()
+        || !case.not_null.is_empty()
+        || case.sql.is_some()
+        || !case.schema.is_empty()
+}
+
+/// #250: row count, uniqueness and not-null, over the whole result.
+pub fn check_assertions(case: &Case, rows: &[JsonValue]) -> Option<String> {
+    if let Some(want) = case.row_count {
+        if rows.len() != want {
+            return Some(format!("rowCount: expected {want}, got {}", rows.len()));
+        }
+    }
+    for col in &case.not_null {
+        for (i, row) in rows.iter().enumerate() {
+            match row.get(col) {
+                None => {
+                    return Some(format!("notNull: row {} has no column {col:?}", i + 1))
+                }
+                Some(JsonValue::Null) => {
+                    return Some(format!("notNull: {col:?} is null on row {}", i + 1))
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    for col in &case.unique {
+        let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (i, row) in rows.iter().enumerate() {
+            // A missing column is reported rather than skipped: "every value is
+            // unique" is trivially true of a column that is not there, and a
+            // silently true assertion is the failure mode this repo keeps
+            // finding.
+            let Some(v) = row.get(col) else {
+                return Some(format!("unique: row {} has no column {col:?}", i + 1));
+            };
+            let k = v.to_string();
+            if let Some(first) = seen.insert(k, i + 1) {
+                return Some(format!(
+                    "unique: {col:?} repeats {} on rows {first} and {}",
+                    describe(Some(v)),
+                    i + 1
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// #250: a SQL predicate over the captured result.
+///
+/// `{rows}` stands for the node's output. A placeholder rather than a magic
+/// table name, because rewriting an identifier inside SQL means parsing SQL,
+/// and getting that subtly wrong would change the assertion being made.
+fn check_sql(engine: &DuckdbEngine, case: &Case, dump: &Path) -> Option<String> {
+    let Some(sql) = case.sql.as_deref() else {
+        return None;
+    };
+    if !sql.contains("{rows}") {
+        return Some(format!(
+            "sql: the assertion must say {{rows}} somewhere, so it is clear what it runs against: {sql}"
+        ));
+    }
+    let src = format!(
+        "read_json_auto('{}', format='newline_delimited')",
+        dump.display().to_string().replace('\\', "/").replace('\'', "''")
+    );
+    let query = sql.replace("{rows}", &src);
+    match engine.query(&query, 2) {
+        Err(e) => Some(format!("sql: {e}")),
+        Ok(res) => {
+            let first = res
+                .rows
+                .first()
+                .and_then(|r| r.as_object())
+                .and_then(|o| o.values().next().cloned());
+            match first {
+                Some(JsonValue::Bool(true)) => None,
+                Some(other) => Some(format!(
+                    "sql: expected true, got {}: {sql}",
+                    describe(Some(&other))
+                )),
+                None => Some(format!("sql: returned no rows: {sql}")),
+            }
+        }
+    }
 }
 
 /// #250: put both sides in one canonical order.
@@ -938,6 +1130,11 @@ mod tests {
             schema: Vec::new(),
             order_by: order_by.iter().map(|s| s.to_string()).collect(),
             unordered,
+            row_count: None,
+            unique: Vec::new(),
+            not_null: Vec::new(),
+            sql: None,
+            tolerance: None,
         }
     }
 
@@ -1017,6 +1214,86 @@ mod tests {
         assert_eq!(w, want, "untouched");
         assert_eq!(g, got, "untouched");
         assert!(compare_with(&w, &g, false).is_some(), "order still asserted");
+    }
+
+    fn case_asserting(f: impl FnOnce(&mut Case)) -> Case {
+        let mut c = case_with(&[], false);
+        f(&mut c);
+        c
+    }
+
+    #[test]
+    fn row_count_is_asserted_without_listing_every_row() {
+        let rows = vec![
+            serde_json::json!({ "id": 1 }),
+            serde_json::json!({ "id": 2 }),
+        ];
+        let c = case_asserting(|c| c.row_count = Some(2));
+        assert_eq!(check_assertions(&c, &rows), None);
+        let c = case_asserting(|c| c.row_count = Some(3));
+        let why = check_assertions(&c, &rows).expect("a wrong count must fail");
+        assert!(why.contains("expected 3") && why.contains("got 2"), "{why}");
+    }
+
+    #[test]
+    fn not_null_catches_a_null_and_a_missing_column() {
+        let c = case_asserting(|c| c.not_null = vec!["v".into()]);
+        assert_eq!(
+            check_assertions(&c, &[serde_json::json!({ "v": 1 })]),
+            None
+        );
+        let why = check_assertions(&c, &[serde_json::json!({ "v": JsonValue::Null })])
+            .expect("a null must fail");
+        assert!(why.contains("null") && why.contains("row 1"), "{why}");
+        // Absent is not the same as null, and both fail this assertion.
+        let why = check_assertions(&c, &[serde_json::json!({ "other": 1 })])
+            .expect("a missing column must fail");
+        assert!(why.contains("no column"), "{why}");
+    }
+
+    #[test]
+    fn unique_names_both_rows_that_collide() {
+        let c = case_asserting(|c| c.unique = vec!["id".into()]);
+        let ok = vec![
+            serde_json::json!({ "id": 1 }),
+            serde_json::json!({ "id": 2 }),
+        ];
+        assert_eq!(check_assertions(&c, &ok), None);
+        let dup = vec![
+            serde_json::json!({ "id": 7 }),
+            serde_json::json!({ "id": 9 }),
+            serde_json::json!({ "id": 7 }),
+        ];
+        let why = check_assertions(&c, &dup).expect("a repeat must fail");
+        assert!(why.contains("rows 1 and 3"), "it must say WHICH rows: {why}");
+    }
+
+    /// "Every value is unique" is trivially true of a column that is not
+    /// there, and a silently true assertion is the failure mode this repo
+    /// keeps finding.
+    #[test]
+    fn unique_on_a_column_that_is_not_there_is_an_error() {
+        let c = case_asserting(|c| c.unique = vec!["nope".into()]);
+        let why = check_assertions(&c, &[serde_json::json!({ "id": 1 })])
+            .expect("must not pass vacuously");
+        assert!(why.contains("no column"), "{why}");
+    }
+
+    /// #250: a computed float landing on 0.30000000000000004 is not a
+    /// regression, and a test that fails on it teaches people to stop writing
+    /// tests.
+    #[test]
+    fn tolerance_accepts_float_noise_and_still_rejects_a_real_change() {
+        let want = vec![serde_json::json!({ "amt": 0.3 })];
+        let got = vec![serde_json::json!({ "amt": 0.30000000000000004 })];
+        assert!(
+            compare_within(&want, &got, false, None).is_some(),
+            "exact comparison is still the default"
+        );
+        assert_eq!(compare_within(&want, &got, false, Some(1e-9)), None);
+        // A difference bigger than the tolerance is still a failure.
+        let moved = vec![serde_json::json!({ "amt": 0.4 })];
+        assert!(compare_within(&want, &moved, false, Some(1e-9)).is_some());
     }
 
     #[test]
@@ -1109,6 +1386,11 @@ mod tests {
             schema: Vec::new(),
             order_by: Vec::new(),
             unordered: false,
+            row_count: None,
+            unique: Vec::new(),
+            not_null: Vec::new(),
+            sql: None,
+            tolerance: None,
         };
         let why = run_case(&engine, &pipeline, dir.path(), &case, dir.path());
         assert!(
@@ -1145,6 +1427,11 @@ mod tests {
             schema: Vec::new(),
             order_by: Vec::new(),
             unordered: false,
+            row_count: None,
+            unique: Vec::new(),
+            not_null: Vec::new(),
+            sql: None,
+            tolerance: None,
         };
         assert_eq!(
             run_case(&engine, &pipeline, dir.path(), &case, dir.path()),
@@ -1178,6 +1465,11 @@ mod tests {
             schema: Vec::new(),
             order_by: Vec::new(),
             unordered: false,
+            row_count: None,
+            unique: Vec::new(),
+            not_null: Vec::new(),
+            sql: None,
+            tolerance: None,
         };
         let why = run_case(&engine, &pipeline, dir.path(), &case, dir.path()).unwrap_or_default();
         assert!(why.contains("no node 'gg'"), "{why}");
