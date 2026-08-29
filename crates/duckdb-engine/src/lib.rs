@@ -3162,6 +3162,36 @@ impl DuckdbEngine {
             .iter()
             .find(|s| s.node_id == node_id)
             .ok_or_else(|| EngineError::Config(format!("no stage for node {node_id:?}")))?;
+        // A sink's stage SQL is `COPY (...) TO 'file'`. Running it to find out
+        // its columns would WRITE that file - here, against a zero-row stub, so
+        // it would truncate the user's real output to nothing. The editor calls
+        // this whenever a node is selected, which would make that data loss a
+        // click away.
+        //
+        // Guarded here rather than in the caller: this is the code that holds
+        // the loaded gun, and a sink has no output columns to describe anyway.
+        if stage.kind != "view" {
+            return Err(EngineError::Config(format!(
+                "node {node_id:?} is a {} stage, which produces no relation to describe - and                  running it to find out would perform its writes",
+                stage.kind
+            )));
+        }
+        // Defence in depth, because this function RUNS what it is handed and a
+        // "view" is not automatically inert: a source view can carry an ATTACH
+        // prelude that would dial a real database, and a prelude can INSTALL.
+        // A transform compiles to exactly one CREATE OR REPLACE VIEW over its
+        // upstream, so anything else is refused rather than executed to see
+        // what it does.
+        if !stage
+            .sql
+            .trim_start()
+            .to_ascii_uppercase()
+            .starts_with("CREATE OR REPLACE VIEW")
+        {
+            return Err(EngineError::Config(format!(
+                "node {node_id:?} does not compile to a plain view, so describing it would run                  something with effects. Only derived relations can be described this way."
+            )));
+        }
 
         let mut sql = String::new();
         for (name, cols) in inputs {

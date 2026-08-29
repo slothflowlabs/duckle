@@ -1069,6 +1069,53 @@ fn a_node_reports_its_real_columns_without_running() {
     );
 }
 
+/// #226: describing a node must never WRITE anything.
+///
+/// A sink stage compiles to `COPY (...) TO 'file'`. Describing a node runs its
+/// stage SQL, so describing a sink would run that COPY - against a zero-row
+/// stub, which means truncating the user's real output file to an empty one.
+/// The editor calls this whenever a node is selected, so that would be data
+/// destruction on a click.
+///
+/// Guarded in the ENGINE rather than in the caller, because the engine is what
+/// can do the damage.
+#[test]
+fn describing_a_sink_never_writes_its_file() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let precious = tmp.path().join("precious.csv");
+    std::fs::write(&precious, "id,name\n1,alice\n2,bob\n").unwrap();
+    let before = std::fs::read_to_string(&precious).unwrap();
+
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": "unread.csv", "hasHeader": true })),
+            node("k", "snk.csv", json!({
+                "path": precious.to_string_lossy(), "hasHeader": true
+            })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    );
+    let upstream = vec![duckle_duckdb_engine::Column {
+        name: "id".into(),
+        data_type: duckle_duckdb_engine::DataType::Int64,
+        nullable: true,
+        primary_key: None,
+        format: None,
+    }];
+    let got = engine.describe_node_columns(&d, "k", &[("s".to_string(), upstream)]);
+
+    assert_eq!(
+        std::fs::read_to_string(&precious).unwrap(),
+        before,
+        "describing a sink must not touch the file it writes to"
+    );
+    assert!(
+        got.is_err(),
+        "and it must say a sink has no columns to describe rather than pretend"
+    );
+}
+
 /// #226: the editor's own node shape reaches the engine.
 ///
 /// The Schema tab sends its React Flow nodes as they are, which carry fields
