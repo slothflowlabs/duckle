@@ -131,6 +131,10 @@ fn duckdb_exec(db: &str, sql: &str) {
     );
 }
 
+fn count_rows(path: &str) -> i64 {
+    count(&format!("read_csv_auto('{}')", path))
+}
+
 fn count(from: &str) -> i64 {
     let rows = duckdb_json(&format!("SELECT COUNT(*) AS n FROM {}", from));
     rows.first()
@@ -14992,6 +14996,101 @@ fn rest_fan_out_runs_parent_requests_concurrently() {
         8,
         "the carried parent key is what replaces order"
     );
+}
+
+/// #257 + #252: a parent already fetched is not fetched again.
+///
+/// The proof is the second run happening with the SERVER GONE. If it still
+/// produces every row, no request was made - which is what resume has to mean
+/// for a fan-out that died at parent 900,001.
+#[test]
+fn a_checkpointed_parent_is_not_requested_twice() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let _g = env_guard();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let served = Arc::new(AtomicUsize::new(0));
+    let count = served.clone();
+    let handle = std::thread::spawn(move || {
+        for stream in listener.incoming().take(3) {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+            let mut chunk = [0u8; 4096];
+            let _ = stream.read(&mut chunk);
+            count.fetch_add(1, Ordering::SeqCst);
+            let body = r#"{"results":[{"officer":"x"}]}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", &ws);
+    let in_csv = write_file(tmp.path(), "in.csv", "id
+1
+2
+3
+");
+    let out = out_path(tmp.path(), "out.csv");
+    let base = format!("http://127.0.0.1:{}", port);
+    let build = || {
+        doc(
+            json!([
+                node("s", "src.csv", json!({ "path": in_csv, "hasHeader": true })),
+                node("c", "src.rest", json!({
+                    "url": base,
+                    "urlTemplate": format!("{}/companies/{{id}}/officers", base),
+                    "responsePath": "/results",
+                    "parentKeyColumn": "id",
+                    "checkpoint": true,
+                })),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+        )
+    };
+
+    let r1 = engine.execute_pipeline_named(&build(), "ckpt");
+    assert_eq!(r1.status, "ok", "first run failed: {:?}", r1.error);
+    assert_eq!(count_rows(&out), 3);
+    assert_eq!(served.load(Ordering::SeqCst), 3, "three parents, three requests");
+
+    // The server stops existing. Anything that needs the network now fails.
+    let _ = handle.join();
+    std::fs::remove_file(&out).ok();
+
+    let r2 = engine.execute_pipeline_named(&build(), "ckpt");
+    assert_eq!(
+        r2.status, "ok",
+        "the second run must not need the network at all: {:?}",
+        r2.error
+    );
+    assert_eq!(
+        count_rows(&out),
+        3,
+        "every row must come back from the checkpoint"
+    );
+    let note = r2.nodes.get("c").and_then(|n| n.note.clone()).unwrap_or_default();
+    assert!(
+        note.contains("3 parent(s) reused from the checkpoint"),
+        "and it must say so; got {:?}",
+        note
+    );
+    std::env::remove_var("DUCKLE_WORKSPACE");
 }
 
 /// #257 + #101: one parent's failure does not discard the others, and the

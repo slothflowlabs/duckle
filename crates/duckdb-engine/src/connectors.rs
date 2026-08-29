@@ -15092,6 +15092,82 @@ impl DuckdbEngine {
             Ok((out, parent_pages))
         };
 
+        // #257 + #252: remember each parent as its walk finishes.
+        //
+        // The same store the AI transforms use. A fan-out with its own record
+        // of what succeeded would be a second answer to the same question, and
+        // two such records drift - so resume falls out of the execution shape
+        // rather than sitting beside it.
+        //
+        // Everything that shapes a request is in the identity, the saved
+        // incremental mark included, because `spec` here is already the
+        // mark-substituted clone: a different cursor is a different question,
+        // and replaying yesterday's answer for it would be silently wrong.
+        let ckpt_config_fp = crate::checkpoint::fingerprint(&serde_json::json!({
+            "url": spec.url,
+            "url_template": spec.url_template,
+            "method": spec.method,
+            "body": spec.body,
+            "response_path": spec.response_path,
+            "parent_key_column": spec.parent_key_column,
+            "response_metadata": spec.response_metadata,
+        }));
+        let store = if spec.checkpoint {
+            match std::env::var("DUCKLE_WORKSPACE").ok().filter(|w| !w.is_empty()) {
+                Some(ws) => Some(crate::checkpoint::Store::open(
+                    std::path::Path::new(&ws),
+                    pipeline_name.unwrap_or(UNNAMED_RUN_FOLDER),
+                    &spec.node_id,
+                )?),
+                None => {
+                    return Err(EngineError::Config(
+                        concat!(
+                            "rest: remembering completed rows needs a workspace ",
+                            "(DUCKLE_WORKSPACE) to keep them in"
+                        )
+                        .into(),
+                    ))
+                }
+            }
+        } else {
+            None
+        };
+        // Keyed on the carried parent key when there is one, and on the whole
+        // parent row otherwise - the same safe direction the AI checkpoint
+        // takes, where a volatile column costs reuse rather than producing a
+        // wrong answer.
+        let ckpt_keys: Vec<String> = spec
+            .parent_key_column
+            .as_deref()
+            .map(|c| vec![c.to_string()])
+            .unwrap_or_default();
+
+        // This parent's rows: from the store when it is already done, from the
+        // network otherwise.
+        //
+        // One closure so the two drivers cannot disagree about when a request
+        // is skipped. They differ in HOW they pull parents and must not differ
+        // in what a parent costs. The bool says whether it was reused, which is
+        // what the run message needs to be honest about.
+        let walk = |parent: &JsonValue| -> Result<(Vec<JsonValue>, u64, bool), EngineError> {
+            let key = store
+                .as_ref()
+                .map(|_| crate::checkpoint::item_key(parent, &ckpt_keys, &[], &ckpt_config_fp));
+            if let (Some(store), Some(key)) = (store.as_ref(), key.as_ref()) {
+                if let Some(done) = store.get(key) {
+                    return Ok((done.as_array().cloned().unwrap_or_default(), 0, true));
+                }
+            }
+            let (rows, pages) = fetch_parent(parent)?;
+            // Recorded HERE, as this parent finishes, not when the stage does.
+            // That is the whole guarantee: a failure on the next parent keeps
+            // every one already fetched.
+            if let (Some(store), Some(key)) = (store.as_ref(), key.as_ref()) {
+                store.record(key, &JsonValue::Array(rows.clone()))?;
+            }
+            Ok((rows, pages, false))
+        };
+
         // #257: write as the walks finish, rather than accumulating.
         //
         // The old shape held every child row in one Vec until the stage ended,
@@ -15110,14 +15186,20 @@ impl DuckdbEngine {
         let mut rejects: Vec<JsonValue> = Vec::new();
         let mut written = 0_usize;
         let mut failed = 0_usize;
+        // Atomic so both drivers count it the same way; the sequential path
+        // simply never contends for it.
+        let reused = std::sync::atomic::AtomicUsize::new(0);
         // The highest value seen in the incremental field, across every parent.
         let mut next_mark: Option<String> = None;
 
         if spec.concurrency <= 1 {
             while let Some(parent) = parents.next()? {
-                match fetch_parent(&parent) {
-                    Ok((rows, walked)) => {
+                match walk(&parent) {
+                    Ok((rows, walked, from_store)) => {
                         pages += walked;
+                        if from_store {
+                            reused.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         for r in &rows {
                             advance_mark(&mut next_mark, spec.incremental_field.as_deref(), r);
                             writer.write_row(r)?;
@@ -15179,11 +15261,14 @@ impl DuckdbEngine {
                             }
                             _ => return,
                         };
-                        let outcome = fetch_parent(&parent);
+                        let outcome = walk(&parent);
                         let Ok(mut g) = shared.lock() else { return };
                         match outcome {
-                            Ok((rows, walked)) => {
+                            Ok((rows, walked, from_store)) => {
                                 *g.2 += walked;
+                                if from_store {
+                                    reused.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                }
                                 for r in &rows {
                                     advance_mark(
                                         g.5,
@@ -15263,14 +15348,23 @@ impl DuckdbEngine {
             written,
             pages,
             spec.node_id,
-            if failed > 0 {
-                format!(
-                    ", {} parent(s) failed and were {}",
-                    failed,
-                    if reject_policy == "reject" { "rejected" } else { "skipped" }
-                )
-            } else {
-                String::new()
+            {
+                let r = reused.load(std::sync::atomic::Ordering::Relaxed);
+                let mut note = String::new();
+                if r > 0 {
+                    note.push_str(&format!(
+                        ", {} parent(s) reused from the checkpoint",
+                        r
+                    ));
+                }
+                if failed > 0 {
+                    note.push_str(&format!(
+                        ", {} parent(s) failed and were {}",
+                        failed,
+                        if reject_policy == "reject" { "rejected" } else { "skipped" }
+                    ));
+                }
+                note
             },
             // Said here rather than left to be discovered when a downstream
             // LIMIT 10 returns different rows on a rerun.

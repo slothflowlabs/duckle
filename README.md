@@ -795,6 +795,26 @@ empty, so a node wired to it binds on a clean run too.
 `_page_number` is now per parent walk. A global counter said 4001 for the first
 page of the 4001st company.
 
+### A fan-out that died at row 900,001
+
+Tick **Remember completed rows** on `src.rest` and each upstream row is recorded
+as its requests finish. A rerun does not fetch it again:
+
+```
+c  ok (3 rows) - rest: materialized 3 rows (0 page(s)) into c,
+                 3 parent(s) reused from the checkpoint
+```
+
+It is the **same store the AI steps use**, on purpose. A fan-out with its own
+record of what succeeded would be a second answer to the same question, and two
+records of that kind drift apart. Resume falls out of the execution shape rather
+than sitting beside it.
+
+Identity is the carried parent key when there is one and the whole upstream row
+otherwise, plus everything that shapes the request - URL, template, method, body,
+response path, and the saved incremental cursor. Change any of them and the old
+answers are not reused, because they answered a different question.
+
 ### A cursor that reaches the request
 
 Filtering after the fetch is not incremental for an API. You still pay for the

@@ -3958,6 +3958,13 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
                     description: 'How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice.',
                 },
                 {
+                    key: 'checkpoint',
+                    label: 'Remember completed rows',
+                    kind: 'bool',
+                    defaultValue: false,
+                    description: 'Each upstream row is recorded as its requests finish, so a rerun does not fetch it again - a fan-out that died at row 900,001 resumes without repeating the 900,000 that worked. Kept in the same place the AI steps keep theirs. Changing the URL, method, body or response path starts a fresh record, since those change the answer.',
+                },
+                {
                     key: 'onParentError',
                     label: 'When a row request fails',
                     kind: 'select',

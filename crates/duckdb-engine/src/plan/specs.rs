@@ -1761,6 +1761,13 @@ pub struct RestSourceSpec {
     /// careless upstream cannot turn into an unbounded request storm. Only
     /// applies when fanning out.
     pub max_requests: u64,
+    /// #257 + #252: remember each parent as its walk finishes, so a rerun does
+    /// not re-fetch the ones that already succeeded.
+    ///
+    /// The SAME store the AI transforms use, deliberately. A fan-out that
+    /// shipped its own record of what succeeded would be a second answer to
+    /// the same question, and two records of that kind drift.
+    pub checkpoint: bool,
     /// #257: the response field that derives the next high-water mark.
     ///
     /// A plain key (`updated_at`) or a JSON pointer (`/meta/updated_at`) into
