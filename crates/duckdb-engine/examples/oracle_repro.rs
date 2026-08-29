@@ -48,7 +48,7 @@ fn main() {
     let pass = std::env::var("ORA_PASS").unwrap_or_else(|_| "duckle".into());
     let conn = std::env::var("ORA_CONN").unwrap_or_else(|_| "//localhost:1521/XEPDB1".into());
     let duckdb = std::env::var("DUCKLE_DUCKDB_BIN")
-        .unwrap_or_else(|_| r".duckdb-cli-v1.5.3\duckdb.exe".into());
+        .unwrap_or_else(|_| r".duckdb-cli-v1.5.4\duckdb.exe".into());
 
     let table = std::env::var("ORA_TABLE").unwrap_or_else(|_| "dates".into());
     let c = oracle::Connection::connect(&user, &pass, &conn).expect("connect");
