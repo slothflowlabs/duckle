@@ -1943,7 +1943,7 @@ impl DuckdbEngine {
                         self.run_pdf_source(&db_path, &secret_prefix, spec)
                     }
             Some(RuntimeSpec::HtmlSource(spec)) => self.run_html_source(&db_path, spec),
-            Some(RuntimeSpec::XmlSource(spec)) => self.run_xml_source(&db_path, spec),
+            Some(RuntimeSpec::XmlSource(spec)) => self.run_xml_source(&db_path, spec, &mut artifacts),
                     Some(RuntimeSpec::XmlSink(spec)) => self.run_xml_sink(&db_path, spec),
                     Some(RuntimeSpec::AvroSink(spec)) => self.run_avro_sink(&db_path, spec),
                     Some(RuntimeSpec::QvdSink(spec)) => self.run_qvd_sink(&db_path, spec),

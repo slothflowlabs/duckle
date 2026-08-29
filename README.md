@@ -744,6 +744,18 @@ an array and a nested child as an object, so those are declared as text.
 Deriving the abstract XSD shape instead would produce casts that fail on every
 row.
 
+The **exact schema bytes** are recorded in the signed run manifest, alongside
+every other input the run read:
+
+```json
+{"role":"input","name":"xsd","uri":"schemas/company.xsd",
+ "sha256":"eb1803ae...","sizeBytes":812}
+```
+
+A configured path can stay the same while the bytes behind it change, and the
+derived column types change with them. The path alone would say nothing about
+which schema a given run actually used.
+
 **An `xs:import` or `xs:include` is refused**, not followed. A column list that
 quietly stops early is the exact failure this feature exists to remove, so a
 schema that pulls in another one says so and asks for a self-contained file.

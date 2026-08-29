@@ -8574,6 +8574,8 @@ impl DuckdbEngine {
         &self,
         xsd_path: &str,
         row_path: &str,
+        node_id: &str,
+        artifacts: &mut Vec<crate::ArtifactRef>,
     ) -> Result<Vec<duckle_metadata::Column>, EngineError> {
         let path = xsd_path.trim();
         let text = if path.starts_with("http://") || path.starts_with("https://") {
@@ -8589,6 +8591,27 @@ impl DuckdbEngine {
                 .map_err(|e| EngineError::Config(format!("xsd: read {path}: {e}")))?
         };
         let cols = crate::xsd::derive(&text, row_path)?;
+        // #286: a configured path can stay the same while the bytes behind it
+        // change, and the derived column types change with them. Recording the
+        // path alone would say nothing about which schema this run actually
+        // used, so the HASH of the bytes goes into the signed manifest through
+        // the same artifact channel every other input uses.
+        artifacts.push(crate::ArtifactRef {
+            node: node_id.to_string(),
+            role: "input".into(),
+            uri: path.to_string(),
+            name: Some("xsd".into()),
+            media_type: Some("application/xml".into()),
+            size_bytes: Some(text.len() as i64),
+            sha256: Some({
+                use sha2::{Digest, Sha256};
+                let mut h = Sha256::new();
+                h.update(text.as_bytes());
+                h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+            }),
+            etag: None,
+            modified_at: None,
+        });
         Ok(cols)
     }
 
@@ -8596,6 +8619,7 @@ impl DuckdbEngine {
         &self,
         db: &Path,
         spec: &XmlSourceSpec,
+        artifacts: &mut Vec<crate::ArtifactRef>,
     ) -> Result<String, EngineError> {
         use std::io::{BufReader, Read, Seek};
         // #282: the documents are whatever an upstream relation names, or
@@ -8632,9 +8656,12 @@ impl DuckdbEngine {
         let declared_schema: Option<Vec<duckle_metadata::Column>> =
             match spec.declared_schema.as_ref().filter(|s| !s.is_empty()) {
                 Some(s) => Some(s.clone()),
-                None if !spec.xsd_path.trim().is_empty() => {
-                    Some(self.derive_schema_from_xsd(&spec.xsd_path, &spec.row_path)?)
-                }
+                None if !spec.xsd_path.trim().is_empty() => Some(self.derive_schema_from_xsd(
+                    &spec.xsd_path,
+                    &spec.row_path,
+                    &spec.node_id,
+                    artifacts,
+                )?),
                 None => None,
             };
         let mut writer = match &declared_schema {
