@@ -10796,6 +10796,74 @@ fn a_cost_ceiling_with_no_prices_does_not_compile() {
     assert!(duckle_duckdb_engine::compile_pipeline_sql(&d).is_ok());
 }
 
+/// #258: an expanded reply must not overwrite the row it came from.
+///
+/// The pre-flight refuses a schema FIELD that collides with an upstream column,
+/// but expansion inserts every top-level field the model actually returned -
+/// and with `json_object` there is no schema to check against at all. So a
+/// model that returns `id` silently replaced the caller's `id`, turning the
+/// input into the output with no error and no way to notice.
+#[test]
+fn an_expanded_field_never_overwrites_an_upstream_column() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        for stream in listener.incoming().take(2) {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+            let mut buf = [0u8; 8192];
+            let _ = stream.read(&mut buf);
+            // The model returns a field named like the caller's own column.
+            let inner = r#"{\"id\": 999, \"score\": 1}"#;
+            let body = format!(r#"{{"choices":[{{"message":{{"content":"{inner}"}}}}]}}"#);
+            let resp = format!(
+                "HTTP/1.1 200 OK{}Content-Type: application/json{}Content-Length: {}{}Connection: close{}{}",
+                CRLF, CRLF, body.len(), CRLF, CRLF, CRLF
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let in_csv = write_file(tmp.path(), "in.csv", "id,name\n7,alice\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": in_csv, "hasHeader": true })),
+            node("l", "xf.ai.llm", json!({
+                "promptTemplate": "Score {name}",
+                "outputColumn": "reply",
+                "model": "mock",
+                "apiKey": "sk-test",
+                "baseUrl": format!("http://127.0.0.1:{}", port),
+                "concurrency": 1,
+                // No schema at all - so nothing was checked up front.
+                "responseFormat": "json_object",
+                "expandColumns": true,
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "l"), main_edge("e2", "l", "k")]),
+    ));
+    drop(handle);
+
+    assert_eq!(
+        r.status, "error",
+        "a reply that would overwrite the caller's own column must stop the run, \
+         not quietly replace the input"
+    );
+    let msg = r.error.unwrap_or_default();
+    assert!(msg.contains("id"), "the error must name the column: {msg}");
+}
+
 /// #258: a request ceiling stops the stage, and the STOP is what matters more
 /// than the counting.
 ///
@@ -15009,6 +15077,99 @@ fn qa_block_keeps_a_pair_once_when_several_rules_catch_it() {
 /// APIs look like: GET /companies, then GET /companies/{id}/officers.
 ///
 /// Asserts on the CAPTURED REQUEST LINES, not just the row count, because the
+/// #257: a cursor must not step over a window whose parents FAILED.
+///
+/// With `onParentError` set to skip or reject, a failed parent's rows were
+/// never fetched - only the fact of the failure was. Advancing the mark past
+/// them means the next run asks from a point after data it never received, and
+/// nothing ever goes back for it. That is silent, permanent loss, which is the
+/// exact failure the incremental design exists to prevent.
+///
+/// The same rule the budget stop already follows: work that did not finish must
+/// not move the cursor.
+#[test]
+fn a_cursor_does_not_advance_past_a_parent_that_failed() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let _g = env_guard();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let asked = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = asked.clone();
+    let handle = std::thread::spawn(move || {
+        for stream in listener.incoming().take(8) {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            let line = req.lines().next().unwrap_or("").to_string();
+            seen.lock().unwrap().push(line.clone());
+            // Company 2 is refused; 1 and 3 answer with later marks.
+            let (status, body) = if line.contains("/companies/2/") {
+                ("500 Internal Server Error", r#"{"error":"boom"}"#.to_string())
+            } else {
+                (
+                    "200 OK",
+                    r#"{"results":[{"officer":"x","updated_at":"2026-03-05"}]}"#.to_string(),
+                )
+            };
+            let resp = format!(
+                "HTTP/1.1 {}{}Content-Type: application/json{}Content-Length: {}{}Connection: close{}{}",
+                status, CRLF, CRLF, body.len(), CRLF, CRLF, CRLF
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", &ws);
+    let in_csv = write_file(tmp.path(), "in.csv", "id\n1\n2\n3\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let base = format!("http://127.0.0.1:{}", port);
+    let build = || {
+        doc(
+            json!([
+                node("s", "src.csv", json!({ "path": in_csv, "hasHeader": true })),
+                node("c", "src.rest", json!({
+                    "url": base,
+                    "urlTemplate": format!("{}/companies/{{id}}/officers?since={{incremental}}", base),
+                    "responsePath": "/results",
+                    "parentKeyColumn": "id",
+                    "onParentError": "skip",
+                    "incrementalField": "updated_at",
+                    "incrementalInitial": "1970-01-01",
+                })),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+        )
+    };
+
+    let r1 = engine.execute_pipeline_named(&build(), "loss");
+    assert_eq!(r1.status, "ok", "a skipped parent must not fail the run: {:?}", r1.error);
+    let r2 = engine.execute_pipeline_named(&build(), "loss");
+    assert_eq!(r2.status, "ok", "second run failed: {:?}", r2.error);
+    drop(handle);
+
+    let reqs = asked.lock().unwrap().clone();
+    let second_run = &reqs[3..];
+    assert!(
+        second_run.iter().all(|r| r.contains("since=1970-01-01")),
+        "company 2 was never fetched, so the cursor must not have moved past it - \
+         otherwise its rows are lost for good: {second_run:?}"
+    );
+}
+
 /// #257: the incremental cursor reaches the REQUEST, and only moves forward
 /// when the whole run succeeded.
 ///

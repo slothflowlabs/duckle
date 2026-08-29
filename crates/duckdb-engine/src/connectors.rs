@@ -12780,6 +12780,20 @@ impl DuckdbEngine {
                             if spec.expand_columns {
                                 if let Some(fields) = value.as_object() {
                                     for (k, v) in fields {
+                                        // The pre-flight refuses a SCHEMA field
+                                        // that collides, but what arrives is not
+                                        // limited to what the schema declared -
+                                        // and with json_object there was no
+                                        // schema to check at all. Overwriting
+                                        // here would replace the caller's own
+                                        // value with the model's and report ok,
+                                        // which is the input silently becoming
+                                        // the output.
+                                        if row.get(k).is_some() {
+                                            return Err(EngineError::Query(format!(
+                                                "ai.llm: the reply has a field {k:?}, which is                                                  already a column on the input row - expanding it                                                  would overwrite the caller's own value. Rename                                                  the column, or turn off expanding the reply."
+                                            )));
+                                        }
                                         obj.insert(k.clone(), v.clone());
                                     }
                                 } else {
@@ -15488,12 +15502,26 @@ impl DuckdbEngine {
         // Only when it moved FORWARD. A page that came back out of order, or an
         // API that returned an older record last, must not walk the mark
         // backwards and re-fetch what was already taken.
+        //
+        // And only when every parent was actually FETCHED. A parent that was
+        // skipped or rejected had its rows never received - only the fact of
+        // the failure was - so moving the cursor past it means the next run
+        // asks from a point after data nothing ever collected, and nothing
+        // goes back for it. That is silent, permanent loss, and it is the
+        // failure the whole incremental design exists to prevent. Same rule a
+        // budget stop already follows: work that did not finish does not move
+        // the cursor.
         if let (Some(path), Some(found)) = (state_path.as_ref(), next_mark.as_ref()) {
             let moved = saved_mark
                 .as_deref()
                 .map(|old| mark_is_newer(found, old))
                 .unwrap_or(true);
-            if moved {
+            if failed > 0 {
+                eprintln!(
+                    "duckle: rest: {failed} parent(s) failed, so the incremental mark was NOT                      advanced - the next run re-reads this window rather than stepping over it"
+                );
+            }
+            if moved && failed == 0 {
                 pending.push(crate::PendingWrite::state(
                     path.clone(),
                     serde_json::json!({ "value": found, "type": "VARCHAR" }),
