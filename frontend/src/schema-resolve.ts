@@ -125,6 +125,36 @@ function computeNodeSchema(
         return [...up, { name, type, nullable: true }];
     }
 
+    // #226: Text to Columns appends its parts and, with dropSource, removes the
+    // column it split. Without this the node fell through to "schema unchanged",
+    // so the new columns never reached the Schema or Preview tabs and the
+    // dropped one stayed listed - showing as a column with no values, which is
+    // exactly what it looks like when a schema describes a relation that does
+    // not have it.
+    //
+    // The engine emits `SELECT *, nullif(split_part(...), '') AS name` - or
+    // `SELECT * EXCLUDE (col), ...` when dropping - so the parts are text and
+    // the source really is gone.
+    if (id === 'xf.text.tocolumns') {
+        const source = props.column as string | undefined;
+        // The engine reads either name; the GUI writes outputColumns.
+        const raw = (props.outputColumns ?? props.columns) as string | undefined;
+        const names = String(raw ?? '')
+            .split(',')
+            .map(n => n.trim())
+            .filter(Boolean);
+        let up = upstream();
+        if (!source || names.length === 0) return up;
+        if (props.dropSource === true) {
+            up = up.filter(c => c.name !== source);
+        }
+        const have = new Set(up.map(c => c.name));
+        const added = names
+            .filter(n => !have.has(n))
+            .map(n => ({ name: n, type: 'string' as DataType, nullable: true }));
+        return [...up, ...added];
+    }
+
     if (id === 'xf.reorder') {
         const ordered = (props.columns as string[] | undefined) ?? [];
         const up = upstream();

@@ -968,6 +968,63 @@ fn text_to_columns_splits_into_named_columns() {
 
 /// A row with fewer parts than there are output columns must yield NULL, not an
 /// empty string. split_part returns '' for a missing part and ''::DOUBLE aborts
+/// #226: what Text to Columns actually PRODUCES, for both dropSource states.
+///
+/// dropSource had no test at all, which is how the GUI came to disagree with
+/// it: the schema shown downstream still listed the split column, so it
+/// appeared as a column with no values - exactly what it looks like when a
+/// schema describes a relation that does not have it.
+///
+/// Asserted on the column SET rather than on values, because the set is the
+/// contract the Schema and Preview tabs mirror.
+#[test]
+fn text_to_columns_output_columns_are_the_contract() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,location
+1,31.21 30.24
+");
+
+    let run = |drop: bool, out: &str| {
+        let d = doc(
+            json!([
+                node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                node("t1", "xf.text.tocolumns", json!({
+                    "column": "location",
+                    "delimiter": " ",
+                    "outputColumns": "latitude, longitude",
+                    "dropSource": drop
+                })),
+                node("k1", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "s1", "t1"), main_edge("e2", "t1", "k1")]),
+        );
+        let r = engine.execute_pipeline(&d);
+        assert_eq!(r.status, "ok", "run failed: {:?}", r.error);
+        // The header line IS the column set the GUI has to agree with.
+        std::fs::read_to_string(out)
+            .unwrap_or_default()
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_string()
+    };
+
+    let kept = out_path(tmp.path(), "kept.csv");
+    assert_eq!(
+        run(false, &kept),
+        "id,location,latitude,longitude",
+        "by default the split column stays and the parts are appended"
+    );
+
+    let dropped = out_path(tmp.path(), "dropped.csv");
+    assert_eq!(
+        run(true, &dropped),
+        "id,latitude,longitude",
+        "dropSource removes the column entirely - not blanks it"
+    );
+}
+
 /// the run, so without the nullif guard this pipeline dies on the second row.
 #[test]
 fn text_to_columns_missing_part_is_null_not_empty() {
