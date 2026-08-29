@@ -8422,6 +8422,10 @@ impl DuckdbEngine {
             );
         };
         let mut skipped: usize = 0;
+        // #255: a pagination walk that stopped early rather than finished.
+        // The next link lives ON the page, so a page that failed does not
+        // lose one page - it loses every page after it, and the walk ends.
+        let mut walk_cut_short: Option<&'static str> = None;
 
         // One body, two drivers. The corpus walks it in bounded batches so
         // the artifact list never lands in memory whole; a configured path
@@ -8439,6 +8443,12 @@ impl DuckdbEngine {
                 Err(e) if spec.on_error == "skip" => {
                     eprintln!("duckle: html: skipping {uri}: {e}");
                     skipped += 1;
+                    // Skipping a document in a corpus loses that document and
+                    // nothing else. Skipping a page in a CHAIN loses the rest
+                    // of the chain, because the link to it was on this page.
+                    if !from_upstream && next_matcher.is_some() {
+                        walk_cut_short = Some("pagination:page-failed");
+                    }
                     return Ok(None);
                 }
                 Err(e) => return Err(e),
@@ -8601,6 +8611,10 @@ impl DuckdbEngine {
                         "duckle: html: stopped at the {}-page limit with more pages to follow ({})",
                         spec.max_pages, next
                     );
+                    // A cap reached with a link still to follow is the same
+                    // thing as a failure mid-walk: rows that are correct, and
+                    // are not all of them.
+                    walk_cut_short = Some("pagination:maxPages");
                     break;
                 }
                 if !seen.insert(next.clone()) {
@@ -8636,6 +8650,17 @@ impl DuckdbEngine {
                 writer.finalize_typed(&self.bin, db, &spec.node_id, &columns_spec, &select_list)?;
             }
             _ => writer.finalize_into_table(&self.bin, db, &spec.node_id)?,
+        }
+        // #255 + #258: rows that are correct and are not all of them. Says so,
+        // and stops anything downstream from publishing a partial chain as if
+        // it were the whole thing.
+        if let Some(reason) = walk_cut_short {
+            return Ok(format!(
+                "{}{} html: the page walk stopped early, so these {} row(s) are not the whole                  result",
+                crate::INCOMPLETE_MARKER,
+                reason,
+                count
+            ));
         }
         Ok(format!(
             "html: materialized {} rows into {}{}",

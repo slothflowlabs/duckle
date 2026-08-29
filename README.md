@@ -857,6 +857,12 @@ or a `<base href>` when the document sets one. A bare `?p=2` keeps the path and
 replaces the query; `../next` climbs one directory. Getting that wrong does not
 error, it silently fetches the wrong page, so each shape has its own test.
 
+A walk that stops EARLY - a page that failed, or the page cap reached with a
+link still to follow - reports the run as **incomplete** and stops anything
+downstream, the same as a budget stop. Skipping a document in a corpus loses
+that document; skipping a page in a chain loses every page after it, because
+the link to them was on the page that failed.
+
 Bounded three ways, because the link is written by someone else: a page cap, a
 stop when a page names no link, and a stop when a URL **repeats**. That last one
 matters most - a next link pointing back at page 1 is a cycle, not a long list.

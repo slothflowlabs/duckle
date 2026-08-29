@@ -15509,6 +15509,61 @@ fn a_checkpointed_parent_is_not_requested_twice() {
     std::env::remove_var("DUCKLE_WORKSPACE");
 }
 
+/// #257: a fan-out over an upstream that matched nothing.
+///
+/// Normal, not exceptional - a filter that selected no rows. The parent list
+/// is spilled to a file that DuckDB writes empty, so the stream has to end
+/// cleanly rather than fail to open it, no request may go out, and the node
+/// must still produce a relation downstream can bind against.
+#[test]
+fn a_fan_out_over_no_parents_makes_no_requests() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let in_csv = write_file(tmp.path(), "in.csv", "id
+1
+2
+");
+    let out = out_path(tmp.path(), "out.csv");
+    // Port 1 is not listening; if a request were made the run would fail, so
+    // "ok" is itself the assertion that none was.
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": in_csv, "hasHeader": true })),
+            node("none", "code.sql", json!({ "sql": "SELECT * FROM s WHERE 1=0" })),
+            // The declared schema lives on the node, not in its properties -
+            // it is what types an empty result instead of leaving a relation
+            // downstream cannot bind against (#170).
+            json!({
+                "id": "c",
+                "position": { "x": 0, "y": 0 },
+                "data": {
+                    "label": "c",
+                    "componentId": "src.rest",
+                    "schema": [{ "name": "officer", "type": "string" }],
+                    "properties": {
+                        "url": "http://127.0.0.1:1/x",
+                        "urlTemplate": "http://127.0.0.1:1/companies/{id}",
+                        "responsePath": "/results",
+                        "parentKeyColumn": "id",
+                    }
+                }
+            }),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([
+            main_edge("e1", "s", "none"),
+            main_edge("e2", "none", "c"),
+            main_edge("e3", "c", "k"),
+        ]),
+    ));
+    assert_eq!(
+        r.status, "ok",
+        "no parents means no requests, so nothing can fail: {:?}",
+        r.error
+    );
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 0);
+}
+
 /// #257 + #101: one parent's failure does not discard the others, and the
 /// failure itself survives as a row.
 ///
@@ -15813,6 +15868,88 @@ fn src_html_extracts_columns_by_selector_including_attributes() {
 
 /// #255: the GUI writes its column list as a key-value map, so the engine has
 /// to read that shape too - otherwise the form works and the run produces
+/// #255: a pagination walk cut short by a failure is INCOMPLETE, not ok.
+///
+/// `on_error: skip` means "skip a bad document" - fair for a corpus, where the
+/// other documents are unaffected. In a CHAIN it is different: the next link
+/// lives on the page that failed, so skipping page 2 does not lose page 2, it
+/// loses pages 2..N and the walk simply stops. Reporting that as a clean run
+/// publishes part of a dataset as though it were all of it.
+///
+/// Which is exactly what the incomplete outcome from #258 is for.
+#[test]
+fn a_pagination_walk_cut_short_by_a_failure_is_incomplete() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let served = Arc::new(AtomicUsize::new(0));
+    let count = served.clone();
+    let handle = std::thread::spawn(move || {
+        for stream in listener.incoming().take(4) {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let i = count.fetch_add(1, Ordering::SeqCst);
+            // Page 1 answers and names page 2. Page 2 fails, so the link to
+            // page 3 is never seen and the walk ends there.
+            let (status, body) = if i == 0 {
+                (
+                    "200 OK",
+                    "<html><body><ul><li class=item>row1</li></ul>\
+                     <a class=next href=\"?p=2\">next</a></body></html>"
+                        .to_string(),
+                )
+            } else {
+                ("500 Internal Server Error", "nope".to_string())
+            };
+            let resp = format!(
+                "HTTP/1.1 {}{}Content-Type: text/html{}Content-Length: {}{}Connection: close{}{}",
+                status, CRLF, CRLF, body.len(), CRLF, CRLF, CRLF
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "rows.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.html", json!({
+                "path": format!("http://127.0.0.1:{}/a/list.html", port),
+                "rowSelector": "li.item",
+                "columns": [{ "name": "v", "selector": "" }],
+                "nextPageSelector": "a.next",
+                "onError": "skip",
+                "maxPages": 10,
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    drop(handle);
+
+    assert_eq!(r.status, "ok", "a skipped page is not a failed run: {:?}", r.error);
+    assert!(
+        r.incomplete,
+        "but the walk stopped at a broken page, so what came back is not all of it"
+    );
+    let sink = r.nodes.get("k").expect("the sink is still reported");
+    assert_eq!(
+        sink.status, "skipped",
+        "and nothing downstream may publish a chain that stopped early"
+    );
+}
+
 /// #255: server-rendered pagination - follow the link the page names.
 ///
 /// The next link is written RELATIVE, which is the shape real pagination uses
