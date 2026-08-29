@@ -20231,6 +20231,21 @@ fn src_rest_keeps_the_original_response_named_by_its_hash() {
     let body = std::fs::read_to_string(&out).unwrap_or_default();
     assert!(body.contains(hash), "the row points at the capture: {body}");
     assert!(body.contains("_response_sha256"), "{body}");
+    // #260: the row NAMES its artifact rather than requiring the reader to
+    // re-derive the destination template - which {date} would not reproduce on
+    // a run that crossed midnight anyway.
+    let uri = scalar_string(&format!(
+        "SELECT _response_uri FROM read_csv_auto('{}')",
+        out
+    ));
+    assert!(
+        std::path::Path::new(&uri).is_file(),
+        "_response_uri must name a file that exists, got {uri:?}"
+    );
+    assert!(
+        uri.contains(hash),
+        "and it must be THIS response's artifact: {uri}"
+    );
     assert!(body.contains("_page_number"), "{body}");
 
     // Re-running with the same body rewrites the same file rather than making a

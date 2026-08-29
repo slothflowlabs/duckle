@@ -827,6 +827,11 @@ otherwise, plus everything that shapes the request - URL, template, method, body
 response path, and the saved incremental cursor. Change any of them and the old
 answers are not reused, because they answered a different question.
 
+Each parsed row carries `_response_uri` naming the artifact it was parsed out
+of, so nothing downstream re-derives the destination template - which `{date}`
+would not reproduce on a run that crossed midnight anyway. The artifact is
+written **before** the parse, so a row can never name a file that does not exist.
+
 ### A cursor that reaches the request
 
 Filtering after the fetch is not incremental for an API. You still pay for the
@@ -988,6 +993,25 @@ not apply here; a package that really is needed and really is missing raises
 `ImportError` on the first row, which is already unambiguous. What does fail is
 a version that contradicts the lock, or a package the lock never mentions -
 those are the two shapes of "someone changed this environment".
+
+**A deployed pipeline cannot silently run against an unprepared target.** A
+bundle built from a workspace with a `code.python` step carries `uv.lock` and
+`pyproject.toml`, so the target has something to verify against. On that target,
+a lock with nothing installed in `.venv` is refused before the run starts:
+
+```
+error : config: python: /srv/app declares a locked environment (uv.lock) but
+        nothing is installed in .venv, so this target is not prepared. Run
+        `duckle-runner python prepare` on this machine before the pipeline runs,
+        or point DUCKLE_PYTHON_BIN at the interpreter you mean.
+```
+
+That gap mattered: "missing packages" alone is deliberately not a failure, so an
+absent or never-synced `.venv` produced only Missing entries and the run went
+ahead against whatever Python the machine had. The lock is shipped, **not** the
+environment - preparing the target stays an explicit step, because resolving
+dependencies at run time is what an air-gapped box cannot have. Naming an
+interpreter with `DUCKLE_PYTHON_BIN` is a decision, so it is exempt.
 
 `DUCKLE_PYTHON_ALLOW_DRIFT=1` downgrades the refusal to a warning. There is
 always a machine where the rule is wrong, and a check with no way past it gets

@@ -305,6 +305,38 @@ pub fn describe(drifts: &[Drift]) -> String {
 /// a check with no way past it gets deleted rather than fixed.
 pub fn guard(workspace: &Path) -> Result<Option<String>, crate::EngineError> {
     let env = inspect(workspace);
+    let overridden = std::env::var("DUCKLE_PYTHON_BIN").is_ok_and(|v| !v.trim().is_empty());
+    let waived = std::env::var("DUCKLE_PYTHON_ALLOW_DRIFT").is_ok_and(|v| v != "0");
+    // #246: a target that DECLARES a locked environment and has none is not
+    // "missing some packages" - it is unprepared.
+    //
+    // Missing entries alone are deliberately not failures, because a lock
+    // resolves across platforms. That rule left a hole exactly where it matters
+    // most: a deployed bundle whose target was never prepared has an absent or
+    // empty .venv, produces nothing BUT Missing entries, and so ran happily
+    // against whatever interpreter the machine happened to have - which is the
+    // one thing committing a lock file is meant to prevent.
+    //
+    // DUCKLE_PYTHON_BIN is exempt: naming an interpreter explicitly is a
+    // decision, not an unprepared machine.
+    //
+    // "Nothing installed" is the signal, not "no interpreter": it is true both
+    // when .venv is absent and when it exists but was never synced, and it does
+    // not depend on where a given platform puts the binary.
+    if env.lock_sha256.is_some() && env.installed.is_empty() && !overridden && !waived {
+        return Err(crate::EngineError::Config(format!(
+            concat!(
+                "python: {} declares a locked environment (uv.lock) but nothing is ",
+                "installed in .venv, so this target is not prepared. Run ",
+                "`duckle-runner python prepare` on this machine before the pipeline ",
+                "runs, or point DUCKLE_PYTHON_BIN at the interpreter you mean. ",
+                "Without one of those the run would use whatever Python the ",
+                "machine happens to have, which is what committing a lock file ",
+                "exists to rule out."
+            ),
+            workspace.display()
+        )));
+    }
     let drifts = drift(&env);
     if drifts.is_empty() {
         return Ok(None);
@@ -441,6 +473,29 @@ mod tests {
             vec![Drift::Unlocked { name: "lightgbm".into(), installed: "4.5.0".into() }]
         );
         assert!(guard(tmp.path()).is_err());
+    }
+
+    /// #246: a target that declares a locked environment and has none at all.
+    ///
+    /// This is the deployment case, and it used to pass: an empty or absent
+    /// .venv produces only Missing entries, which are deliberately not
+    /// failures, so the run went ahead against whatever interpreter the machine
+    /// happened to have - the exact thing a lock file is committed to prevent.
+    #[test]
+    fn a_lock_with_no_environment_at_all_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        lock_with(tmp.path(), &[("pyarrow", "17.0.0")]);
+        let e = guard(tmp.path()).unwrap_err().to_string();
+        assert!(e.contains("prepare"), "must say how to fix it: {e}");
+
+        // A venv that exists but was never synced is the same situation.
+        let tmp2 = tempfile::tempdir().unwrap();
+        venv_with(tmp2.path(), &[], "3.12.4");
+        lock_with(tmp2.path(), &[("pyarrow", "17.0.0")]);
+        assert!(
+            guard(tmp2.path()).is_err(),
+            "an empty .venv beside a lock is unprepared, not merely incomplete"
+        );
     }
 
     /// A workspace with no lock has not asked for any of this.

@@ -14891,13 +14891,23 @@ impl DuckdbEngine {
                 // #260: persist the original body before parsing, so a later
                 // question about whether the PARSER or the SOURCE changed can be
                 // answered from the bytes rather than argued about.
-                if !spec.raw_response_destination.trim().is_empty() {
+                // #260: kept, so each parsed row can NAME the artifact it came
+                // from. Reconstructing it downstream from the template would
+                // mean re-deriving {sha256} and {date} and hoping they still
+                // resolve the same way - and {date} would not, on a run that
+                // crossed midnight.
+                let page_raw_uri = if spec.raw_response_destination.trim().is_empty() {
+                    None
+                } else {
                     let dest = spec
                         .raw_response_destination
                         .replace("{sha256}", &page_sha256)
                         .replace("{date}", &chrono::Utc::now().format("%Y-%m-%d").to_string());
+                    // Written BEFORE the parse below, so a row can never name
+                    // an artifact that does not exist yet.
                     self.capture_raw_response(&dest, page_body.as_bytes())?;
-                }
+                    Some(dest)
+                };
                 let (rows, response): (Vec<JsonValue>, JsonValue) = match spec.response_format {
                     RestResponseFormat::Json => {
                         let response: JsonValue =
@@ -14977,6 +14987,17 @@ impl DuckdbEngine {
                                     o.insert(
                                         "_response_sha256".into(),
                                         JsonValue::from(page_sha256.clone()),
+                                    );
+                                    // #260: the artifact this row was parsed
+                                    // out of. Null when nothing was captured,
+                                    // rather than a path to a file that was
+                                    // never written.
+                                    o.insert(
+                                        "_response_uri".into(),
+                                        match &page_raw_uri {
+                                            Some(u) => JsonValue::from(u.clone()),
+                                            None => JsonValue::Null,
+                                        },
                                     );
                                     // Per this parent's walk. A global counter
                                     // would keep climbing across parents, so

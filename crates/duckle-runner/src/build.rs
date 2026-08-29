@@ -671,6 +671,43 @@ pub fn run() -> Result<(), String> {
         record(&mut files, &rel);
     }
 
+    // #246: a deployed pipeline with a Python step carries its lock contract.
+    //
+    // Without it the target has nothing to verify against, and the engine's
+    // preflight - which only fires when a uv.lock is present - stays silent.
+    // The bundle would then run against whatever interpreter the target
+    // happens to have, which is exactly what committing a lock rules out.
+    //
+    // The lock is shipped, NOT the environment. Duckle does not package
+    // wheels: preparing the target stays an explicit step, because resolving
+    // dependencies at run time is what an air-gapped or scheduled box cannot
+    // have. pyproject.toml rides along because `uv sync` needs it to act on
+    // the lock at all.
+    if doc.nodes.iter().any(|n| n.data.component_id.as_deref() == Some("code.python")) {
+        let mut carried = 0;
+        for name in ["uv.lock", "pyproject.toml"] {
+            let src = args.workspace.join(name);
+            if !src.exists() {
+                continue;
+            }
+            let bytes = std::fs::read(&src)
+                .map_err(|e| format!("read {}: {}", src.display(), e))?;
+            write_file(&root.join(name), &bytes)?;
+            record(&mut files, name);
+            carried += 1;
+        }
+        if carried == 0 {
+            // Said out loud rather than left to be discovered on the target. A
+            // bundle with a Python step and no lock is a bundle whose Python
+            // behaviour is whatever the target machine decides.
+            eprintln!(
+                "duckle: this pipeline has a code.python step and the workspace has no uv.lock, \
+                 so the bundle cannot pin its Python environment. The target will run against \
+                 whatever interpreter it has. Commit a uv.lock to make it reproducible."
+            );
+        }
+    }
+
     // routines/ are intentionally NOT shipped: resolve_workspace already
     // inlines SQL routine bodies into the pipeline doc at build time, and
     // run_artifact only ever reads pipeline/<name>.json. Copying routine
