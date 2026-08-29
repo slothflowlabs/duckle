@@ -1614,6 +1614,8 @@ mod tests {
             trigger: "scheduled".into(),
             error: None,
             category: None,
+            incomplete: false,
+            incomplete_reason: None,
             assets: vec![AssetTouch { id: asset.into(), direction: dir.into(), rows }],
             run_id: None,
             unchanged: false,

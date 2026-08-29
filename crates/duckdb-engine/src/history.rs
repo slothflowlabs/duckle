@@ -42,6 +42,22 @@ pub struct RunRecord {
     /// `default` so records written before this existed still load.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unchanged: bool,
+    /// #258: the run produced rows, they are correct, and they are not all of
+    /// them - a stage stopped at a ceiling it was given.
+    ///
+    /// Persisted for the same reason `unchanged` is, and it matters more: the
+    /// moment the run is over, a budget stop is indistinguishable from an
+    /// ordinary success unless the record says otherwise. Alerting and the Runs
+    /// tab both read this history, and "we hit the ceiling" has to be tellable
+    /// from "it worked".
+    ///
+    /// `default` so records written before this existed still load.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub incomplete: bool,
+    /// Why, machine-readable (`budget:maxRequests`), so alerting can match on
+    /// it rather than on a sentence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incomplete_reason: Option<String>,
     /// Coarse error bucket (see error_category) - present only on failure.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub category: Option<String>,
@@ -92,6 +108,8 @@ impl RunRecord {
             node_count: result.nodes.len(),
             trigger: trigger.to_string(),
             unchanged: result.unchanged,
+            incomplete: result.incomplete,
+            incomplete_reason: result.incomplete_reason.clone(),
             error: result.error.clone(),
             category: result.category.clone(),
             assets: Vec::new(),
@@ -277,6 +295,56 @@ fn escape_label(v: &str) -> String {
 }
 
 #[cfg(test)]
+mod incomplete_record_tests {
+    use super::*;
+
+    fn result(incomplete: bool, reason: Option<&str>) -> RunResult {
+        RunResult {
+            status: "ok".into(),
+            duration_ms: 1,
+            nodes: Default::default(),
+            preview: Vec::new(),
+            error: None,
+            category: None,
+            unchanged: false,
+            incomplete,
+            incomplete_reason: reason.map(str::to_string),
+            artifacts: Vec::new(),
+            artifacts_truncated: false,
+        }
+    }
+
+    /// #258: the moment the run is over, a budget stop is indistinguishable
+    /// from an ordinary success unless the RECORD says otherwise. Alerting and
+    /// the Runs tab read this history, not the RunResult that is long gone.
+    #[test]
+    fn an_incomplete_run_stays_incomplete_in_its_record() {
+        let rec = RunRecord::from_result(&result(true, Some("budget:maxRequests")), "manual");
+        assert_eq!(rec.status, "ok", "a budget stop is not a failure");
+        assert!(rec.incomplete, "but the record must not call it a plain success");
+        assert_eq!(rec.incomplete_reason.as_deref(), Some("budget:maxRequests"));
+
+        // A record written before this existed still loads, and reads as
+        // complete rather than failing to parse.
+        let old: RunRecord =
+            serde_json::from_str(r#"{"at":"2026-01-01","status":"ok","duration_ms":1,"rows":0,"node_count":1,"trigger":"manual"}"#)
+                .expect("an older record must still load");
+        assert!(!old.incomplete);
+        assert_eq!(old.incomplete_reason, None);
+    }
+
+    /// And an ordinary run is not marked, so the flag means something.
+    #[test]
+    fn an_ordinary_run_is_not_marked_incomplete() {
+        let rec = RunRecord::from_result(&result(false, None), "manual");
+        assert!(!rec.incomplete);
+        // It is skipped in the JSON entirely, so old readers see no new key.
+        let json = serde_json::to_string(&rec).unwrap();
+        assert!(!json.contains("incomplete"), "{json}");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -293,6 +361,8 @@ mod tests {
             category: (status == "error").then(|| "schema".into()),
             assets: Vec::new(),
             unchanged: false,
+            incomplete: false,
+            incomplete_reason: None,
         }
     }
 
@@ -351,6 +421,8 @@ mod unchanged_persistence_tests {
             unchanged,
             error: None,
             category: None,
+            incomplete: false,
+            incomplete_reason: None,
             assets: Vec::new(),
         }
     }
