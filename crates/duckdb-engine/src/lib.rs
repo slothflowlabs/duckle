@@ -2962,15 +2962,15 @@ impl DuckdbEngine {
             }
             let schema_path = marker_dir.join(format!("{}_schema.json", i));
             let rows_path = marker_dir.join(format!("{}_rows.json", i));
-            let schema: Vec<Column> = read_ndjson(&schema_path)
-                .iter()
-                .filter_map(parse_describe_row)
-                .collect();
+            let schema_rows = read_ndjson(&schema_path);
+            let schema: Vec<Column> = schema_rows.iter().filter_map(parse_describe_row).collect();
             let rows = read_ndjson(&rows_path);
             preview.push(NodePreview {
                 node_id: stage.node_id.clone(),
                 columns: schema,
                 rows,
+                // Same rows, same filter, so the two stay aligned by index.
+                sql_types: schema_rows.iter().filter_map(describe_row_sql_type).collect(),
             });
         }
 
@@ -3128,6 +3128,8 @@ impl DuckdbEngine {
                 node_id: name.to_string(),
                 columns: schema,
                 rows: arrays.get(base + 1).cloned().unwrap_or_default(),
+                // Same rows, same filter, so the two stay aligned by index.
+                sql_types: schema_rows.iter().filter_map(describe_row_sql_type).collect(),
             }
         });
         (count, preview)
@@ -5219,6 +5221,17 @@ fn parse_json_arrays(s: &str) -> Vec<Vec<JsonValue>> {
 }
 
 /// Turn one DuckDB `DESCRIBE` row into a Column.
+/// #250: the raw `column_type` from a DESCRIBE row, kept verbatim.
+fn describe_row_sql_type(v: &JsonValue) -> Option<String> {
+    v.get("column_name")?;
+    Some(
+        v.get("column_type")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("VARCHAR")
+            .to_string(),
+    )
+}
+
 fn parse_describe_row(v: &JsonValue) -> Option<Column> {
     let name = v.get("column_name")?.as_str()?.to_string();
     let type_name = v
@@ -6066,6 +6079,17 @@ pub struct NodePreview {
     pub node_id: String,
     pub columns: Vec<Column>,
     pub rows: Vec<JsonValue>,
+    /// #250: the DuckDB type exactly as DESCRIBE reported it, aligned with
+    /// `columns` by index.
+    ///
+    /// `Column.data_type` collapses `DECIMAL(18,3)` to `decimal`, which is
+    /// right for the schema model and wrong for an assertion about precision:
+    /// `DECIMAL(18,3)` becoming `DECIMAL(10,2)` can round, lose precision or
+    /// overflow while reading as the same broad type. Kept beside rather than
+    /// inside `Column`, because precision is a fact about THIS run's relation,
+    /// not part of the declared-schema vocabulary.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sql_types: Vec<String>,
 }
 
 /// Schema + rows from a single read-only query ([`Engine::query`]). The

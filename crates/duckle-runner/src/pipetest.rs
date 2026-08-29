@@ -708,6 +708,19 @@ pub fn order_for_compare(
     (want, got)
 }
 
+/// #250: one spelling for a parameterised SQL type, so `DECIMAL(18, 2)` and
+/// `decimal(18,2)` are the same assertion.
+///
+/// Case and internal spaces only. Nothing is reordered or defaulted: filling in
+/// an omitted scale would be inventing what the author meant, and the point of
+/// writing the parentheses is to say it exactly.
+fn normalize_sql_type(t: &str) -> String {
+    t.chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_uppercase)
+        .collect()
+}
+
 /// #250: does the node's schema match what the case declared?
 ///
 /// Only the columns named are checked, like the row comparison: a test that had
@@ -737,13 +750,36 @@ pub fn check_schema(
                 "schema: {col:?} is declared as {declared:?}, which is not a type name I know"
             ));
         };
-        let Some(actual) = preview.columns.iter().find(|c| &c.name == col) else {
+        let Some(at) = preview.columns.iter().position(|c| &c.name == col) else {
             let have: Vec<&str> = preview.columns.iter().map(|c| c.name.as_str()).collect();
             return Some(format!(
                 "schema: no column {col:?}. The node has: {}",
                 have.join(", ")
             ));
         };
+        let actual = &preview.columns[at];
+        // #250: a declaration that spells out precision is asserting precision.
+        //
+        // DECIMAL(18,3) becoming DECIMAL(10,2) rounds, loses precision and
+        // eventually overflows, while both read as the broad `decimal` type -
+        // so for money the broad type is not the assertion anyone means. Only
+        // when the parentheses are written, though: `DECIMAL` on its own still
+        // means the family, and demanding precision nobody asked for would fail
+        // correct tests.
+        if declared.contains('(') {
+            let Some(got) = preview.sql_types.get(at) else {
+                return Some(format!(
+                    "schema: {col:?} was declared as {declared:?}, but this run did not report a \
+                     precise type to compare it against"
+                ));
+            };
+            if normalize_sql_type(got) != normalize_sql_type(declared) {
+                return Some(format!(
+                    "schema: {col:?} is {got}, expected {declared}"
+                ));
+            }
+            continue;
+        }
         if actual.data_type != expected {
             return Some(format!(
                 "schema: {col:?} is {}, expected {} (declared {declared:?})",
@@ -1038,6 +1074,7 @@ mod tests {
             // became a decimal.
             columns: vec![col("day", DataType::String), col("n", DataType::Decimal)],
             rows: vec![],
+            sql_types: vec![],
         };
         let want = vec![("day".to_string(), "DATE".to_string())];
         let why = check_schema(&want, Some(&preview)).expect("must catch DATE -> VARCHAR");
@@ -1054,6 +1091,57 @@ mod tests {
             ("n".to_string(), "decimal".to_string()),
         ];
         assert_eq!(check_schema(&ok, Some(&preview)), None, "both vocabularies");
+    }
+
+    /// #250: DECIMAL(18,3) becoming DECIMAL(10,2) rounds, loses precision and
+    /// eventually overflows, while both read as the broad `decimal` type. When
+    /// the expectation spells the precision out, it is asserting precision.
+    #[test]
+    fn a_declared_precision_is_compared() {
+        use duckle_duckdb_engine::{Column, DataType, NodePreview};
+        let preview = NodePreview {
+            node_id: "x".into(),
+            columns: vec![Column {
+                name: "turnover".into(),
+                data_type: DataType::Decimal,
+                nullable: true,
+                primary_key: None,
+                format: None,
+            }],
+            rows: vec![],
+            sql_types: vec!["DECIMAL(10,0)".into()],
+        };
+        let want = vec![("turnover".to_string(), "DECIMAL(18,2)".to_string())];
+        let why = check_schema(&want, Some(&preview)).expect("a narrowed decimal must fail");
+        assert!(why.contains("DECIMAL(10,0)") && why.contains("DECIMAL(18,2)"), "{why}");
+
+        // The same precision, written differently, is the same assertion.
+        let ok = vec![("turnover".to_string(), "decimal(10, 0)".to_string())];
+        assert_eq!(check_schema(&ok, Some(&preview)), None);
+    }
+
+    /// `DECIMAL` on its own still means the family. Demanding a precision
+    /// nobody wrote would fail correct tests.
+    #[test]
+    fn a_bare_type_name_still_means_the_family() {
+        use duckle_duckdb_engine::{Column, DataType, NodePreview};
+        let preview = NodePreview {
+            node_id: "x".into(),
+            columns: vec![Column {
+                name: "turnover".into(),
+                data_type: DataType::Decimal,
+                nullable: true,
+                primary_key: None,
+                format: None,
+            }],
+            rows: vec![],
+            sql_types: vec!["DECIMAL(10,0)".into()],
+        };
+        let want = vec![("turnover".to_string(), "DECIMAL".to_string())];
+        assert_eq!(check_schema(&want, Some(&preview)), None);
+        // And a genuinely different family still fails.
+        let want = vec![("turnover".to_string(), "BIGINT".to_string())];
+        assert!(check_schema(&want, Some(&preview)).is_some());
     }
 
     /// A type name nobody recognises is a mistake in the TEST. Mapping it to
@@ -1074,6 +1162,7 @@ mod tests {
                 format: None,
             }],
             rows: vec![],
+            sql_types: vec![],
         };
         let want = vec![("s".to_string(), "VARCHARR".to_string())];
         let why = check_schema(&want, Some(&preview)).expect("a typo must not pass");
@@ -1094,6 +1183,7 @@ mod tests {
                 format: None,
             }],
             rows: vec![],
+            sql_types: vec![],
         };
         let want = vec![("nope".to_string(), "BIGINT".to_string())];
         let why = check_schema(&want, Some(&preview)).expect("must fail");
@@ -1113,6 +1203,7 @@ mod tests {
                 Column { name: "extra".into(), data_type: DataType::Json, nullable: true, primary_key: None, format: None },
             ],
             rows: vec![],
+            sql_types: vec![],
         };
         let want = vec![("id".to_string(), "BIGINT".to_string())];
         assert_eq!(check_schema(&want, Some(&preview)), None);
