@@ -827,6 +827,15 @@ otherwise, plus everything that shapes the request - URL, template, method, body
 response path, and the saved incremental cursor. Change any of them and the old
 answers are not reused, because they answered a different question.
 
+The destination may be **`s3://`**, using the object-storage connection on the
+node, so a raw zone can be the raw zone rather than a local staging step. It is
+written before the parse either way, so no parsed row can exist without its
+source being durable - which a later copy stage could not promise.
+
+`src.html` takes the same setting. It already fetched once, so the archived page
+and the parsed page are the same bytes rather than two requests that might
+differ, and its rows carry the same two columns.
+
 Each parsed row carries `_response_uri` naming the artifact it was parsed out
 of, so nothing downstream re-derives the destination template - which `{date}`
 would not reproduce on a run that crossed midnight anyway. The artifact is

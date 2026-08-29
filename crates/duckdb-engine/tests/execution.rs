@@ -15397,6 +15397,71 @@ fn src_html_extracts_columns_by_selector_including_attributes() {
 
 /// #255: the GUI writes its column list as a key-value map, so the engine has
 /// to read that shape too - otherwise the form works and the run produces
+/// #260: src.html archives the exact page it parsed, before parsing it.
+///
+/// The point is not that a file appears - it is that the file is the bytes the
+/// rows came from. The test hashes the captured file and compares it against
+/// the `_response_sha256` stamped on the rows, so a capture of a SECOND fetch
+/// (which could differ) would not pass.
+#[test]
+fn src_html_archives_the_page_it_parsed() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let html = "<html><body><ul>
+<li class=item><a href=/c/1>Acme</a></li>
+<li class=item><a href=/c/2>Globex</a></li>
+</ul></body></html>
+";
+    let page = write_file(tmp.path(), "list.html", html);
+    let raw_dir = tmp.path().join("raw");
+    let dest = format!("{}/{{sha256}}.html", raw_dir.to_string_lossy().replace('\\', "/"));
+    let out = out_path(tmp.path(), "out.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.html", json!({
+                "path": page,
+                "rowSelector": "li.item",
+                "columns": [{ "name": "name", "selector": "a" }],
+                "rawResponseDestination": dest,
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "src.html failed: {:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2);
+
+    let captured: Vec<_> = std::fs::read_dir(&raw_dir)
+        .expect("the raw directory must exist")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    assert_eq!(captured.len(), 1, "one page, one capture: {captured:?}");
+
+    let uri = scalar_string(&format!(
+        "SELECT _response_uri FROM read_csv_auto('{}') LIMIT 1",
+        out
+    ));
+    assert!(
+        std::path::Path::new(&uri).is_file(),
+        "the row must name a file that exists: {uri:?}"
+    );
+    // The archived bytes ARE the parsed bytes.
+    let on_disk = std::fs::read(&captured[0]).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&on_disk),
+        html,
+        "the capture must be the page that was parsed, byte for byte"
+    );
+    let stamped = scalar_string(&format!(
+        "SELECT _response_sha256 FROM read_csv_auto('{}') LIMIT 1",
+        out
+    ));
+    assert!(
+        uri.contains(&stamped),
+        "content-addressed: the name carries the hash the rows carry ({stamped} vs {uri})"
+    );
+}
+
 /// nothing, which is the silent-bug class this repo keeps finding.
 #[test]
 fn src_html_reads_the_key_value_column_shape_the_gui_writes() {

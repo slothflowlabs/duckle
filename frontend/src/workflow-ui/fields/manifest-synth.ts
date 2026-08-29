@@ -1034,6 +1034,17 @@ function synthFileSource(comp: ComponentDef): ComponentManifest {
         ...(comp.id === 'src.pdf' || comp.id === 'src.xml' || comp.id === 'src.html'
             ? [artifactInputSection(), artifactAuthSection()]
             : []),
+        ...(comp.id === 'src.html'
+            ? [{
+                  label: 'Keep the original page',
+                  fields: [{
+                      key: 'rawResponseDestination',
+                      label: 'Archive each page at',
+                      kind: 'text' as const,
+                      description: 'Where to write each page BEFORE it is parsed, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content, so a changed page becomes a new file and an unchanged one rewrites the same one. {date} is also substituted. An s3:// destination uses the object-storage connection above. Rows carry _response_uri and _response_sha256 naming what they were parsed from. Leave blank to archive nothing.',
+                  }],
+              }]
+            : []),
         ...outputCacheSection(comp),
     ]);
 }
@@ -3977,7 +3988,7 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
                     description: 'One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log.',
                 },
                     { key: 'responseMetadata', label: 'Add response metadata', kind: 'bool', defaultValue: false, description: 'Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can.' },
-                    { key: 'rawResponseDestination', label: 'Keep the original response at', kind: 'text', description: 'A local path to write each response body to BEFORE parsing, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing.' },
+                    { key: 'rawResponseDestination', label: 'Keep the original response at', kind: 'text', description: 'A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing.' },
             ],
         },
     ]);

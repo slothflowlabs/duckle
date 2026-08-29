@@ -609,6 +609,13 @@ pub struct HtmlColumn {
 /// outright, so this parses with a tolerant HTML parser instead.
 #[derive(Debug, Clone)]
 pub struct HtmlSourceSpec {
+    /// #260: where to persist the ORIGINAL page, before parsing.
+    ///
+    /// Same contract as `src.rest`: empty = capture nothing, `{sha256}` and
+    /// `{date}` are substituted, and the bytes written are the bytes parsed -
+    /// `html_text` fetches once and both the archive and the parser consume
+    /// that one result.
+    pub raw_response_destination: String,
     /// #256: per-node transport (proxy, timeouts, User-Agent), usually filled
     /// from a saved `http` connection. None uses the shared default agent.
     pub transport: Option<crate::tls::HttpTransport>,
@@ -1761,6 +1768,12 @@ pub struct RestSourceSpec {
     /// careless upstream cannot turn into an unbounded request storm. Only
     /// applies when fanning out.
     pub max_requests: u64,
+    /// #260: credentials for the raw capture when its destination is `s3://`.
+    ///
+    /// Separate from the request's own auth: the API you read and the bucket
+    /// you archive into are different systems, and sharing one credential
+    /// between them would be an accident waiting to happen.
+    pub raw_auth: crate::plan::ArtifactAuth,
     /// #257 + #252: remember each parent as its walk finishes, so a rerun does
     /// not re-fetch the ones that already succeeded.
     ///

@@ -8386,7 +8386,15 @@ impl DuckdbEngine {
         let decorate = |obj: &mut serde_json::Map<String, JsonValue>,
                         uri: &str,
                         source_sha: &Option<String>,
-                        upstream_row: &JsonValue| {
+                        upstream_row: &JsonValue,
+                        capture: &Option<(String, String)>| {
+            // #260: the archived page this row was parsed out of. Stamped
+            // before the upstream-only fields, because a capture happens on the
+            // configured-path route too - which is the route this was asked for.
+            if let Some((cap_uri, cap_sha)) = capture {
+                obj.insert("_response_uri".into(), JsonValue::String(cap_uri.clone()));
+                obj.insert("_response_sha256".into(), JsonValue::String(cap_sha.clone()));
+            }
             if !from_upstream {
                 return;
             }
@@ -8426,6 +8434,28 @@ impl DuckdbEngine {
                 }
                 Err(e) => return Err(e),
             };
+            // #260: archive the exact bytes that are about to be parsed, and do
+            // it BEFORE parsing so no extracted row can exist without its
+            // source being durable. html_text fetched once, so this is the same
+            // response the parser sees - not a second request that might return
+            // something else.
+            let capture: Option<(String, String)> =
+                if spec.raw_response_destination.trim().is_empty() {
+                    None
+                } else {
+                    let sha = {
+                        use sha2::{Digest, Sha256};
+                        let mut h = Sha256::new();
+                        h.update(html.as_bytes());
+                        h.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>()
+                    };
+                    let dest = spec
+                        .raw_response_destination
+                        .replace("{sha256}", &sha)
+                        .replace("{date}", &chrono::Utc::now().format("%Y-%m-%d").to_string());
+                    self.capture_raw_response(&spec.input.auth, &dest, html.as_bytes())?;
+                    Some((dest, sha))
+                };
             let doc = dom_query::Document::from(html);
             if spec.columns.is_empty() {
                 // Table mode: the row selector names a table, its header cells name
@@ -8464,7 +8494,7 @@ impl DuckdbEngine {
                             obj.insert(name, JsonValue::String(cell.clone()));
                         }
                         let _ = ri;
-                        decorate(&mut obj, uri, source_sha, upstream_row);
+                        decorate(&mut obj, uri, source_sha, upstream_row, &capture);
                         writer.write_row(&JsonValue::Object(obj))?;
                         count += 1;
                     }
@@ -8503,7 +8533,7 @@ impl DuckdbEngine {
                             },
                         );
                     }
-                    decorate(&mut obj, uri, source_sha, upstream_row);
+                    decorate(&mut obj, uri, source_sha, upstream_row, &capture);
                     writer.write_row(&JsonValue::Object(obj))?;
                     count += 1;
                 }
@@ -14677,13 +14707,31 @@ impl DuckdbEngine {
     /// from a normal copy: a URL is a NAME that can be rebound, so naming the
     /// capture after its URL and skipping when the file exists silently keeps
     /// the old body when the resource changed.
-    fn capture_raw_response(&self, dest: &str, body: &[u8]) -> Result<(), EngineError> {
+    fn capture_raw_response(
+        &self,
+        auth: &plan::ArtifactAuth,
+        dest: &str,
+        body: &[u8],
+    ) -> Result<(), EngineError> {
+        // #260: object storage, so a raw zone can BE the raw zone rather than a
+        // local staging step. Written HERE, before the caller parses, which is
+        // what keeps "durable before any parsed row flows" true - a later copy
+        // stage could not promise that.
         if dest.starts_with("s3://") || dest.starts_with("s3a://") {
-            return Err(EngineError::Config(format!(
-                "rest: raw capture to {dest} needs object-storage credentials on this node, \
-                 which src.rest does not carry yet. Capture to a local path and copy it with \
-                 xf.artifact.copy, which does."
-            )));
+            let cfg = auth.s3.as_ref().ok_or_else(|| {
+                EngineError::Config(format!(
+                    concat!(
+                        "raw capture to {} needs S3 credentials - pick a saved S3 ",
+                        "connection on this node, or capture to a local path."
+                    ),
+                    dest
+                ))
+            })?;
+            let (bucket, key) = crate::s3::parse_s3_uri(dest)?;
+            let owned = body.to_vec();
+            let len = owned.len() as u64;
+            cfg.put(&bucket, &key, std::io::Cursor::new(owned), len, None)?;
+            return Ok(());
         }
         let path = std::path::Path::new(dest);
         if let Some(parent) = path.parent() {
@@ -14905,7 +14953,7 @@ impl DuckdbEngine {
                         .replace("{date}", &chrono::Utc::now().format("%Y-%m-%d").to_string());
                     // Written BEFORE the parse below, so a row can never name
                     // an artifact that does not exist yet.
-                    self.capture_raw_response(&dest, page_body.as_bytes())?;
+                    self.capture_raw_response(&spec.raw_auth, &dest, page_body.as_bytes())?;
                     Some(dest)
                 };
                 let (rows, response): (Vec<JsonValue>, JsonValue) = match spec.response_format {

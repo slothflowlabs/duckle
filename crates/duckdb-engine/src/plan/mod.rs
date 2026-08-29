@@ -4630,6 +4630,9 @@ fn build_stage(
         let mut headers = headers_from_props(&props);
         push_rest_auth(&mut headers, &props);
         html_source = Some(HtmlSourceSpec {
+            raw_response_destination: string_prop(&props, "rawResponseDestination")
+                .map(|v| v.trim().to_string())
+                .unwrap_or_default(),
             input: artifact_input_from_props(&props, upstream),
             on_error: string_prop(&props, "onError")
                 .filter(|s| !s.trim().is_empty())
@@ -5466,6 +5469,7 @@ fn build_stage(
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "/data".into());
         rest_source = Some(RestSourceSpec {
+            raw_auth: artifact_auth_from_props(&props),
             // This is the fixed-endpoint form (a vendor alias), which never
             // fans out, so there is nothing to run in parallel and no parent
             // that could fail on its own.
@@ -5759,6 +5763,7 @@ fn build_stage(
             from_view: rest_from_view,
             url_template: rest_url_template,
             parent_key_column: string_prop(&props, "parentKeyColumn").filter(|s| !s.is_empty()),
+            raw_auth: artifact_auth_from_props(&props),
             checkpoint: props
                 .get("checkpoint")
                 .and_then(JsonValue::as_bool)
