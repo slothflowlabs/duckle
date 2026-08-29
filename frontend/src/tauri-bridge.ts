@@ -758,6 +758,34 @@ export async function compilePipelineSql(
     });
 }
 
+/**
+ * #226: the columns a node really produces, worked out by the engine.
+ *
+ * The editor's per-component rules cannot see a transform that adds several
+ * columns, removes one, or adds a column that is not text. This asks DuckDB
+ * instead: it runs the node's own compiled SQL against a zero-row typed stub of
+ * its inputs and reports what came out. Reads nothing - no file, no credential,
+ * no network - so it is cheap enough to ask on every selection.
+ *
+ * null when there is no backend to ask, exactly like the other helpers here.
+ */
+export async function describeNodeColumns(
+    nodes: Node<DuckleNodeData>[],
+    edges: Edge[],
+    nodeId: string,
+    inputs: Array<[string, Column[]]>,
+): Promise<Column[] | null> {
+    if (!isTauri() && !isWebBackend()) return null;
+    return await invoke<Column[]>('describe_node_columns', {
+        // The same shape every other pipeline command takes: the nodes as they
+        // are, not a hand-rolled projection that could drop a field the engine
+        // needs.
+        pipeline: { nodes, edges },
+        nodeId,
+        inputs,
+    });
+}
+
 /** A resolved origin column for lineage (#103). */
 export type LineageRoot = { node: string; column: string };
 /** node id -> [output column name, root source columns][]. */

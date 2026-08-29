@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { Edge, Node } from '@xyflow/react';
 import { CheckCircle2, ChevronLeft, ChevronRight, MousePointer2, Workflow } from 'lucide-react';
 import { resolveUpstreamSchema, resolveUpstreamSampleRows, resolveOutputSchema, deriveSchemaFromEngine } from '../schema-resolve';
-import { invoke } from '@tauri-apps/api/core';
+import { describeNodeColumns } from '../tauri-bridge';
 import { buildContextVars, builtinVars, substituteDeep } from '../run-resolve';
 import type { Column, DuckleNodeData } from '../pipeline-types';
 import type {
@@ -178,7 +178,7 @@ export default function PropertiesPanel({
     useEffect(() => {
         if (!selected) return;
         let live = true;
-        void deriveSchemaFromEngine(selected.id, allNodes, edges, invoke).then(changed => {
+        void deriveSchemaFromEngine(selected.id, allNodes, edges, describeNodeColumns).then(changed => {
             if (live && changed) setDerivedTick(t => t + 1);
         });
         return () => {

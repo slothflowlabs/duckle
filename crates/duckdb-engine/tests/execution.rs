@@ -1069,6 +1069,56 @@ fn a_node_reports_its_real_columns_without_running() {
     );
 }
 
+/// #226: the editor's own node shape reaches the engine.
+///
+/// The Schema tab sends its React Flow nodes as they are, which carry fields
+/// the engine has never heard of - `selected`, `dragging`, `measured`. The
+/// frontend swallows a failure here so the tab keeps its guess, which means a
+/// shape mismatch would make the whole feature silently dead rather than
+/// noisy. So the shape is asserted rather than assumed.
+#[test]
+fn a_react_flow_node_deserialises_and_describes() {
+    let engine = engine_or_skip!();
+    // Exactly what the editor holds: extra keys, and data carrying more than
+    // the engine reads.
+    let raw = json!({
+        "nodes": [
+            { "id": "s", "type": "source", "position": { "x": 1.5, "y": 2.5 },
+              "selected": true, "dragging": false,
+              "measured": { "width": 220, "height": 80 },
+              "data": { "label": "in", "componentId": "src.csv",
+                        "properties": { "path": "unread.csv", "hasHeader": true },
+                        "sampleRows": [], "status": "idle" } },
+            { "id": "h", "type": "transform", "position": { "x": 300.0, "y": 2.5 },
+              "selected": false,
+              "data": { "label": "hash", "componentId": "xf.hash",
+                        "properties": { "column": "location", "outputColumn": "loc_hash",
+                                        "algorithm": "md5" } } }
+        ],
+        "edges": [
+            { "id": "e1", "source": "s", "target": "h",
+              "sourceHandle": null, "targetHandle": null, "selected": false }
+        ]
+    });
+    let d: duckle_duckdb_engine::PipelineDoc =
+        serde_json::from_value(raw).expect("the editor's own node shape must deserialise");
+
+    let upstream = vec![duckle_duckdb_engine::Column {
+        name: "location".into(),
+        data_type: duckle_duckdb_engine::DataType::String,
+        nullable: true,
+        primary_key: None,
+        format: None,
+    }];
+    let cols = engine
+        .describe_node_columns(&d, "h", &[("s".to_string(), upstream)])
+        .expect("and must describe from it");
+    assert_eq!(
+        cols.iter().map(|c| c.name.clone()).collect::<Vec<_>>().join(","),
+        "location,loc_hash"
+    );
+}
+
 /// #226: what Text to Columns actually PRODUCES, for both dropSource states.
 ///
 /// dropSource had no test at all, which is how the GUI came to disagree with

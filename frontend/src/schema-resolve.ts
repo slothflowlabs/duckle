@@ -62,7 +62,12 @@ export async function deriveSchemaFromEngine(
     nodeId: string,
     nodes: Node<DuckleNodeData>[],
     edges: Edge[],
-    invoke: (cmd: string, args: Record<string, unknown>) => Promise<unknown>,
+    describe: (
+        nodes: Node<DuckleNodeData>[],
+        edges: Edge[],
+        nodeId: string,
+        inputs: Array<[string, Column[]]>,
+    ) => Promise<Column[] | null>,
 ): Promise<boolean> {
     const node = nodes.find(n => n.id === nodeId);
     const componentId = node?.data.componentId;
@@ -78,11 +83,12 @@ export async function deriveSchemaFromEngine(
     if (derived.has(key)) return false;
 
     try {
-        const cols = (await invoke('describe_node_columns', {
-            pipeline: { nodes: nodes.map(n => ({ id: n.id, type: n.type, position: n.position, data: n.data })), edges },
+        const cols = await describe(
+            nodes,
+            edges,
             nodeId,
-            inputs: inputs.map(([id, cols]) => [id, cols]),
-        })) as Column[] | null;
+            inputs.map(([id, cols]) => [id, cols] as [string, Column[]]),
+        );
         if (!Array.isArray(cols) || cols.length === 0) return false;
         derived.set(key, cols);
         return true;
