@@ -201,6 +201,29 @@ pub fn apply_given(doc: &mut JsonValue, node_id: &str, path: &str) -> Result<(),
 
 /// Sources whose input IS a file path, so pointing that path at a fixture is
 /// the whole substitution.
+/// #250: where a `given` value naming a file is looked for.
+///
+/// Beside the TEST file first, which is what the docs describe and where a
+/// suite's fixtures naturally live. The pipeline's own directory stays as a
+/// fallback so suites written against the older behaviour keep working, and a
+/// path that resolves as given is honoured last.
+///
+/// `None` means the value is not a file at all, and the caller treats it as
+/// inline text.
+fn resolve_fixture(suite_dir: &Path, pipeline: &Path, body: &str) -> Option<PathBuf> {
+    let by_suite = suite_dir.join(body);
+    if by_suite.is_file() {
+        return Some(by_suite);
+    }
+    if let Some(by_pipeline) = pipeline.parent().map(|d| d.join(body)) {
+        if by_pipeline.is_file() {
+            return Some(by_pipeline);
+        }
+    }
+    let literal = PathBuf::from(body);
+    literal.is_file().then_some(literal)
+}
+
 fn reads_a_path(component: &str) -> bool {
     matches!(
         component,
@@ -215,6 +238,13 @@ fn reads_a_path(component: &str) -> bool {
             | "src.fixedwidth"
             | "src.artifact"
             | "src.text"
+            // #250: both take a local path and both have real parser
+            // configuration worth testing. Leaving them out meant a PDF or
+            // HTML pipeline could not be covered by a fixture at all - the
+            // `given` was accepted and then quietly ignored, which is worse
+            // than refusing it.
+            | "src.pdf"
+            | "src.html"
     )
 }
 
@@ -305,7 +335,13 @@ pub fn compare_with(expected: &[JsonValue], actual: &[JsonValue], coerce: bool) 
 }
 
 /// Run one case and say what went wrong, or nothing.
-fn run_case(engine: &DuckdbEngine, pipeline: &Path, case: &Case, tmp: &Path) -> Option<String> {
+fn run_case(
+    engine: &DuckdbEngine,
+    pipeline: &Path,
+    suite_dir: &Path,
+    case: &Case,
+    tmp: &Path,
+) -> Option<String> {
     let text = match std::fs::read_to_string(pipeline) {
         Ok(t) => t,
         Err(e) => return Some(format!("cannot read {}: {e}", pipeline.display())),
@@ -319,11 +355,12 @@ fn run_case(engine: &DuckdbEngine, pipeline: &Path, case: &Case, tmp: &Path) -> 
         // how a Parquet or JSON fixture can stand in for a whole source. Any
         // other value is inline text, written out as before.
         let fixture = {
-            let named = pipeline.parent().map(|d| d.join(body)).unwrap_or_else(|| PathBuf::from(body));
-            if named.is_file() {
-                named
-            } else if Path::new(body).is_file() {
-                PathBuf::from(body)
+            // #250: beside the TEST file first, which is what the docs describe
+            // and where a suite's fixtures naturally live. The pipeline's own
+            // directory stays as a fallback so suites written against the older
+            // behaviour keep working rather than failing on a missing file.
+            if let Some(found) = resolve_fixture(suite_dir, pipeline, body) {
+                found
             } else {
                 // Name the temp file by the SHAPE of the text, so inline JSON
                 // standing in for a non-file source is read as JSON rather
@@ -507,7 +544,9 @@ pub fn run(duckdb: PathBuf) -> ExitCode {
             }
         };
         for case in &cases {
-            let outcome = run_case(&engine, &pipeline, case, &tmp);
+            // Fixtures resolve beside the .test.json, which is this path.
+            let suite_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+            let outcome = run_case(&engine, &pipeline, &suite_dir, case, &tmp);
             match &outcome {
                 None => {
                     passed += 1;
@@ -591,6 +630,70 @@ mod tests {
         assert!(compare(&want, &[]).unwrap().contains("expected 1 row(s), got 0"));
     }
 
+    /// #250: a fixture named in a case lives beside the .test.json, which is
+    /// what the docs describe. It used to resolve against the PIPELINE's
+    /// directory instead, so a suite kept next to its fixtures - the layout the
+    /// docs show - could not find them, and the case fell through to treating
+    /// the filename as inline text.
+    #[test]
+    fn a_fixture_resolves_beside_the_test_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let suite = dir.path().join("suite");
+        let pipes = dir.path().join("pipelines");
+        std::fs::create_dir_all(&suite).unwrap();
+        std::fs::create_dir_all(&pipes).unwrap();
+        // The fixture sits beside the test file, NOT beside the pipeline.
+        std::fs::write(suite.join("orders.csv"), "id,amt
+1,5
+").unwrap();
+        let pipeline = pipes.join("p.json");
+        std::fs::write(
+            &pipeline,
+            serde_json::json!({
+                "nodes": [{ "id": "s", "type": "source", "position": {"x":0,"y":0},
+                    "data": { "label": "s", "componentId": "src.csv",
+                              "properties": { "path": "/nope.csv", "hasHeader": true } } }],
+                "edges": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert!(
+            !pipeline.parent().unwrap().join("orders.csv").is_file(),
+            "deliberately NOT beside the pipeline - that is the case that broke"
+        );
+        // The real resolver, not a restatement of it.
+        let found = resolve_fixture(&suite, &pipeline, "orders.csv")
+            .expect("a fixture beside the test file must be found");
+        assert_eq!(found, suite.join("orders.csv"));
+
+        // The pipeline's directory still works, so older suites keep running.
+        std::fs::write(pipes.join("other.csv"), "id
+1
+").unwrap();
+        assert_eq!(
+            resolve_fixture(&suite, &pipeline, "other.csv").unwrap(),
+            pipes.join("other.csv")
+        );
+
+        // And a value that names no file at all is inline text, not a path.
+        assert!(resolve_fixture(&suite, &pipeline, "id,amt
+1,5
+").is_none());
+    }
+
+    #[test]
+    fn a_pdf_or_html_source_can_be_given_a_fixture() {
+        // #250: both take a local path, so a `given` must be able to replace it.
+        // Leaving them out accepted the given and then ignored it, which is
+        // worse than refusing it.
+        assert!(reads_a_path("src.pdf"), "src.pdf takes a local path");
+        assert!(reads_a_path("src.html"), "src.html takes a local path");
+        // A source that does NOT read a path must still be refused.
+        assert!(!reads_a_path("src.postgres"));
+    }
+
     #[test]
     fn giving_a_node_input_keeps_its_other_settings() {
         // The fixture has to exercise the REAL reader - its delimiter, its header
@@ -668,7 +771,7 @@ mod tests {
             rows,
             coerce: false,
         };
-        let why = run_case(&engine, &pipeline, &case, dir.path());
+        let why = run_case(&engine, &pipeline, dir.path(), &case, dir.path());
         assert!(
             why.as_deref().map(|w| w.contains("101")).unwrap_or(false),
             "a 101-row result must not satisfy a 100-row expectation: {why:?}"
@@ -702,7 +805,7 @@ mod tests {
             coerce: false,
         };
         assert_eq!(
-            run_case(&engine, &pipeline, &case, dir.path()),
+            run_case(&engine, &pipeline, dir.path(), &case, dir.path()),
             None,
             "150 rows should compare against 150 rows"
         );
@@ -731,7 +834,7 @@ mod tests {
             rows: vec![serde_json::json!({ "id": 1 })],
             coerce: false,
         };
-        let why = run_case(&engine, &pipeline, &case, dir.path()).unwrap_or_default();
+        let why = run_case(&engine, &pipeline, dir.path(), &case, dir.path()).unwrap_or_default();
         assert!(why.contains("no node 'gg'"), "{why}");
     }
 
