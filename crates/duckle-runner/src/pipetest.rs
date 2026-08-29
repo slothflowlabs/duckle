@@ -67,6 +67,17 @@ pub struct Case {
     /// VARCHAR both serialise to a JSON string, BIGINT and DECIMAL both to a
     /// JSON number. Those are exactly the regressions this exists for.
     pub schema: Vec<(String, String)>,
+    /// #250: sort both sides by these columns before comparing.
+    ///
+    /// SQL without an explicit ORDER BY has no guaranteed order, so a CORRECT
+    /// result set can start failing after an execution-plan change. Naming the
+    /// columns makes the case deterministic without asserting an order the
+    /// pipeline never promised.
+    pub order_by: Vec<String>,
+    /// #250: compare as a bag - sort both sides by their whole content.
+    ///
+    /// The blunt version of `order_by`, for a result with no natural key.
+    pub unordered: bool,
 }
 
 /// One failure, said in terms of the case rather than of the engine.
@@ -140,7 +151,25 @@ pub fn parse(path: &Path, text: &str) -> Result<(PathBuf, Vec<Case>), String> {
                     .collect()
             })
             .unwrap_or_default();
-        cases.push(Case { name: label, given, node, rows, coerce, schema });
+        let order_by: Vec<String> = expect
+            .get("orderBy")
+            .and_then(JsonValue::as_array)
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
+        let unordered = expect
+            .get("unordered")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
+        cases.push(Case {
+            name: label,
+            given,
+            node,
+            rows,
+            coerce,
+            schema,
+            order_by,
+            unordered,
+        });
     }
     Ok((pipeline_path, cases))
 }
@@ -444,7 +473,47 @@ fn run_case(
     ) {
         return Some(why);
     }
-    compare_with(&case.rows, &actual, case.coerce)
+    // #250: make the comparison deterministic before making it. Both sides are
+    // sorted by the same rule, so the case does not depend on an order SQL
+    // never promised - and the author does not have to hand-sort the
+    // expectation to match whatever the planner happened to produce.
+    let (want, got) = order_for_compare(&case.rows, &actual, case);
+    compare_with(&want, &got, case.coerce)
+}
+
+/// #250: put both sides in one canonical order.
+///
+/// `order_by` sorts by the named columns; `unordered` sorts by the whole row.
+/// Neither is on by default, so a case that means to assert the pipeline's own
+/// ORDER BY still does.
+///
+/// The key is a list of rendered values compared lexicographically - canonical
+/// rather than numeric, so 10 sorts before 9. That is deliberate: the goal is
+/// that both sides agree, not that the order reads naturally. A missing column
+/// contributes an empty entry rather than being skipped, so two rows differing
+/// only in whether a key column is present still sort apart.
+pub fn order_for_compare(
+    expected: &[JsonValue],
+    actual: &[JsonValue],
+    case: &Case,
+) -> (Vec<JsonValue>, Vec<JsonValue>) {
+    if case.order_by.is_empty() && !case.unordered {
+        return (expected.to_vec(), actual.to_vec());
+    }
+    let key = |row: &JsonValue| -> Vec<String> {
+        if case.order_by.is_empty() {
+            return vec![row.to_string()];
+        }
+        case.order_by
+            .iter()
+            .map(|c| row.get(c).map(|v| v.to_string()).unwrap_or_default())
+            .collect()
+    };
+    let mut want = expected.to_vec();
+    let mut got = actual.to_vec();
+    want.sort_by_key(&key);
+    got.sort_by_key(&key);
+    (want, got)
 }
 
 /// #250: does the node's schema match what the case declared?
@@ -859,6 +928,97 @@ mod tests {
         assert_eq!(check_schema(&[], Some(&preview)), None);
     }
 
+    fn case_with(order_by: &[&str], unordered: bool) -> Case {
+        Case {
+            name: "c".into(),
+            given: Vec::new(),
+            node: "n".into(),
+            rows: Vec::new(),
+            coerce: false,
+            schema: Vec::new(),
+            order_by: order_by.iter().map(|s| s.to_string()).collect(),
+            unordered,
+        }
+    }
+
+    /// #250: SQL without an ORDER BY has no guaranteed order, so a CORRECT
+    /// result can start failing after a plan change. Naming the key columns
+    /// makes the case deterministic without asserting an order the pipeline
+    /// never promised.
+    #[test]
+    fn order_by_makes_a_differently_ordered_result_compare_equal() {
+        // Deliberately written in a DIFFERENT order from the result, and
+        // neither side already sorted - so only sorting BOTH makes them agree.
+        let want = vec![
+            serde_json::json!({ "id": 2, "v": "b" }),
+            serde_json::json!({ "id": 1, "v": "a" }),
+        ];
+        let got = vec![
+            serde_json::json!({ "id": 1, "v": "a" }),
+            serde_json::json!({ "id": 2, "v": "b" }),
+        ];
+        // Without it, the case fails purely on order.
+        let plain = case_with(&[], false);
+        let (w, g) = order_for_compare(&want, &got, &plain);
+        assert!(compare_with(&w, &g, false).is_some(), "unordered compare must differ");
+
+        let sorted = case_with(&["id"], false);
+        let (w, g) = order_for_compare(&want, &got, &sorted);
+        assert_eq!(compare_with(&w, &g, false), None, "orderBy must make it agree");
+    }
+
+    /// A genuinely different result must still fail - sorting is not a way of
+    /// making any two sets equal.
+    #[test]
+    fn order_by_does_not_hide_a_real_difference() {
+        let want = vec![serde_json::json!({ "id": 1, "v": "a" })];
+        let got = vec![serde_json::json!({ "id": 1, "v": "CHANGED" })];
+        let c = case_with(&["id"], false);
+        let (w, g) = order_for_compare(&want, &got, &c);
+        let why = compare_with(&w, &g, false).expect("a changed value must still fail");
+        assert!(why.contains("v"), "{why}");
+    }
+
+    /// The blunt version, for a result with no natural key.
+    #[test]
+    fn unordered_compares_as_a_bag() {
+        let want = vec![
+            serde_json::json!({ "v": "b" }),
+            serde_json::json!({ "v": "a" }),
+        ];
+        let got = vec![
+            serde_json::json!({ "v": "a" }),
+            serde_json::json!({ "v": "b" }),
+        ];
+        let c = case_with(&[], true);
+        let (w, g) = order_for_compare(&want, &got, &c);
+        assert_eq!(compare_with(&w, &g, false), None);
+
+        // A missing row is still a failure, not merely a different order.
+        let short = vec![serde_json::json!({ "v": "a" })];
+        let (w, g) = order_for_compare(&want, &short, &c);
+        assert!(compare_with(&w, &g, false).is_some());
+    }
+
+    /// Neither is on by default, so a case that means to assert the pipeline's
+    /// own ORDER BY still does.
+    #[test]
+    fn ordering_is_off_unless_asked_for() {
+        let want = vec![
+            serde_json::json!({ "id": 2 }),
+            serde_json::json!({ "id": 1 }),
+        ];
+        let got = vec![
+            serde_json::json!({ "id": 1 }),
+            serde_json::json!({ "id": 2 }),
+        ];
+        let c = case_with(&[], false);
+        let (w, g) = order_for_compare(&want, &got, &c);
+        assert_eq!(w, want, "untouched");
+        assert_eq!(g, got, "untouched");
+        assert!(compare_with(&w, &g, false).is_some(), "order still asserted");
+    }
+
     #[test]
     fn a_pdf_or_html_source_can_be_given_a_fixture() {
         // #250: both take a local path, so a `given` must be able to replace it.
@@ -947,6 +1107,8 @@ mod tests {
             rows,
             coerce: false,
             schema: Vec::new(),
+            order_by: Vec::new(),
+            unordered: false,
         };
         let why = run_case(&engine, &pipeline, dir.path(), &case, dir.path());
         assert!(
@@ -981,6 +1143,8 @@ mod tests {
             rows,
             coerce: false,
             schema: Vec::new(),
+            order_by: Vec::new(),
+            unordered: false,
         };
         assert_eq!(
             run_case(&engine, &pipeline, dir.path(), &case, dir.path()),
@@ -1012,6 +1176,8 @@ mod tests {
             rows: vec![serde_json::json!({ "id": 1 })],
             coerce: false,
             schema: Vec::new(),
+            order_by: Vec::new(),
+            unordered: false,
         };
         let why = run_case(&engine, &pipeline, dir.path(), &case, dir.path()).unwrap_or_default();
         assert!(why.contains("no node 'gg'"), "{why}");
