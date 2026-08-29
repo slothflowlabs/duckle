@@ -61,6 +61,12 @@ pub struct Case {
     /// every column really is VARCHAR, where writing the expectation any other
     /// way would be a lie about the data.
     pub coerce: bool,
+    /// #250: expected column types, as `{"id": "BIGINT", "day": "DATE"}`.
+    ///
+    /// A rendered-value comparison cannot see a type regression: DATE and
+    /// VARCHAR both serialise to a JSON string, BIGINT and DECIMAL both to a
+    /// JSON number. Those are exactly the regressions this exists for.
+    pub schema: Vec<(String, String)>,
 }
 
 /// One failure, said in terms of the case rather than of the engine.
@@ -124,7 +130,17 @@ pub fn parse(path: &Path, text: &str) -> Result<(PathBuf, Vec<Case>), String> {
             .and_then(JsonValue::as_str)
             .map(|m| m.eq_ignore_ascii_case("text"))
             .unwrap_or(false);
-        cases.push(Case { name: label, given, node, rows, coerce });
+        // #250: expected column types, on the expectation beside the rows.
+        let schema: Vec<(String, String)> = expect
+            .get("schema")
+            .and_then(JsonValue::as_object)
+            .map(|o| {
+                o.iter()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        cases.push(Case { name: label, given, node, rows, coerce, schema });
     }
     Ok((pipeline_path, cases))
 }
@@ -418,7 +434,64 @@ fn run_case(
         }
         Err(_) => Vec::new(),
     };
+    // #250: types first. A row comparison cannot see DATE becoming VARCHAR or
+    // BIGINT becoming DECIMAL - both sides render the same - so checking the
+    // schema before the values means the failure names the real regression
+    // instead of a confusing value mismatch downstream of it.
+    if let Some(why) = check_schema(
+        &case.schema,
+        result.preview.iter().find(|p| p.node_id == case.node),
+    ) {
+        return Some(why);
+    }
     compare_with(&case.rows, &actual, case.coerce)
+}
+
+/// #250: does the node's schema match what the case declared?
+///
+/// Only the columns named are checked, like the row comparison: a test that had
+/// to list every column would break on an unrelated addition and stop being
+/// written.
+///
+/// Precision and scale are NOT compared. The types come from DuckDB's DESCRIBE
+/// mapped to Duckle's own set, so `DECIMAL(18,3)` and `DECIMAL(10,2)` both read
+/// as decimal. That is a real limit and it is stated rather than implied - the
+/// regressions this catches are the ones that cross a type family, which is
+/// what a rendered-value comparison is blind to.
+pub fn check_schema(
+    want: &[(String, String)],
+    preview: Option<&duckle_duckdb_engine::NodePreview>,
+) -> Option<String> {
+    if want.is_empty() {
+        return None;
+    }
+    let Some(preview) = preview else {
+        return Some("the node reported no schema to check against".to_string());
+    };
+    for (col, declared) in want {
+        // A type name nobody recognises is a mistake in the TEST, and saying so
+        // beats asserting something that cannot fail.
+        let Some(expected) = duckle_duckdb_engine::parse_type_name(declared) else {
+            return Some(format!(
+                "schema: {col:?} is declared as {declared:?}, which is not a type name I know"
+            ));
+        };
+        let Some(actual) = preview.columns.iter().find(|c| &c.name == col) else {
+            let have: Vec<&str> = preview.columns.iter().map(|c| c.name.as_str()).collect();
+            return Some(format!(
+                "schema: no column {col:?}. The node has: {}",
+                have.join(", ")
+            ));
+        };
+        if actual.data_type != expected {
+            return Some(format!(
+                "schema: {col:?} is {}, expected {} (declared {declared:?})",
+                actual.data_type.name(),
+                expected.name()
+            ));
+        }
+    }
+    None
 }
 
 /// A file name that cannot escape the scratch folder or collide with a sibling.
@@ -683,6 +756,109 @@ mod tests {
 ").is_none());
     }
 
+    /// #250: the regressions a rendered-value comparison is blind to.
+    ///
+    /// DATE and VARCHAR both serialise to a JSON string; BIGINT and DECIMAL
+    /// both to a JSON number. A case comparing values passes through both.
+    #[test]
+    fn a_type_regression_a_value_comparison_cannot_see_is_caught() {
+        use duckle_duckdb_engine::NodePreview;
+        use duckle_duckdb_engine::{Column, DataType};
+        let col = |name: &str, t: DataType| Column {
+            name: name.to_string(),
+            data_type: t,
+            nullable: true,
+            primary_key: None,
+            format: None,
+        };
+        let preview = NodePreview {
+            node_id: "x".into(),
+            // The regression: a DATE that became text, and a BIGINT that
+            // became a decimal.
+            columns: vec![col("day", DataType::String), col("n", DataType::Decimal)],
+            rows: vec![],
+        };
+        let want = vec![("day".to_string(), "DATE".to_string())];
+        let why = check_schema(&want, Some(&preview)).expect("must catch DATE -> VARCHAR");
+        assert!(why.contains("day"), "{why}");
+        assert!(why.contains("date") && why.contains("string"), "both types: {why}");
+
+        let want = vec![("n".to_string(), "BIGINT".to_string())];
+        let why = check_schema(&want, Some(&preview)).expect("must catch BIGINT -> DECIMAL");
+        assert!(why.contains("int64") && why.contains("decimal"), "{why}");
+
+        // And it passes when the types are what was declared.
+        let ok = vec![
+            ("day".to_string(), "VARCHAR".to_string()),
+            ("n".to_string(), "decimal".to_string()),
+        ];
+        assert_eq!(check_schema(&ok, Some(&preview)), None, "both vocabularies");
+    }
+
+    /// A type name nobody recognises is a mistake in the TEST. Mapping it to
+    /// VARCHAR - which the engine's own mapper does by falling through - would
+    /// make the assertion pass against any text column, and an assertion that
+    /// cannot fail is worse than none.
+    #[test]
+    fn an_unknown_type_name_is_an_error_not_a_silent_varchar() {
+        use duckle_duckdb_engine::NodePreview;
+        use duckle_duckdb_engine::{Column, DataType};
+        let preview = NodePreview {
+            node_id: "x".into(),
+            columns: vec![Column {
+                name: "s".into(),
+                data_type: DataType::String,
+                nullable: true,
+                primary_key: None,
+                format: None,
+            }],
+            rows: vec![],
+        };
+        let want = vec![("s".to_string(), "VARCHARR".to_string())];
+        let why = check_schema(&want, Some(&preview)).expect("a typo must not pass");
+        assert!(why.contains("not a type name"), "{why}");
+    }
+
+    #[test]
+    fn a_missing_column_names_what_the_node_does_have() {
+        use duckle_duckdb_engine::NodePreview;
+        use duckle_duckdb_engine::{Column, DataType};
+        let preview = NodePreview {
+            node_id: "x".into(),
+            columns: vec![Column {
+                name: "id".into(),
+                data_type: DataType::Int64,
+                nullable: true,
+                primary_key: None,
+                format: None,
+            }],
+            rows: vec![],
+        };
+        let want = vec![("nope".to_string(), "BIGINT".to_string())];
+        let why = check_schema(&want, Some(&preview)).expect("must fail");
+        assert!(why.contains("nope") && why.contains("id"), "{why}");
+    }
+
+    /// Only the columns named are checked, like the row comparison - otherwise
+    /// an unrelated new column breaks every test and people stop writing them.
+    #[test]
+    fn a_schema_assertion_ignores_columns_it_does_not_name() {
+        use duckle_duckdb_engine::NodePreview;
+        use duckle_duckdb_engine::{Column, DataType};
+        let preview = NodePreview {
+            node_id: "x".into(),
+            columns: vec![
+                Column { name: "id".into(), data_type: DataType::Int64, nullable: true, primary_key: None, format: None },
+                Column { name: "extra".into(), data_type: DataType::Json, nullable: true, primary_key: None, format: None },
+            ],
+            rows: vec![],
+        };
+        let want = vec![("id".to_string(), "BIGINT".to_string())];
+        assert_eq!(check_schema(&want, Some(&preview)), None);
+        // An empty declaration asserts nothing at all.
+        assert_eq!(check_schema(&[], Some(&preview)), None);
+    }
+
     #[test]
     fn a_pdf_or_html_source_can_be_given_a_fixture() {
         // #250: both take a local path, so a `given` must be able to replace it.
@@ -770,6 +946,7 @@ mod tests {
             node: "g".into(),
             rows,
             coerce: false,
+            schema: Vec::new(),
         };
         let why = run_case(&engine, &pipeline, dir.path(), &case, dir.path());
         assert!(
@@ -803,6 +980,7 @@ mod tests {
             node: "g".into(),
             rows,
             coerce: false,
+            schema: Vec::new(),
         };
         assert_eq!(
             run_case(&engine, &pipeline, dir.path(), &case, dir.path()),
@@ -833,6 +1011,7 @@ mod tests {
             node: "gg".into(),
             rows: vec![serde_json::json!({ "id": 1 })],
             coerce: false,
+            schema: Vec::new(),
         };
         let why = run_case(&engine, &pipeline, dir.path(), &case, dir.path()).unwrap_or_default();
         assert!(why.contains("no node 'gg'"), "{why}");

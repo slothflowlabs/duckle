@@ -12,7 +12,10 @@
 //! separate CLI invocations); sinks `COPY` from the upstream table.
 //! Cancellation kills the in-flight child process.
 
-use duckle_metadata::{Column, DataType};
+// Re-exported: NodePreview.columns is public, so its element type has to be
+// reachable by anything that reads a preview - the runner's test harness could
+// not name the type of a field it was handed.
+pub use duckle_metadata::{Column, DataType};
 use duckle_plugin_sdk::{Inspection, InspectError};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -5234,6 +5237,56 @@ fn parse_describe_row(v: &JsonValue) -> Option<Column> {
         primary_key: None,
         format: None,
     })
+}
+
+/// #250: a type name a person WROTE, parsed strictly.
+///
+/// Accepts SQL spellings (`BIGINT`, `DECIMAL(18,3)`, `TIMESTAMP`) and Duckle's
+/// own names (`int64`, `decimal`), so a test can be written in whichever
+/// vocabulary its author thinks in.
+///
+/// `None` for anything unrecognised, which is the whole reason this is not
+/// [`map_duckdb_type`]: that one falls back to String, so a typo in a test file
+/// would quietly assert VARCHAR and pass against a VARCHAR column. An assertion
+/// that cannot fail is worse than no assertion.
+pub fn parse_type_name(t: &str) -> Option<DataType> {
+    let raw = t.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    // Duckle's own vocabulary first: these are exact, so they cannot be
+    // confused with a SQL spelling.
+    for dt in [
+        DataType::String,
+        DataType::Int32,
+        DataType::Int64,
+        DataType::Float32,
+        DataType::Float64,
+        DataType::Bool,
+        DataType::Date,
+        DataType::Timestamp,
+        DataType::Time,
+        DataType::Decimal,
+        DataType::Json,
+        DataType::Binary,
+        DataType::Geometry,
+    ] {
+        if raw.eq_ignore_ascii_case(dt.name()) {
+            return Some(dt);
+        }
+    }
+    // SQL spellings, via the same table the engine uses to read a DESCRIBE - so
+    // an assertion and a real column are judged by one rule. VARCHAR has to be
+    // listed explicitly because map_duckdb_type reaches String by falling
+    // through, which is exactly what must not happen for an unknown name.
+    let base = raw.to_uppercase();
+    let base = base.split('(').next().unwrap_or(&base).trim();
+    if matches!(base, "VARCHAR" | "TEXT" | "STRING" | "CHAR" | "BPCHAR" | "UUID") {
+        return Some(DataType::String);
+    }
+    let mapped = map_duckdb_type(raw);
+    // Anything that only mapped because of the fallback is unknown.
+    (mapped != DataType::String).then_some(mapped)
 }
 
 fn map_duckdb_type(t: &str) -> DataType {
