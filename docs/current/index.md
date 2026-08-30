@@ -68,6 +68,13 @@ This guide is organized into the following sections to help you get the most out
 * Securely managing encrypted connection passwords.
 * Interacting with the local AI assistant process panel.
 
+### 11. [Security, Governance & Compliance](../security/index.md)
+* Comprehensive compliance suite organized according to the **[Diátaxis Framework](https://diataxis.fr/)**.
+* **[Tutorials](../security/index.md#1-tutorials-learning-oriented)**: Hands-on learning for [secure pipeline authoring](../security/tutorials/secure-pipeline-authoring.md) and [SIEM audit log ingestion](../security/tutorials/audit-logging-siem-tutorial.md).
+* **[How-To Guides](../security/index.md#2-how-to-guides-task-oriented)**: Operational guides for [secrets management](../security/how-to/configure-secrets-management.md), [vulnerability reporting & patching](../security/how-to/vulnerability-reporting-patching.md), [Vector SIEM streaming](../security/how-to/siem-vector-integration.md), and [incident response runbooks](../security/how-to/incident-handling-runbook.md).
+* **[Reference](../security/index.md#3-reference-information-oriented)**: Authoritative technical specifications including the [SOC 2 & ISO 27001 control matrix](../security/reference/soc2-iso27001-control-matrix.md), [audit event schema](../security/reference/audit-event-schema.md), [Okta SSO & MFA architecture spec](../security/reference/sso-okta-architecture-spec.md), and [security CLI commands](../security/reference/security-cli-reference.md).
+* **[Explanation](../security/index.md#4-explanation-understanding-oriented)**: Architectural discussions on the [trust boundary and threat model](../security/explanation/trust-boundary-and-threat-model.md), [TDD-driven SSDLC](../security/explanation/ssdlc-and-tdd-philosophy.md), and [AES-256-GCM encryption hierarchy](../security/explanation/encryption-and-key-hierarchy.md).
+
 ---
 
 ## Core Visual Concepts
@@ -76,3 +83,4 @@ When using Duckle, you will primarily work with three visual structures:
 * **The Canvas**: A large interactive board where you design pipelines by drawing connector lines between handles on nodes.
 * **Nodes (Components)**: Visual blocks representing a source (e.g. CSV), a transformation (e.g. Filter), a QA validator, or a target destination (e.g. database table).
 * **Ports & Edges**: Connective pins on nodes. Circles on the left are inputs; circles on the right are outputs. Connector lines (edges) carry the data flow.
+
