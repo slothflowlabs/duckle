@@ -939,9 +939,25 @@ fn t_run_tests(args: &Value) -> Result<Value, String> {
     }
 }
 
+/// Turn a loaded pipeline value into the document the engine will run.
+///
+/// The run-time placeholder tiers are resolved here, in the same order every
+/// other execution surface applies them (desktop, scheduler, `serve`, `follow`).
+/// Without this a credential kept in a vault reached the connector as the
+/// literal text `${VAULT:NAME}`, which is the one thing a vault exists to
+/// prevent - and the server's own tool instructions tell an agent to write
+/// `${ENV:KEY}` rather than a literal, so it advertised a mechanism it did not
+/// honour.
+fn prepare_run_doc(v: &Value) -> Result<PipelineDoc, String> {
+    let mut doc = to_doc(v)?;
+    duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
+    duckle_duckdb_engine::context::apply_env(&mut doc);
+    duckle_duckdb_engine::context::apply_vault(&mut doc);
+    Ok(doc)
+}
+
 fn t_run_pipeline(args: &Value) -> Result<Value, String> {
     let (v, name) = load_pipeline_value(args)?;
-    let doc = to_doc(&v)?;
     let duckdb = resolve_duckdb(arg_str(args, "duckdb"))
         .ok_or("no DuckDB binary found; set DUCKLE_DUCKDB_BIN or pass 'duckdb'")?;
     std::env::set_var("DUCKLE_DUCKDB_BIN", &duckdb);
@@ -955,6 +971,10 @@ fn t_run_pipeline(args: &Value) -> Result<Value, String> {
         std::env::remove_var("DUCKLE_WORKSPACE");
         std::env::remove_var("DUCKLE_LOG_DIR");
     }
+
+    // Prepared after the workspace is set, so every tier sees the same
+    // environment the run itself will see.
+    let doc = prepare_run_doc(&v)?;
 
     let engine = DuckdbEngine::new(duckdb);
     // Stopping at a node is the point of asking: an agent changing one step should not
@@ -1607,6 +1627,56 @@ fn sanitize_segment(name: &str) -> String {
 #[cfg(test)]
 mod verify_tests {
     use super::*;
+
+    /// A vaulted credential must be FETCHED before the document reaches the
+    /// engine.
+    ///
+    /// Every other execution surface - desktop, scheduler, `serve`, `follow` -
+    /// resolves the run-time placeholder tiers first. The MCP server did not,
+    /// so `${VAULT:NAME}` arrived at the connector as that literal text and the
+    /// connection failed with a password that was never fetched. The server's
+    /// own tool instructions tell an agent to write `${ENV:KEY}` rather than a
+    /// literal, so it was advertising a mechanism it did not honour.
+    #[test]
+    fn an_mcp_run_resolves_vault_and_env_placeholders() {
+        #[cfg(windows)]
+        std::env::set_var("DUCKLE_VAULT_COMMAND", "cmd /c echo {name}");
+        #[cfg(not(windows))]
+        std::env::set_var("DUCKLE_VAULT_COMMAND", "echo {name}");
+        std::env::set_var("DUCKLE_MCP_TEST_TOKEN", "from-env");
+
+        let v = json!({
+            "nodes": [{
+                "id": "n",
+                "position": { "x": 0, "y": 0 },
+                "data": {
+                    "label": "n",
+                    "componentId": "src.inline",
+                    "properties": { "columns": [
+                        { "key": "pw",  "value": "${VAULT:ORDERS}" },
+                        { "key": "tok", "value": "${ENV:DUCKLE_MCP_TEST_TOKEN}" }
+                    ]}
+                }
+            }],
+            "edges": []
+        });
+        let doc = prepare_run_doc(&v).expect("prepare");
+        let props = doc.nodes[0].data.properties.clone().expect("properties");
+
+        std::env::remove_var("DUCKLE_VAULT_COMMAND");
+        std::env::remove_var("DUCKLE_MCP_TEST_TOKEN");
+
+        assert_eq!(
+            props["columns"][0]["value"], "ORDERS",
+            "a vaulted credential must be fetched, not handed to the connector \
+             as the placeholder text"
+        );
+        assert_eq!(
+            props["columns"][1]["value"], "from-env",
+            "and the ${{ENV:...}} tier the server's own instructions advertise \
+             must resolve too"
+        );
+    }
 
     #[test]
     fn structural_risks_clean_pipeline_has_none() {

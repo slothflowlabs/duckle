@@ -474,7 +474,8 @@ impl Scheduler {
         // Resolve ${ENV:NAME} from the process environment so scheduled runs see
         // OS env vars just like the headless runner does (issue #137).
         duckle_duckdb_engine::context::apply_env(&mut pipeline);
-    duckle_duckdb_engine::context::apply_vault(&mut pipeline);
+        // Fetch anything held in a vault (CyberArk and the like) for this run.
+        duckle_duckdb_engine::context::apply_vault(&mut pipeline);
         // A fresh per-run cancel scope so concurrent scheduled runs (and the
         // interactive run) don't share or reset each other's cancellation.
         let engine = self.engine.for_new_run();
