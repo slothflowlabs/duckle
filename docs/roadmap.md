@@ -130,6 +130,14 @@ Search via DuckDB `vss` / `fts`) ships today.
 |---|---|
 | `ctl.schedule` | Schedules exist - they're configured in the Schedule panel via the orchestration crate, not as a graph node. The graph-node form is on the roadmap for a "this pipeline triggers that pipeline" semantic |
 
+### Enterprise Identity & Access Management (SSO / MFA)
+
+| Capability | Notes |
+|---|---|
+| `auth.oidc` / `auth.saml` | Okta / Entra ID / Google Workspace SSO integration via OIDC Authorization Code Flow with PKCE and SAML 2.0 Web Browser SSO. See [Okta SSO Architecture Spec](security/reference/sso-okta-architecture-spec.md). |
+| `auth.mfa` | Upstream IdP MFA step-up enforcement (`amr`/`acr` claim validation for admin role operations). |
+| `auth.rbac-sync` | Automated IdP group-to-role synchronization (`admin`, `operator`, `viewer`). |
+
 ### Other
 
 | Component | Notes |
