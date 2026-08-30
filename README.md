@@ -757,9 +757,28 @@ A configured path can stay the same while the bytes behind it change, and the
 derived column types change with them. The path alone would say nothing about
 which schema a given run actually used.
 
-**An `xs:import` or `xs:include` is refused**, not followed. A column list that
-quietly stops early is the exact failure this feature exists to remove, so a
-schema that pulls in another one says so and asks for a self-contained file.
+**An `xs:import`, `xs:include` or `xs:redefine` is followed**, under rules that
+keep a schema set from becoming a way to read the disk or the network:
+
+- Resolved relative to the document that **named** it, not to the root, so a
+  nested set loads the way its author laid it out.
+- Confined to the root schema's own directory. `..` is folded *before* the check,
+  because checking a path and then normalizing it is how a confinement is walked
+  past.
+- A **local** schema set may not fetch over the network. A remote one resolves
+  through the shared HTTP agent, which is where the workspace network policy
+  applies, so an import is subject to the same allowlist as anything else.
+- A cycle loads once and stops, and a document shared by two parents is read
+  once.
+- Ceilings: 64 documents, 16 levels deep, 8 MiB in total.
+- Every imported document is hashed into the run manifest alongside the root. A
+  change to any of them changes the derived columns just as much.
+
+Two things are still refused, because the alternative is a column list that
+quietly stops early. An import naming a namespace with **no `schemaLocation`**
+has nothing to resolve. And two schemas declaring a *different* type under the
+same local name cannot both be honoured, so the run says which name clashed
+rather than picking one and changing a column's type silently.
 
 ### A fan-out over two million parents
 

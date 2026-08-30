@@ -8707,12 +8707,69 @@ impl DuckdbEngine {
             std::fs::read_to_string(path)
                 .map_err(|e| EngineError::Config(format!("xsd: read {path}: {e}")))?
         };
-        let cols = crate::xsd::derive(&text, row_path)?;
+        // #286: a schema may pull in others. Reading them is this function's
+        // job rather than the parser's, because only here is it known what may
+        // be read: a local set is confined to the root schema's own directory,
+        // and a remote one goes through the shared agent, which is where the
+        // workspace network policy is enforced.
+        let base = path.replace('\\', "/");
+        let remote_root = base.starts_with("http://") || base.starts_with("https://");
+        let root_dir = if remote_root {
+            String::new()
+        } else {
+            match base.rfind('/') {
+                Some(i) => base[..i].to_string(),
+                None => ".".to_string(),
+            }
+        };
+        let mut fetched: Vec<(String, String)> = Vec::new();
+        let cols = {
+            let mut load = |loc: &str| -> Result<String, String> {
+                let child_remote = loc.starts_with("http://") || loc.starts_with("https://");
+                if child_remote && !remote_root {
+                    // A schema set that lives on disk must not reach the
+                    // network because one of its files said so. That is the
+                    // unpinned fetch nobody asked for.
+                    return Err(format!(
+                        "{loc} is remote, but the schema it is imported from is a local file. A                          local schema set is not allowed to fetch over the network. Point at a                          local copy of it."
+                    ));
+                }
+                let text = if child_remote {
+                    let agent = crate::tls::http_agent();
+                    agent
+                        .get(loc)
+                        .call()
+                        .map_err(|e| format!("fetch {loc}: {e}"))?
+                        .into_string()
+                        .map_err(|e| format!("read {loc}: {e}"))?
+                } else {
+                    if !crate::xsd::inside_root(&root_dir, loc) {
+                        return Err(format!(
+                            "{loc} is outside the schema root {root_dir}, so it was not read"
+                        ));
+                    }
+                    std::fs::read_to_string(loc).map_err(|e| format!("read {loc}: {e}"))?
+                };
+                fetched.push((loc.to_string(), text.clone()));
+                Ok(text)
+            };
+            let (cols, _loaded) =
+                crate::xsd::derive_resolved(&text, row_path, &base, &mut load)?;
+            cols
+        };
         // #286: a configured path can stay the same while the bytes behind it
         // change, and the derived column types change with them. Recording the
         // path alone would say nothing about which schema this run actually
         // used, so the HASH of the bytes goes into the signed manifest through
-        // the same artifact channel every other input uses.
+        // the same artifact channel every other input uses. Every imported
+        // document is recorded the same way, because a change to any of them
+        // changes the derived columns just as much as a change to the root.
+        let sha = |t: &str| -> String {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(t.as_bytes());
+            h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+        };
         artifacts.push(crate::ArtifactRef {
             node: node_id.to_string(),
             role: "input".into(),
@@ -8720,15 +8777,23 @@ impl DuckdbEngine {
             name: Some("xsd".into()),
             media_type: Some("application/xml".into()),
             size_bytes: Some(text.len() as i64),
-            sha256: Some({
-                use sha2::{Digest, Sha256};
-                let mut h = Sha256::new();
-                h.update(text.as_bytes());
-                h.finalize().iter().map(|b| format!("{b:02x}")).collect()
-            }),
+            sha256: Some(sha(&text)),
             etag: None,
             modified_at: None,
         });
+        for (loc, body) in &fetched {
+            artifacts.push(crate::ArtifactRef {
+                node: node_id.to_string(),
+                role: "input".into(),
+                uri: loc.clone(),
+                name: Some("xsd-import".into()),
+                media_type: Some("application/xml".into()),
+                size_bytes: Some(body.len() as i64),
+                sha256: Some(sha(body)),
+                etag: None,
+                modified_at: None,
+            });
+        }
         Ok(cols)
     }
 
