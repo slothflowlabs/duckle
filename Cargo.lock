@@ -4425,8 +4425,10 @@ name = "duckle-mcp"
 version = "0.0.1"
 dependencies = [
  "duckle-duckdb-engine",
+ "duckle-secrets",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

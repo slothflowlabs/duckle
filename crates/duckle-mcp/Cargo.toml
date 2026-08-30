@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 duckle-duckdb-engine = { workspace = true }
+duckle-secrets = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
@@ -36,3 +37,6 @@ duckle-duckdb-engine = { workspace = true, features = ["teradata", "db2"] }
 # no system libodbc.so.2 at runtime (issue #131). Windows keeps odbc32.
 [target.'cfg(all(target_os = "linux", not(target_env = "musl")))'.dependencies]
 duckle-duckdb-engine = { workspace = true, features = ["teradata-static"] }
+
+[dev-dependencies]
+tempfile = "3.10"

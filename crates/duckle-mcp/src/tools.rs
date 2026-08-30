@@ -948,9 +948,14 @@ fn t_run_tests(args: &Value) -> Result<Value, String> {
 /// prevent - and the server's own tool instructions tell an agent to write
 /// `${ENV:KEY}` rather than a literal, so it advertised a mechanism it did not
 /// honour.
-fn prepare_run_doc(v: &Value) -> Result<PipelineDoc, String> {
+fn prepare_run_doc(v: &Value, workspace: Option<&str>) -> Result<PipelineDoc, String> {
     let mut doc = to_doc(v)?;
     duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
+    // Saved connections expand BEFORE the env pass, so a connection field
+    // stored as ${ENV:...} still resolves below. Same order as the scheduler.
+    if let Some(ws) = workspace.filter(|w| !w.is_empty()) {
+        duckle_secrets::resolve_connection_refs(std::path::Path::new(ws), &mut doc.nodes)?;
+    }
     duckle_duckdb_engine::context::apply_env(&mut doc);
     duckle_duckdb_engine::context::apply_vault(&mut doc);
     Ok(doc)
@@ -974,7 +979,7 @@ fn t_run_pipeline(args: &Value) -> Result<Value, String> {
 
     // Prepared after the workspace is set, so every tier sees the same
     // environment the run itself will see.
-    let doc = prepare_run_doc(&v)?;
+    let doc = prepare_run_doc(&v, arg_str(args, "workspace"))?;
 
     let engine = DuckdbEngine::new(duckdb);
     // Stopping at a node is the point of asking: an agent changing one step should not
@@ -1660,7 +1665,7 @@ mod verify_tests {
             }],
             "edges": []
         });
-        let doc = prepare_run_doc(&v).expect("prepare");
+        let doc = prepare_run_doc(&v, None).expect("prepare");
         let props = doc.nodes[0].data.properties.clone().expect("properties");
 
         std::env::remove_var("DUCKLE_VAULT_COMMAND");
@@ -1676,6 +1681,46 @@ mod verify_tests {
             "and the ${{ENV:...}} tier the server's own instructions advertise \
              must resolve too"
         );
+    }
+
+    /// A saved connection must be expanded before the run, on this surface too.
+    ///
+    /// The scheduler, `serve` and the desktop app all resolve `connectionRef`
+    /// into the fields the engine reads. The MCP server did not, so a pipeline
+    /// an agent wrote against a saved connection reached the engine with no
+    /// host and no credential at all - the reference was simply left sitting
+    /// there as a property nothing consumes.
+    #[test]
+    fn an_mcp_run_expands_a_saved_connection_reference() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        std::fs::create_dir_all(ws.join("connections")).unwrap();
+        std::fs::write(
+            ws.join("connections").join("warehouse.json"),
+            r#"{"kind":"postgres","host":"db.internal","port":5432,
+                "database":"sales","username":"reader","password":"pw"}"#,
+        )
+        .unwrap();
+
+        let v = json!({
+            "nodes": [{
+                "id": "n",
+                "position": { "x": 0, "y": 0 },
+                "data": {
+                    "label": "n",
+                    "componentId": "src.postgres",
+                    "properties": { "connectionRef": "warehouse", "tableName": "orders" }
+                }
+            }],
+            "edges": []
+        });
+        let doc = prepare_run_doc(&v, ws.to_str()).expect("prepare");
+        let props = doc.nodes[0].data.properties.clone().expect("properties");
+        assert_eq!(
+            props["host"], "db.internal",
+            "the saved connection has to reach the engine, or the run has no host at all"
+        );
+        assert_eq!(props["database"], "sales");
     }
 
     #[test]
