@@ -4,36 +4,72 @@
     {
       "id": "src",
       "type": "source",
-      "position": { "x": 0, "y": 0 },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
       "data": {
         "label": "Customers",
         "componentId": "src.csv",
-        "properties": { "path": "${workspace}/data/customers.csv", "hasHeader": true }
+        "properties": {
+          "path": "${workspace}/data/customers.csv",
+          "hasHeader": true
+        }
       }
     },
     {
       "id": "flt",
       "type": "transform",
-      "position": { "x": 240, "y": 0 },
+      "position": {
+        "x": 240,
+        "y": 0
+      },
       "data": {
         "label": "This segment",
         "componentId": "xf.filter",
-        "properties": { "predicate": "segment = '${ITER_ITEM_SEGMENT}'" }
+        "properties": {
+          "predicate": "segment = '${ITER_ITEM_SEGMENT}'"
+        }
       }
     },
     {
       "id": "snk",
       "type": "sink",
-      "position": { "x": 480, "y": 0 },
+      "position": {
+        "x": 480,
+        "y": 0
+      },
       "data": {
         "label": "Segment file",
         "componentId": "snk.csv",
-        "properties": { "path": "${workspace}/output/by_segment/${ITER_ITEM_SEGMENT}.csv", "hasHeader": true }
+        "properties": {
+          "path": "${workspace}/output/by_segment/${ITER_ITEM_SEGMENT}.csv",
+          "writeHeader": true
+        }
       }
     }
   ],
   "edges": [
-    { "id": "e1", "source": "src", "target": "flt", "sourceHandle": "main", "targetHandle": "main", "data": { "connectionType": "main" } },
-    { "id": "e2", "source": "flt", "target": "snk", "sourceHandle": "main", "targetHandle": "main", "data": { "connectionType": "main" } }
-  ]
+    {
+      "id": "e1",
+      "source": "src",
+      "target": "flt",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e2",
+      "source": "flt",
+      "target": "snk",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    }
+  ],
+  "formatVersion": 1
 }

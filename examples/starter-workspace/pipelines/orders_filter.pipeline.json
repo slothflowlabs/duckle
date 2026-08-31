@@ -1,4 +1,5 @@
 {
+  "formatVersion": 1,
   "name": "CSV filter to Parquet",
   "nodes": [
     {

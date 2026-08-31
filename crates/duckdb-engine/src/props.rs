@@ -48,8 +48,7 @@ const CATALOG: &str =
 /// the check for the whole component would hide everything else. They are
 /// listed here with the line that reads them so the list can be worked off
 /// rather than grown.
-const ACCEPTED: [(&str, &str, &str); 3] = [
-    ("snk.csv", "hasHeader", "read at plan/builders.rs:8634; the sink manifest omits it"),
+const ACCEPTED: [(&str, &str, &str); 2] = [
     ("xf.groupby", "materialize", "read at plan/mod.rs:6440 for every component"),
     ("code.sql", "materialize", "read at plan/mod.rs:6440 for every component"),
 ];
@@ -118,6 +117,14 @@ fn declared() -> &'static BTreeMap<String, BTreeSet<String>> {
                     keys.insert(key.to_string());
                 }
             }
+            // #299 owns the renames. Accepted here so a pipeline still running
+            // on the old name is not failed for it - it is reported as
+            // deprecated below, with the name migration will move it to.
+            for (c, old, _) in crate::format::ALIASES {
+                if c == id {
+                    keys.insert(old.to_string());
+                }
+            }
             out.insert(id.to_string(), keys);
         }
         out
@@ -184,6 +191,26 @@ pub fn check(doc: &PipelineDoc) -> Vec<Finding> {
             continue;
         };
         for key in props.keys() {
+            // A renamed property still works, and saying nothing about it is
+            // how a workspace stays on a name that will eventually stop being
+            // honoured. Reported with the current name and never fatal - the
+            // pipeline is correct today, and #299's migration rewrites it.
+            if let Some((_, _, current)) =
+                crate::format::ALIASES.iter().find(|(c, o, _)| *c == component && o == key)
+            {
+                findings.push(Finding {
+                    code: "deprecated_component_property".into(),
+                    node: node.id.clone(),
+                    component: component.to_string(),
+                    property: Some(key.clone()),
+                    suggestion: Some(current.to_string()),
+                    message: format!(
+                        "{component} still reads {key}, but it is now called {current}. `duckle-runner migrate` renames it."
+                    ),
+                    fails: false,
+                });
+                continue;
+            }
             // The namespace #298 reserves for third-party metadata: it round
             // trips and never reaches a builder.
             if key.starts_with("x-") || known.contains(key) {
@@ -303,9 +330,17 @@ mod tests {
     fn a_key_the_builder_reads_but_the_manifest_omits_is_not_rejected() {
         // Rejecting these would break pipelines the engine runs correctly.
         assert!(
-            check(&doc("snk.csv", serde_json::json!({ "path": "o.csv", "hasHeader": true })))
-                .is_empty()
+            check(&doc("xf.groupby", serde_json::json!({ "materialize": true }))).is_empty()
         );
+    }
+
+    #[test]
+    fn a_renamed_property_is_reported_as_deprecated_and_never_fails() {
+        let f = check(&doc("snk.csv", serde_json::json!({ "path": "o.csv", "hasHeader": true })));
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].code, "deprecated_component_property");
+        assert_eq!(f[0].suggestion.as_deref(), Some("writeHeader"));
+        assert!(!f[0].fails, "the pipeline is correct today");
     }
 
     #[test]

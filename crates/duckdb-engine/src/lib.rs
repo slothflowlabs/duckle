@@ -40,6 +40,7 @@ pub mod review;
 pub mod alerts;
 pub mod props;
 pub mod affected;
+pub mod format;
 pub mod catalog;
 pub mod runlock;
 pub mod s3;
@@ -1003,6 +1004,16 @@ impl DuckdbEngine {
         // fresh flag via for_new_run(); clearing on every entry would let a
         // nested sub-pipeline run (ctl.iterate/foreach/runjob/parallelize) wipe
         // a cancel the user requested mid-loop.
+
+        // #299: before ANY other check, including whether the engine is
+        // installed. A newer format may carry settings this build cannot see -
+        // a declared parameter contract, a schedule exclusion - and reading it
+        // anyway runs something other than what the file describes without
+        // failing. It is also the more useful of the two errors: upgrading
+        // Duckle is what fixes it, and that installs the engine too.
+        if let Err(e) = crate::format::refuse_if_too_new(doc.format_version) {
+            return RunResult::failed(total_start, e.to_string());
+        }
 
         if !self.bin.exists() {
             return RunResult::failed(

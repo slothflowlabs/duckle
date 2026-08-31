@@ -17,6 +17,15 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 /// directly - no wrapping metadata required for a run.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PipelineDoc {
+    /// #299: which format this document is in. 0, the default, is every
+    /// pipeline written before the marker existed and is perfectly readable.
+    ///
+    /// It is carried on the struct rather than checked only at the file reader
+    /// because a document reaches the engine from six places, and a version
+    /// checked at five of them is worse than one checked nowhere - it reads as
+    /// covered.
+    #[serde(default, rename = "formatVersion", skip_serializing_if = "is_zero")]
+    pub format_version: u32,
     pub nodes: Vec<PipelineNode>,
     #[serde(default)]
     pub edges: Vec<PipelineEdge>,
@@ -27,6 +36,10 @@ pub struct PipelineDoc {
     /// compilation and every surface gets the same answer.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parameters: crate::params::Schema,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 #[derive(Debug)]
@@ -629,6 +642,9 @@ pub fn compile_partial(
         }
     }
     let filtered = PipelineDoc {
+        // Carried, not defaulted: a subgraph of a document is in the same
+        // format as the document.
+        format_version: pipeline.format_version,
         parameters: Default::default(),
         nodes: pipeline
             .nodes

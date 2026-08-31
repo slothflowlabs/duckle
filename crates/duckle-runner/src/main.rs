@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 mod affected_cmd;
+mod migrate_cmd;
 mod capabilities;
 mod contracts_cmd;
 mod report;
@@ -2023,6 +2024,11 @@ fn main() -> ExitCode {
                 .unwrap_or_default()
         );
         return ExitCode::from(0);
+    }
+    // `migrate` -> bring a workspace up to the current format, deliberately
+    // and never on sight (#299).
+    if std::env::args().nth(1).as_deref() == Some("migrate") {
+        return migrate_cmd::run();
     }
     // `affected` -> which pipelines a change reaches, and why (#308).
     if std::env::args().nth(1).as_deref() == Some("affected") {

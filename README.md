@@ -623,6 +623,50 @@ being able to answer.
 A pipeline that declares nothing behaves exactly as before: any unresolved
 `${name}` is simply prompted for.
 
+### Which format is this file in? (`migrate`)
+
+A workspace outlives the build that wrote it. Every pipeline now carries the
+format it is in, and every build says which formats it will accept.
+
+```bash
+duckle-runner migrate            # what would change, and why. Writes nothing.
+duckle-runner migrate --json     # the same, for CI
+duckle-runner migrate --write    # apply, keeping each original as .json.bak
+```
+
+```text
+pipelines/region_summary.pipeline.json
+    k1: renamed snk.csv.hasHeader to writeHeader
+    stamped formatVersion 1 (was 0)
+
+nothing written. Pass --write to apply.
+```
+
+**A file from a newer build is refused, before anything else happens** -
+including before the check that the engine is installed, because "upgrade
+Duckle" is the useful answer and upgrading installs the engine too. A newer
+format may carry settings this build cannot see, and reading it anyway runs
+something other than what the file describes without failing anywhere.
+
+**A file with no marker is version 0, and version 0 runs.** Migration is how a
+file stops being ambiguous, not a toll for opening it.
+
+**Migration works on the raw document, never through the engine's struct.** That
+struct carries what the engine needs and not, for instance, `name`; round-tripping
+through it would silently delete every key the engine happens not to use. There
+is a test asserting it still would.
+
+**Stamping a version is a one-line diff.** Re-serializing expands every object
+an author wrote inline, which buries the real change under a reformat nobody
+asked for. The insertion is only used when re-parsing it yields exactly the
+document the migration produced - correctness first, then the diff.
+
+**Renames are deterministic and idempotent.** A property renamed between
+versions is still honoured under the old name and reported by `validate` as
+deprecated, naming the current one. When both names are present the old one is
+dropped rather than moved over the live value, because the builder already reads
+the current name and a migration must not change what runs.
+
 ### A property nothing reads (`validate`)
 
 A property no builder reads used to change nothing and say nothing: the run took
