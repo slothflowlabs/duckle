@@ -300,6 +300,7 @@ mod incomplete_record_tests {
 
     fn result(incomplete: bool, reason: Option<&str>) -> RunResult {
         RunResult {
+            cache_keys: Default::default(),
             status: "ok".into(),
             duration_ms: 1,
             nodes: Default::default(),

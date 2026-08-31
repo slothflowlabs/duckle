@@ -2906,6 +2906,7 @@ fn record_schedule_outcome(
 /// where the ordinary path already reports from.
 fn alerts_notify(state: &State, pipeline_id: &str, status: &str, duration_ms: u64, error: Option<String>) {
     let result = duckle_duckdb_engine::RunResult {
+        cache_keys: Default::default(),
         status: status.to_string(),
         // Synthesised for an alert about something outside a run.
         unchanged: false,

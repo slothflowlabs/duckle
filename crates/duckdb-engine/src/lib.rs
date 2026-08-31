@@ -47,6 +47,7 @@ pub mod baseline;
 pub mod budget;
 pub mod checkpoint;
 pub mod outcache;
+pub mod retry;
 pub mod plans;
 pub mod policy;
 pub mod pyenv;
@@ -1113,6 +1114,7 @@ impl DuckdbEngine {
         };
 
         let mut nodes: std::collections::BTreeMap<String, NodeRunStatus> = Default::default();
+        let mut cache_keys: std::collections::BTreeMap<String, String> = Default::default();
         let mut overall_error: Option<String> = None;
         // ctl.try installs a fallback path here. On any subsequent
         // stage failure, the engine runs it as a side effect before
@@ -1758,6 +1760,9 @@ impl DuckdbEngine {
                 // stage runs, from the relation it is about to read, so a
                 // changed input produces a different key and a genuine re-run.
                 let cache_key = self.output_cache_key(&db_path, stage, pipeline_name);
+                if let Some(k) = cache_key.as_ref() {
+                    cache_keys.insert(stage.node_id.clone(), k.key.clone());
+                }
                 let restored = match cache_key.as_ref() {
                     Some(k) if outcache::hit(k) => {
                         match outcache::restore(&self.bin, &db_path, &stage.node_id, k) {
@@ -2455,6 +2460,7 @@ impl DuckdbEngine {
             .map(|e| error_category::categorize_error(e).to_string());
         let unchanged = run_was_unchanged(&nodes);
         RunResult {
+            cache_keys,
             status: final_status.into(),
             duration_ms: total_start.elapsed().as_millis() as u64,
             nodes,
@@ -2992,6 +2998,7 @@ impl DuckdbEngine {
             .map(|e| error_category::categorize_error(e).to_string());
         let unchanged = run_was_unchanged(&nodes);
         RunResult {
+            cache_keys: Default::default(),
             status: final_status.into(),
             duration_ms,
             nodes,
@@ -6080,6 +6087,15 @@ pub const ARTIFACT_RECORD_CAP: usize = 1000;
 
 #[derive(Debug, Serialize)]
 pub struct RunResult {
+    /// #305: the output-cache key each node's result was stored under, when it
+    /// had one. Carried so a run can record what it produced in terms a later
+    /// retry can verify: "node D succeeded" says nothing about whether D's
+    /// output still exists, and a content key does.
+    ///
+    /// Empty for every node that is not cache-eligible, which is most of them,
+    /// so it is skipped when empty rather than padding every API response.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub cache_keys: std::collections::BTreeMap<String, String>,
     pub status: String,
     pub duration_ms: u64,
     pub nodes: std::collections::BTreeMap<String, NodeRunStatus>,
@@ -6126,6 +6142,7 @@ impl RunResult {
     fn failed(start: Instant, error: String) -> Self {
         let category = error_category::categorize_error(&error);
         RunResult {
+            cache_keys: Default::default(),
             status: "error".into(),
             duration_ms: start.elapsed().as_millis() as u64,
             nodes: Default::default(),

@@ -145,6 +145,9 @@ struct Args {
     clear_watermarks: Vec<String>,
     manifest: bool,
     verify_manifest: Option<PathBuf>,
+    /// #305: the run this one is retrying, recorded on the receipt so the two
+    /// are linked. `None` for an ordinary run.
+    retry_of: Option<String>,
 }
 
 impl Args {
@@ -261,6 +264,7 @@ fn parse_args() -> Result<Args, String> {
         }
     }
     Ok(Args {
+        retry_of: None,
         target,
         pipeline,
         workspace,
@@ -376,7 +380,13 @@ fn run_backfill(args: &Args) -> Result<bool, String> {
 }
 
 fn run() -> Result<bool, String> {
-    let args = parse_args()?;
+    run_with(parse_args()?)
+}
+
+/// The run itself, given already-parsed arguments. Split out so `retry` can
+/// drive the same path with arguments it built from a receipt rather than from
+/// the command line (#305).
+fn run_with(args: Args) -> Result<bool, String> {
 
     // Backfill flags short-circuit: manage saved watermark/snapshot state and
     // exit without running the pipeline.
@@ -402,6 +412,10 @@ fn run() -> Result<bool, String> {
         .map_err(|e| format!("read {}: {}", pipeline.display(), e))?;
     let mut doc: PipelineDoc = serde_json::from_str(&text)
         .map_err(|e| format!("parse {}: {}", pipeline.display(), e))?;
+    // #305: taken HERE, before the resolution passes below. apply_time_builtins
+    // stamps a fresh date into the document on every run, so a hash taken after
+    // it would differ daily and call an unchanged pipeline changed.
+    let pipeline_hash = duckle_duckdb_engine::retry::pipeline_hash(&doc);
 
     // Workspace defaults to the pipeline file's directory. Pre-fetched
     // DuckDB extensions and incremental state live relative to it.
@@ -457,6 +471,50 @@ fn run() -> Result<bool, String> {
         Some(t) => engine.execute_pipeline_with_events(&doc, Some(t), Some(&name), |_| {}),
         None => engine.execute_pipeline_named(&doc, &name),
     };
+
+    // #305: record what this run was, keyed by an id a retry can hold. The run
+    // history is a capped human-facing list with no per-node detail and no
+    // pipeline identity, so it cannot answer "is this the same work?".
+    {
+        let safe: String = name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+            .collect();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or_default();
+        let receipt = duckle_duckdb_engine::retry::RunReceipt {
+            run_id: format!("run-{safe}-{stamp}"),
+            parent_run_id: args.retry_of.clone(),
+            at: chrono::Utc::now().to_rfc3339(),
+            status: result.status.clone(),
+            pipeline_name: name.clone(),
+            pipeline_path: pipeline.display().to_string(),
+            pipeline_hash,
+            engine_version: duckle_duckdb_engine::retry::ENGINE_VERSION.to_string(),
+            nodes: result
+                .nodes
+                .iter()
+                .map(|(id, st)| {
+                    (
+                        id.clone(),
+                        duckle_duckdb_engine::retry::ReceiptNode {
+                            status: st.status.clone(),
+                            kind: st.kind.clone(),
+                            output_cache_key: result.cache_keys.get(id).cloned(),
+                        },
+                    )
+                })
+                .collect(),
+        };
+        // Best-effort: a run that cannot record itself is still a run that
+        // happened, and failing it over bookkeeping would be the worse bug.
+        match duckle_duckdb_engine::retry::write(&workspace, &receipt) {
+            Ok(()) => println!("run id   : {}", receipt.run_id),
+            Err(e) => eprintln!("duckle: could not write the run receipt: {e}"),
+        }
+    }
 
     println!("status   : {}", result.status);
     println!("duration : {} ms", result.duration_ms);
@@ -1833,6 +1891,10 @@ fn main() -> ExitCode {
     if std::env::args().nth(1).as_deref() == Some("quickstart") {
         return run_quickstart();
     }
+    // `retry` -> plan and, when it is safe, repeat a failed run (#305).
+    if std::env::args().nth(1).as_deref() == Some("retry") {
+        return run_retry();
+    }
     // `validate` -> compile-only CI gate. No engine binary, no credentials,
     // no network: it never opens a source or writes a sink.
     if std::env::args().nth(1).as_deref() == Some("validate") {
@@ -1944,6 +2006,160 @@ fn main() -> ExitCode {
         Ok(false) => ExitCode::from(1),
         Err(e) => {
             eprintln!("duckle-runner: {e}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// `duckle-runner retry <run_id>` - repeat a failed run without repeating what
+/// is already known-good, and without repeating a write nobody asked to repeat.
+///
+/// Prints the plan first, always. A retry that quietly re-writes three sinks is
+/// the failure this exists to prevent, so the plan is the product and the
+/// execution is what happens once somebody has read it.
+fn run_retry() -> ExitCode {
+    use duckle_duckdb_engine::retry;
+
+    let mut it = std::env::args().skip(2);
+    let mut run_id: Option<String> = None;
+    let mut workspace: Option<PathBuf> = None;
+    let (mut dry_run, mut allow_changed, mut rerun_sinks, mut json_out) = (false, false, false, false);
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--workspace" => workspace = it.next().map(PathBuf::from),
+            "--dry-run" => dry_run = true,
+            "--allow-changed" => allow_changed = true,
+            "--rerun-sinks" => rerun_sinks = true,
+            "--json" => json_out = true,
+            "-h" | "--help" => {
+                println!(
+                    "usage: duckle-runner retry <run_id> [--workspace DIR] [--dry-run] \
+                     [--allow-changed] [--rerun-sinks] [--json]"
+                );
+                return ExitCode::from(0);
+            }
+            other if !other.starts_with('-') && run_id.is_none() => run_id = Some(other.to_string()),
+            other => {
+                eprintln!("duckle-runner retry: unknown argument {other}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let Some(run_id) = run_id else {
+        eprintln!("duckle-runner retry: a run id is required. It is printed as `run id` by the run you want to retry.");
+        return ExitCode::from(2);
+    };
+    let workspace = workspace.unwrap_or_else(|| PathBuf::from("."));
+
+    // The receipt names the pipeline, so a retry does not ask the operator to
+    // remember which file a run came from.
+    let prior = match retry::load(&workspace, &run_id) {
+        Ok(r) => r,
+        Err(retry::LoadError::NotFound) => {
+            eprintln!(
+                "duckle-runner retry: no receipt for run {run_id} under {}. Only a run started by \
+                 `duckle-runner --pipeline` writes one.",
+                workspace.display()
+            );
+            return ExitCode::from(2);
+        }
+        Err(retry::LoadError::Unreadable(e)) => {
+            eprintln!("duckle-runner retry: the receipt for {run_id} could not be read ({e}).");
+            return ExitCode::from(2);
+        }
+    };
+
+    let pipeline = PathBuf::from(&prior.pipeline_path);
+    let doc: duckle_duckdb_engine::PipelineDoc = match std::fs::read_to_string(&pipeline)
+        .map_err(|e| e.to_string())
+        .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
+    {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!(
+                "duckle-runner retry: cannot read the pipeline this run used ({}): {e}",
+                pipeline.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+
+    // Whether a recorded output is still there is answered by looking, not by
+    // trusting the receipt. A run that succeeded months ago may have had its
+    // cache pruned since.
+    let ws = workspace.clone();
+    let pname = prior.pipeline_name.clone();
+    let cache_hit = move |node: &str, key: &str| -> Option<String> {
+        let f = duckle_duckdb_engine::outcache::dir(&ws, &pname, node)
+            .join(format!("{key}.parquet"));
+        f.is_file().then(|| f.display().to_string())
+    };
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    let new_id = format!("retry-{stamp}");
+    let plan = retry::plan(
+        &workspace,
+        &run_id,
+        &doc,
+        &new_id,
+        allow_changed,
+        rerun_sinks,
+        &cache_hit,
+    );
+
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&plan).unwrap_or_default());
+    } else {
+        println!("retry of : {run_id}");
+        println!("pipeline : {}", prior.pipeline_path);
+        if let Some(r) = &plan.refusal {
+            println!("refused  : {}", r.code);
+            println!("           {}", r.message);
+        } else {
+            for d in &plan.decisions {
+                let (what, why) = match &d.action {
+                    retry::Action::Reuse { evidence } => ("reuse ", evidence.clone()),
+                    retry::Action::ReExecute { reason } => ("run   ", reason.clone()),
+                    retry::Action::RewriteSink { reason } => ("WRITE ", reason.clone()),
+                };
+                println!("  {what} {:<24} {why}", d.node_id);
+            }
+        }
+    }
+    if plan.refusal.is_some() {
+        return ExitCode::from(2);
+    }
+    if dry_run {
+        println!("dry run  : nothing was executed");
+        return ExitCode::from(0);
+    }
+
+    // Reuse itself is the engine's decision, made per stage from a content key
+    // computed at run time. The plan above says what that is expected to come
+    // to; running is what makes it so.
+    let args = Args {
+        pipeline: Some(pipeline),
+        workspace: Some(workspace),
+        duckdb: None,
+        log_dir: None,
+        name: Some(prior.pipeline_name.clone()),
+        target: None,
+        list_watermarks: false,
+        set_watermarks: Vec::new(),
+        set_snapshots: Vec::new(),
+        clear_watermarks: Vec::new(),
+        manifest: false,
+        verify_manifest: None,
+        retry_of: Some(run_id),
+    };
+    match run_with(args) {
+        Ok(true) => ExitCode::from(0),
+        Ok(false) => ExitCode::from(1),
+        Err(e) => {
+            eprintln!("duckle-runner retry: {e}");
             ExitCode::from(2)
         }
     }

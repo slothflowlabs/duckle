@@ -378,6 +378,7 @@ mod tests {
         nodes.insert("xf".to_string(), mk(Some(0), "view"));
         nodes.insert("snk".to_string(), mk(Some(0), "sink"));
         let r = RunResult {
+            cache_keys: Default::default(),
             status: "ok".into(),
             unchanged: false,
             incomplete: false,

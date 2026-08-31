@@ -194,6 +194,7 @@ fn run_one_blocking(
 /// of the gap where a broken schedule reads as a schedule that never fired.
 fn failed_run(started: DateTime<Utc>, error: &str) -> RunResult {
     RunResult {
+        cache_keys: Default::default(),
         status: "error".into(),
         duration_ms: Utc::now().signed_duration_since(started).num_milliseconds().max(0) as u64,
         nodes: Default::default(),
@@ -521,6 +522,7 @@ impl Scheduler {
             .collect();
         let elapsed = Utc::now().signed_duration_since(started).num_milliseconds().max(0) as u64;
         Ok(RunResult {
+            cache_keys: Default::default(),
             status: if run.failed() { "error".into() } else { "success".into() },
             // A plan rollup is not a source poll; it always did work or failed.
             unchanged: false,
@@ -648,6 +650,7 @@ impl Scheduler {
         // exactly what an operator needs to see against the schedule.
         let elapsed = Utc::now().signed_duration_since(started).num_milliseconds().max(0) as u64;
         let result = RunResult {
+            cache_keys: Default::default(),
             status: "error".into(),
             duration_ms: elapsed,
             nodes: Default::default(),

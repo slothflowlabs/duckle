@@ -502,6 +502,7 @@ mod tests {
 
     fn result(status: &str, error: Option<&str>) -> RunResult {
         RunResult {
+            cache_keys: Default::default(),
             status: status.into(),
             duration_ms: 1234,
             nodes: Default::default(),

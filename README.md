@@ -499,6 +499,45 @@ That ordering is the difference between a correct micro-batch loop and a lossy
 one, so it is covered by a regression test that fails if the position ever
 advances past a batch that did not land.
 
+### Retry a failed run (`retry`)
+
+Every run writes a small receipt under `<workspace>/runs/receipts/` and prints
+its id. `retry` takes that id and says what repeating the run would do, before
+doing any of it:
+
+```bash
+duckle-runner retry run-daily-1788171319319 --dry-run
+duckle-runner retry run-daily-1788171319319 --rerun-sinks
+duckle-runner retry run-daily-1788171319319 --json          # for CI and agents
+```
+
+```text
+  run    extract                  it failed last time
+  reuse  parse                    <ws>/cache/daily/parse/9f2c....parquet
+  WRITE  publish                  a sink writes outside the run
+```
+
+**It refuses more than it reuses, on purpose.** A retry stops before planning
+anything when the pipeline has changed since that run, when the engine version
+has, when the run being retried actually succeeded, or when it would write again
+to a sink. Nothing in the engine can tell a sink that is safe to repeat from one
+that is not, so that decision is not made for you: `--rerun-sinks` is how you
+say you have checked. `--allow-changed` retries a changed pipeline with reuse
+switched off, because the recorded outputs describe work that no longer exists.
+
+**Reuse is verified, not assumed.** A node is only reused when its recorded
+output is still on disk, checked by looking. A receipt saying a node succeeded
+is not evidence that its output survived, and a cache pruned since is the normal
+way it does not.
+
+**What it does not do yet.** There is no `--from <node>`: compiling a downstream
+subgraph does not exist, and a flag that always errors is worse than no flag.
+Reuse only ever covers nodes with `cacheOutput` set, which is opt-in and offered
+by six components, so a pipeline that never ticked the box reuses nothing and
+the plan says so on every line. And only runs started by `duckle-runner
+--pipeline` write a receipt today, so a run from the API, the scheduler or the
+desktop app answers `retry:no-receipt` rather than guessing.
+
 ### Backfill without the desktop app (`backfill`)
 
 Production deployments are headless, so replaying from an earlier point should
