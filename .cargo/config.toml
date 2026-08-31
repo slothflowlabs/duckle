@@ -10,23 +10,30 @@
 # targets. The musl target is intentionally absent: the musl runner excludes
 # Teradata entirely.
 #
-# On a non-Debian distro, point ODBC_SYS_STATIC_PATH at your unixODBC lib dir
-# instead (or adjust the path below); on Windows/macOS this file does nothing.
+# Distros that do not use multiarch (Arch, Fedora) keep the archives in
+# /usr/lib64 or /usr/local/lib, so those follow as fallbacks. The multiarch dir
+# stays FIRST: these flags apply to every build for the triple, including the
+# release job that produces the published Linux binaries, and that job must keep
+# linking the same archives it links today.
+#
+# A path under a home directory does NOT belong here - this file is committed and
+# shared, and a home directory is writable by whoever owns it. For a lib dir
+# outside these, set ODBC_SYS_STATIC_PATH; build.rs adds it (and $HOME/.local/lib)
+# to the search path for your build alone, gated on the teradata-static feature.
+# On Windows/macOS this file does nothing.
 [target.x86_64-unknown-linux-gnu]
 rustflags = [
-    "-L", "native=/home/darekdan/.local/lib",
-    "-L", "native=/usr/local/lib",
     "-L", "native=/usr/lib/x86_64-linux-gnu",
     "-L", "native=/usr/lib64",
+    "-L", "native=/usr/local/lib",
     "-L", "native=/usr/lib",
 ]
 
 [target.aarch64-unknown-linux-gnu]
 rustflags = [
-    "-L", "native=/home/darekdan/.local/lib",
-    "-L", "native=/usr/local/lib",
     "-L", "native=/usr/lib/aarch64-linux-gnu",
     "-L", "native=/usr/lib64",
+    "-L", "native=/usr/local/lib",
     "-L", "native=/usr/lib",
 ]
 
