@@ -224,20 +224,7 @@ fn run_recorded(
         workspace,
         receipt,
         &result.status,
-        result
-            .nodes
-            .iter()
-            .map(|(id, st)| {
-                (
-                    id.clone(),
-                    duckle_duckdb_engine::retry::ReceiptNode {
-                        status: st.status.clone(),
-                        kind: st.kind.clone(),
-                        output_cache_key: result.cache_keys.get(id).cloned(),
-                    },
-                )
-            })
-            .collect(),
+        duckle_duckdb_engine::retry::nodes_of(&result),
     );
     result
 }
@@ -562,20 +549,7 @@ impl Scheduler {
             &workspace,
             receipt,
             &result.status,
-            result
-                .nodes
-                .iter()
-                .map(|(nid, st)| {
-                    (
-                        nid.clone(),
-                        duckle_duckdb_engine::retry::ReceiptNode {
-                            status: st.status.clone(),
-                            kind: st.kind.clone(),
-                            output_cache_key: result.cache_keys.get(nid).cloned(),
-                        },
-                    )
-                })
-                .collect(),
+            duckle_duckdb_engine::retry::nodes_of(&result),
         );
         self.record_run(id, started, &result);
         Ok(result)

@@ -452,10 +452,18 @@ pub fn validate_params(
     crate::params::validate(&doc.parameters, &supplied)
 }
 
+/// Substitute `${name}` throughout the document, after validating the supplied
+/// values against whatever contract the pipeline declares.
+///
+/// Returns what was actually used, with every declared secret replaced by `***`
+/// (#309). Returned rather than left for each surface to reconstruct: this is
+/// the one place that knows both the effective values (defaults included) and
+/// which of them are secret, and a caller that rebuilt the map from its own
+/// inputs would record the wrong thing on both counts.
 pub fn apply_params(
     doc: &mut PipelineDoc,
     params: &HashMap<String, String>,
-) -> Result<(), String> {
+) -> Result<std::collections::BTreeMap<String, String>, String> {
     // #317: the one normalization boundary. Every surface reaches substitution
     // through here, so validating here is what makes the desktop, the console,
     // the CLI, MCP and the scheduler agree - validating per surface is how one
@@ -466,6 +474,18 @@ pub fn apply_params(
             .collect::<Vec<_>>()
             .join("; ")
     })?;
+    // What gets recorded (#309). A pipeline that DECLARES its parameters says
+    // which are secret, and those become `***`. A pipeline that declares
+    // nothing has said nothing about any of them, and one of them may well be
+    // a password - so the value is replaced by a digest of itself. That keeps
+    // "this parameter changed between the two runs" answerable without a
+    // credential ever reaching a file, which is the same trade #308 makes for
+    // context values.
+    let recorded: std::collections::BTreeMap<String, String> = if doc.parameters.is_empty() {
+        params.iter().map(|(k, v)| (k.clone(), digest(v))).collect()
+    } else {
+        resolved.for_history()
+    };
     // Declared parameters carry defaults, so the effective set can be larger
     // than what the caller supplied.
     let params: HashMap<String, String> = if doc.parameters.is_empty() {
@@ -475,18 +495,30 @@ pub fn apply_params(
     };
     let params = &params;
     if params.is_empty() {
-        return Ok(());
+        return Ok(recorded);
     }
     let re = match regex::Regex::new(r"\$\{([^}]+)\}") {
         Ok(re) => re,
-        Err(_) => return Ok(()),
+        Err(_) => return Ok(recorded),
     };
     for node in &mut doc.nodes {
         if let Some(props) = node.data.properties.as_mut() {
             substitute_params_deep(props, None, params, &re, &node.id)?;
         }
     }
-    Ok(())
+    Ok(recorded)
+}
+
+/// A short, stable stand-in for a value nobody declared the sensitivity of.
+///
+/// Marked with a leading `#` so a reader can tell a digest from a value at a
+/// glance rather than wondering why a parameter is eight hex characters. Not a
+/// cryptographic claim: it answers same-or-different and nothing else.
+fn digest(value: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut h);
+    format!("#{:08x}", h.finish() as u32)
 }
 
 /// Key-aware walk. `substitute_deep` discards the property name, which is exactly
@@ -1490,7 +1522,7 @@ mod tests {
         let mut doc: crate::PipelineDoc = serde_json::from_str(json).unwrap();
         let mut params = std::collections::HashMap::new();
         params.insert("MONTH".to_string(), "03".to_string());
-        super::apply_params(&mut doc, &params);
+        let _ = super::apply_params(&mut doc, &params);
         let props = doc.nodes[0].data.properties.as_ref().unwrap();
         assert_eq!(props["path"], serde_json::json!("${workspace}/sales_03.csv"));
         assert_eq!(props["where"], serde_json::json!("region = '${REGION}'"));

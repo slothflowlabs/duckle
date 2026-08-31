@@ -841,7 +841,7 @@ fn dispatch_cmd(state: &WebState, cmd: &str, body: &[u8]) -> Reply {
                 &state.workspace,
                 receipt,
                 &result.status,
-                receipt_nodes(&result),
+                duckle_duckdb_engine::retry::nodes_of(&result),
             );
             match serde_json::to_value(&result) {
                 Ok(v) => respond_json(&v),
@@ -1066,26 +1066,6 @@ fn begin_editor_run(
     )
 }
 
-/// The per-node half of a receipt, from a finished run.
-fn receipt_nodes(
-    result: &duckle_duckdb_engine::RunResult,
-) -> std::collections::BTreeMap<String, duckle_duckdb_engine::retry::ReceiptNode> {
-    result
-        .nodes
-        .iter()
-        .map(|(nid, st)| {
-            (
-                nid.clone(),
-                duckle_duckdb_engine::retry::ReceiptNode {
-                    status: st.status.clone(),
-                    kind: st.kind.clone(),
-                    output_cache_key: result.cache_keys.get(nid).cloned(),
-                },
-            )
-        })
-        .collect()
-}
-
 /// `event: result` line. The frontend turns these back into the same live
 /// per-node animation the desktop gets from the Tauri Channel.
 fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(), String> {
@@ -1148,7 +1128,7 @@ fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(
         &state.workspace,
         receipt,
         &result.status,
-        receipt_nodes(&result),
+        duckle_duckdb_engine::retry::nodes_of(&result),
     );
     let rj = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
     stream
@@ -3143,7 +3123,11 @@ fn execute_one_with(
     // Refused rather than substituted when a parameter would inject shell syntax
     // into an executed property: /api/run needs only operator, and quietly allowing
     // that would hand an operator the execution /api/deploy reserves for admin.
-    duckle_duckdb_engine::context::apply_params(&mut doc, params)?;
+    // #309: what the run was actually given, secrets already replaced. Taken
+    // from the substitution boundary rather than from `params` here, because
+    // that is the only place that knows the effective set (declared defaults
+    // included) and which of them the pipeline declared secret.
+    let recorded_params = duckle_duckdb_engine::context::apply_params(&mut doc, params)?;
     // Match the web cmd paths and headless `duckle-runner --pipeline`: resolve
     // ${workspace}/${projectroot} and workspace-relative file paths before run,
     // so file-loaded pipelines (manual /api/run + scheduled runs) work too.
@@ -3168,25 +3152,18 @@ fn execute_one_with(
         &hash,
         None,
     );
+    // Written again straight away rather than only at `finish`: a run that is
+    // killed still leaves a receipt, and "what was that run given?" is exactly
+    // the question asked of a run that did not come back.
+    let receipt =
+        duckle_duckdb_engine::retry::RunReceipt { parameters: recorded_params, ..receipt };
+    let _ = duckle_duckdb_engine::retry::write(&state.workspace, &receipt);
     let result = engine.execute_pipeline_named(&doc, &id);
     duckle_duckdb_engine::retry::finish(
         &state.workspace,
         receipt,
         &result.status,
-        result
-            .nodes
-            .iter()
-            .map(|(nid, st)| {
-                (
-                    nid.clone(),
-                    duckle_duckdb_engine::retry::ReceiptNode {
-                        status: st.status.clone(),
-                        kind: st.kind.clone(),
-                        output_cache_key: result.cache_keys.get(nid).cloned(),
-                    },
-                )
-            })
-            .collect(),
+        duckle_duckdb_engine::retry::nodes_of(&result),
     );
 
     let mut record = RunRecord::from_result_in(&state.workspace, &id, &result, trigger);

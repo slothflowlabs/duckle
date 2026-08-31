@@ -22,6 +22,7 @@ use std::process::ExitCode;
 
 mod affected_cmd;
 mod migrate_cmd;
+mod runsdiff_cmd;
 mod capabilities;
 mod contracts_cmd;
 mod report;
@@ -495,25 +496,27 @@ fn run_with(args: Args) -> Result<bool, String> {
 
     // #259: the run is recorded BEFORE the result is printed, and the id is
     // minted before the work above ran - see where `receipt` is created.
+    let run_id = receipt.run_id.clone();
     duckle_duckdb_engine::retry::finish(
         &workspace,
         receipt,
         &result.status,
-        result
-            .nodes
-            .iter()
-            .map(|(id, st)| {
-                (
-                    id.clone(),
-                    duckle_duckdb_engine::retry::ReceiptNode {
-                        status: st.status.clone(),
-                        kind: st.kind.clone(),
-                        output_cache_key: result.cache_keys.get(id).cloned(),
-                    },
-                )
-            })
-            .collect(),
+        duckle_duckdb_engine::retry::nodes_of(&result),
     );
+
+    // #309: the console, the scheduler and the desktop all append a run-history
+    // record; the bare CLI was the only run surface that did not, so a run
+    // started here was invisible to the Runs tab, to alerting, to asset
+    // freshness and to `runs diff`. Found by comparing two CLI runs and getting
+    // "at least one run has no history record" for both of them.
+    let mut record = duckle_duckdb_engine::RunRecord::from_result_in(
+        &workspace,
+        &name,
+        &result,
+        if target.is_some() { "partial" } else { "manual" },
+    );
+    record.run_id = Some(run_id);
+    duckle_duckdb_engine::append_run_record(&workspace, &name, record);
 
     println!("status   : {}", result.status);
     println!("duration : {} ms", result.duration_ms);
@@ -2024,6 +2027,10 @@ fn main() -> ExitCode {
                 .unwrap_or_default()
         );
         return ExitCode::from(0);
+    }
+    // `runs diff` -> what was different about these two runs (#309).
+    if std::env::args().nth(1).as_deref() == Some("runs") {
+        return runsdiff_cmd::run();
     }
     // `migrate` -> bring a workspace up to the current format, deliberately
     // and never on sight (#299).

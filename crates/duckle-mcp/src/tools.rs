@@ -1009,20 +1009,7 @@ fn t_run_pipeline(args: &Value) -> Result<Value, String> {
             std::path::Path::new(ws),
             r,
             &result.status,
-            result
-                .nodes
-                .iter()
-                .map(|(id, st)| {
-                    (
-                        id.clone(),
-                        duckle_duckdb_engine::retry::ReceiptNode {
-                            status: st.status.clone(),
-                            kind: st.kind.clone(),
-                            output_cache_key: result.cache_keys.get(id).cloned(),
-                        },
-                    )
-                })
-                .collect(),
+            duckle_duckdb_engine::retry::nodes_of(&result),
         );
     }
 

@@ -67,6 +67,41 @@ pub struct ReceiptNode {
     /// them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_cache_key: Option<String>,
+    /// Rows the node reported, when it reported any (#309).
+    ///
+    /// Absent is not zero: a run that failed at node two has counts for nothing
+    /// after it, and calling those zero would make a comparison report a
+    /// collapse in volume that never happened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u64>,
+    /// How long the node took, when it was measured (#309).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
+
+/// Every node of a finished run, in receipt terms.
+///
+/// One constructor because there were six copies of this mapping - the runner,
+/// MCP, two in the console, two in the scheduler - and adding a field to the
+/// receipt meant finding all six. #259 already shipped once having missed two
+/// surfaces; this is the shape that stops it happening a third time.
+pub fn nodes_of(result: &crate::RunResult) -> BTreeMap<String, ReceiptNode> {
+    result
+        .nodes
+        .iter()
+        .map(|(id, st)| {
+            (
+                id.clone(),
+                ReceiptNode {
+                    status: st.status.clone(),
+                    kind: st.kind.clone(),
+                    output_cache_key: result.cache_keys.get(id).cloned(),
+                    rows: st.rows,
+                    duration_ms: st.duration_ms,
+                },
+            )
+        })
+        .collect()
 }
 
 /// What a run was, in the terms a retry needs.
@@ -111,6 +146,16 @@ pub struct RunReceipt {
     /// would differ every day and call an unchanged pipeline changed.
     pub pipeline_hash: String,
     pub engine_version: String,
+    /// The parameters the run was given, with every declared secret replaced by
+    /// `***` (#309).
+    ///
+    /// Replaced rather than dropped: a missing key reads as "never supplied",
+    /// and "was this run given a token at all?" is a question worth being able
+    /// to answer. The redaction is [`crate::params::Resolved::for_history`], so
+    /// what counts as a secret is the pipeline's own declaration rather than a
+    /// guess made here about the name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub parameters: BTreeMap<String, String>,
     pub nodes: BTreeMap<String, ReceiptNode>,
 }
 
@@ -158,6 +203,7 @@ pub fn begin(
         pipeline_path: pipeline_path.to_string(),
         pipeline_hash: pipeline_hash.to_string(),
         engine_version: ENGINE_VERSION.to_string(),
+        parameters: BTreeMap::new(),
         nodes: BTreeMap::new(),
     };
     // Best effort: a run that cannot record itself is still a run that happens.
@@ -580,6 +626,7 @@ mod tests {
             pipeline_path: "/tmp/p.json".into(),
             pipeline_hash: hash.into(),
             engine_version: ENGINE_VERSION.into(),
+            parameters: Default::default(),
             nodes: nodes
                 .iter()
                 .map(|(id, st, key, kind)| {
@@ -589,6 +636,8 @@ mod tests {
                             status: (*st).to_string(),
                             kind: Some((*kind).to_string()),
                             output_cache_key: key.map(|k| k.to_string()),
+                            rows: None,
+                            duration_ms: None,
                         },
                     )
                 })

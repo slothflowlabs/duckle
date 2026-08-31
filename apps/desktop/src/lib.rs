@@ -441,7 +441,7 @@ async fn run_pipeline(
     *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = None;
     let result = joined.map_err(|e| e.to_string())?;
     if let Some((ws, r)) = receipt {
-        duckle_duckdb_engine::retry::finish(&ws, r, &result.status, desktop_receipt_nodes(&result));
+        duckle_duckdb_engine::retry::finish(&ws, r, &result.status, duckle_duckdb_engine::retry::nodes_of(&result));
     }
     record_history(&pipeline_id, &workspace_path, &result, "manual");
     Ok(result)
@@ -481,26 +481,6 @@ fn begin_desktop_run(
             None,
         ),
     ))
-}
-
-/// The per-node half of a receipt, from a finished run.
-fn desktop_receipt_nodes(
-    result: &duckle_duckdb_engine::RunResult,
-) -> std::collections::BTreeMap<String, duckle_duckdb_engine::retry::ReceiptNode> {
-    result
-        .nodes
-        .iter()
-        .map(|(nid, st)| {
-            (
-                nid.clone(),
-                duckle_duckdb_engine::retry::ReceiptNode {
-                    status: st.status.clone(),
-                    kind: st.kind.clone(),
-                    output_cache_key: result.cache_keys.get(nid).cloned(),
-                },
-            )
-        })
-        .collect()
 }
 
 /// #166 stage 2: expand saved Salesforce connection refs into node auth props
@@ -580,7 +560,7 @@ async fn run_pipeline_partial(
     *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = None;
     let result = joined.map_err(|e| e.to_string())?;
     if let Some((ws, r)) = receipt {
-        duckle_duckdb_engine::retry::finish(&ws, r, &result.status, desktop_receipt_nodes(&result));
+        duckle_duckdb_engine::retry::finish(&ws, r, &result.status, duckle_duckdb_engine::retry::nodes_of(&result));
     }
     record_history(&pipeline_id, &workspace_path, &result, "partial");
     Ok(result)

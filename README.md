@@ -623,6 +623,52 @@ being able to answer.
 A pipeline that declares nothing behaves exactly as before: any unresolved
 `${name}` is simply prompted for.
 
+### Why was this run different? (`runs diff`)
+
+```bash
+duckle-runner runs diff <run_a> <run_b>
+duckle-runner runs diff <run_a> <run_b> --json
+```
+
+```text
+execution:
+  node.out.rows                          3  ->  7
+  node.src.durationMs                    61  ->  103
+  durationMs                             172  ->  198
+output:
+  rows                                   3  ->  7
+
+* Identical code, engine and parameters, but the output differs - which points at
+  the sources rather than at Duckle.
+* A node produced a different number of rows, which is visible from the receipts alone.
+
+not compared:
+  source content hashes and data-quality results: not recorded per run yet.
+```
+
+**Grouped by kind, because the grouping is the answer.** Code, runtime,
+invocation, inputs, execution, output. "Seventeen things differ" helps nobody;
+"the code is identical, the engine is identical, one input has different rows"
+is a diagnosis.
+
+**Explanations are rules over recorded facts**, not generated prose. Every line
+can be traced back to a difference in the list above it, so a reader who
+disagrees can point at the rule. A plausible sentence that cannot be traced is
+worse than none, because it gets believed.
+
+**What could not be compared is stated.** A comparison that quietly omits what
+it could not see reads as "these are the same".
+
+**Absent is not zero.** A run that failed at its second node has counts for
+nothing after it, and calling those zero would report a collapse in volume that
+never happened.
+
+**Secrets are compared without being revealed.** A parameter the pipeline
+declared secret is recorded as `***`; a parameter in a pipeline that declared
+nothing is recorded as a digest of its value, so "this changed" stays answerable
+without a credential ever reaching a file. Nothing here reads data - row counts,
+hashes and durations only.
+
 ### Which format is this file in? (`migrate`)
 
 A workspace outlives the build that wrote it. Every pipeline now carries the
