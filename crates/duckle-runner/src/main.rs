@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod capabilities;
 mod report;
 mod retention;
 mod audit;
@@ -1918,6 +1919,10 @@ fn main() -> ExitCode {
     // `quickstart` -> scaffold a working pipeline, run it, show the rows.
     if std::env::args().nth(1).as_deref() == Some("quickstart") {
         return run_quickstart();
+    }
+    // `capabilities` -> the connector matrix, generated from the manifests (#313).
+    if std::env::args().nth(1).as_deref() == Some("capabilities") {
+        return capabilities::run();
     }
     // `retention` -> report and bound what the workspace accumulates (#303).
     if std::env::args().nth(1).as_deref() == Some("retention") {

@@ -583,6 +583,34 @@ Real holiday calendars vary by country, region and year; a first version that
 tried to know them would be wrong somewhere and confidently so. A date list is
 something an operator can check by reading it.
 
+### The connector matrix, generated (`capabilities`)
+
+A hand-maintained feature table drifts from the code the week after it is
+written, and a prose list of ~400 components cannot answer "which sources do
+incremental?". So it is derived from the same manifests the editor renders forms
+from:
+
+```bash
+duckle-runner capabilities --kind source
+duckle-runner capabilities --json | jq '.components[] | select(.incremental)'
+```
+
+```text
+component                  kind       sql   incr  push  rej   write modes
+src.postgres               source     yes   yes   yes   yes
+snk.csv                    sink       -     -     -     yes   overwrite/append
+```
+
+Each record carries the ports (reject output, lookup input, artifact I/O),
+whether it takes a saved connection or inline credentials, custom SQL,
+incremental, pushdown, the write modes its own field offers, whether its output
+can be cached, and every declared property key.
+
+**It reports what a component OFFERS, not what the engine does with it.** A
+capability is inferred from the declared surface, so where the two disagree the
+manifest is wrong - which is what the property-contract test exists to catch.
+This registry inherits that accuracy rather than adding to it.
+
 ### Bounding what a workspace accumulates (`retention`)
 
 A long-running server grows run history, run logs, receipts and a stage cache,
