@@ -1460,6 +1460,7 @@ fn respond_403(msg: &str) -> Reply {
     respond("403 Forbidden", "text/plain", msg.as_bytes())
 }
 
+#[allow(dead_code)]
 fn handle(mut stream: TcpStream, state: &Arc<State>) -> Result<(), String> {
     let req = read_request(&mut stream)?;
     let reply = route_console(&req, state);
@@ -1590,6 +1591,7 @@ fn public_route(req: &Request, state: &State) -> Reply {
     sign_in(state, req)
 }
 
+#[allow(dead_code)]
 fn route_console(req: &Request, state: &Arc<State>) -> Reply {
     match authorize(req, state) {
         Access::Refused(reply) => reply,

@@ -44,6 +44,7 @@ pub struct ApiKeyInfo {
 
 impl ApiKeyInfo {
     /// Whether this key would be accepted right now.
+    #[allow(dead_code)]
     pub fn is_live(&self, now: i64) -> bool {
         !self.revoked && self.expires_at.is_none_or(|e| e > now)
     }

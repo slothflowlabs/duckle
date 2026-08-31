@@ -121,7 +121,7 @@ pub fn encrypt_value(key: &[u8; 32], aad: &[u8], plaintext: &str) -> Result<Stri
     getrandom::fill(&mut nonce_bytes).map_err(|e| format!("nonce rng: {}", e))?;
     let ciphertext = cipher
         .encrypt(
-            Nonce::from_slice(&nonce_bytes),
+            &Nonce::from(nonce_bytes),
             Payload { msg: plaintext.as_bytes(), aad },
         )
         .map_err(|e| format!("encrypt: {}", e))?;
@@ -154,14 +154,14 @@ pub fn decrypt_value(key: &[u8; 32], aad: &[u8], blob: &str) -> Result<String, S
     }
     let (nonce_bytes, ciphertext) = raw.split_at(12);
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("cipher init: {}", e))?;
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let nonce = Nonce::try_from(nonce_bytes).map_err(|e| format!("nonce: {}", e))?;
     let plain = if bound {
         cipher
-            .decrypt(nonce, Payload { msg: ciphertext, aad })
+            .decrypt(&nonce, Payload { msg: ciphertext, aad })
             .map_err(|_| SEALED_ELSEWHERE.to_string())?
     } else {
         cipher
-            .decrypt(nonce, ciphertext)
+            .decrypt(&nonce, ciphertext)
             .map_err(|e| format!("decrypt: {}", e))?
     };
     String::from_utf8(plain).map_err(|e| format!("utf8: {}", e))

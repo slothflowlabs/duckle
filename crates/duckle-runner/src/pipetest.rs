@@ -104,6 +104,7 @@ pub struct Case {
 
 /// One failure, said in terms of the case rather than of the engine.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct Failure {
     pub case: String,
     pub why: String,
@@ -412,6 +413,7 @@ fn same_cell(
     text(want) == text(got)
 }
 
+#[allow(dead_code)]
 pub fn compare(expected: &[JsonValue], actual: &[JsonValue]) -> Option<String> {
     compare_with(expected, actual, false)
 }
@@ -426,6 +428,7 @@ pub fn compare_within(
     compare_inner(expected, actual, coerce, tolerance)
 }
 
+#[allow(dead_code)]
 pub fn compare_with(expected: &[JsonValue], actual: &[JsonValue], coerce: bool) -> Option<String> {
     compare_inner(expected, actual, coerce, None)
 }
