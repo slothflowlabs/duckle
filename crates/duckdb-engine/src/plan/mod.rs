@@ -20,6 +20,13 @@ pub struct PipelineDoc {
     pub nodes: Vec<PipelineNode>,
     #[serde(default)]
     pub edges: Vec<PipelineEdge>,
+    /// #317: the typed parameter contract, when the pipeline declares one.
+    ///
+    /// Empty means the #127 behaviour is unchanged: any unresolved `${name}`
+    /// is prompted for as a string. Declared, it is validated once before
+    /// compilation and every surface gets the same answer.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub parameters: crate::params::Schema,
 }
 
 #[derive(Debug)]
@@ -622,6 +629,7 @@ pub fn compile_partial(
         }
     }
     let filtered = PipelineDoc {
+        parameters: Default::default(),
         nodes: pipeline
             .nodes
             .iter()

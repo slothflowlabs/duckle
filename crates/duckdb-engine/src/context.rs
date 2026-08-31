@@ -432,10 +432,48 @@ fn is_reserved_param(name: &str) -> bool {
 /// property. `POST /api/run` needs only the operator role while `POST /api/deploy`
 /// needs admin, so silently substituting there would hand an operator the code
 /// execution the authorization table reserves for an administrator.
+/// #317: validate supplied parameters against the pipeline's declared contract.
+///
+/// Separate from [`apply_params`] so a surface that wants to RENDER the problems
+/// - a form marking three fields, an agent correcting itself - gets them
+/// structured rather than as one string it has to parse back apart.
+///
+/// A pipeline with no declared parameters returns the values unchanged: the
+/// #127 behaviour, where an unresolved `${name}` is simply prompted for.
+pub fn validate_params(
+    doc: &PipelineDoc,
+    params: &HashMap<String, String>,
+) -> Result<crate::params::Resolved, Vec<crate::params::ParamError>> {
+    if doc.parameters.is_empty() {
+        return Ok(Default::default());
+    }
+    let supplied: std::collections::BTreeMap<String, String> =
+        params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    crate::params::validate(&doc.parameters, &supplied)
+}
+
 pub fn apply_params(
     doc: &mut PipelineDoc,
     params: &HashMap<String, String>,
 ) -> Result<(), String> {
+    // #317: the one normalization boundary. Every surface reaches substitution
+    // through here, so validating here is what makes the desktop, the console,
+    // the CLI, MCP and the scheduler agree - validating per surface is how one
+    // of them ends up accepting a value another refuses.
+    let resolved = validate_params(doc, params).map_err(|errs| {
+        errs.iter()
+            .map(|e| e.message.clone())
+            .collect::<Vec<_>>()
+            .join("; ")
+    })?;
+    // Declared parameters carry defaults, so the effective set can be larger
+    // than what the caller supplied.
+    let params: HashMap<String, String> = if doc.parameters.is_empty() {
+        params.clone()
+    } else {
+        resolved.values().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    };
+    let params = &params;
     if params.is_empty() {
         return Ok(());
     }
@@ -1183,6 +1221,71 @@ mod tests {
 
     /// `discover_parameters` never offers the builtins, so a request naming one is not
     /// filling a parameter in - it is redefining where the pipeline reads and writes.
+    /// #317: the declared contract is enforced at the boundary every surface
+    /// goes through, not at each surface.
+    #[test]
+    fn a_declared_contract_is_enforced_before_substitution() {
+        let doc_json = serde_json::json!({
+            "nodes": [{
+                "id": "n", "position": { "x": 0, "y": 0 },
+                "data": { "label": "n", "componentId": "src.inline",
+                          "properties": { "columns": [{ "key": "c", "value": "${jurisdiction}" }] } }
+            }],
+            "edges": [],
+            "parameters": {
+                "jurisdiction": { "type": "string", "enum": ["BE", "NL"], "required": true },
+                "full_refresh": { "type": "boolean", "default": "false" }
+            }
+        });
+
+        // A value outside the enum is refused, and nothing is substituted.
+        let mut doc: PipelineDoc = serde_json::from_value(doc_json.clone()).unwrap();
+        let mut bad = HashMap::new();
+        bad.insert("jurisdiction".to_string(), "FR".to_string());
+        let err = super::apply_params(&mut doc, &bad).unwrap_err();
+        assert!(err.contains("jurisdiction"), "must name the parameter: {err}");
+        assert_eq!(
+            doc.nodes[0].data.properties.as_ref().unwrap()["columns"][0]["value"],
+            "${jurisdiction}",
+            "a refused set must not half-substitute"
+        );
+
+        // A valid one substitutes, and the declared default is applied even
+        // though the caller never supplied it.
+        let mut doc: PipelineDoc = serde_json::from_value(doc_json).unwrap();
+        let mut good = HashMap::new();
+        good.insert("jurisdiction".to_string(), "BE".to_string());
+        super::apply_params(&mut doc, &good).expect("valid");
+        assert_eq!(
+            doc.nodes[0].data.properties.as_ref().unwrap()["columns"][0]["value"],
+            "BE"
+        );
+        let resolved = super::validate_params(&doc, &good).unwrap();
+        assert_eq!(
+            resolved.values().get("full_refresh").map(String::as_str),
+            Some("false"),
+            "a default is part of the resolved set, not something each surface adds"
+        );
+    }
+
+    /// A pipeline that declares nothing keeps the #127 behaviour exactly.
+    #[test]
+    fn a_pipeline_with_no_contract_is_unchanged() {
+        let mut doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [{
+                "id": "n", "position": { "x": 0, "y": 0 },
+                "data": { "label": "n", "componentId": "src.inline",
+                          "properties": { "columns": [{ "key": "c", "value": "${anything}" }] } }
+            }],
+            "edges": []
+        }))
+        .unwrap();
+        let mut p = HashMap::new();
+        p.insert("anything".to_string(), "value".to_string());
+        super::apply_params(&mut doc, &p).expect("no contract, no refusal");
+        assert_eq!(doc.nodes[0].data.properties.as_ref().unwrap()["columns"][0]["value"], "value");
+    }
+
     #[test]
     fn a_request_cannot_redefine_the_path_builtins_or_env_secrets() {
         let mut doc = doc_with(r#"{"path":"${workspace}/a.csv","alt":"${projectroot}/b","tok":"${ENV:TOKEN}"}"#);

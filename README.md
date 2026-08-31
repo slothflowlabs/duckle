@@ -583,6 +583,46 @@ Real holiday calendars vary by country, region and year; a first version that
 tried to know them would be wrong somewhere and confidently so. A date list is
 something an operator can check by reading it.
 
+### Typed pipeline parameters
+
+A pipeline can declare what it takes, and the contract is checked once for every
+surface rather than separately by each:
+
+```json
+"parameters": {
+  "jurisdiction":   { "type": "string",  "enum": ["BE","NL","GB"], "required": true },
+  "effective_date": { "type": "date",    "required": true },
+  "full_refresh":   { "type": "boolean", "default": "false" },
+  "max_companies":  { "type": "integer", "minimum": 1 },
+  "api_token":      { "type": "secret",  "required": true }
+}
+```
+
+Types: `string`, `integer`, `number`, `boolean`, `date`, `datetime`, `secret`.
+Constraints: `required`, `default`, `enum`, `minimum`, `maximum`, `pattern`,
+`description`.
+
+**Validated at one boundary.** Every surface - desktop, console, CLI, HTTP API,
+MCP, scheduler, Plans - reaches substitution through the same function, so the
+contract is enforced there. Validating per surface is how the desktop ends up
+accepting a value the scheduler refuses, and the bug is then in neither of them.
+
+**Every problem at once**, with a stable code (`param:unknown`, `param:missing`,
+`param:type`, `param:enum`, `param:range`, `param:pattern`) and what was wanted.
+A form filling in one mistake per round trip is not a contract, it is a
+guessing game. An undeclared name is refused rather than ignored, with the near
+names suggested - a typo is far more likely than a new parameter, and a silently
+ignored one means the run used the default and nobody noticed.
+
+**`secret` is a declared type, not a guess from the name.** A secret value never
+reaches run history, and a constraint failure on one never echoes the value into
+an error message. In history it is replaced rather than dropped, because a
+missing key reads as "never supplied" and "was this run given a token?" is worth
+being able to answer.
+
+A pipeline that declares nothing behaves exactly as before: any unresolved
+`${name}` is simply prompted for.
+
 ### Will this change break something downstream? (`contracts check`)
 
 A pipeline can validate perfectly on its own and still break another one. This

@@ -209,6 +209,7 @@ mod tests {
                 alias: None,
                 properties: None,
                 schema: Some(vec![Column {
+                    tags: Vec::new(),
                     name: "order_id".into(),
                     data_type: DataType::Int64,
                     nullable: false,

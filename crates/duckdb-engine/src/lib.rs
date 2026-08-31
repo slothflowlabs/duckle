@@ -50,6 +50,7 @@ pub mod contracts;
 pub mod cronzone;
 pub mod mask;
 pub mod outcache;
+pub mod params;
 pub mod retry;
 pub mod sla;
 pub mod plans;
