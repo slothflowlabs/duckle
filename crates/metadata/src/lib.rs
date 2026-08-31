@@ -69,6 +69,18 @@ pub struct Column {
     /// own / auto-detected parsing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
+    /// #301: what this column holds, for the surfaces people INSPECT.
+    ///
+    /// `pii` and `secret` are the ones the engine acts on; anything else is
+    /// carried for a caller that knows what it means. Declared rather than
+    /// inferred: a heuristic that masked `company_name` because it contains
+    /// "name" would teach people to distrust the masking, and one that quietly
+    /// failed to mask something would be worse.
+    ///
+    /// Tagging changes what a preview, log or API response SHOWS. It never
+    /// changes what the pipeline writes - that is what `qa.mask` is for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 fn default_true() -> bool {

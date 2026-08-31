@@ -327,6 +327,7 @@ fn declared_schema(raw: &RawNode, component_id: &str) -> Option<duckle_metadata:
         raw.column_types
             .iter()
             .map(|(name, ty)| Column {
+                tags: Vec::new(),
                 name: name.clone(),
                 // The component reads a delimited file, so every field arrives as text
                 // and the expressions that follow do their own conversion. Declaring a

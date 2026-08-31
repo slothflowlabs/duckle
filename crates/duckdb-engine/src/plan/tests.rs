@@ -2156,8 +2156,8 @@
         // column00..columnNN and every downstream expression fails to bind.
         use duckle_metadata::{Column, DataType};
         let cols = vec![
-            Column { name: "c00".into(), data_type: DataType::String, nullable: true, format: None, primary_key: None },
-            Column { name: "c01".into(), data_type: DataType::String, nullable: true, format: None, primary_key: None },
+            Column { name: "c00".into(), data_type: DataType::String, nullable: true, format: None, primary_key: None, tags: Vec::new() },
+            Column { name: "c01".into(), data_type: DataType::String, nullable: true, format: None, primary_key: None, tags: Vec::new() },
         ];
         let sql = build_csv_source(
             &serde_json::json!({ "path": "d.txt", "hasHeader": false, "nullPadding": true,
@@ -2655,9 +2655,9 @@
 
         // A declared schema names them, exactly like a headerless CSV.
         let declared = vec![
-            Column { name: "id".into(), data_type: DataType::String, nullable: true, primary_key: None, format: None },
-            Column { name: "code".into(), data_type: DataType::String, nullable: true, primary_key: None, format: None },
-            Column { name: "amount".into(), data_type: DataType::String, nullable: true, primary_key: None, format: None },
+            Column { name: "id".into(), data_type: DataType::String, nullable: true, primary_key: None, format: None, tags: Vec::new() },
+            Column { name: "code".into(), data_type: DataType::String, nullable: true, primary_key: None, format: None, tags: Vec::new() },
+            Column { name: "amount".into(), data_type: DataType::String, nullable: true, primary_key: None, format: None, tags: Vec::new() },
         ];
         let named = build_fixedwidth_source(&props, Some(&declared)).unwrap();
         assert!(named.contains("AS \"id\""), "declared names must win: {named}");
@@ -4212,6 +4212,7 @@
         // audit B1: a cloud CSV source must honor a Schema-panel declaration
         // via types= (issue #3 parity), not a bare read_csv_auto.
         let cols = vec![duckle_metadata::Column {
+            tags: Vec::new(),
             name: "amt".into(),
             data_type: duckle_metadata::DataType::String,
             nullable: true,
@@ -4237,6 +4238,7 @@
         // rows that fail to parse (raw text), and a tolerant split main that
         // drops exactly those rows. The two predicates must be complementary.
         let cols = vec![duckle_metadata::Column {
+            tags: Vec::new(),
             name: "order_date".into(),
             data_type: duckle_metadata::DataType::Date,
             nullable: true,
@@ -4266,6 +4268,7 @@
         // No declared schema (or all-text schema) => nothing to reject.
         assert!(build_csv_reject_sql(&props, None, false).is_none());
         let text_cols = vec![duckle_metadata::Column {
+            tags: Vec::new(),
             name: "name".into(),
             data_type: duckle_metadata::DataType::String,
             nullable: true,
@@ -5121,6 +5124,7 @@
         // schema -> unchanged read (all columns, auto-inferred).
         use duckle_metadata::{Column, DataType};
         let col = |name: &str, dt: DataType, fmt: Option<&str>| Column {
+            tags: Vec::new(),
             name: name.into(),
             data_type: dt,
             nullable: true,

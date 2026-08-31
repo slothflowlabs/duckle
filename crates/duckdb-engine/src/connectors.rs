@@ -8639,6 +8639,7 @@ impl DuckdbEngine {
                     .columns
                     .iter()
                     .map(|c| duckle_metadata::Column {
+                        tags: Vec::new(),
                         name: c.name.clone(),
                         data_type: duckle_metadata::DataType::String,
                         nullable: true,
@@ -11813,6 +11814,7 @@ impl DuckdbEngine {
             ]
             .iter()
             .map(|(name, dt)| duckle_metadata::Column {
+                tags: Vec::new(),
                 name: (*name).to_string(),
                 data_type: *dt,
                 nullable: true,
@@ -17497,6 +17499,7 @@ pub(crate) fn advance_mark(mark: &mut Option<String>, field: Option<&str>, row: 
 fn parent_failure_schema() -> Vec<duckle_metadata::Column> {
     use duckle_metadata::{Column, DataType};
     let col = |name: &str, t: DataType| Column {
+        tags: Vec::new(),
         name: name.to_string(),
         data_type: t,
         nullable: true,
@@ -18860,9 +18863,9 @@ mod xml_remote_tests {
     fn declared_columns_build_varchar_read_and_typed_cast() {
         use duckle_metadata::{Column, DataType};
         let schema = vec![
-            Column { name: "id".into(), data_type: DataType::Int64, nullable: true, primary_key: None, format: None },
-            Column { name: "price".into(), data_type: DataType::Float64, nullable: true, primary_key: None, format: None },
-            Column { name: "title".into(), data_type: DataType::String, nullable: true, primary_key: None, format: None },
+            Column { name: "id".into(), data_type: DataType::Int64, nullable: true, primary_key: None, format: None, tags: Vec::new() },
+            Column { name: "price".into(), data_type: DataType::Float64, nullable: true, primary_key: None, format: None, tags: Vec::new() },
+            Column { name: "title".into(), data_type: DataType::String, nullable: true, primary_key: None, format: None, tags: Vec::new() },
         ];
         let (columns_spec, select_list) = xml_declared_columns(&schema);
         // read_json reads every declared column as text...

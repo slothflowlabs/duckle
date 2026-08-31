@@ -73,6 +73,79 @@ fn node(id: &str, component: &str, props: Value) -> Value {
     })
 }
 
+/// #301: a tagged column is masked in the preview of a REAL run.
+///
+/// The unit tests cover the masking rule; this covers the wiring, which is the
+/// half that silently does nothing if the call is in the wrong place. Every
+/// inspection surface reads this same preview, so if it is masked here it is
+/// masked in the desktop panel, the CLI, the console API and the MCP tools an
+/// agent calls.
+#[test]
+fn a_tagged_column_is_masked_in_the_preview_a_run_returns() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "people.csv", "id,email,token
+1,a@example.com,sk-live-1
+");
+    let out = out_path(tmp.path(), "out.csv");
+
+    let mut src = node("s", "src.csv", json!({ "path": &csv, "hasHeader": true }));
+    // Tags live on the declared schema, which is where a person writes them.
+    src["data"]["schema"] = json!([
+        { "name": "id",    "type": "int64" },
+        { "name": "email", "type": "string", "tags": ["pii"] },
+        { "name": "token", "type": "string", "tags": ["secret"] }
+    ]);
+
+    let src2 = src.clone();
+    let r = engine.execute_pipeline(&doc(
+        json!([src, node("k", "snk.csv", json!({ "path": &out, "hasHeader": true }))]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+
+    let p = r.preview.iter().find(|p| p.node_id == "s").expect("a preview for the source");
+    let row = &p.rows[0];
+    assert_eq!(row["token"], "***", "a secret must never survive to a preview: {row}");
+    assert!(
+        row["email"].as_str().unwrap_or_default().starts_with('#'),
+        "pii must be hashed rather than shown: {row}"
+    );
+    assert_eq!(row["id"], 1, "an untagged column is untouched: {row}");
+
+    // Acceptance criterion 3: what the pipeline WROTE is unchanged. Masking is
+    // for the surfaces people look at, not for the data.
+    let written = std::fs::read_to_string(&out).expect("the sink wrote");
+    assert!(
+        written.contains("a@example.com") && written.contains("sk-live-1"),
+        "masking must not alter what the pipeline writes: {written}"
+    );
+
+    // And again on the OTHER execution path. The run above is pure SQL so it
+    // batches; naming a target forces the per-stage path instead. A masking
+    // point wired into only one of the two would leak on the other, which is
+    // this engine's oldest trap.
+    let staged = engine.execute_pipeline_with_events(
+        &doc(
+            json!([
+                src2,
+                node("k2", "snk.csv", json!({ "path": out_path(tmp.path(), "o2.csv"), "hasHeader": true }))
+            ]),
+            json!([main_edge("e1", "s", "k2")]),
+        ),
+        Some("s"),
+        None,
+        |_| {},
+    );
+    assert_eq!(staged.status, "ok", "{:?}", staged.error);
+    let sp = staged.preview.iter().find(|p| p.node_id == "s").expect("a preview");
+    assert_eq!(
+        sp.rows[0]["token"], "***",
+        "the per-stage path must mask too: {}",
+        sp.rows[0]
+    );
+}
+
 fn main_edge(id: &str, source: &str, target: &str) -> Value {
     json!({ "id": id, "source": source, "target": target, "data": { "connectionType": "main" } })
 }
@@ -988,6 +1061,7 @@ fn a_node_reports_its_real_columns_without_running() {
     let engine = engine_or_skip!();
     let upstream = vec![
         duckle_duckdb_engine::Column {
+            tags: Vec::new(),
             name: "id".into(),
             data_type: duckle_duckdb_engine::DataType::Int64,
             nullable: true,
@@ -995,6 +1069,7 @@ fn a_node_reports_its_real_columns_without_running() {
             format: None,
         },
         duckle_duckdb_engine::Column {
+            tags: Vec::new(),
             name: "location".into(),
             data_type: duckle_duckdb_engine::DataType::String,
             nullable: true,
@@ -1097,6 +1172,7 @@ fn describing_a_sink_never_writes_its_file() {
         json!([main_edge("e1", "s", "k")]),
     );
     let upstream = vec![duckle_duckdb_engine::Column {
+        tags: Vec::new(),
         name: "id".into(),
         data_type: duckle_duckdb_engine::DataType::Int64,
         nullable: true,
@@ -1151,6 +1227,7 @@ fn a_react_flow_node_deserialises_and_describes() {
         serde_json::from_value(raw).expect("the editor's own node shape must deserialise");
 
     let upstream = vec![duckle_duckdb_engine::Column {
+        tags: Vec::new(),
         name: "location".into(),
         data_type: duckle_duckdb_engine::DataType::String,
         nullable: true,

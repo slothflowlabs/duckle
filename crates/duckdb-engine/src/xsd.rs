@@ -631,6 +631,7 @@ fn columns_from(schema: &Schema, row_path: &str) -> Result<Vec<Column>, EngineEr
     // the way the reader names them.
     for (name, ty, optional) in &ct.attributes {
         out.push(Column {
+            tags: Vec::new(),
             name: format!("@{name}"),
             data_type: ty
                 .as_deref()
@@ -657,6 +658,7 @@ fn columns_from(schema: &Schema, row_path: &str) -> Result<Vec<Column>, EngineEr
                 .unwrap_or(DataType::String)
         };
         out.push(Column {
+            tags: Vec::new(),
             name: child.name.clone(),
             data_type,
             // A repeated or nested child can be absent from a given row even

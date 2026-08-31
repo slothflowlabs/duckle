@@ -1065,6 +1065,7 @@ mod tests {
         use duckle_duckdb_engine::NodePreview;
         use duckle_duckdb_engine::{Column, DataType};
         let col = |name: &str, t: DataType| Column {
+            tags: Vec::new(),
             name: name.to_string(),
             data_type: t,
             nullable: true,
@@ -1105,6 +1106,7 @@ mod tests {
         let preview = NodePreview {
             node_id: "x".into(),
             columns: vec![Column {
+                tags: Vec::new(),
                 name: "turnover".into(),
                 data_type: DataType::Decimal,
                 nullable: true,
@@ -1131,6 +1133,7 @@ mod tests {
         let preview = NodePreview {
             node_id: "x".into(),
             columns: vec![Column {
+                tags: Vec::new(),
                 name: "turnover".into(),
                 data_type: DataType::Decimal,
                 nullable: true,
@@ -1158,6 +1161,7 @@ mod tests {
         let preview = NodePreview {
             node_id: "x".into(),
             columns: vec![Column {
+                tags: Vec::new(),
                 name: "s".into(),
                 data_type: DataType::String,
                 nullable: true,
@@ -1179,6 +1183,7 @@ mod tests {
         let preview = NodePreview {
             node_id: "x".into(),
             columns: vec![Column {
+                tags: Vec::new(),
                 name: "id".into(),
                 data_type: DataType::Int64,
                 nullable: true,
@@ -1202,8 +1207,8 @@ mod tests {
         let preview = NodePreview {
             node_id: "x".into(),
             columns: vec![
-                Column { name: "id".into(), data_type: DataType::Int64, nullable: true, primary_key: None, format: None },
-                Column { name: "extra".into(), data_type: DataType::Json, nullable: true, primary_key: None, format: None },
+                Column { name: "id".into(), data_type: DataType::Int64, nullable: true, primary_key: None, format: None, tags: Vec::new() },
+                Column { name: "extra".into(), data_type: DataType::Json, nullable: true, primary_key: None, format: None, tags: Vec::new() },
             ],
             rows: vec![],
             sql_types: vec![],

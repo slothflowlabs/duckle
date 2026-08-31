@@ -499,6 +499,39 @@ That ordering is the difference between a correct micro-batch loop and a lossy
 one, so it is covered by a regression test that fails if the position ever
 advances past a batch that did not land.
 
+### Masking what you look at, not what you write
+
+A pipeline's sinks can be perfectly governed and its data still be read off a
+screen. Previews, profiles, reject rows, error bodies, API responses and the
+rows an MCP tool hands an agent are all places production person-data appears
+without anyone's permissions being wrong.
+
+Tag the column in the schema:
+
+```json
+{ "name": "email",      "type": "string", "tags": ["pii"] }
+{ "name": "api_secret", "type": "string", "tags": ["secret"] }
+```
+
+| tag | what an inspection surface shows |
+|---|---|
+| `secret` | `***`, always, whatever else the column is tagged |
+| `pii` | a short stable digest, so rows stay distinguishable without the value appearing |
+| `mask:null` / `mask:last4` / `mask:redact` / `mask:hash` | picked explicitly |
+
+**It never changes what the pipeline writes.** The sink still receives the real
+value, because the sink is governed by policy and the screen is not. Changing
+written data is what `qa.mask` is for.
+
+Masking happens as the previews are assembled, so the desktop panel, the CLI,
+the console API and MCP are consistent by construction rather than by four
+callers remembering. Both execution paths are covered, and there is a test for
+each - a masking point wired into only one of them would leak on the other.
+
+Nothing is inferred from a column name. A heuristic that masked `company_name`
+because it contains "name" would teach people to distrust the masking, and one
+that quietly failed to mask something would be worse.
+
 ### Schedules in a named time zone
 
 A cron expression is civil time: `0 3 * * *` means three in the morning as a

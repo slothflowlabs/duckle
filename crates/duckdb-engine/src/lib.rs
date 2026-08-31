@@ -47,6 +47,7 @@ pub mod baseline;
 pub mod budget;
 pub mod checkpoint;
 pub mod cronzone;
+pub mod mask;
 pub mod outcache;
 pub mod retry;
 pub mod plans;
@@ -707,6 +708,7 @@ impl DuckdbEngine {
                     .and_then(|v| v.as_bool().or_else(|| v.as_i64().map(|n| n != 0)))
                     .unwrap_or(true);
                 Some(Column {
+                    tags: Vec::new(),
                     name,
                     data_type: map_sqlserver_type(type_name),
                     nullable,
@@ -1223,6 +1225,7 @@ impl DuckdbEngine {
                 &compiled.stages,
                 &redact_secrets,
                 total_start,
+                &mask::tags_from_doc(doc),
                 &mut on_event,
             );
             return r;
@@ -2459,6 +2462,14 @@ impl DuckdbEngine {
         let category = overall_error
             .as_deref()
             .map(|e| error_category::categorize_error(e).to_string());
+        // #301: mask before the previews leave the engine. Every inspection
+        // surface - the desktop panel, the CLI, the console API, the MCP tools
+        // an agent calls - reads this same list, so masking here makes them
+        // consistent by construction rather than by four callers remembering.
+        // Values only: the columns, their types and the row count are what make
+        // a preview useful for debugging and none of them is the sensitive part.
+        let mut preview = preview;
+        mask::mask_previews(&mut preview, &mask::tags_from_doc(doc));
         let unchanged = run_was_unchanged(&nodes);
         RunResult {
             cache_keys,
@@ -2506,6 +2517,9 @@ impl DuckdbEngine {
         stages: &[plan::Stage],
         redact_secrets: &[Secret],
         total_start: Instant,
+        // #301: the batched path has stages rather than the document, so the
+        // column tags are handed in by the caller that does have it.
+        mask_tags: &mask::TagMap,
         on_event: &mut dyn FnMut(PipelineEvent),
     ) -> RunResult {
         use std::io::Write;
@@ -2997,6 +3011,14 @@ impl DuckdbEngine {
         let category = overall_error
             .as_deref()
             .map(|e| error_category::categorize_error(e).to_string());
+        // #301: mask before the previews leave the engine. Every inspection
+        // surface - the desktop panel, the CLI, the console API, the MCP tools
+        // an agent calls - reads this same list, so masking here makes them
+        // consistent by construction rather than by four callers remembering.
+        // Values only: the columns, their types and the row count are what make
+        // a preview useful for debugging and none of them is the sensitive part.
+        let mut preview = preview;
+        mask::mask_previews(&mut preview, mask_tags);
         let unchanged = run_was_unchanged(&nodes);
         RunResult {
             cache_keys: Default::default(),
@@ -3750,6 +3772,7 @@ fn run_file_op(spec: &FileOpSpec) -> Result<String, EngineError> {
 fn run_events_columns() -> Vec<Column> {
     use duckle_metadata::DataType;
     let text = |n: &str| Column {
+        tags: Vec::new(),
         name: n.to_string(),
         data_type: DataType::String,
         nullable: true,
@@ -3761,6 +3784,7 @@ fn run_events_columns() -> Vec<Column> {
         .map(|n| text(n))
         .collect();
     cols.push(Column {
+        tags: Vec::new(),
         name: "duration_ms".to_string(),
         data_type: DataType::Int64,
         nullable: true,
@@ -5347,6 +5371,7 @@ fn parse_describe_row(v: &JsonValue) -> Option<Column> {
         .map(|s| !s.eq_ignore_ascii_case("NO"))
         .unwrap_or(true);
     Some(Column {
+        tags: Vec::new(),
         name,
         data_type: map_duckdb_type(type_name),
         nullable,
@@ -6381,6 +6406,7 @@ mod tests {
         };
         let dir = tempfile::tempdir().unwrap();
         let col = |name: &str, dt: DataType| Column {
+            tags: Vec::new(),
             name: name.into(),
             data_type: dt,
             nullable: true,

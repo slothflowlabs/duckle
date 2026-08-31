@@ -155,7 +155,7 @@ mod tests {
     use duckle_metadata::DataType;
 
     fn col(name: &str, dt: DataType) -> Column {
-        Column { name: name.into(), data_type: dt, nullable: true, primary_key: None, format: None }
+        Column { name: name.into(), data_type: dt, nullable: true, primary_key: None, format: None, tags: Vec::new() }
     }
 
     #[test]
