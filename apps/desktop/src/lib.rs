@@ -431,6 +431,7 @@ async fn run_pipeline(
     duckle_duckdb_engine::context::apply_vault(&mut pipeline);
     ensure_pixeltable_if_used(&app, &pipeline);
     let name = pipeline_name.clone();
+    let receipt = begin_desktop_run(&workspace_path, &pipeline, pipeline_id.as_deref().unwrap_or("pipeline"), "desktop");
     let joined = tokio::task::spawn_blocking(move || {
         engine.execute_pipeline_with_events(&pipeline, None, name.as_deref(), |evt| {
             let _ = on_event.send(evt);
@@ -439,8 +440,67 @@ async fn run_pipeline(
     .await;
     *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = None;
     let result = joined.map_err(|e| e.to_string())?;
+    if let Some((ws, r)) = receipt {
+        duckle_duckdb_engine::retry::finish(&ws, r, &result.status, desktop_receipt_nodes(&result));
+    }
     record_history(&pipeline_id, &workspace_path, &result, "manual");
     Ok(result)
+}
+
+/// #259: record a canvas run, before and after.
+///
+/// The desktop is the most-used way to start a run, and it recorded no run id
+/// at all: `record_history` goes through `RunRecord::from_result`, which
+/// hard-codes `run_id: None`. So the runs people actually start were the ones
+/// that could not be found afterwards, which is the hole #259 exists to close.
+fn begin_desktop_run(
+    workspace: &Option<String>,
+    pipeline: &duckle_duckdb_engine::PipelineDoc,
+    pipeline_id: &str,
+    trigger: &str,
+) -> Option<(std::path::PathBuf, duckle_duckdb_engine::retry::RunReceipt)> {
+    // No workspace means nowhere to record into, which is the scratch-canvas
+    // case rather than an error.
+    let workspace = std::path::PathBuf::from(workspace.as_deref().filter(|w| !w.is_empty())?);
+    let workspace = &workspace;
+    let hash = duckle_duckdb_engine::retry::pipeline_hash(pipeline);
+    let run_id = duckle_duckdb_engine::retry::new_run_id(pipeline_id, trigger);
+    Some((
+        workspace.clone(),
+        duckle_duckdb_engine::retry::begin(
+            workspace,
+            &run_id,
+            trigger,
+            pipeline_id,
+            &workspace
+                .join("pipelines")
+                .join(format!("{pipeline_id}.json"))
+                .display()
+                .to_string(),
+            &hash,
+            None,
+        ),
+    ))
+}
+
+/// The per-node half of a receipt, from a finished run.
+fn desktop_receipt_nodes(
+    result: &duckle_duckdb_engine::RunResult,
+) -> std::collections::BTreeMap<String, duckle_duckdb_engine::retry::ReceiptNode> {
+    result
+        .nodes
+        .iter()
+        .map(|(nid, st)| {
+            (
+                nid.clone(),
+                duckle_duckdb_engine::retry::ReceiptNode {
+                    status: st.status.clone(),
+                    kind: st.kind.clone(),
+                    output_cache_key: result.cache_keys.get(nid).cloned(),
+                },
+            )
+        })
+        .collect()
 }
 
 /// #166 stage 2: expand saved Salesforce connection refs into node auth props
@@ -503,6 +563,9 @@ async fn run_pipeline_partial(
     ensure_pixeltable_if_used(&app, &pipeline);
     let target = target_node_id;
     let name = pipeline_name.clone();
+    // Run-to-here is still a run, and the one most likely to be asked about
+    // afterwards ("what did that node actually produce?").
+    let receipt = begin_desktop_run(&workspace_path, &pipeline, pipeline_id.as_deref().unwrap_or("pipeline"), "desktop-partial");
     let joined = tokio::task::spawn_blocking(move || {
         engine.execute_pipeline_with_events(
             &pipeline,
@@ -516,6 +579,9 @@ async fn run_pipeline_partial(
     .await;
     *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = None;
     let result = joined.map_err(|e| e.to_string())?;
+    if let Some((ws, r)) = receipt {
+        duckle_duckdb_engine::retry::finish(&ws, r, &result.status, desktop_receipt_nodes(&result));
+    }
     record_history(&pipeline_id, &workspace_path, &result, "partial");
     Ok(result)
 }

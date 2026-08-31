@@ -172,6 +172,7 @@ fn inspect_csv(opts: CsvOptions) -> Result<Inspection, InspectError> {
         .map(|(idx, name)| {
             let inferred = infer_column_type(&samples, idx, null_sentinel.as_deref());
             Column {
+                tags: Vec::new(),
                 name: name.clone(),
                 data_type: inferred,
                 nullable: column_has_nulls(&samples, idx, null_sentinel.as_deref()),

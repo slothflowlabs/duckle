@@ -835,7 +835,14 @@ fn dispatch_cmd(state: &WebState, cmd: &str, body: &[u8]) -> Reply {
             let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
             let _guard = state.run_lock.acquire();
             let engine = DuckdbEngine::new(state.duckdb.clone());
+            let receipt = begin_editor_run(&state.workspace, &doc, &name, "web");
             let result = engine.execute_pipeline_named(&doc, &name);
+            duckle_duckdb_engine::retry::finish(
+                &state.workspace,
+                receipt,
+                &result.status,
+                receipt_nodes(&result),
+            );
             match serde_json::to_value(&result) {
                 Ok(v) => respond_json(&v),
                 Err(e) => respond_err("500 Internal Server Error", &e.to_string()),
@@ -1034,6 +1041,51 @@ fn dispatch_cmd(state: &WebState, cmd: &str, body: &[u8]) -> Reply {
 
 /// Run a pipeline and STREAM its progress to the browser as Server-Sent Events:
 /// each engine PipelineEvent is a `data:` line; the final RunResult is an
+
+/// #259: record a run the web editor started.
+///
+/// The editor's Run button does not go through `execute_one_with` - it streams,
+/// and run-to-here needs a target - so without this the two most-used console
+/// run paths recorded nothing addressable. Returns the receipt to finish with.
+fn begin_editor_run(
+    workspace: &std::path::Path,
+    doc: &PipelineDoc,
+    name: &str,
+    trigger: &str,
+) -> duckle_duckdb_engine::retry::RunReceipt {
+    let hash = duckle_duckdb_engine::retry::pipeline_hash(doc);
+    let run_id = duckle_duckdb_engine::retry::new_run_id(name, trigger);
+    duckle_duckdb_engine::retry::begin(
+        workspace,
+        &run_id,
+        trigger,
+        name,
+        &workspace.join("pipelines").join(format!("{name}.json")).display().to_string(),
+        &hash,
+        None,
+    )
+}
+
+/// The per-node half of a receipt, from a finished run.
+fn receipt_nodes(
+    result: &duckle_duckdb_engine::RunResult,
+) -> std::collections::BTreeMap<String, duckle_duckdb_engine::retry::ReceiptNode> {
+    result
+        .nodes
+        .iter()
+        .map(|(nid, st)| {
+            (
+                nid.clone(),
+                duckle_duckdb_engine::retry::ReceiptNode {
+                    status: st.status.clone(),
+                    kind: st.kind.clone(),
+                    output_cache_key: result.cache_keys.get(nid).cloned(),
+                },
+            )
+        })
+        .collect()
+}
+
 /// `event: result` line. The frontend turns these back into the same live
 /// per-node animation the desktop gets from the Tauri Channel.
 fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(), String> {
@@ -1078,12 +1130,26 @@ fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(
     // synchronous, so events stream first, the result line follows).
     let mut ev = stream.try_clone().map_err(|e| e.to_string())?;
     let engine = DuckdbEngine::new(state.duckdb.clone());
+    // Run-to-here is still a run, and the one an operator is most likely to
+    // want to find again.
+    let receipt = begin_editor_run(
+        &state.workspace,
+        &doc,
+        &name,
+        if target.is_some() { "web-partial" } else { "web" },
+    );
     let result = engine.execute_pipeline_with_events(&doc, target.as_deref(), Some(&name), |evt| {
         if let Ok(j) = serde_json::to_string(&evt) {
             let _ = ev.write_all(format!("data: {}\n\n", j).as_bytes());
             let _ = ev.flush();
         }
     });
+    duckle_duckdb_engine::retry::finish(
+        &state.workspace,
+        receipt,
+        &result.status,
+        receipt_nodes(&result),
+    );
     let rj = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
     stream
         .write_all(format!("event: result\ndata: {}\n\n", rj).as_bytes())
