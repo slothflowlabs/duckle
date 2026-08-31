@@ -27466,13 +27466,13 @@
             ]
           },
           {
-            "label": "Behavior",
+            "label": "SCD Type 3 columns",
             "fields": [
               {
-                "key": "rejectUnchanged",
-                "label": "Drop unchanged rows",
-                "kind": "bool",
-                "defaultValue": true
+                "key": "effectiveDateColumn",
+                "label": "Effective-date column",
+                "kind": "text",
+                "description": "Optional. When set, each row is stamped with the time the previous value was captured, in a column of this name."
               }
             ]
           }

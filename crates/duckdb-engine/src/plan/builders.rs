@@ -2946,13 +2946,29 @@ pub(crate) fn build_scd3(inputs: &NodeInputs, props: &JsonValue) -> Result<Strin
     let prev = inputs.first_lookup().ok_or_else(|| {
         "SCD3 needs a 'previous' input on the lookup port (the prior snapshot)".to_string()
     })?;
-    let keys = columns_list(props, "keyColumns");
+    // The form writes `naturalKey` / `compareColumns`, which is also what every
+    // other CDC builder reads. This one read `keyColumns` / `trackColumns` and
+    // nothing else, so a node configured in the editor failed with "SCD3 needs
+    // key columns" while its Natural key field was filled in, and there was no
+    // way to fix that from the UI: the field the error asked for is not on the
+    // form. The engine's older spelling stays accepted so a hand-written
+    // pipeline that used it keeps working.
+    let mut keys = columns_list(props, "naturalKey");
     if keys.is_empty() {
-        return Err("SCD3 needs key columns".to_string());
+        keys = columns_list(props, "keyColumns");
     }
-    let tracked = columns_list(props, "trackColumns");
+    if keys.is_empty() {
+        return Err("SCD3 needs key columns (naturalKey)".to_string());
+    }
+    let mut tracked = columns_list(props, "compareColumns");
     if tracked.is_empty() {
-        return Err("SCD3 needs at least one column to track a previous value for".to_string());
+        tracked = columns_list(props, "trackColumns");
+    }
+    if tracked.is_empty() {
+        return Err(
+            "SCD3 needs at least one column to track a previous value for (compareColumns)"
+                .to_string(),
+        );
     }
     let key_eq = keys.iter().map(|k| { let q = quote_ident(k); format!("p.{q} = c.{q}") }).collect::<Vec<_>>().join(" AND ");
     let prev_cols = tracked.iter()

@@ -5815,14 +5815,33 @@ function synthCdcTransform(comp: ComponentDef): ComponentManifest {
             ],
         },
         {
-            label: id.endsWith('.scd2') ? 'SCD Type 2 columns' : 'Behavior',
+            label: id.endsWith('.scd2')
+                ? 'SCD Type 2 columns'
+                : id.endsWith('.scd3')
+                  ? 'SCD Type 3 columns'
+                  : 'Behavior',
             fields: id.endsWith('.scd2')
                 ? [
                       { key: 'validFromColumn', label: 'Valid-from column', kind: 'text', defaultValue: 'valid_from' },
                       { key: 'validToColumn', label: 'Valid-to column', kind: 'text', defaultValue: 'valid_to' },
                       { key: 'isCurrentColumn', label: 'Is-current flag column', kind: 'text', defaultValue: 'is_current' },
                   ]
-                : [{ key: 'rejectUnchanged', label: 'Drop unchanged rows', kind: 'bool', defaultValue: true }],
+                : id.endsWith('.scd3')
+                  ? // SCD3 stamps an optional effective date and has no
+                    // unchanged-row behaviour to configure. It was previously
+                    // offered `rejectUnchanged`, which its builder never reads,
+                    // and not offered this, which its builder does read - so the
+                    // one control it has was unreachable from the editor.
+                    [
+                        {
+                            key: 'effectiveDateColumn',
+                            label: 'Effective-date column',
+                            kind: 'text',
+                            description:
+                                'Optional. When set, each row is stamped with the time the previous value was captured, in a column of this name.',
+                        },
+                    ]
+                  : [{ key: 'rejectUnchanged', label: 'Drop unchanged rows', kind: 'bool', defaultValue: true }],
         },
     ], 'declared');
 }

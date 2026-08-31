@@ -2584,6 +2584,46 @@
         assert!(build_scd3(&no_prev, &props).is_err());
     }
 
+    /// The SCD3 form and the SCD3 builder have to agree on the property names.
+    ///
+    /// They did not. The manifest declares `naturalKey` / `compareColumns`,
+    /// which is what every other CDC builder reads, and `build_scd3` alone read
+    /// `keyColumns` / `trackColumns`. So configuring SCD3 in the editor produced
+    /// "SCD3 needs key columns" while looking at a filled-in Natural key field,
+    /// and there was no way to fix it from the UI because the field the error
+    /// asks for is not on the form.
+    ///
+    /// The older test passed throughout, because it asserted the spelling the
+    /// code used rather than the one the form writes.
+    #[test]
+    fn scd3_reads_the_property_names_its_form_writes() {
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["c1".into()]);
+        ni.ports.insert("lookup".into(), vec!["p1".into()]);
+
+        // Exactly what the editor stores for this component.
+        let declared = serde_json::json!({
+            "naturalKey": ["id"],
+            "compareColumns": ["v"],
+        });
+        let sql = build_scd3(&ni, &declared).expect(
+            "the keys the form writes must build; anything else is a component              nobody can configure from the GUI",
+        );
+        assert!(
+            sql.contains("p.\"v\" AS \"previous_v\""),
+            "the tracked column has to come from compareColumns: {sql}"
+        );
+        assert!(
+            sql.contains("p.\"id\" = c.\"id\""),
+            "the join key has to come from naturalKey: {sql}"
+        );
+
+        // The engine's own older spelling keeps working, so a hand-written
+        // pipeline that used it does not break.
+        let legacy = serde_json::json!({ "keyColumns": ["id"], "trackColumns": ["v"] });
+        assert!(build_scd3(&ni, &legacy).is_ok(), "the legacy spelling must stay accepted");
+    }
+
     #[test]
     fn qa_outlier_emits_iqr_and_zscore_pass_reject_sql() {
         let mk = || { let mut ni = NodeInputs::default(); ni.ports.insert("main".into(), vec!["up".into()]); ni };
