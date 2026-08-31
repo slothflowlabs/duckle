@@ -470,54 +470,47 @@ fn run_with(args: Args) -> Result<bool, String> {
         true => DuckdbEngine::new(duckdb),
         false => DuckdbEngine::new(duckdb).without_previews(),
     };
+    // #259: identity before work. A run killed here still exists to be found,
+    // and `reconcile` can later tell it apart from one that finished.
+    let trigger = if args.retry_of.is_some() { "retry" } else { "manual" };
+    let run_id = duckle_duckdb_engine::retry::new_run_id(&name, trigger);
+    println!("run id   : {run_id}");
+    let receipt = duckle_duckdb_engine::retry::begin(
+        &workspace,
+        &run_id,
+        trigger,
+        &name,
+        &pipeline.display().to_string(),
+        &pipeline_hash,
+        args.retry_of.clone(),
+    );
+
     let result = match target.as_deref() {
         Some(t) => engine.execute_pipeline_with_events(&doc, Some(t), Some(&name), |_| {}),
         None => engine.execute_pipeline_named(&doc, &name),
     };
 
-    // #305: record what this run was, keyed by an id a retry can hold. The run
-    // history is a capped human-facing list with no per-node detail and no
-    // pipeline identity, so it cannot answer "is this the same work?".
-    {
-        let safe: String = name
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
-            .collect();
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or_default();
-        let receipt = duckle_duckdb_engine::retry::RunReceipt {
-            run_id: format!("run-{safe}-{stamp}"),
-            parent_run_id: args.retry_of.clone(),
-            at: chrono::Utc::now().to_rfc3339(),
-            status: result.status.clone(),
-            pipeline_name: name.clone(),
-            pipeline_path: pipeline.display().to_string(),
-            pipeline_hash,
-            engine_version: duckle_duckdb_engine::retry::ENGINE_VERSION.to_string(),
-            nodes: result
-                .nodes
-                .iter()
-                .map(|(id, st)| {
-                    (
-                        id.clone(),
-                        duckle_duckdb_engine::retry::ReceiptNode {
-                            status: st.status.clone(),
-                            kind: st.kind.clone(),
-                            output_cache_key: result.cache_keys.get(id).cloned(),
-                        },
-                    )
-                })
-                .collect(),
-        };
-        // Best-effort: a run that cannot record itself is still a run that
-        // happened, and failing it over bookkeeping would be the worse bug.
-        match duckle_duckdb_engine::retry::write(&workspace, &receipt) {
-            Ok(()) => println!("run id   : {}", receipt.run_id),
-            Err(e) => eprintln!("duckle: could not write the run receipt: {e}"),
-        }
-    }
+    // #259: the run is recorded BEFORE the result is printed, and the id is
+    // minted before the work above ran - see where `receipt` is created.
+    duckle_duckdb_engine::retry::finish(
+        &workspace,
+        receipt,
+        &result.status,
+        result
+            .nodes
+            .iter()
+            .map(|(id, st)| {
+                (
+                    id.clone(),
+                    duckle_duckdb_engine::retry::ReceiptNode {
+                        status: st.status.clone(),
+                        kind: st.kind.clone(),
+                        output_cache_key: result.cache_keys.get(id).cloned(),
+                    },
+                )
+            })
+            .collect(),
+    );
 
     println!("status   : {}", result.status);
     println!("duration : {} ms", result.duration_ms);

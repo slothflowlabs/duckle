@@ -249,6 +249,22 @@ pub fn run() -> Result<(), String> {
     std::env::set_var("DUCKLE_LOG_DIR", workspace.join("logs"));
     apply_workspace_memory_limit(&workspace);
 
+    // #259: anything still marked `running` was not finished by a process that
+    // is alive now, because this one is starting. Say so, rather than leaving a
+    // receipt claiming a run is in progress forever. `interrupted` is
+    // deliberately distinct from `error`: the run did not fail, it stopped
+    // being observed, and a caller that conflates them retries work that may
+    // well have completed.
+    let reclaimed =
+        duckle_duckdb_engine::retry::reconcile(&workspace, &|pid| pid == std::process::id());
+    if !reclaimed.is_empty() {
+        eprintln!(
+            "duckle: {} run(s) were still marked running and are now interrupted: {}",
+            reclaimed.len(),
+            reclaimed.join(", ")
+        );
+    }
+
     // Decide who may use this console before binding anything. An exposed bind
     // with no credential does not refuse to start any more - it comes up
     // unclaimed, so setup can be finished in a browser - but it then spends
@@ -403,6 +419,22 @@ pub fn run_web() -> Result<(), String> {
     std::env::set_var("DUCKLE_WORKSPACE", &workspace);
     std::env::set_var("DUCKLE_LOG_DIR", workspace.join("logs"));
     apply_workspace_memory_limit(&workspace);
+
+    // #259: anything still marked `running` was not finished by a process that
+    // is alive now, because this one is starting. Say so, rather than leaving a
+    // receipt claiming a run is in progress forever. `interrupted` is
+    // deliberately distinct from `error`: the run did not fail, it stopped
+    // being observed, and a caller that conflates them retries work that may
+    // well have completed.
+    let reclaimed =
+        duckle_duckdb_engine::retry::reconcile(&workspace, &|pid| pid == std::process::id());
+    if !reclaimed.is_empty() {
+        eprintln!(
+            "duckle: {} run(s) were still marked running and are now interrupted: {}",
+            reclaimed.len(),
+            reclaimed.join(", ")
+        );
+    }
     // The editor writes files, edits connections and runs pipelines, so it is
     // at least as powerful as the console and gets the same rule: loopback is
     // open, anything else needs a credential before the socket is bound.
@@ -3052,12 +3084,49 @@ fn execute_one_with(
     duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
 
     let engine = engine.unwrap_or_else(|| DuckdbEngine::new(state.duckdb.clone()));
+    // #259: every console execution is addressable, not only the async one.
+    // `execute_one` passed None, so a synchronous run, a scheduled step and a
+    // plan step each recorded no id at all - which is what made "which run was
+    // that?" unanswerable for most of the ways a run actually starts. Minted
+    // here because all of them come through this function.
+    let owned_id = run_id
+        .map(str::to_string)
+        .unwrap_or_else(|| duckle_duckdb_engine::retry::new_run_id(&id, trigger));
+    let hash = duckle_duckdb_engine::retry::pipeline_hash(&doc);
+    let receipt = duckle_duckdb_engine::retry::begin(
+        &state.workspace,
+        &owned_id,
+        trigger,
+        &id,
+        &path.display().to_string(),
+        &hash,
+        None,
+    );
     let result = engine.execute_pipeline_named(&doc, &id);
+    duckle_duckdb_engine::retry::finish(
+        &state.workspace,
+        receipt,
+        &result.status,
+        result
+            .nodes
+            .iter()
+            .map(|(nid, st)| {
+                (
+                    nid.clone(),
+                    duckle_duckdb_engine::retry::ReceiptNode {
+                        status: st.status.clone(),
+                        kind: st.kind.clone(),
+                        output_cache_key: result.cache_keys.get(nid).cloned(),
+                    },
+                )
+            })
+            .collect(),
+    );
 
     let mut record = RunRecord::from_result_in(&state.workspace, &id, &result, trigger);
     // #259: stamp the id the caller was handed, so a finished async run is
     // still answerable once it has left memory.
-    record.run_id = run_id.map(str::to_string);
+    record.run_id = Some(owned_id);
     let _ = append_run_record(&state.workspace, &id, record);
     // After the run is recorded, so an unreachable channel can never cost a
     // run its history entry, and never changes the outcome reported below.

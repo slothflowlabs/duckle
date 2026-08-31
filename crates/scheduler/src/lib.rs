@@ -184,7 +184,62 @@ fn run_one_blocking(
     duckle_duckdb_engine::context::apply_env(&mut pipeline);
     duckle_duckdb_engine::context::apply_vault(&mut pipeline);
     // A fresh cancel scope per pipeline, so one step of a plan cannot cancel the next.
-    Ok(engine.for_new_run().execute_pipeline_named(&pipeline, pipeline_id))
+    Ok(run_recorded(
+        engine,
+        workspace,
+        &pipeline,
+        pipeline_id,
+        "plan",
+        &workspace.join("pipelines").join(format!("{pipeline_id}.json")).display().to_string(),
+    ))
+}
+
+/// #259: run a pipeline and record its identity, before and after.
+///
+/// Both scheduler paths go through here, so a scheduled run and a plan step are
+/// addressable the same way as a `duckle-runner` run. Before this, neither
+/// recorded a run id at all - `execute_one` hard-codes `None` - so "which run
+/// was that?" had no answer for anything the scheduler started.
+fn run_recorded(
+    engine: &DuckdbEngine,
+    workspace: &Path,
+    pipeline: &duckle_duckdb_engine::PipelineDoc,
+    pipeline_id: &str,
+    trigger: &str,
+    pipeline_path: &str,
+) -> RunResult {
+    let hash = duckle_duckdb_engine::retry::pipeline_hash(pipeline);
+    let run_id = duckle_duckdb_engine::retry::new_run_id(pipeline_id, trigger);
+    let receipt = duckle_duckdb_engine::retry::begin(
+        workspace,
+        &run_id,
+        trigger,
+        pipeline_id,
+        pipeline_path,
+        &hash,
+        None,
+    );
+    let result = engine.for_new_run().execute_pipeline_named(pipeline, pipeline_id);
+    duckle_duckdb_engine::retry::finish(
+        workspace,
+        receipt,
+        &result.status,
+        result
+            .nodes
+            .iter()
+            .map(|(id, st)| {
+                (
+                    id.clone(),
+                    duckle_duckdb_engine::retry::ReceiptNode {
+                        status: st.status.clone(),
+                        kind: st.kind.clone(),
+                        output_cache_key: result.cache_keys.get(id).cloned(),
+                    },
+                )
+            })
+            .collect(),
+    );
+    result
 }
 
 /// A run that never started, as a result.
@@ -482,10 +537,46 @@ impl Scheduler {
         // Log scheduled runs under the pipeline id (the scheduler has no
         // friendly name handy) so they still land in the per-pipeline log.
         let log_name = pipeline_id.clone();
+        // #259: identity before work, on the scheduler too. A scheduled run
+        // that dies with the server used to leave nothing addressable at all.
+        let hash = duckle_duckdb_engine::retry::pipeline_hash(&pipeline);
+        let run_id = duckle_duckdb_engine::retry::new_run_id(&pipeline_id, "scheduled");
+        let receipt = duckle_duckdb_engine::retry::begin(
+            &workspace,
+            &run_id,
+            "scheduled",
+            &pipeline_id,
+            &workspace
+                .join("pipelines")
+                .join(format!("{pipeline_id}.json"))
+                .display()
+                .to_string(),
+            &hash,
+            None,
+        );
         let result =
             tokio::task::spawn_blocking(move || engine.execute_pipeline_named(&pipeline, &log_name))
                 .await
                 .map_err(|e| e.to_string())?;
+        duckle_duckdb_engine::retry::finish(
+            &workspace,
+            receipt,
+            &result.status,
+            result
+                .nodes
+                .iter()
+                .map(|(nid, st)| {
+                    (
+                        nid.clone(),
+                        duckle_duckdb_engine::retry::ReceiptNode {
+                            status: st.status.clone(),
+                            kind: st.kind.clone(),
+                            output_cache_key: result.cache_keys.get(nid).cloned(),
+                        },
+                    )
+                })
+                .collect(),
+        );
         self.record_run(id, started, &result);
         Ok(result)
     }

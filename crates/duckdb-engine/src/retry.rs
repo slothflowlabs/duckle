@@ -74,6 +74,28 @@ pub struct ReceiptNode {
 #[serde(rename_all = "camelCase")]
 pub struct RunReceipt {
     pub run_id: String,
+    /// What started this run: "manual", "scheduled", "plan", "api", "mcp",
+    /// "retry", "follow", "desktop".
+    ///
+    /// #259: recorded because "why did this run" is the first question asked of
+    /// a run nobody remembers starting, and the answer was previously spread
+    /// across four surfaces that each described it differently or not at all.
+    #[serde(default = "unknown_trigger")]
+    pub trigger: String,
+    /// Where the run got to.
+    ///
+    /// Written as `running` BEFORE the work starts, so a run that never
+    /// finishes still exists to be found. A process that dies leaves its
+    /// receipt saying `running` forever, which is what [`reconcile`] turns into
+    /// an honest `interrupted`.
+    #[serde(default = "unknown_state")]
+    pub state: String,
+    /// The OS process that owns this run while it is `running`.
+    ///
+    /// Only meaningful together with `state == "running"`, and only on the host
+    /// that wrote it. Used by [`reconcile`] to avoid calling a live run dead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
     /// The run this one was a retry of. `None` for an original run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_run_id: Option<String>,
@@ -90,6 +112,126 @@ pub struct RunReceipt {
     pub pipeline_hash: String,
     pub engine_version: String,
     pub nodes: BTreeMap<String, ReceiptNode>,
+}
+
+fn unknown_trigger() -> String {
+    "unknown".to_string()
+}
+
+fn unknown_state() -> String {
+    // A receipt written before states existed finished one way or another and
+    // is not running now, so reading it as `running` would make `reconcile`
+    // rewrite history it knows nothing about.
+    "finished".to_string()
+}
+
+/// The states a run passes through (#259).
+pub const RUNNING: &str = "running";
+pub const INTERRUPTED: &str = "interrupted";
+pub const FINISHED: &str = "finished";
+
+/// Mint a run id and record that the run has STARTED, before any work happens.
+///
+/// This is the half #259 is really about. A receipt written only at the end
+/// exists exactly when it is least needed: a run that was killed, or whose
+/// server went down, leaves nothing at all, so "what was running when this box
+/// rebooted?" has no answer. Writing first and updating after means an
+/// unfinished run is still a run you can find.
+pub fn begin(
+    workspace: &Path,
+    run_id: &str,
+    trigger: &str,
+    pipeline_name: &str,
+    pipeline_path: &str,
+    pipeline_hash: &str,
+    parent_run_id: Option<String>,
+) -> RunReceipt {
+    let receipt = RunReceipt {
+        run_id: run_id.to_string(),
+        trigger: trigger.to_string(),
+        state: RUNNING.to_string(),
+        pid: Some(std::process::id()),
+        parent_run_id,
+        at: chrono::Utc::now().to_rfc3339(),
+        status: RUNNING.to_string(),
+        pipeline_name: pipeline_name.to_string(),
+        pipeline_path: pipeline_path.to_string(),
+        pipeline_hash: pipeline_hash.to_string(),
+        engine_version: ENGINE_VERSION.to_string(),
+        nodes: BTreeMap::new(),
+    };
+    // Best effort: a run that cannot record itself is still a run that happens.
+    let _ = write(workspace, &receipt);
+    receipt
+}
+
+/// Record how a run ended.
+pub fn finish(
+    workspace: &Path,
+    mut receipt: RunReceipt,
+    status: &str,
+    nodes: BTreeMap<String, ReceiptNode>,
+) {
+    receipt.state = FINISHED.to_string();
+    receipt.status = status.to_string();
+    receipt.pid = None;
+    receipt.nodes = nodes;
+    let _ = write(workspace, &receipt);
+}
+
+/// Turn abandoned `running` receipts into an honest `interrupted`.
+///
+/// Called when a server or scheduler starts: anything still marked running that
+/// this process does not own was killed rather than completed. `interrupted` is
+/// deliberately a distinct answer from `error` - the run did not fail, it
+/// stopped being observed, and a caller that treats those the same will retry
+/// things that may well have finished.
+///
+/// Receipts belonging to a LIVE process are left alone, so a second runner on
+/// the same workspace does not declare the first one dead.
+pub fn reconcile(workspace: &Path, live_pids: &dyn Fn(u32) -> bool) -> Vec<String> {
+    let mut changed = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir(workspace)) else {
+        return changed;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().is_none_or(|x| x != "json") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&p) else { continue };
+        let Ok(mut r) = serde_json::from_str::<RunReceipt>(&text) else { continue };
+        if r.state != RUNNING {
+            continue;
+        }
+        if r.pid.is_some_and(|pid| live_pids(pid)) {
+            continue;
+        }
+        r.state = INTERRUPTED.to_string();
+        r.status = INTERRUPTED.to_string();
+        r.pid = None;
+        if write(workspace, &r).is_ok() {
+            changed.push(r.run_id.clone());
+        }
+    }
+    changed
+}
+
+/// Mint a run id for a trigger.
+///
+/// One format everywhere, because three different ones is what #259 found:
+/// the engine minted `run-{pid}-{nanos}` and never persisted it, the console
+/// minted its own, and the run history only ever carried the console's.
+pub fn new_run_id(pipeline_name: &str, trigger: &str) -> String {
+    let safe: String = pipeline_name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    format!("run-{trigger}-{safe}-{stamp}")
 }
 
 /// Receipts live beside the run history but keyed by run id, because that is
@@ -128,8 +270,20 @@ pub fn write(workspace: &Path, receipt: &RunReceipt) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Keep the newest [`MAX_RECEIPTS`]. Best-effort: failing to prune must never
-/// fail a run.
+/// Is this receipt for a run that has not finished?
+///
+/// Read rather than assumed, because the answer decides whether the file may be
+/// deleted. An unreadable receipt is treated as NOT running, so a corrupt file
+/// can still be pruned instead of accumulating forever.
+fn is_running(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<RunReceipt>(&t).ok())
+        .is_some_and(|r| r.state == RUNNING)
+}
+
+/// Keep the newest [`MAX_RECEIPTS`] FINISHED receipts. Best-effort: failing to
+/// prune must never fail a run.
 fn prune(d: &Path) {
     let mut entries: Vec<(std::time::SystemTime, PathBuf)> = match std::fs::read_dir(d) {
         Ok(rd) => rd
@@ -139,6 +293,12 @@ fn prune(d: &Path) {
                 let m = e.metadata().ok()?;
                 Some((m.modified().ok()?, e.path()))
             })
+            // A receipt is written at `begin`, so a long run has an OLD mtime
+            // while it is still in flight, and pruning oldest-first would
+            // delete it out from under itself. On a busy workspace that is a
+            // multi-hour backfill losing exactly the in-flight record this
+            // exists to keep.
+            .filter(|(_, p)| !is_running(p))
             .collect(),
         Err(_) => return,
     };
@@ -263,6 +423,9 @@ pub fn plan(
         }
     };
 
+    // #259: `interrupted` is not a failure, but it is not a success either -
+    // the run stopped being observed and may have written anything or nothing.
+    // Retrying it is legitimate; the sink refusal below is what keeps it safe.
     if prior.status == "ok" {
         return Plan::refused(
             run_id,
@@ -407,6 +570,9 @@ mod tests {
     fn receipt(status: &str, hash: &str, nodes: &[(&str, &str, Option<&str>, &str)]) -> RunReceipt {
         RunReceipt {
             run_id: "r1".into(),
+            trigger: "manual".into(),
+            state: FINISHED.into(),
+            pid: None,
             parent_run_id: None,
             at: "2026-08-31T00:00:00Z".into(),
             status: status.into(),
@@ -444,6 +610,103 @@ mod tests {
         let r = receipt("error", "abc", &[("a", "ok", Some("K"), "source")]);
         write(tmp.path(), &r).unwrap();
         assert_eq!(load(tmp.path(), "r1").unwrap(), r);
+    }
+
+    /// Pruning must never delete a run that is still going.
+    ///
+    /// The receipt is written at `begin`, so a long run has an OLD mtime while
+    /// still being in flight - and prune removes oldest-first. On a busy
+    /// workspace a multi-hour backfill would have its record deleted out from
+    /// under it, which is precisely the in-flight record #259 exists to keep.
+    #[test]
+    fn pruning_never_removes_a_run_that_is_still_running() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A long run, started first and still going.
+        begin(tmp.path(), "run-long", "manual", "backfill", "/p.json", "h", None);
+        // Then more finished runs than the cap, all newer.
+        for i in 0..(MAX_RECEIPTS + 5) {
+            let r = begin(tmp.path(), &format!("run-{i}"), "api", "p", "/p.json", "h", None);
+            finish(tmp.path(), r, "ok", BTreeMap::new());
+        }
+        assert!(
+            load(tmp.path(), "run-long").is_ok(),
+            "the in-flight run's receipt was pruned while it was still running"
+        );
+    }
+
+    /// #259: the receipt exists BEFORE the work does. A receipt written only at
+    /// the end is missing exactly when it is most needed - a killed run, or a
+    /// server that went down, leaves nothing to find.
+    #[test]
+    fn a_run_is_recorded_before_it_starts_and_updated_when_it_ends() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = begin(tmp.path(), "run-1", "scheduled", "daily", "/p.json", "hash", None);
+
+        let mid = load(tmp.path(), "run-1").expect("recorded before any work");
+        assert_eq!(mid.state, RUNNING, "an unfinished run must be findable");
+        assert_eq!(mid.trigger, "scheduled", "and must say what started it");
+        assert_eq!(mid.pid, Some(std::process::id()));
+
+        finish(tmp.path(), r, "ok", BTreeMap::new());
+        let done = load(tmp.path(), "run-1").unwrap();
+        assert_eq!(done.state, FINISHED);
+        assert_eq!(done.status, "ok");
+        assert_eq!(done.pid, None, "a finished run owns no process");
+    }
+
+    /// A process that died leaves its receipt saying `running` forever.
+    /// `interrupted` is a distinct answer from `error`: the run did not fail,
+    /// it stopped being observed, and treating those the same would retry work
+    /// that may well have completed.
+    #[test]
+    fn an_abandoned_run_becomes_interrupted_rather_than_staying_running() {
+        let tmp = tempfile::tempdir().unwrap();
+        begin(tmp.path(), "run-dead", "api", "daily", "/p.json", "hash", None);
+
+        let changed = reconcile(tmp.path(), &|_| false); // nothing is alive
+        assert_eq!(changed, vec!["run-dead".to_string()]);
+        let r = load(tmp.path(), "run-dead").unwrap();
+        assert_eq!(r.state, INTERRUPTED);
+        assert_ne!(r.status, "error", "interrupted is not the same as failed");
+    }
+
+    /// The dangerous direction: a second runner on the same workspace must not
+    /// declare the first one's live run dead.
+    #[test]
+    fn reconcile_leaves_a_live_run_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        begin(tmp.path(), "run-live", "manual", "daily", "/p.json", "hash", None);
+        let changed = reconcile(tmp.path(), &|pid| pid == std::process::id());
+        assert!(changed.is_empty(), "a running process still owns its run");
+        assert_eq!(load(tmp.path(), "run-live").unwrap().state, RUNNING);
+    }
+
+    /// A receipt written before states existed finished one way or another.
+    /// Reading it as `running` would let reconcile rewrite history it knows
+    /// nothing about.
+    #[test]
+    fn an_older_receipt_without_a_state_is_not_declared_interrupted() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir(tmp.path())).unwrap();
+        std::fs::write(
+            dir(tmp.path()).join("old.json"),
+            r#"{"runId":"old","at":"2026-01-01T00:00:00Z","status":"error",
+                "pipelineName":"p","pipelinePath":"/p.json","pipelineHash":"h",
+                "engineVersion":"0.0.1","nodes":{}}"#,
+        )
+        .unwrap();
+        let changed = reconcile(tmp.path(), &|_| false);
+        assert!(changed.is_empty(), "an old receipt is not an abandoned run: {changed:?}");
+        assert_eq!(load(tmp.path(), "old").unwrap().status, "error");
+    }
+
+    /// One id format everywhere, carrying the trigger - three different formats
+    /// is what #259 found.
+    #[test]
+    fn a_run_id_names_its_trigger_and_is_filesystem_safe() {
+        let id = new_run_id("lake/daily load", "scheduled");
+        assert!(id.starts_with("run-scheduled-"), "got {id}");
+        assert!(!id.contains('/') && !id.contains(' '), "got {id}");
     }
 
     /// Absent and unreadable are different answers. The run history collapses

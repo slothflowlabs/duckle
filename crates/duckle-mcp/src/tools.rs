@@ -982,12 +982,49 @@ fn t_run_pipeline(args: &Value) -> Result<Value, String> {
     let doc = prepare_run_doc(&v, arg_str(args, "workspace"))?;
 
     let engine = DuckdbEngine::new(duckdb);
+    // #259: a run an agent starts is addressable like any other. Without this,
+    // "which run did the agent just do?" had no answer, and MCP is the surface
+    // where that question is asked most.
+    let receipt = arg_str(args, "workspace").map(|ws| {
+        let hash = duckle_duckdb_engine::retry::pipeline_hash(&doc);
+        let run_id = duckle_duckdb_engine::retry::new_run_id(&name, "mcp");
+        duckle_duckdb_engine::retry::begin(
+            std::path::Path::new(ws),
+            &run_id,
+            "mcp",
+            &name,
+            arg_str(args, "path").unwrap_or("(inline)"),
+            &hash,
+            None,
+        )
+    });
     // Stopping at a node is the point of asking: an agent changing one step should not
     // have to run everything after it, least of all the sinks, to see what it did.
     let result = match arg_str(args, "target") {
         Some(t) => engine.execute_pipeline_with_events(&doc, Some(t), Some(&name), |_| {}),
         None => engine.execute_pipeline_named(&doc, &name),
     };
+    if let (Some(r), Some(ws)) = (receipt, arg_str(args, "workspace")) {
+        duckle_duckdb_engine::retry::finish(
+            std::path::Path::new(ws),
+            r,
+            &result.status,
+            result
+                .nodes
+                .iter()
+                .map(|(id, st)| {
+                    (
+                        id.clone(),
+                        duckle_duckdb_engine::retry::ReceiptNode {
+                            status: st.status.clone(),
+                            kind: st.kind.clone(),
+                            output_cache_key: result.cache_keys.get(id).cloned(),
+                        },
+                    )
+                })
+                .collect(),
+        );
+    }
 
     let mut out = serde_json::to_value(&result).map_err(|e| e.to_string())?;
     // Cap preview rows so the response stays small.
