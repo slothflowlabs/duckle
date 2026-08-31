@@ -1920,6 +1920,10 @@ fn main() -> ExitCode {
     if std::env::args().nth(1).as_deref() == Some("quickstart") {
         return run_quickstart();
     }
+    // `freshness` -> which assets are past the age they declared (#304).
+    if std::env::args().nth(1).as_deref() == Some("freshness") {
+        return run_freshness();
+    }
     // `capabilities` -> the connector matrix, generated from the manifests (#313).
     if std::env::args().nth(1).as_deref() == Some("capabilities") {
         return capabilities::run();
@@ -2295,4 +2299,69 @@ fn run_retention() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// `duckle-runner freshness` - which assets are older than they said they would
+/// be (#304).
+///
+/// Evaluated on a clock rather than at the end of a run, because the ways an
+/// asset goes stale mostly produce no failed run at all: a schedule switched
+/// off, a server down, a source that stopped publishing.
+fn run_freshness() -> ExitCode {
+    let mut workspace = PathBuf::from(".");
+    let mut json_out = false;
+    let mut stale_only = false;
+    let mut it = std::env::args().skip(2);
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--workspace" => workspace = it.next().map(PathBuf::from).unwrap_or(workspace),
+            "--json" => json_out = true,
+            "--stale" => stale_only = true,
+            other => {
+                eprintln!("duckle-runner freshness: unknown argument {other}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let mut all = duckle_duckdb_engine::sla::evaluate(&workspace, chrono::Utc::now());
+    if stale_only {
+        all.retain(|a| a.state == duckle_duckdb_engine::sla::State::Stale);
+    }
+    let stale = all
+        .iter()
+        .filter(|a| a.state == duckle_duckdb_engine::sla::State::Stale)
+        .count();
+    if json_out {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schemaVersion": report::SCHEMA_VERSION,
+                "command": "freshness",
+                "stale": stale,
+                "assets": all,
+            }))
+            .unwrap_or_default()
+        );
+    } else {
+        println!("{:<40} {:<8} {:<10} {:<10} owner", "asset", "state", "age", "limit");
+        for a in &all {
+            let age = a
+                .age_seconds
+                .map(|s| format!("{}h", s / 3600))
+                .unwrap_or_else(|| "never".into());
+            println!(
+                "{:<40} {:<8} {:<10} {:<10} {}",
+                a.asset,
+                format!("{:?}", a.state).to_lowercase(),
+                age,
+                a.maximum_age.clone().unwrap_or_else(|| "-".into()),
+                a.owner.clone().unwrap_or_else(|| "-".into())
+            );
+        }
+        println!("
+{} asset(s), {stale} stale", all.len());
+    }
+    // Stale is a finding about the data, which is exit 1 - the same code a
+    // failed check uses, so a monitoring job gates on it without special-casing.
+    if stale > 0 { ExitCode::from(1) } else { ExitCode::from(0) }
 }

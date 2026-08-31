@@ -583,6 +583,38 @@ Real holiday calendars vary by country, region and year; a first version that
 tried to know them would be wrong somewhere and confidently so. A date list is
 something an operator can check by reading it.
 
+### Freshness that does not wait for a failure (`freshness`)
+
+A dataset goes stale in ways that produce no failed run at all: a schedule
+switched off, a server down, a source that stopped publishing, a run that was
+never queued. Alerting on failures cannot see any of those, because nothing
+failed. So an asset declares how old it may get, on the same `owners.json` rule
+that already carries who owns it:
+
+```json
+{ "match": "/lake/raw/*", "owner": "data-eng", "maximumAge": "36h" }
+```
+
+```bash
+duckle-runner freshness --stale --json     # exit 1 when anything is stale
+```
+
+```text
+asset                                    state    age        limit      owner
+/lake/never                              stale    never      1h         ops
+/lake/orders                             stale    50h        36h        data-eng
+```
+
+**A partial publish does not count as a refresh.** A failed run never did, but an
+`incomplete` one used to - a run that stopped at a ceiling has correct rows and
+not all of them, and unlike a failure it looks healthy. That was a real bug, and
+there is a test that fails without the fix.
+
+**No declared limit means `unknown`, not `fresh`.** "We do not know" and "it is
+fine" are different answers and only one of them is reassuring. An asset a rule
+names but which has never been written is `stale` rather than missing: the SLA
+says it should have been there by now.
+
 ### The connector matrix, generated (`capabilities`)
 
 A hand-maintained feature table drifts from the code the week after it is

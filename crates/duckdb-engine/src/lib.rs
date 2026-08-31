@@ -50,6 +50,7 @@ pub mod cronzone;
 pub mod mask;
 pub mod outcache;
 pub mod retry;
+pub mod sla;
 pub mod plans;
 pub mod policy;
 pub mod pyenv;

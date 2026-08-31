@@ -474,6 +474,7 @@ pub fn annotate(
         None => rules.insert(
             0,
             OwnerRule {
+                maximum_age: None,
                 pattern: name.to_string(),
                 // An annotation with no owner still needs the field; the empty
                 // string reads as "not stated" everywhere it is shown.
@@ -545,7 +546,12 @@ pub fn freshness(workspace: &Path) -> BTreeMap<String, Freshness> {
         let Ok(records) = serde_json::from_str::<Vec<crate::history::RunRecord>>(&text) else {
             continue;
         };
-        for record in records.iter().filter(|r| r.status == "ok") {
+        // #304: a failed run never counted, but an INCOMPLETE one did. An
+        // incomplete run stopped at a ceiling, so its rows are correct and are
+        // not all of them - treating that as a refresh is the quieter half of
+        // "a partial publish must not refresh the asset", because a failure is
+        // visible and a truncated success looks healthy.
+        for record in records.iter().filter(|r| r.status == "ok" && !r.incomplete) {
             for touch in record.assets.iter().filter(|a| a.direction == "write") {
                 let better = match out.get(&touch.id) {
                     // History is appended in order, but two pipelines writing
@@ -597,6 +603,14 @@ pub struct OwnerRule {
     /// asked for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// #304: how old this asset is allowed to get before it is stale, written
+    /// the way an operator writes one - "36h", "2d", "90m".
+    ///
+    /// On the same rule as ownership for the same reason description and tags
+    /// are: they are authored together, and a second file would drift from
+    /// this one. A stale asset also needs an owner to tell, which is here.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "maximumAge")]
+    pub maximum_age: Option<String>,
 }
 
 /// Who owns what, as authored by a human.
@@ -2208,6 +2222,7 @@ mod tests {
         let owners = Owners {
             assets: vec![
                 OwnerRule {
+                    maximum_age: None,
                     pattern: "/lake/raw/pii_*".into(),
                     owner: "Privacy".into(),
                     contact: Some("privacy@acme.test".into()),
@@ -2215,6 +2230,7 @@ mod tests {
                     tags: Vec::new(),
                 },
                 OwnerRule {
+                    maximum_age: None,
                     pattern: "/lake/raw/*".into(),
                     owner: "Data Platform".into(),
                     contact: None,
@@ -2223,6 +2239,7 @@ mod tests {
                 },
             ],
             pipelines: vec![OwnerRule {
+                maximum_age: None,
                 pattern: "*-ingest-*".into(),
                 owner: "Ingest".into(),
                 contact: None,
@@ -2244,6 +2261,7 @@ mod tests {
         // ownership were complete.
         let owners = Owners {
             assets: vec![OwnerRule {
+                maximum_age: None,
                 pattern: "[unclosed".into(),
                 owner: "Nobody".into(),
                 contact: None,
