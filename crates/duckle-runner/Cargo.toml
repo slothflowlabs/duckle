@@ -68,3 +68,4 @@ duckle-duckdb-engine = { workspace = true, features = ["teradata-static"] }
 
 [dev-dependencies]
 tempfile = "3"
+
