@@ -46,6 +46,7 @@ pub mod audit;
 pub mod baseline;
 pub mod budget;
 pub mod checkpoint;
+pub mod contracts;
 pub mod cronzone;
 pub mod mask;
 pub mod outcache;

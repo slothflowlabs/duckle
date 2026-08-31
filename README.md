@@ -583,6 +583,46 @@ Real holiday calendars vary by country, region and year; a first version that
 tried to know them would be wrong somewhere and confidently so. A date list is
 something an operator can check by reading it.
 
+### Will this change break something downstream? (`contracts check`)
+
+A pipeline can validate perfectly on its own and still break another one. This
+compares each produced asset's declared schema against a git revision, asks the
+catalog who reads that asset, and says what would break:
+
+```bash
+duckle-runner contracts check --base main --format sarif
+```
+
+```text
+BREAKING               /lake/orders.parquet removes amt, read by consumer
+possibly breaking      /lake/orders.parquet removes note, and nothing in this workspace reads it
+```
+
+**Severity depends on the reader, not just the change.** Removing a column is
+only breaking if something reads it - the same edit is additive in one workspace
+and an outage in another, and only the consumer graph can tell them apart.
+
+| change | verdict |
+|---|---|
+| add a column | compatible - nothing can bind a column that did not exist |
+| remove or rename a column something reads | **breaking** |
+| remove a column nothing here reads | possibly breaking, never "compatible" |
+| widen a type (`int32` to `int64`, anything to text) | compatible |
+| narrow a type something reads | **breaking** |
+| let a column be null | possibly breaking - it still binds, the answers just go wrong |
+
+**It compares against a git revision rather than a stored contract**, because
+the previous schema already exists in the commit you are proposing against. A
+separately stored contract is a second copy of the same fact, and the first time
+it drifts the check compares against something nobody shipped.
+
+**"Reads it" is deliberately over-broad**: a column counts as referenced if its
+name appears as a whole word in a consumer's declared schema or any of its node
+properties. A false "breaking" costs someone thirty seconds; a false
+"compatible" costs an incident. Uncertain answers are reported as *possibly
+breaking* rather than dressed up as either, and `--strict` fails the build on
+those too.
+
 ### Freshness that does not wait for a failure (`freshness`)
 
 A dataset goes stale in ways that produce no failed run at all: a schedule

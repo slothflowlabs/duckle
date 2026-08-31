@@ -175,6 +175,11 @@ pub fn is_stale(workspace: &Path, catalog: &Catalog) -> bool {
 /// straight from the object store, so this is safe to run on a dirty worktree
 /// and safe to run while somebody else is editing.
 pub fn build_at_revision(workspace: &Path, rev: &str) -> Result<Catalog, String> {
+    Ok(build_from_documents(&documents_at_revision(workspace, rev)?))
+}
+
+/// The pipeline documents as of a git revision (#302).
+pub fn documents_at_revision(workspace: &Path, rev: &str) -> Result<Vec<(String, Value)>, String> {
     let listed = git(workspace, &["ls-tree", "-r", "--name-only", rev, "--", "."])?;
     let mut docs: Vec<(String, Value)> = Vec::new();
     for rel in listed.lines().map(str::trim).filter(|l| !l.is_empty()) {
@@ -204,9 +209,10 @@ pub fn build_at_revision(workspace: &Path, rev: &str) -> Result<Catalog, String>
         let id = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         docs.push((id, doc));
     }
-    // No fingerprint: this graph describes a revision, not the worktree, so
-    // asking whether it is "stale" against the files on disk is meaningless.
-    Ok(build_from_documents(&docs))
+    // No fingerprint is attached by the caller: this describes a revision, not
+    // the worktree, so asking whether it is "stale" against the files on disk
+    // is meaningless.
+    Ok(docs)
 }
 
 fn git(workspace: &Path, args: &[&str]) -> Result<String, String> {
@@ -919,7 +925,14 @@ fn declared_columns(node: &Value) -> Vec<String> {
 }
 
 /// Read every pipeline in the workspace and build the graph.
-pub fn build(workspace: &Path) -> Result<Catalog, String> {
+/// The pipeline documents currently on disk.
+///
+/// Split out (#302) so a caller that needs the DOCUMENTS rather than the graph
+/// - comparing a revision against the worktree, say - uses the same idea of
+/// what a pipeline file is. Two different walks would eventually disagree about
+/// which files count, and a contract check that silently skipped a pipeline
+/// would report "no breaking changes" for the wrong reason.
+pub fn documents(workspace: &Path) -> Vec<(String, Value)> {
     let mut docs: Vec<(String, Value)> = Vec::new();
     for path in discover_pipeline_files(workspace) {
         let Ok(text) = std::fs::read_to_string(&path) else { continue };
@@ -930,6 +943,11 @@ pub fn build(workspace: &Path) -> Result<Catalog, String> {
         let id = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         docs.push((id, doc));
     }
+    docs
+}
+
+pub fn build(workspace: &Path) -> Result<Catalog, String> {
+    let docs = documents(workspace);
     let mut catalog = build_from_documents(&docs);
     catalog.built_from = Some(fingerprint(workspace));
     Ok(catalog)

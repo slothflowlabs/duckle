@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 mod capabilities;
+mod contracts_cmd;
 mod report;
 mod retention;
 mod audit;
@@ -1912,6 +1913,10 @@ fn main() -> ExitCode {
     // `quickstart` -> scaffold a working pipeline, run it, show the rows.
     if std::env::args().nth(1).as_deref() == Some("quickstart") {
         return run_quickstart();
+    }
+    // `contracts` -> will this change break something downstream? (#302)
+    if std::env::args().nth(1).as_deref() == Some("contracts") {
+        return contracts_cmd::run();
     }
     // `freshness` -> which assets are past the age they declared (#304).
     if std::env::args().nth(1).as_deref() == Some("freshness") {
