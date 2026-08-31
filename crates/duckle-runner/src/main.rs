@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod report;
 mod audit;
 mod backfill;
 mod baseline;
@@ -1332,10 +1333,27 @@ fn run_validate() -> ExitCode {
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut json_out = false;
     let mut with_sql = false;
+    // #312: CI reads a format, not console text. `--json` stays exactly as it
+    // was and is the same document as `--format json`, so nothing that already
+    // parses it breaks.
+    let mut format = String::new();
     let mut it = std::env::args().skip(2); // skip the exe and the "validate" verb
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--json" => json_out = true,
+            "--format" => match it.next().as_deref() {
+                Some(f @ ("json" | "junit" | "sarif")) => format = f.to_string(),
+                Some(other) => {
+                    eprintln!(
+                        "duckle-runner validate: unknown --format {other}. Use json, junit or sarif."
+                    );
+                    return ExitCode::from(2);
+                }
+                None => {
+                    eprintln!("duckle-runner validate: --format needs json, junit or sarif");
+                    return ExitCode::from(2);
+                }
+            },
             // Emit the compiled SQL per stage. This is the whole point of a
             // compile-to-SQL engine being inspectable: you can read exactly
             // what will run before it runs.
@@ -1376,7 +1394,9 @@ fn run_validate() -> ExitCode {
     }
 
     let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut findings: Vec<report::Finding> = Vec::new();
     let mut failed = 0usize;
+    let machine = !format.is_empty();
     for path in &paths {
         let label = path.display().to_string();
         let outcome = std::fs::read_to_string(path)
@@ -1390,7 +1410,8 @@ fn run_validate() -> ExitCode {
         match outcome {
             Ok(stages) => {
                 let n = stages.len();
-                if json_out {
+                findings.push(report::Finding::pass(&label, "compile", format!("{n} stages")));
+                if json_out || machine {
                     let mut entry = serde_json::json!({
                         "pipeline": label, "ok": true, "stages": n
                     });
@@ -1428,7 +1449,8 @@ fn run_validate() -> ExitCode {
             }
             Err(e) => {
                 failed += 1;
-                if json_out {
+                findings.push(report::Finding::fail(&label, "compile", e.clone()));
+                if json_out || machine {
                     results.push(serde_json::json!({ "pipeline": label, "ok": false, "error": e }));
                 } else {
                     println!("FAIL  {label}");
@@ -1437,14 +1459,19 @@ fn run_validate() -> ExitCode {
             }
         }
     }
-    if json_out {
-        let doc = serde_json::json!({
-            "ok": failed == 0,
-            "checked": paths.len(),
-            "failed": failed,
-            "results": results,
-        });
-        println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
+    if json_out || machine {
+        match format.as_str() {
+            "junit" => println!("{}", report::junit("validate", &findings)),
+            "sarif" => println!("{}", report::sarif("validate", &findings)),
+            // The versioned envelope carries `results` as well, so the shape
+            // `--json` has always emitted is still there: an existing consumer
+            // reads ok/checked/failed/results, a new one reads schemaVersion
+            // and findings, and neither has to know about the other.
+            _ => println!(
+                "{}",
+                report::json("validate", &findings, serde_json::json!({ "results": results }))
+            ),
+        }
     } else {
         println!(
             "\n{} pipeline(s) checked, {} failed",

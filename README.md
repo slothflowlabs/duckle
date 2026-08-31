@@ -583,6 +583,38 @@ Real holiday calendars vary by country, region and year; a first version that
 tried to know them would be wrong somewhere and confidently so. A date list is
 something an operator can check by reading it.
 
+### Reports CI already understands (`--format`)
+
+`validate` emits the shapes CI systems and agents actually consume, so nothing
+has to scrape console text:
+
+```bash
+duckle-runner validate --format json    # versioned envelope
+duckle-runner validate --format junit   # every CI renders this as a test report
+duckle-runner validate --format sarif   # GitHub Code Scanning, and most editors
+```
+
+SARIF puts each finding on the file it is about, with forward-slash URIs so Code
+Scanning can match them to repository paths. JUnit keeps the passing checks as
+well as the failures, because a report with two failures and no passes cannot be
+told from one where only two things ran.
+
+**The exit codes are part of the contract:**
+
+| code | meaning |
+|---|---|
+| `0` | everything checked passed |
+| `1` | a check failed - the thing being checked is wrong |
+| `2` | the tool could not run - bad flag, unreadable file, no input |
+
+`1` and `2` are deliberately different. A job usually wants to fail differently
+on `2`, because `2` means the gate never actually ran, and treating that as a
+pass is how a broken gate goes unnoticed for a month.
+
+`--json` is unchanged and is the same document as `--format json`: the versioned
+envelope carries the old `results` array alongside the new `findings`, so an
+existing consumer keeps working and a new one gets `schemaVersion`.
+
 ### Retry a failed run (`retry`)
 
 Every run writes a small receipt under `<workspace>/runs/receipts/` and prints
