@@ -623,6 +623,61 @@ being able to answer.
 A pipeline that declares nothing behaves exactly as before: any unresolved
 `${name}` is simply prompted for.
 
+### What does this change reach? (`affected`)
+
+A change to one pipeline is rarely contained to it. Ask which pipelines it
+reaches, and why:
+
+```bash
+duckle-runner affected --base main                 # against the working tree
+duckle-runner affected --base main --head HEAD --json
+duckle-runner validate --affected --base main      # validate only what it reaches
+```
+
+```text
+affected against main (head: working tree)
+
+  produce                      changed
+  middle                       produce -> lake/orders.parquet -> middle
+  serve                        produce -> lake/orders.parquet -> middle -> lake/canonical.parquet -> serve
+
+run order: produce, middle, serve
+```
+
+**Every pipeline carries the chain that reached it**, so a reviewer can point at
+the hop they disagree with. A selection with no explanation is not reviewable -
+it is trusted completely or ignored completely, and both are wrong.
+
+**Two kinds of edge.** The asset graph is one: a pipeline writes a table,
+another reads it. The other is `pipelineRef` - a parent invoking a child - and
+it runs the other way, because the child changing is what affects the parent.
+Following only the asset graph misses every sub-pipeline edit.
+
+**Deleting a producer is a change too.** It writes nothing now, so the current
+graph says it affects nobody; the pipelines that read what it used to write are
+listed, and the deleted one is named separately because it cannot be run.
+
+**Dragging a node is not a change.** Canvas geometry is dropped before
+comparing. A gate that fires on every drag is one people learn to skip.
+
+**Dynamic dependencies are a result, not a gap.** A path decided at run time
+(`${ARRIVAL_DIR}/*.parquet`) gets a confident-looking id from the catalog that
+is not what the run will read, so neither its edges nor their absence can be
+trusted. Those are always listed; `--include-uncertain` decides only whether
+they are also selected.
+
+**Contexts are compared key by key, by hash.** A context holds credentials, so
+"did this key change" is answered without the value reaching an output, a log or
+a return type - and only the pipelines referencing a changed key are selected.
+
+**Producers run before consumers, children before parents.** Pipelines that
+depend on each other are reported as a cycle rather than flushed into the order:
+an arbitrary order that looks topological is worse than an admitted one.
+
+Changed files that are neither pipelines nor a modelled shared input are listed
+under `unclassified` rather than silently assumed harmless. The JSON carries
+`schemaVersion` so CI fails loudly instead of half-parsing a newer document.
+
 ### Will this change break something downstream? (`contracts check`)
 
 A pipeline can validate perfectly on its own and still break another one. This

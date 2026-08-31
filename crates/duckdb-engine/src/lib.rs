@@ -38,6 +38,7 @@ pub mod drift;
 pub mod qvd;
 pub mod review;
 pub mod alerts;
+pub mod affected;
 pub mod catalog;
 pub mod runlock;
 pub mod s3;

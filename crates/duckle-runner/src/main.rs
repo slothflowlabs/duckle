@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod affected_cmd;
 mod capabilities;
 mod contracts_cmd;
 mod report;
@@ -1329,6 +1330,14 @@ fn run_validate() -> ExitCode {
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut json_out = false;
     let mut with_sql = false;
+    // #308: validate only what a change reaches. The selection comes from the
+    // same function `affected` prints, so the two can never disagree about
+    // which pipelines a change touches - a gate that selects differently from
+    // the command people read is worse than having neither.
+    let mut affected_base: Option<String> = None;
+    let mut affected_head = String::new();
+    let mut affected_workspace = PathBuf::from(".");
+    let mut include_uncertain = false;
     // #312: CI reads a format, not console text. `--json` stays exactly as it
     // was and is the same document as `--format json`, so nothing that already
     // parses it breaks.
@@ -1354,6 +1363,13 @@ fn run_validate() -> ExitCode {
             // compile-to-SQL engine being inspectable: you can read exactly
             // what will run before it runs.
             "--sql" => with_sql = true,
+            "--affected" => affected_base = Some(String::new()),
+            "--base" => affected_base = Some(it.next().unwrap_or_default()),
+            "--head" => affected_head = it.next().unwrap_or_default(),
+            "--workspace" => {
+                affected_workspace = it.next().map(PathBuf::from).unwrap_or(affected_workspace)
+            }
+            "--include-uncertain" => include_uncertain = true,
             "--pipeline" => match it.next() {
                 Some(p) => paths.push(PathBuf::from(p)),
                 None => {
@@ -1366,6 +1382,53 @@ fn run_validate() -> ExitCode {
                 return ExitCode::from(2);
             }
             other => paths.push(PathBuf::from(other)),
+        }
+    }
+    // #308: `--affected --base <rev>` replaces the path list with the pipelines
+    // that change reaches. Nothing affected means nothing to validate, and that
+    // is a pass - reporting "no pipelines given" for it would fail every clean
+    // pull request.
+    if let Some(base) = affected_base {
+        if base.trim().is_empty() {
+            eprintln!("duckle-runner validate --affected: --base <rev> is required");
+            return ExitCode::from(2);
+        }
+        let selection = affected_cmd::select(
+            &affected_workspace,
+            &base,
+            &affected_head,
+            include_uncertain,
+        );
+        let selection = match selection {
+            Ok((s, _)) => s,
+            Err(e) => {
+                eprintln!("duckle-runner validate --affected: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        // In the order the selection gives, so reading the output follows the
+        // dependency chain rather than the alphabet.
+        let mut order = selection.order.clone();
+        for entry in &selection.selected {
+            if !order.contains(&entry.pipeline) {
+                order.push(entry.pipeline.clone());
+            }
+        }
+        for id in order {
+            let file = format!("{id}.json");
+            for candidate in [
+                affected_workspace.join("pipelines").join(&file),
+                affected_workspace.join(&file),
+            ] {
+                if candidate.is_file() {
+                    paths.push(candidate);
+                    break;
+                }
+            }
+        }
+        if paths.is_empty() {
+            println!("nothing affected against {base}");
+            return ExitCode::from(0);
         }
     }
     // No explicit paths: validate every pipeline in ./pipelines, which is the
@@ -1913,6 +1976,10 @@ fn main() -> ExitCode {
     // `quickstart` -> scaffold a working pipeline, run it, show the rows.
     if std::env::args().nth(1).as_deref() == Some("quickstart") {
         return run_quickstart();
+    }
+    // `affected` -> which pipelines a change reaches, and why (#308).
+    if std::env::args().nth(1).as_deref() == Some("affected") {
+        return affected_cmd::run();
     }
     // `contracts` -> will this change break something downstream? (#302)
     if std::env::args().nth(1).as_deref() == Some("contracts") {

@@ -195,7 +195,7 @@ pub fn references(doc: &crate::PipelineDoc, column: &str) -> bool {
 
 /// Whole-word match, so `id` does not match `paid` and a column called `name`
 /// is not found in every description in the file.
-fn contains_word(haystack: &str, needle: &str) -> bool {
+pub(crate) fn contains_word(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
     }
