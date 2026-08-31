@@ -2624,6 +2624,59 @@
         assert!(build_scd3(&ni, &legacy).is_ok(), "the legacy spelling must stay accepted");
     }
 
+    /// The Fixed-width form and the Fixed-width source have to agree.
+    ///
+    /// They did not. The form offers `columnWidths` ("10,20,8"), and the
+    /// builder required `columns` as an array of {name,start,width} and
+    /// nothing else, so configuring the node in the editor failed outright
+    /// with "columns array required" and no field on the form could satisfy
+    /// it. `columnWidths` appears nowhere but the manifest: no converter, no
+    /// engine read.
+    ///
+    /// Widths are cumulative, so the Nth column starts after the previous
+    /// ones. Names come from the declared schema when there is one, which is
+    /// the same rule a headerless CSV already follows.
+    #[test]
+    fn fixedwidth_reads_the_widths_its_form_writes() {
+        use duckle_metadata::{Column, DataType};
+
+        let props = serde_json::json!({ "path": "/tmp/f.txt", "columnWidths": "10,5,8" });
+        let sql = build_fixedwidth_source(&props, None).expect(
+            "the key the form writes must build; anything else is a source \
+             nobody can configure from the GUI",
+        );
+        // 1-based, cumulative: 1, then 1+10, then 1+10+5.
+        assert!(sql.contains("substr(line, 1, 10)"), "first column: {sql}");
+        assert!(sql.contains("substr(line, 11, 5)"), "second starts after the first: {sql}");
+        assert!(sql.contains("substr(line, 16, 8)"), "third starts after both: {sql}");
+
+        // With no declared schema the names are positional but usable.
+        assert!(sql.contains("AS \"col1\""), "got: {sql}");
+
+        // A declared schema names them, exactly like a headerless CSV.
+        let declared = vec![
+            Column { name: "id".into(), data_type: DataType::String, nullable: true, primary_key: None, format: None },
+            Column { name: "code".into(), data_type: DataType::String, nullable: true, primary_key: None, format: None },
+            Column { name: "amount".into(), data_type: DataType::String, nullable: true, primary_key: None, format: None },
+        ];
+        let named = build_fixedwidth_source(&props, Some(&declared)).unwrap();
+        assert!(named.contains("AS \"id\""), "declared names must win: {named}");
+        assert!(named.contains("AS \"amount\""), "got: {named}");
+
+        // The explicit form keeps working unchanged.
+        let explicit = serde_json::json!({
+            "path": "/tmp/f.txt",
+            "columns": [{ "name": "a", "start": 1, "width": 3 }],
+        });
+        let ex = build_fixedwidth_source(&explicit, None).unwrap();
+        assert!(ex.contains("substr(line, 1, 3)") && ex.contains("AS \"a\""), "got: {ex}");
+
+        // Neither form supplied is still an error, and it names both keys.
+        let err = build_fixedwidth_source(&serde_json::json!({ "path": "/tmp/f.txt" }), None)
+            .unwrap_err();
+        assert!(err.contains("columnWidths"), "the error must name the form's key: {err}");
+    }
+
     #[test]
     fn qa_outlier_emits_iqr_and_zscore_pass_reject_sql() {
         let mk = || { let mut ni = NodeInputs::default(); ni.ports.insert("main".into(), vec!["up".into()]); ni };

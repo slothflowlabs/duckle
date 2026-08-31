@@ -1744,7 +1744,17 @@ function fileFormatSection(comp: ComponentDef): FormSection[] {
                         label: 'Column widths',
                         kind: 'text',
                         placeholder: '10,20,8,30',
-                        description: 'Comma-separated character widths per column.',
+                        description:
+                            'Comma-separated character widths per column. Each column starts where the previous one ended. Names come from the Schema tab when it is filled in, otherwise col1, col2 and so on.',
+                    },
+                    {
+                        // Read by the builder since it was written; never
+                        // offered, so trimming could not be turned off.
+                        key: 'trim',
+                        label: 'Trim trailing spaces',
+                        kind: 'bool',
+                        defaultValue: true,
+                        description: 'Fixed-width fields are space-padded. Turn this off to keep the padding.',
                     },
                 ],
             },

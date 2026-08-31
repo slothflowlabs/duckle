@@ -27,7 +27,7 @@ pub fn source_select_for_format(format: &str, props: &JsonValue) -> Option<Strin
         "spatial" => build_spatial_source(props),
         "gdb" => build_gdb_source(props),
         "huggingface" => build_huggingface_source(props),
-        "fixedwidth" => return build_fixedwidth_source(props).ok(),
+        "fixedwidth" => return build_fixedwidth_source(props, None).ok(),
         // DuckLake is DuckDB-backed; the catalog is ATTACHed as duckle_src by
         // the inspect prelude (see source_prelude), so the SELECT is identical
         // to the run path.
@@ -229,7 +229,7 @@ pub(crate) fn build_view_sql(
         "src.spatial" => Ok(build_spatial_source(props)),
         "src.gdb" => Ok(build_gdb_source(props)),
         "src.huggingface" => Ok(build_huggingface_source(props)),
-        "src.fixedwidth" => build_fixedwidth_source(props),
+        "src.fixedwidth" => build_fixedwidth_source(props, declared),
         // Pass-through transforms
         "xf.filter" => build_filter(inputs, props),
         // Log Rows - pass data through unchanged; its rows surface in the
@@ -8395,16 +8395,53 @@ pub(crate) fn build_huggingface_source(props: &JsonValue) -> String {
 /// every line becomes a single string the SUBSTR projections can chew.
 /// Trims trailing whitespace by default (the standard for fixed-width
 /// dumps where every field is padded to its column width).
-pub(crate) fn build_fixedwidth_source(props: &JsonValue) -> Result<String, String> {
+pub(crate) fn build_fixedwidth_source(
+    props: &JsonValue,
+    declared: Option<&[duckle_metadata::Column]>,
+) -> Result<String, String> {
     let path = string_prop(props, "path")
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "Fixed-width source: path required".to_string())?;
-    let cols = props
-        .get("columns")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| {
-            "Fixed-width source: columns array required ({name, start, width} each)".to_string()
-        })?;
+    // The form offers `columnWidths` ("10,20,8") and this required `columns`
+    // as an array of {name,start,width}, so a node configured in the editor
+    // failed outright and no field on the form could satisfy it. Widths are
+    // cumulative - the Nth column starts after the ones before it - and the
+    // names come from the declared schema when there is one, which is the same
+    // rule a headerless CSV already follows.
+    let widths_form: Option<Vec<JsonValue>> = string_prop(props, "columnWidths")
+        .filter(|s| !s.trim().is_empty())
+        .map(|spec| {
+            let mut at: i64 = 1;
+            let mut out = Vec::new();
+            for (i, piece) in spec.split(',').enumerate() {
+                let w: i64 = match piece.trim().parse() {
+                    Ok(w) if w > 0 => w,
+                    _ => continue,
+                };
+                let name = declared
+                    .and_then(|d| d.get(i))
+                    .map(|c| c.name.clone())
+                    .unwrap_or_else(|| format!("col{}", i + 1));
+                out.push(serde_json::json!({ "name": name, "start": at, "width": w }));
+                at += w;
+            }
+            out
+        })
+        .filter(|v: &Vec<JsonValue>| !v.is_empty());
+    let owned;
+    let cols: &Vec<JsonValue> = match props.get("columns").and_then(|v| v.as_array()) {
+        Some(c) => c,
+        None => match widths_form {
+            Some(w) => {
+                owned = w;
+                &owned
+            }
+            None => {
+                return Err("Fixed-width source: set columnWidths (e.g. 10,20,8), or a columns                             array of {name, start, width} each"
+                    .to_string())
+            }
+        },
+    };
     if cols.is_empty() {
         return Err("Fixed-width source: at least one column required".into());
     }
