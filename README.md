@@ -499,6 +499,37 @@ That ordering is the difference between a correct micro-batch loop and a lossy
 one, so it is covered by a regression test that fails if the position ever
 advances past a batch that did not land.
 
+### Schedules in a named time zone
+
+A cron expression is civil time: `0 3 * * *` means three in the morning as a
+person reads a clock. With no zone set that is the machine's clock, which is
+what every existing schedule already means. Set one and it stops depending on
+where the runner is deployed:
+
+```yaml
+timezone: Europe/Brussels
+```
+
+A Brussels registry pipeline stays at 03:00 Brussels whether the container runs
+on UTC or the operator is watching from another continent. An unknown zone is
+**refused when you save it**, not at fire time, so `Europe/Brussel` is a typo
+you see rather than a job quietly running on UTC for a quarter.
+
+**Daylight saving is decided, not discovered.** Twice a year a civil time is not
+a single instant, so both cases are pinned and tested:
+
+| case | what happens |
+|---|---|
+| the clock skips it (spring) | the occurrence is **skipped**, and the skip is reported. A job asked to run at 02:30 on a day with no 02:30 has not been missed by the scheduler; the day was short. It is not nudged to 03:30. |
+| the clock repeats it (autumn) | it fires **once, at the earlier** of the two instants |
+
+**Intervals are untouched.** `every 24 hours` is an elapsed duration, not "the
+same clock time tomorrow", and a zone must not quietly turn one into the other.
+
+Both schedulers - the desktop one and the web console's - now evaluate through
+the same code. They disagreed once before, and the way it showed up was one
+expression firing at two different times depending on which surface owned it.
+
 ### Retry a failed run (`retry`)
 
 Every run writes a small receipt under `<workspace>/runs/receipts/` and prints

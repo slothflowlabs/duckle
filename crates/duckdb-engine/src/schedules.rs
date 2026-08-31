@@ -61,6 +61,19 @@ pub struct Schedule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_id: Option<String>,
     pub kind: ScheduleKind,
+    /// #318: the IANA zone a cron expression is read in, e.g. "Europe/Brussels".
+    ///
+    /// Absent means the machine's own zone, which is what #194 settled on and
+    /// what every schedule written before this means, so an existing store
+    /// keeps its behaviour untouched. Set, it makes "03:00" mean 03:00 there
+    /// regardless of where the runner is deployed - which is the point, since a
+    /// container is usually UTC and the person who wrote the schedule is not.
+    ///
+    /// Only meaningful for cron schedules. An interval is an elapsed duration
+    /// and a zone must not quietly turn "every 24 hours" into "the same clock
+    /// time tomorrow".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
     #[serde(default)]
     pub last_run_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
@@ -146,6 +159,7 @@ mod tests {
 
     fn interval(pipeline: &str, seconds: u64) -> Schedule {
         Schedule {
+            timezone: None,
             id: format!("id-{pipeline}"),
             pipeline_id: pipeline.into(),
             plan_id: None,

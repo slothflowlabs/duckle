@@ -2637,6 +2637,12 @@ fn migrate_legacy_schedules(workspace: &Path) {
                 plan_id: None,
                 enabled: cfg.get("enabled").and_then(Value::as_bool).unwrap_or(false),
                 kind,
+                timezone: cfg
+                    .get("timezone")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string),
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -2677,8 +2683,15 @@ fn next_run_at(sched: &Value, last_at: Option<&str>) -> Option<String> {
     }
     let cron = sched.get("cron").and_then(Value::as_str).unwrap_or("").trim();
     if !cron.is_empty() {
-        let schedule = normalize_cron(cron).and_then(|e| e.parse::<cron::Schedule>().ok())?;
-        return schedule.after(&chrono::Local::now()).next().map(|dt| dt.to_rfc3339());
+        // #318: through the shared evaluator, so this console and the embedded
+        // scheduler read the same expression as the same instant. They did not
+        // once (#194), and the way that showed up was a job firing at two
+        // different times depending on which surface owned it.
+        let tz = sched.get("timezone").and_then(Value::as_str);
+        let zone = duckle_duckdb_engine::cronzone::resolve_zone(tz).ok()?;
+        let (occ, _skipped) =
+            duckle_duckdb_engine::cronzone::next_after(cron, &zone, chrono::Utc::now()).ok()?;
+        return occ.map(|o| o.at.to_rfc3339());
     }
     let interval = sched.get("intervalSeconds").and_then(Value::as_u64).unwrap_or(0);
     if interval == 0 {
@@ -2726,6 +2739,17 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
     {
         return Err("Invalid cron expression (use 5 fields, e.g. `0 9 * * 1`)".to_string());
     }
+    // #318: a zone typo is refused here, in front of whoever typed it, rather
+    // than becoming a job that quietly runs on the container's UTC clock.
+    if let Some(tz) = body.get("timezone").and_then(|v| v.as_str()) {
+        duckle_duckdb_engine::cronzone::resolve_zone(Some(tz))?;
+    }
+    let timezone: Option<String> = body
+        .get("timezone")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string);
     // Seconds are what the store holds. A console that sends only minutes is
     // still honoured, but one that echoes back the intervalSeconds it was given
     // keeps a sub-minute schedule exactly as the desktop editor set it.
@@ -2775,6 +2799,7 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
                 enabled,
                 plan_id: plan_id.clone().flatten(),
                 kind,
+                timezone: timezone.clone(),
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,

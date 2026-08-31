@@ -58,6 +58,7 @@ async fn run_now_executes_pipeline_from_disk_and_records_history() {
 
     let s = sched
         .upsert(Schedule {
+            timezone: None,
             id: String::new(),
             pipeline_id: "pipe1".into(),
             plan_id: None,

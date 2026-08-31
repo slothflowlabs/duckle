@@ -6,7 +6,7 @@
 //! are due, and fires each as a non-blocking spawn that calls into the
 //! shared `DuckdbEngine`.
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Utc};
 use cron::Schedule as CronSchedule;
 use duckle_duckdb_engine::{
     append_run_record, plans, runlock, schedules, DuckdbEngine, RunRecord, RunResult,
@@ -335,11 +335,9 @@ impl Scheduler {
     }
 
     pub fn upsert(&self, mut schedule: Schedule) -> Result<Schedule, String> {
+        validate_schedule(&schedule)?;
         match &schedule.kind {
-            ScheduleKind::Cron { expr } => {
-                CronSchedule::from_str(expr)
-                    .map_err(|e| format!("Invalid cron expression: {}", e))?;
-            }
+            ScheduleKind::Cron { .. } => {}
             ScheduleKind::Interval { seconds } => {
                 if *seconds < 1 {
                     return Err("Interval must be at least 1 second".into());
@@ -925,11 +923,10 @@ fn run_permits() -> &'static std::sync::Arc<tokio::sync::Semaphore> {
 /// future time.
 fn claim_next_run(s: &mut Schedule, now: DateTime<Utc>) {
     s.next_run_at = match &s.kind {
-        // Evaluate in local time (see parse_cron) and store the resulting
-        // absolute instant as UTC.
-        ScheduleKind::Cron { expr } => parse_cron(expr)
-            .and_then(|sched| sched.after(&now.with_timezone(&Local)).next())
-            .map(|dt| dt.with_timezone(&Utc)),
+        // #318: read in the schedule's own zone when it names one, otherwise
+        // the machine's, and store the resulting absolute instant as UTC. Both
+        // schedulers call the same evaluator so they cannot drift apart again.
+        ScheduleKind::Cron { expr } => cron_next(expr, s.timezone.as_deref(), now),
         ScheduleKind::Interval { seconds } => {
             Some(now + chrono::Duration::seconds(*seconds as i64))
         }
@@ -943,9 +940,7 @@ fn compute_next_run(s: &mut Schedule) {
         return;
     }
     s.next_run_at = match &s.kind {
-        ScheduleKind::Cron { expr } => parse_cron(expr)
-            .and_then(|sched| sched.upcoming(Local).next())
-            .map(|dt| dt.with_timezone(&Utc)),
+        ScheduleKind::Cron { expr } => cron_next(expr, s.timezone.as_deref(), Utc::now()),
         ScheduleKind::Interval { seconds } => {
             let base = s.last_run_at.unwrap_or_else(Utc::now);
             Some(base + chrono::Duration::seconds(*seconds as i64))
@@ -955,32 +950,62 @@ fn compute_next_run(s: &mut Schedule) {
     };
 }
 
-/// The `cron` crate expects a 6- or 7-field expression (seconds first). Accept a
-/// standard 5-field cron ("min hour dom mon dow") by prepending a "0 " seconds
-/// field, and pass 6/7-field expressions through. Without this a hand-edited
-/// 5-field expression parsed to None and the schedule silently never fired.
-/// Mirrors normalize_cron in duckle-runner's serve.rs.
-fn normalize_cron(expr: &str) -> Option<String> {
-    match expr.split_whitespace().count() {
-        5 => Some(format!("0 {}", expr)),
-        6 | 7 => Some(expr.to_string()),
-        _ => None,
+/// What makes a schedule saveable.
+///
+/// Split out so saving and evaluating cannot disagree, which they did: this
+/// validated with a bare `CronSchedule::from_str`, so a five-field expression
+/// was REFUSED on save while `compute_next_run` normalised it and scheduled it
+/// happily. A schedule you cannot save but which would have worked is the same
+/// class of bug as one you can save that never fires.
+fn validate_schedule(schedule: &Schedule) -> Result<(), String> {
+    // #318: an unknown zone is refused here rather than at fire time, so a typo
+    // is a save error in front of the person who made it, not a job that
+    // quietly runs on UTC in a container.
+    duckle_duckdb_engine::cronzone::resolve_zone(schedule.timezone.as_deref())?;
+    if let ScheduleKind::Cron { expr } = &schedule.kind {
+        let normalized = duckle_duckdb_engine::cronzone::normalize_cron(expr).ok_or_else(|| {
+            format!("Invalid cron expression: {expr:?} does not have 5, 6 or 7 fields")
+        })?;
+        CronSchedule::from_str(&normalized)
+            .map_err(|e| format!("Invalid cron expression: {}", e))?;
+    }
+    Ok(())
+}
+
+/// The next firing of a cron expression, in the schedule's zone (#318).
+///
+/// A bad expression or an unknown zone yields None - the same "this schedule
+/// has no next run" the old code produced for an unparseable expression - but
+/// the reason is said out loud, because a schedule that silently never fires is
+/// the failure mode this area already had once.
+fn cron_next(expr: &str, timezone: Option<&str>, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let zone = match duckle_duckdb_engine::cronzone::resolve_zone(timezone) {
+        Ok(z) => z,
+        Err(e) => {
+            eprintln!("duckle: schedule has an unusable time zone: {e}");
+            return None;
+        }
+    };
+    match duckle_duckdb_engine::cronzone::next_after(expr, &zone, now) {
+        Ok((occ, skipped)) => {
+            for s in skipped {
+                // A civil time that does not exist has not been missed by the
+                // scheduler - the day was short. Said once, where an operator
+                // looking for "why did 02:30 not run" will find it.
+                eprintln!("duckle: schedule skipped an occurrence: {s:?}");
+            }
+            occ.map(|o| o.at)
+        }
+        Err(e) => {
+            eprintln!("duckle: schedule cron is unusable: {e}");
+            None
+        }
     }
 }
 
-/// Parse a cron expression for schedule evaluation (issue #194).
-///
-/// Cron expressions are evaluated in the machine's LOCAL time zone, so
-/// "0 0 3 * * *" means 3am where the user is, not 3am UTC. This matches how
-/// the UI renders next-run times (toLocaleString) and how the web console has
-/// behaved since #132. The computed instant is still stored as UTC.
-fn parse_cron(expr: &str) -> Option<CronSchedule> {
-    normalize_cron(expr).and_then(|e| CronSchedule::from_str(&e).ok())
-}
-
-
 #[cfg(test)]
 mod tests {
+    use chrono::Local;
     use super::*;
 
     #[test]
@@ -994,6 +1019,7 @@ mod tests {
             kind: ScheduleKind::Cron {
                 expr: "0 * * * * *".into(),
             },
+            timezone: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1020,6 +1046,7 @@ mod tests {
             kind: ScheduleKind::Cron {
                 expr: "0 0 3 * * *".into(),
             },
+            timezone: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1047,6 +1074,7 @@ mod tests {
             kind: ScheduleKind::Cron {
                 expr: "0 0 3 * * *".into(),
             },
+            timezone: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1072,6 +1100,7 @@ mod tests {
             kind: ScheduleKind::Cron {
                 expr: "0 3 * * *".into(),
             },
+            timezone: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1085,7 +1114,78 @@ mod tests {
     }
 
     #[test]
+    fn a_five_field_cron_can_be_saved_as_well_as_scheduled() {
+        // Saving used to validate with a bare CronSchedule::from_str, which
+        // refuses a five-field expression, while compute_next_run normalised it
+        // and scheduled it. So an expression that worked could not be saved.
+        let s = Schedule {
+            id: "t".into(),
+            pipeline_id: "p1".into(),
+            plan_id: None,
+            name: "daily".into(),
+            enabled: true,
+            kind: ScheduleKind::Cron { expr: "0 3 * * *".into() },
+            timezone: None,
+            last_run_at: None,
+            last_run_status: None,
+            last_run_duration_ms: None,
+            last_run_error: None,
+            next_run_at: None,
+        };
+        assert!(validate_schedule(&s).is_ok(), "{:?}", validate_schedule(&s));
+    }
+
+    #[test]
+    fn an_unknown_time_zone_is_refused_on_save() {
+        let mut s = Schedule {
+            id: "t".into(),
+            pipeline_id: "p1".into(),
+            plan_id: None,
+            name: "daily".into(),
+            enabled: true,
+            kind: ScheduleKind::Cron { expr: "0 0 3 * * *".into() },
+            timezone: Some("Europe/Brussel".into()),
+            last_run_at: None,
+            last_run_status: None,
+            last_run_duration_ms: None,
+            last_run_error: None,
+            next_run_at: None,
+        };
+        let e = validate_schedule(&s).unwrap_err();
+        assert!(e.contains("Europe/Brussel"), "must name the typo: {e}");
+        s.timezone = Some("Europe/Brussels".into());
+        assert!(validate_schedule(&s).is_ok(), "the real zone must be accepted");
+    }
+
+    /// The point of #318: the instant follows the named zone, not the host.
+    #[test]
+    fn a_zoned_cron_fires_on_that_zones_clock() {
+        use chrono::TimeZone;
+        let mut s = Schedule {
+            id: "t".into(),
+            pipeline_id: "p1".into(),
+            plan_id: None,
+            name: "brussels 3am".into(),
+            enabled: true,
+            kind: ScheduleKind::Cron { expr: "0 0 3 * * *".into() },
+            timezone: Some("Europe/Brussels".into()),
+            last_run_at: None,
+            last_run_status: None,
+            last_run_duration_ms: None,
+            last_run_error: None,
+            next_run_at: None,
+        };
+        claim_next_run(&mut s, chrono::Utc.with_ymd_and_hms(2026, 1, 10, 12, 0, 0).unwrap());
+        assert_eq!(
+            s.next_run_at.expect("scheduled"),
+            chrono::Utc.with_ymd_and_hms(2026, 1, 11, 2, 0, 0).unwrap(),
+            "03:00 Brussels in January is 02:00 UTC, wherever this runs"
+        );
+    }
+
+    #[test]
     fn normalize_cron_rejects_bad_field_counts() {
+        use duckle_duckdb_engine::cronzone::normalize_cron;
         assert_eq!(normalize_cron("0 3 * * *").as_deref(), Some("0 0 3 * * *"));
         assert_eq!(normalize_cron("0 0 3 * * *").as_deref(), Some("0 0 3 * * *"));
         assert!(normalize_cron("* * *").is_none());
@@ -1102,6 +1202,7 @@ mod tests {
             name: "every 5".into(),
             enabled: true,
             kind: ScheduleKind::Interval { seconds: 300 },
+            timezone: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1124,6 +1225,7 @@ mod tests {
             name: "off".into(),
             enabled: false,
             kind: ScheduleKind::Interval { seconds: 60 },
+            timezone: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1159,6 +1261,7 @@ mod tests {
                 enabled: true,
                 // Six fields, so the leading one is seconds: due almost at once.
                 kind: ScheduleKind::Cron { expr: "* * * * * *".into() },
+                timezone: None,
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -1252,6 +1355,7 @@ mod tests {
                 name: "nightly".into(),
                 enabled: true,
                 kind: ScheduleKind::Interval { seconds: 3600 },
+                timezone: None,
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -1292,6 +1396,7 @@ mod tests {
                 name: "nightly".into(),
                 enabled: true,
                 kind: ScheduleKind::Interval { seconds: 3600 },
+                timezone: None,
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -1349,6 +1454,7 @@ mod tests {
             name: "nightly".into(),
             enabled: true,
             kind: ScheduleKind::Interval { seconds: 3600 },
+            timezone: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1415,6 +1521,7 @@ mod tests {
                 name: "nightly".into(),
                 enabled: true,
                 kind: ScheduleKind::Interval { seconds: 3600 },
+                timezone: None,
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -1465,6 +1572,7 @@ mod tests {
             name: "nightly".into(),
             enabled: true,
             kind: ScheduleKind::Interval { seconds: 3600 },
+            timezone: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
