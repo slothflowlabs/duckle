@@ -38,6 +38,7 @@ pub mod drift;
 pub mod qvd;
 pub mod review;
 pub mod alerts;
+pub mod props;
 pub mod affected;
 pub mod catalog;
 pub mod runlock;
@@ -1008,6 +1009,34 @@ impl DuckdbEngine {
                 total_start,
                 "DuckDB engine isn't installed yet. Open Setup to install it.".into(),
             );
+        }
+
+        // #298: a property no builder reads changed nothing, and before this
+        // nothing said so - the run used the default and the numbers looked
+        // fine. Warned rather than refused, because a pipeline that has quietly
+        // carried a dead property for a year should start telling its operator,
+        // not stop running the day they upgrade. DUCKLE_STRICT_PROPERTIES=1
+        // turns it into a refusal for a workspace that wants one.
+        let property_findings: Vec<crate::props::Finding> =
+            crate::props::check(doc).into_iter().filter(|f| f.fails).collect();
+        if !property_findings.is_empty() {
+            if crate::props::strict_execution() {
+                return RunResult::failed(
+                    total_start,
+                    property_findings
+                        .iter()
+                        .map(|f| format!("{}: {}", f.node, f.message))
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                );
+            }
+            for f in &property_findings {
+                user_on_event(PipelineEvent::Log {
+                    node_id: f.node.clone(),
+                    level: "warn".into(),
+                    message: f.message.clone(),
+                });
+            }
         }
 
         // #246: a Python stage against an environment that is not the one

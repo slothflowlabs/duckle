@@ -4,87 +4,136 @@
     {
       "id": "orders",
       "type": "source",
-      "position": { "x": 0, "y": 0 },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
       "data": {
         "label": "Orders (Parquet)",
         "componentId": "src.parquet",
-        "properties": { "path": "${workspace}/data/orders.parquet" }
+        "properties": {
+          "path": "${workspace}/data/orders.parquet"
+        }
       }
     },
     {
       "id": "customers",
       "type": "source",
-      "position": { "x": 0, "y": 120 },
+      "position": {
+        "x": 0,
+        "y": 120
+      },
       "data": {
         "label": "Customers (CSV)",
         "componentId": "src.csv",
-        "properties": { "path": "${workspace}/data/customers.csv", "hasHeader": true }
+        "properties": {
+          "path": "${workspace}/data/customers.csv",
+          "hasHeader": true
+        }
       }
     },
     {
       "id": "products",
       "type": "source",
-      "position": { "x": 0, "y": 240 },
+      "position": {
+        "x": 0,
+        "y": 240
+      },
       "data": {
         "label": "Products (DuckDB)",
         "componentId": "src.duckdb",
-        "properties": { "host": "localhost", "database": "${workspace}/data/products.duckdb", "mode": "table", "tableName": "products" }
+        "properties": {
+          "database": "${workspace}/data/products.duckdb",
+          "tableName": "products"
+        }
       }
     },
     {
       "id": "regions",
       "type": "source",
-      "position": { "x": 0, "y": 360 },
+      "position": {
+        "x": 0,
+        "y": 360
+      },
       "data": {
         "label": "Regions (SQLite)",
         "componentId": "src.sqlite",
-        "properties": { "host": "localhost", "database": "${workspace}/data/regions.sqlite", "mode": "table", "tableName": "regions" }
+        "properties": {
+          "database": "${workspace}/data/regions.sqlite",
+          "tableName": "regions"
+        }
       }
     },
     {
       "id": "j_cust",
       "type": "transform",
-      "position": { "x": 260, "y": 0 },
+      "position": {
+        "x": 260,
+        "y": 0
+      },
       "data": {
         "label": "+ customer",
         "componentId": "xf.join.inner",
-        "properties": { "leftKey": "customer_id", "rightKey": "customer_id" }
+        "properties": {
+          "leftKey": "customer_id",
+          "rightKey": "customer_id"
+        }
       }
     },
     {
       "id": "j_prod",
       "type": "transform",
-      "position": { "x": 500, "y": 0 },
+      "position": {
+        "x": 500,
+        "y": 0
+      },
       "data": {
         "label": "+ product",
         "componentId": "xf.join.inner",
-        "properties": { "leftKey": "product_id", "rightKey": "product_id" }
+        "properties": {
+          "leftKey": "product_id",
+          "rightKey": "product_id"
+        }
       }
     },
     {
       "id": "j_reg",
       "type": "transform",
-      "position": { "x": 740, "y": 0 },
+      "position": {
+        "x": 740,
+        "y": 0
+      },
       "data": {
         "label": "+ region",
         "componentId": "xf.join.inner",
-        "properties": { "leftKey": "region_id", "rightKey": "region_id" }
+        "properties": {
+          "leftKey": "region_id",
+          "rightKey": "region_id"
+        }
       }
     },
     {
       "id": "par",
       "type": "transform",
-      "position": { "x": 980, "y": 0 },
+      "position": {
+        "x": 980,
+        "y": 0
+      },
       "data": {
         "label": "Parallel write",
         "componentId": "ctl.parallelize",
-        "properties": { "maxConcurrency": 0 }
+        "properties": {
+          "maxConcurrency": 0
+        }
       }
     },
     {
       "id": "to_db",
       "type": "sink",
-      "position": { "x": 1220, "y": -60 },
+      "position": {
+        "x": 1220,
+        "y": -60
+      },
       "data": {
         "label": "Warehouse (upsert)",
         "componentId": "snk.duckdb",
@@ -92,30 +141,118 @@
           "database": "${workspace}/output/warehouse.duckdb",
           "tableName": "enriched_orders",
           "mode": "upsert",
-          "conflictColumns": ["order_id"]
+          "conflictColumns": [
+            "order_id"
+          ]
         }
       }
     },
     {
       "id": "to_pq",
       "type": "sink",
-      "position": { "x": 1220, "y": 80 },
+      "position": {
+        "x": 1220,
+        "y": 80
+      },
       "data": {
         "label": "Parquet export",
         "componentId": "snk.parquet",
-        "properties": { "path": "${workspace}/output/enriched_orders.parquet" }
+        "properties": {
+          "path": "${workspace}/output/enriched_orders.parquet"
+        }
       }
     }
   ],
   "edges": [
-    { "id": "e1", "source": "orders", "target": "j_cust", "sourceHandle": "main", "targetHandle": "main", "data": { "connectionType": "main" } },
-    { "id": "e2", "source": "customers", "target": "j_cust", "sourceHandle": "main", "targetHandle": "lookup", "data": { "connectionType": "lookup" } },
-    { "id": "e3", "source": "j_cust", "target": "j_prod", "sourceHandle": "main", "targetHandle": "main", "data": { "connectionType": "main" } },
-    { "id": "e4", "source": "products", "target": "j_prod", "sourceHandle": "main", "targetHandle": "lookup", "data": { "connectionType": "lookup" } },
-    { "id": "e5", "source": "j_prod", "target": "j_reg", "sourceHandle": "main", "targetHandle": "main", "data": { "connectionType": "main" } },
-    { "id": "e6", "source": "regions", "target": "j_reg", "sourceHandle": "main", "targetHandle": "lookup", "data": { "connectionType": "lookup" } },
-    { "id": "e7", "source": "j_reg", "target": "par", "sourceHandle": "main", "targetHandle": "main", "data": { "connectionType": "main" } },
-    { "id": "e8", "source": "par", "target": "to_db", "sourceHandle": "main_1", "targetHandle": "main", "data": { "connectionType": "main" } },
-    { "id": "e9", "source": "par", "target": "to_pq", "sourceHandle": "main_2", "targetHandle": "main", "data": { "connectionType": "main" } }
+    {
+      "id": "e1",
+      "source": "orders",
+      "target": "j_cust",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e2",
+      "source": "customers",
+      "target": "j_cust",
+      "sourceHandle": "main",
+      "targetHandle": "lookup",
+      "data": {
+        "connectionType": "lookup"
+      }
+    },
+    {
+      "id": "e3",
+      "source": "j_cust",
+      "target": "j_prod",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e4",
+      "source": "products",
+      "target": "j_prod",
+      "sourceHandle": "main",
+      "targetHandle": "lookup",
+      "data": {
+        "connectionType": "lookup"
+      }
+    },
+    {
+      "id": "e5",
+      "source": "j_prod",
+      "target": "j_reg",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e6",
+      "source": "regions",
+      "target": "j_reg",
+      "sourceHandle": "main",
+      "targetHandle": "lookup",
+      "data": {
+        "connectionType": "lookup"
+      }
+    },
+    {
+      "id": "e7",
+      "source": "j_reg",
+      "target": "par",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e8",
+      "source": "par",
+      "target": "to_db",
+      "sourceHandle": "main_1",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e9",
+      "source": "par",
+      "target": "to_pq",
+      "sourceHandle": "main_2",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    }
   ]
 }

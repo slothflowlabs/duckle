@@ -623,6 +623,42 @@ being able to answer.
 A pipeline that declares nothing behaves exactly as before: any unresolved
 `${name}` is simply prompted for.
 
+### A property nothing reads (`validate`)
+
+A property no builder reads used to change nothing and say nothing: the run took
+the default and the numbers looked fine. `validate` now refuses it.
+
+```text
+FAIL  typo.json  (3 stages, 2 dead properties)
+      unknown_component_property  src.csv does not read hasHeaders. Did you mean hasHeader?
+      unknown_component_property  xf.topn does not read limit, so setting it changes nothing
+```
+
+Machine-readable under `--format json`: `code`, `node`, `component`, `property`
+and a `suggestion` when one is close enough to be worth naming. A wrong guess
+sends the reader off to check a name that was never the point, so nothing close
+enough gets no suggestion at all.
+
+```bash
+duckle-runner components schema        # the accepted names, per component
+```
+
+That document is generated from the same map the checker enforces, so what it
+promises and what the engine accepts cannot drift apart.
+
+**Strict at `validate`, a warning at run time.** A lint that cannot fail is one
+people stop reading, and validate is where a typo should be caught. A pipeline
+that has quietly carried a dead property for a year should start telling its
+operator, not stop running the day they upgrade - set
+`DUCKLE_STRICT_PROPERTIES=1` to refuse there too.
+
+**`x-` keys round-trip untouched**, so a third-party tool can keep its own
+metadata in a pipeline file without it ever reaching a builder.
+
+**A component the exported catalog does not list is a catalog gap, not a
+pipeline error.** The engine accepts aliases the catalog has no entry for, so
+those are reported and never fail anything.
+
 ### What does this change reach? (`affected`)
 
 A change to one pipeline is rarely contained to it. Ask which pipelines it

@@ -1464,23 +1464,56 @@ fn run_validate() -> ExitCode {
                 serde_json::from_str::<PipelineDoc>(&text).map_err(|e| format!("parse: {e}"))
             })
             .and_then(|doc| {
-                duckle_duckdb_engine::compile_pipeline_sql(&doc).map_err(|e| e.to_string())
+                // #298: a dead property is not a compile error - the pipeline
+                // compiles perfectly and does the wrong thing. Checked here so
+                // the one surface whose whole job is to say "this is fine"
+                // cannot say it about a property nothing reads.
+                let dead = duckle_duckdb_engine::props::check(&doc);
+                duckle_duckdb_engine::compile_pipeline_sql(&doc)
+                    .map_err(|e| e.to_string())
+                    .map(|stages| (stages, dead))
             });
         match outcome {
-            Ok(stages) => {
+            Ok((stages, dead)) => {
                 let n = stages.len();
                 findings.push(report::Finding::pass(&label, "compile", format!("{n} stages")));
+                // #298: strict here, warn at execution. A lint that cannot fail
+                // is one people stop reading, and validate is where a typo
+                // should be caught - not three hours into a run whose output
+                // looks plausible.
+                let refused = dead.iter().filter(|f| f.fails).count();
+                for f in &dead {
+                    let detail = format!("{}: {}", f.node, f.message);
+                    findings.push(match f.fails {
+                        true => report::Finding::fail(&label, &f.code, detail),
+                        false => report::Finding::pass(&label, &f.code, detail),
+                    });
+                }
+                if refused > 0 {
+                    failed += 1;
+                }
                 if json_out || machine {
                     let mut entry = serde_json::json!({
-                        "pipeline": label, "ok": true, "stages": n
+                        "pipeline": label, "ok": refused == 0, "stages": n
                     });
+                    if !dead.is_empty() {
+                        entry["properties"] =
+                            serde_json::to_value(&dead).unwrap_or_else(|_| serde_json::json!([]));
+                    }
                     if with_sql {
                         entry["sql"] =
                             serde_json::to_value(&stages).unwrap_or_else(|_| serde_json::json!([]));
                     }
                     results.push(entry);
                 } else {
-                    println!("ok    {label}  ({n} stages)");
+                    match refused {
+                        0 => println!("ok    {label}  ({n} stages)"),
+                        _ => println!("FAIL  {label}  ({n} stages, {refused} dead propert\
+ies)"),
+                    }
+                    for f in &dead {
+                        println!("      {} {}", f.code, f.message);
+                    }
                     if with_sql {
                         for s in &stages {
                             match serde_json::to_value(s) {
@@ -1976,6 +2009,20 @@ fn main() -> ExitCode {
     // `quickstart` -> scaffold a working pipeline, run it, show the rows.
     if std::env::args().nth(1).as_deref() == Some("quickstart") {
         return run_quickstart();
+    }
+    // `components schema` -> the accepted property names, per component, so an
+    // agent or editor does not have to scrape source to avoid #198 (#298).
+    if std::env::args().nth(1).as_deref() == Some("components") {
+        if std::env::args().nth(2).as_deref() != Some("schema") {
+            eprintln!("usage: duckle-runner components schema [--json]");
+            return ExitCode::from(2);
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&duckle_duckdb_engine::props::schema_json())
+                .unwrap_or_default()
+        );
+        return ExitCode::from(0);
     }
     // `affected` -> which pipelines a change reaches, and why (#308).
     if std::env::args().nth(1).as_deref() == Some("affected") {
