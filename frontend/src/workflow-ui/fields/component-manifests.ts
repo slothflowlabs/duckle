@@ -893,6 +893,17 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                         description:
                             'Leave empty to deduplicate on the whole row.',
                     },
+                    {
+                        // The builder has read this since the audit that added
+                        // it; the form never offered it, so the cheap
+                        // deterministic path was unreachable and every run
+                        // paid for ORDER BY ALL instead.
+                        key: 'orderBy',
+                        label: 'Tie-break columns (optional)',
+                        kind: 'columns',
+                        description:
+                            'Which row survives each duplicate group. Only used when Distinct columns is set. Left empty, the whole row is sorted so the result stays the same run to run, which is correct but costs a full sort on every column. Naming a few columns here keeps that determinism far more cheaply.',
+                    },
                 ],
             },
         ],

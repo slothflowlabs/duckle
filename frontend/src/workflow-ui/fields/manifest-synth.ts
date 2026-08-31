@@ -4822,6 +4822,17 @@ function synthRowTransform(comp: ComponentDef): ComponentManifest {
                 label: id === 'xf.sample' ? 'Sample' : 'Limit',
                 fields: [
                     { key: 'count', label: id === 'xf.sample' ? 'Sample size' : 'Row count', kind: 'integer', defaultValue: 100 },
+                    {
+                        // Without an ordering, LIMIT/OFFSET take an arbitrary
+                        // slice that can differ run to run. The engine has
+                        // accepted this opt-in since that was found; the form
+                        // did not offer it, so the fix was unreachable.
+                        key: 'orderBy',
+                        label: 'Order by (optional)',
+                        kind: 'columns',
+                        description:
+                            'Makes the chosen rows the same on every run. Left empty, the rows kept or skipped are whichever ones happen to arrive first, which can change between runs even on identical input.',
+                    },
                 ],
             },
         ], 'upstream');
@@ -6296,6 +6307,16 @@ function synthQualityValidation(comp: ComponentDef): ComponentManifest {
                 label: 'Uniqueness',
                 fields: [
                     { key: 'columns', label: 'Uniqueness key', kind: 'columns', required: true },
+                    {
+                        // Same story: the engine reads tieBreak, the form never
+                        // offered it, so "which duplicate survives" could not be
+                        // pinned down from the editor.
+                        key: 'tieBreak',
+                        label: 'Tie-break columns (optional)',
+                        kind: 'columns',
+                        description:
+                            'Which row of each duplicate group is kept. Left empty, the survivor is arbitrary and the same input can keep a different row on a later run. Row counts are unaffected either way.',
+                    },
                     onFail,
                 ],
             },

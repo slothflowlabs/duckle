@@ -16842,6 +16842,12 @@
                 "label": "Distinct columns",
                 "kind": "columns",
                 "description": "Leave empty to deduplicate on the whole row."
+              },
+              {
+                "key": "orderBy",
+                "label": "Tie-break columns (optional)",
+                "kind": "columns",
+                "description": "Which row survives each duplicate group. Only used when Distinct columns is set. Left empty, the whole row is sorted so the result stays the same run to run, which is correct but costs a full sort on every column. Naming a few columns here keeps that determinism far more cheaply."
               }
             ]
           }
@@ -16913,6 +16919,12 @@
                 "label": "Sample size",
                 "kind": "integer",
                 "defaultValue": 100
+              },
+              {
+                "key": "orderBy",
+                "label": "Order by (optional)",
+                "kind": "columns",
+                "description": "Makes the chosen rows the same on every run. Left empty, the rows kept or skipped are whichever ones happen to arrive first, which can change between runs even on identical input."
               }
             ]
           }
@@ -16984,6 +16996,12 @@
                 "label": "Row count",
                 "kind": "integer",
                 "defaultValue": 100
+              },
+              {
+                "key": "orderBy",
+                "label": "Order by (optional)",
+                "kind": "columns",
+                "description": "Makes the chosen rows the same on every run. Left empty, the rows kept or skipped are whichever ones happen to arrive first, which can change between runs even on identical input."
               }
             ]
           }
@@ -17147,6 +17165,12 @@
                 "label": "Row count",
                 "kind": "integer",
                 "defaultValue": 100
+              },
+              {
+                "key": "orderBy",
+                "label": "Order by (optional)",
+                "kind": "columns",
+                "description": "Makes the chosen rows the same on every run. Left empty, the rows kept or skipped are whichever ones happen to arrive first, which can change between runs even on identical input."
               }
             ]
           }
@@ -43255,6 +43279,12 @@
                 "label": "Uniqueness key",
                 "kind": "columns",
                 "required": true
+              },
+              {
+                "key": "tieBreak",
+                "label": "Tie-break columns (optional)",
+                "kind": "columns",
+                "description": "Which row of each duplicate group is kept. Left empty, the survivor is arbitrary and the same input can keep a different row on a later run. Row counts are unaffected either way."
               },
               {
                 "key": "onFail",
