@@ -2643,6 +2643,11 @@ fn migrate_legacy_schedules(workspace: &Path) {
                     .map(str::trim)
                     .filter(|t| !t.is_empty())
                     .map(str::to_string),
+                exclude: cfg
+                    .get("exclude")
+                    .cloned()
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .unwrap_or_default(),
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -2689,8 +2694,18 @@ fn next_run_at(sched: &Value, last_at: Option<&str>) -> Option<String> {
         // different times depending on which surface owned it.
         let tz = sched.get("timezone").and_then(Value::as_str);
         let zone = duckle_duckdb_engine::cronzone::resolve_zone(tz).ok()?;
-        let (occ, _skipped) =
-            duckle_duckdb_engine::cronzone::next_after(cron, &zone, chrono::Utc::now()).ok()?;
+        let exclude: duckle_duckdb_engine::cronzone::Exclusions = sched
+            .get("exclude")
+            .cloned()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        let (occ, _skipped) = duckle_duckdb_engine::cronzone::next_after_excluding(
+            cron,
+            &zone,
+            &exclude,
+            chrono::Utc::now(),
+        )
+        .ok()?;
         return occ.map(|o| o.at.to_rfc3339());
     }
     let interval = sched.get("intervalSeconds").and_then(Value::as_u64).unwrap_or(0);
@@ -2750,6 +2765,15 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
         .map(str::trim)
         .filter(|t| !t.is_empty())
         .map(str::to_string);
+    // #296: a maintenance calendar is checked where it is written. A misspelled
+    // weekday excludes nothing, which looks exactly like no exclusion at all
+    // until the day it was supposed to cover arrives.
+    let exclude: duckle_duckdb_engine::cronzone::Exclusions = match body.get("exclude").cloned() {
+        Some(v) => serde_json::from_value(v)
+            .map_err(|e| format!("Invalid exclude calendar: {e}"))?,
+        None => Default::default(),
+    };
+    exclude.validate()?;
     // Seconds are what the store holds. A console that sends only minutes is
     // still honoured, but one that echoes back the intervalSeconds it was given
     // keeps a sub-minute schedule exactly as the desktop editor set it.
@@ -2800,6 +2824,7 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
                 plan_id: plan_id.clone().flatten(),
                 kind,
                 timezone: timezone.clone(),
+                exclude: exclude.clone(),
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,

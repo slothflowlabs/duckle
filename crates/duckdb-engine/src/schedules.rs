@@ -74,6 +74,13 @@ pub struct Schedule {
     /// time tomorrow".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
+    /// #296: days this schedule must not fire on - a maintenance window.
+    ///
+    /// Civil dates in the schedule's own zone, so "2026-12-25" is Christmas
+    /// where the schedule lives rather than a UTC window clipping two local
+    /// days. Empty by default, which is every schedule written before this.
+    #[serde(default, skip_serializing_if = "crate::cronzone::Exclusions::is_empty")]
+    pub exclude: crate::cronzone::Exclusions,
     #[serde(default)]
     pub last_run_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
@@ -160,6 +167,7 @@ mod tests {
     fn interval(pipeline: &str, seconds: u64) -> Schedule {
         Schedule {
             timezone: None,
+            exclude: Default::default(),
             id: format!("id-{pipeline}"),
             pipeline_id: pipeline.into(),
             plan_id: None,

@@ -85,6 +85,86 @@ pub enum Adjustment {
     NonexistentLocalTime(String),
     /// The civil time happens twice (autumn back). The earlier one was taken.
     AmbiguousLocalTime(String),
+    /// A maintenance window or excluded weekday covered it (#296).
+    Excluded { at: String, reason: String },
+}
+
+/// Days a schedule must not fire on (#296).
+///
+/// Deliberately small: a weekday list and a date list. Real holiday calendars
+/// vary by country, region and year, and a first version that tried to know
+/// them would be wrong somewhere and confidently so. A date list is something
+/// an operator can verify by reading it.
+///
+/// Dates are CIVIL dates in the schedule's own zone, which is why this could
+/// not sensibly exist before the zone did: "do not run on 2026-12-25" means
+/// Christmas where the schedule lives, not a UTC window that clips two
+/// different local days.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Exclusions {
+    /// Lowercase English weekday names, e.g. ["sunday"].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub weekdays: Vec<String>,
+    /// ISO civil dates, e.g. ["2026-12-25"].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dates: Vec<String>,
+}
+
+impl Exclusions {
+    pub fn is_empty(&self) -> bool {
+        self.weekdays.is_empty() && self.dates.is_empty()
+    }
+
+    /// Check the lists themselves, so a typo is refused where it is written
+    /// rather than silently never matching. "sundy" excluding nothing is
+    /// indistinguishable from no exclusion at all until the day arrives.
+    pub fn validate(&self) -> Result<(), String> {
+        for w in &self.weekdays {
+            if weekday_from_name(w).is_none() {
+                return Err(format!(
+                    "unknown weekday {w:?}. Use an English day name such as sunday."
+                ));
+            }
+        }
+        for d in &self.dates {
+            if chrono::NaiveDate::parse_from_str(d.trim(), "%Y-%m-%d").is_err() {
+                return Err(format!("unknown date {d:?}. Use YYYY-MM-DD, e.g. 2026-12-25."));
+            }
+        }
+        Ok(())
+    }
+
+    /// Why this civil time is excluded, if it is.
+    fn excludes(&self, civil: NaiveDateTime) -> Option<String> {
+        use chrono::Datelike;
+        let date = civil.date();
+        for w in &self.weekdays {
+            if weekday_from_name(w) == Some(date.weekday()) {
+                return Some(format!("excluded weekday {}", w.trim().to_lowercase()));
+            }
+        }
+        for d in &self.dates {
+            if chrono::NaiveDate::parse_from_str(d.trim(), "%Y-%m-%d") == Ok(date) {
+                return Some(format!("excluded date {}", d.trim()));
+            }
+        }
+        None
+    }
+}
+
+fn weekday_from_name(name: &str) -> Option<chrono::Weekday> {
+    use chrono::Weekday::*;
+    match name.trim().to_ascii_lowercase().as_str() {
+        "monday" | "mon" => Some(Mon),
+        "tuesday" | "tue" => Some(Tue),
+        "wednesday" | "wed" => Some(Wed),
+        "thursday" | "thu" => Some(Thu),
+        "friday" | "fri" => Some(Fri),
+        "saturday" | "sat" => Some(Sat),
+        "sunday" | "sun" => Some(Sun),
+        _ => None,
+    }
 }
 
 /// One resolved occurrence.
@@ -139,14 +219,24 @@ pub fn next_after(
     zone: &Zone,
     after: DateTime<Utc>,
 ) -> Result<(Option<Occurrence>, Vec<Adjustment>), String> {
+    next_after_excluding(expr, zone, &Exclusions::default(), after)
+}
+
+/// [`next_after`], skipping occurrences an exclusion calendar covers (#296).
+pub fn next_after_excluding(
+    expr: &str,
+    zone: &Zone,
+    exclusions: &Exclusions,
+    after: DateTime<Utc>,
+) -> Result<(Option<Occurrence>, Vec<Adjustment>), String> {
     let normalized = normalize_cron(expr)
         .ok_or_else(|| format!("{expr:?} is not a 5, 6 or 7 field cron expression"))?;
     let schedule: cron::Schedule = normalized
         .parse()
         .map_err(|e| format!("cannot parse cron {expr:?}: {e}"))?;
     match zone {
-        Zone::Local => walk(&schedule, &chrono::Local, after, expr),
-        Zone::Named(tz) => walk(&schedule, tz, after, expr),
+        Zone::Local => walk(&schedule, &chrono::Local, exclusions, after, expr),
+        Zone::Named(tz) => walk(&schedule, tz, exclusions, after, expr),
     }
 }
 
@@ -162,6 +252,7 @@ pub fn next_after(
 fn walk<T: TimeZone>(
     schedule: &cron::Schedule,
     tz: &T,
+    exclusions: &Exclusions,
     after: DateTime<Utc>,
     expr: &str,
 ) -> Result<(Option<Occurrence>, Vec<Adjustment>), String>
@@ -171,7 +262,7 @@ where
     // A spring-forward gap can only swallow a run of consecutive occurrences,
     // never an unbounded one. The cap is a backstop so an expression naming a
     // civil time that never exists reports rather than hangs.
-    const MAX_SKIPS: usize = 64;
+    const MAX_SKIPS: usize = 512;
     let mut skipped: Vec<Adjustment> = Vec::new();
 
     let start_civil = after.with_timezone(tz).naive_local();
@@ -185,6 +276,14 @@ where
         // wrapper carried it here and means nothing else.
         let civil = next.naive_utc();
         cursor = next;
+        // Checked before the zone maths: a day the operator excluded is
+        // excluded whether or not its civil time is also a transition oddity,
+        // and reporting "ambiguous" for a day that was never going to run
+        // would be a confusing answer to "why did this not fire".
+        if let Some(reason) = exclusions.excludes(civil) {
+            skipped.push(Adjustment::Excluded { at: civil.to_string(), reason });
+            continue;
+        }
         let (instant, adjustment) = civil_to_instant(tz, civil);
         match instant {
             Some(at) => {
@@ -203,7 +302,9 @@ where
         }
     }
     Err(format!(
-        "cron {expr:?} named no civil time that exists in this zone within {MAX_SKIPS} occurrences"
+        "cron {expr:?} named no civil time that exists in this zone and is not excluded, within \
+         {MAX_SKIPS} occurrences. An exclusion calendar that covers every day the expression \
+         names would look exactly like this."
     ))
 }
 
@@ -282,6 +383,79 @@ mod tests {
             "and it must say so: {:?}",
             occ.adjustment
         );
+    }
+
+    /// #296: a maintenance window skips the occurrence and says why, rather
+    /// than the run merely not appearing.
+    #[test]
+    fn an_excluded_date_is_skipped_and_reported() {
+        let zone = resolve_zone(Some("Europe/Brussels")).unwrap();
+        let ex = Exclusions { weekdays: vec![], dates: vec!["2026-12-25".into()] };
+        let (occ, skipped) =
+            next_after_excluding("0 0 3 * * *", &zone, &ex, utc(2026, 12, 24, 12, 0)).unwrap();
+        let occ = occ.expect("an occurrence");
+        assert!(
+            matches!(skipped.first(), Some(Adjustment::Excluded { .. })),
+            "the skipped day must be reported: {skipped:?}"
+        );
+        assert_eq!(occ.local, "2026-12-26 03:00:00", "it runs the next day instead");
+    }
+
+    /// The exclusion is a CIVIL date in the schedule's own zone. 03:00 Brussels
+    /// on the 25th is 02:00 UTC on the 25th, but a schedule at 00:30 Brussels
+    /// is 23:30 UTC on the 24th - so a UTC-based check would exclude the wrong
+    /// day. This is why exclusions could not sensibly exist before zones did.
+    #[test]
+    fn exclusion_is_by_civil_date_in_the_schedules_own_zone() {
+        let zone = resolve_zone(Some("Europe/Brussels")).unwrap();
+        let ex = Exclusions { weekdays: vec![], dates: vec!["2026-12-25".into()] };
+        // 00:30 Brussels on the 25th is 23:30 UTC on the 24th.
+        let (occ, skipped) =
+            next_after_excluding("0 30 0 * * *", &zone, &ex, utc(2026, 12, 24, 12, 0)).unwrap();
+        assert!(
+            matches!(skipped.first(), Some(Adjustment::Excluded { .. })),
+            "the 25th local must be excluded even though it is the 24th in UTC: {skipped:?}"
+        );
+        assert_eq!(occ.unwrap().local, "2026-12-26 00:30:00");
+    }
+
+    #[test]
+    fn an_excluded_weekday_is_skipped() {
+        let zone = resolve_zone(Some("UTC")).unwrap();
+        let ex = Exclusions { weekdays: vec!["sunday".into()], dates: vec![] };
+        // 2026-12-27 is a Sunday.
+        let (occ, skipped) =
+            next_after_excluding("0 0 3 * * *", &zone, &ex, utc(2026, 12, 26, 12, 0)).unwrap();
+        assert!(matches!(skipped.first(), Some(Adjustment::Excluded { .. })), "{skipped:?}");
+        assert_eq!(occ.unwrap().local, "2026-12-28 03:00:00", "Monday instead");
+    }
+
+    /// A typo must be refused where it is written. "sundy" excluding nothing is
+    /// indistinguishable from no exclusion at all until the day arrives.
+    #[test]
+    fn a_misspelled_exclusion_is_refused_rather_than_matching_nothing() {
+        let bad = Exclusions { weekdays: vec!["sundy".into()], dates: vec![] };
+        assert!(bad.validate().unwrap_err().contains("sundy"));
+        let bad = Exclusions { weekdays: vec![], dates: vec!["25-12-2026".into()] };
+        assert!(bad.validate().unwrap_err().contains("YYYY-MM-DD"));
+        let good = Exclusions { weekdays: vec!["Sunday".into()], dates: vec!["2026-12-25".into()] };
+        assert!(good.validate().is_ok(), "case and real dates are fine");
+    }
+
+    /// An exclusion that covers every day the expression names reports rather
+    /// than looping, because a scheduler that hangs is worse than one that
+    /// complains.
+    #[test]
+    fn an_exclusion_covering_everything_is_an_error_not_a_hang() {
+        let zone = resolve_zone(Some("UTC")).unwrap();
+        let all_week = Exclusions {
+            weekdays: vec![
+                "monday".into(), "tuesday".into(), "wednesday".into(), "thursday".into(),
+                "friday".into(), "saturday".into(), "sunday".into(),
+            ],
+            dates: vec![],
+        };
+        assert!(next_after_excluding("0 0 3 * * *", &zone, &all_week, utc(2026, 1, 1, 0, 0)).is_err());
     }
 
     /// A five-field expression is accepted on both surfaces, or a hand-edited

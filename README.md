@@ -530,6 +530,26 @@ Both schedulers - the desktop one and the web console's - now evaluate through
 the same code. They disagreed once before, and the way it showed up was one
 expression firing at two different times depending on which surface owned it.
 
+**Days a schedule must not fire on** are a small calendar rather than a holiday
+provider:
+
+```yaml
+exclude:
+  weekdays: [sunday]
+  dates: [2026-12-25]
+```
+
+The dates are civil dates **in the schedule's own zone**, which is why this
+belongs with time zones rather than beside them: a schedule at 00:30 Brussels on
+the 25th is 23:30 UTC on the 24th, so a UTC-based check would exclude the wrong
+day. A skipped occurrence is reported rather than merely not happening, and a
+misspelled weekday or date is refused when you save it - "sundy" excludes
+nothing, which looks exactly like no exclusion at all until the day arrives.
+
+Real holiday calendars vary by country, region and year; a first version that
+tried to know them would be wrong somewhere and confidently so. A date list is
+something an operator can check by reading it.
+
 ### Retry a failed run (`retry`)
 
 Every run writes a small receipt under `<workspace>/runs/receipts/` and prints

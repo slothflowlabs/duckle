@@ -926,7 +926,7 @@ fn claim_next_run(s: &mut Schedule, now: DateTime<Utc>) {
         // #318: read in the schedule's own zone when it names one, otherwise
         // the machine's, and store the resulting absolute instant as UTC. Both
         // schedulers call the same evaluator so they cannot drift apart again.
-        ScheduleKind::Cron { expr } => cron_next(expr, s.timezone.as_deref(), now),
+        ScheduleKind::Cron { expr } => cron_next(expr, s.timezone.as_deref(), &s.exclude, now),
         ScheduleKind::Interval { seconds } => {
             Some(now + chrono::Duration::seconds(*seconds as i64))
         }
@@ -940,7 +940,7 @@ fn compute_next_run(s: &mut Schedule) {
         return;
     }
     s.next_run_at = match &s.kind {
-        ScheduleKind::Cron { expr } => cron_next(expr, s.timezone.as_deref(), Utc::now()),
+        ScheduleKind::Cron { expr } => cron_next(expr, s.timezone.as_deref(), &s.exclude, Utc::now()),
         ScheduleKind::Interval { seconds } => {
             let base = s.last_run_at.unwrap_or_else(Utc::now);
             Some(base + chrono::Duration::seconds(*seconds as i64))
@@ -962,6 +962,7 @@ fn validate_schedule(schedule: &Schedule) -> Result<(), String> {
     // is a save error in front of the person who made it, not a job that
     // quietly runs on UTC in a container.
     duckle_duckdb_engine::cronzone::resolve_zone(schedule.timezone.as_deref())?;
+    schedule.exclude.validate()?;
     if let ScheduleKind::Cron { expr } = &schedule.kind {
         let normalized = duckle_duckdb_engine::cronzone::normalize_cron(expr).ok_or_else(|| {
             format!("Invalid cron expression: {expr:?} does not have 5, 6 or 7 fields")
@@ -978,7 +979,12 @@ fn validate_schedule(schedule: &Schedule) -> Result<(), String> {
 /// has no next run" the old code produced for an unparseable expression - but
 /// the reason is said out loud, because a schedule that silently never fires is
 /// the failure mode this area already had once.
-fn cron_next(expr: &str, timezone: Option<&str>, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+fn cron_next(
+    expr: &str,
+    timezone: Option<&str>,
+    exclude: &duckle_duckdb_engine::cronzone::Exclusions,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
     let zone = match duckle_duckdb_engine::cronzone::resolve_zone(timezone) {
         Ok(z) => z,
         Err(e) => {
@@ -986,7 +992,7 @@ fn cron_next(expr: &str, timezone: Option<&str>, now: DateTime<Utc>) -> Option<D
             return None;
         }
     };
-    match duckle_duckdb_engine::cronzone::next_after(expr, &zone, now) {
+    match duckle_duckdb_engine::cronzone::next_after_excluding(expr, &zone, exclude, now) {
         Ok((occ, skipped)) => {
             for s in skipped {
                 // A civil time that does not exist has not been missed by the
@@ -1020,6 +1026,7 @@ mod tests {
                 expr: "0 * * * * *".into(),
             },
             timezone: None,
+            exclude: Default::default(),
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1047,6 +1054,7 @@ mod tests {
                 expr: "0 0 3 * * *".into(),
             },
             timezone: None,
+            exclude: Default::default(),
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1075,6 +1083,7 @@ mod tests {
                 expr: "0 0 3 * * *".into(),
             },
             timezone: None,
+            exclude: Default::default(),
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1101,6 +1110,7 @@ mod tests {
                 expr: "0 3 * * *".into(),
             },
             timezone: None,
+            exclude: Default::default(),
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1126,6 +1136,7 @@ mod tests {
             enabled: true,
             kind: ScheduleKind::Cron { expr: "0 3 * * *".into() },
             timezone: None,
+            exclude: Default::default(),
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1145,6 +1156,7 @@ mod tests {
             enabled: true,
             kind: ScheduleKind::Cron { expr: "0 0 3 * * *".into() },
             timezone: Some("Europe/Brussel".into()),
+            exclude: Default::default(),
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1169,6 +1181,7 @@ mod tests {
             enabled: true,
             kind: ScheduleKind::Cron { expr: "0 0 3 * * *".into() },
             timezone: Some("Europe/Brussels".into()),
+            exclude: Default::default(),
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1203,6 +1216,7 @@ mod tests {
             enabled: true,
             kind: ScheduleKind::Interval { seconds: 300 },
             timezone: None,
+            exclude: Default::default(),
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1226,6 +1240,7 @@ mod tests {
             enabled: false,
             kind: ScheduleKind::Interval { seconds: 60 },
             timezone: None,
+            exclude: Default::default(),
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1262,6 +1277,7 @@ mod tests {
                 // Six fields, so the leading one is seconds: due almost at once.
                 kind: ScheduleKind::Cron { expr: "* * * * * *".into() },
                 timezone: None,
+                exclude: Default::default(),
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -1356,6 +1372,7 @@ mod tests {
                 enabled: true,
                 kind: ScheduleKind::Interval { seconds: 3600 },
                 timezone: None,
+                exclude: Default::default(),
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -1397,6 +1414,7 @@ mod tests {
                 enabled: true,
                 kind: ScheduleKind::Interval { seconds: 3600 },
                 timezone: None,
+                exclude: Default::default(),
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -1455,6 +1473,7 @@ mod tests {
             enabled: true,
             kind: ScheduleKind::Interval { seconds: 3600 },
             timezone: None,
+            exclude: Default::default(),
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1522,6 +1541,7 @@ mod tests {
                 enabled: true,
                 kind: ScheduleKind::Interval { seconds: 3600 },
                 timezone: None,
+                exclude: Default::default(),
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -1573,6 +1593,7 @@ mod tests {
             enabled: true,
             kind: ScheduleKind::Interval { seconds: 3600 },
             timezone: None,
+            exclude: Default::default(),
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
