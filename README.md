@@ -583,6 +583,42 @@ Real holiday calendars vary by country, region and year; a first version that
 tried to know them would be wrong somewhere and confidently so. A date list is
 something an operator can check by reading it.
 
+### Bounding what a workspace accumulates (`retention`)
+
+A long-running server grows run history, run logs, receipts and a stage cache,
+and nothing the pipelines do bounds any of it:
+
+```bash
+duckle-runner retention status --json
+duckle-runner retention prune --cache-days 45 --logs-days 30 --receipts-keep 50 --dry-run
+duckle-runner retention prune --cache-days 45 --logs-days 30 --receipts-keep 50
+```
+
+```text
+category          files        bytes  oldest
+cache               412   1204338112  61d
+logs                 38      1102944  90d
+runs                  6        49122  12d
+receipts             57        27991  12d
+```
+
+**Retention is opt-in per category.** A bare `prune` with no limits removes
+nothing, because housekeeping that deletes by default is how a workspace loses
+something nobody meant to lose.
+
+**`.duckle/` is never touched, at all.** It holds the workspace encryption key,
+saved watermarks and resume positions, known host keys and the accepted XSD
+contracts. Losing a watermark does not lose history - it silently re-ingests or
+skips data, which is a correctness problem rather than a housekeeping one. The
+check runs when the plan is built **and again when it is applied**, so that
+"never touches state" is a property of the code rather than of the caller.
+
+The **audit log is never pruned by age**: it is the record of the prune's own
+deletions, and every prune appends to it.
+
+`--dry-run` and a real prune call the same planning function and differ only in
+whether the deletion runs, so the two cannot disagree about what would go.
+
 ### Reports CI already understands (`--format`)
 
 `validate` emits the shapes CI systems and agents actually consume, so nothing

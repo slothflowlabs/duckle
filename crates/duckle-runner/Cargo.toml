@@ -68,4 +68,7 @@ duckle-duckdb-engine = { workspace = true, features = ["teradata-static"] }
 
 [dev-dependencies]
 tempfile = "3"
+# #303: retention tests need files with a chosen mtime; already in the tree via
+# notify, so this adds no new dependency to the graph.
+filetime = "0.2"
 

@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 mod report;
+mod retention;
 mod audit;
 mod backfill;
 mod baseline;
@@ -1918,6 +1919,10 @@ fn main() -> ExitCode {
     if std::env::args().nth(1).as_deref() == Some("quickstart") {
         return run_quickstart();
     }
+    // `retention` -> report and bound what the workspace accumulates (#303).
+    if std::env::args().nth(1).as_deref() == Some("retention") {
+        return run_retention();
+    }
     // `retry` -> plan and, when it is safe, repeat a failed run (#305).
     if std::env::args().nth(1).as_deref() == Some("retry") {
         return run_retry();
@@ -2187,6 +2192,101 @@ fn run_retry() -> ExitCode {
         Ok(false) => ExitCode::from(1),
         Err(e) => {
             eprintln!("duckle-runner retry: {e}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// `duckle-runner retention status|prune` - bound what Duckle accumulates (#303).
+///
+/// Retention is opt-in per category: a bare `prune` with no limits removes
+/// nothing. Housekeeping that deletes by default is how a workspace loses
+/// something nobody meant to lose.
+fn run_retention() -> ExitCode {
+    let mut it = std::env::args().skip(2);
+    let sub = it.next().unwrap_or_default();
+    let mut workspace = PathBuf::from(".");
+    let mut json_out = false;
+    let mut dry_run = false;
+    let mut policy = retention::Policy::default();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--workspace" => workspace = it.next().map(PathBuf::from).unwrap_or(workspace),
+            "--json" => json_out = true,
+            "--dry-run" => dry_run = true,
+            "--cache-days" => policy.cache_days = it.next().and_then(|v| v.parse().ok()),
+            "--logs-days" => policy.logs_days = it.next().and_then(|v| v.parse().ok()),
+            "--receipts-keep" => policy.receipts_keep = it.next().and_then(|v| v.parse().ok()),
+            other => {
+                eprintln!("duckle-runner retention: unknown argument {other}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    match sub.as_str() {
+        "status" => {
+            let use_ = retention::survey(&workspace);
+            if json_out {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "schemaVersion": report::SCHEMA_VERSION,
+                        "command": "retention.status",
+                        "categories": use_,
+                    }))
+                    .unwrap_or_default()
+                );
+            } else {
+                println!("{:<12} {:>10} {:>12}  oldest", "category", "files", "bytes");
+                for c in &use_ {
+                    let oldest = c
+                        .oldest_days
+                        .map(|d| format!("{d}d"))
+                        .unwrap_or_else(|| "-".into());
+                    println!("{:<12} {:>10} {:>12}  {oldest}", c.category, c.files, c.bytes);
+                }
+            }
+            ExitCode::from(0)
+        }
+        "prune" => {
+            let plan = retention::plan(&workspace, &policy);
+            let bytes: u64 = plan.iter().map(|r| r.bytes).sum();
+            if json_out {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "schemaVersion": report::SCHEMA_VERSION,
+                        "command": "retention.prune",
+                        "dryRun": dry_run,
+                        "files": plan.len(),
+                        "bytes": bytes,
+                        "removals": plan,
+                    }))
+                    .unwrap_or_default()
+                );
+            } else {
+                for r in &plan {
+                    println!("{:<10} {:>10}  {}  ({})", r.category, r.bytes, r.path, r.reason);
+                }
+                println!("
+{} file(s), {bytes} bytes", plan.len());
+            }
+            if dry_run {
+                if !json_out {
+                    println!("dry run: nothing was deleted");
+                }
+                return ExitCode::from(0);
+            }
+            let (n, freed) = retention::apply(&workspace, &plan);
+            if !json_out {
+                println!("removed {n} file(s), {freed} bytes");
+            }
+            ExitCode::from(0)
+        }
+        _ => {
+            eprintln!(
+                "usage: duckle-runner retention status|prune [--workspace DIR] [--json]                  [--dry-run] [--cache-days N] [--logs-days N] [--receipts-keep N]"
+            );
             ExitCode::from(2)
         }
     }
