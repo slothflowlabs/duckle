@@ -57,6 +57,7 @@ enum Ast {
     In(Box<Ast>, Vec<Ast>, bool),
     /// `x is None` / `x is not None`
     IsNull(Box<Ast>, bool),
+    #[allow(dead_code)]
     Tuple(Vec<Ast>),
 }
 

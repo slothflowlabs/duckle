@@ -629,9 +629,9 @@ fn load_secrets_enc(workspace: &Path) -> Result<Option<HashMap<String, String>>,
         (Sha256::digest(passphrase.as_bytes()).to_vec(), nonce_bytes, ciphertext)
     };
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| format!("cipher init: {}", e))?;
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let nonce = Nonce::try_from(nonce_bytes).map_err(|e| format!("nonce: {}", e))?;
     let plain = cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(&nonce, ciphertext)
         .map_err(|_| "wrong DUCKLE_BUNDLE_PASSPHRASE or corrupt secrets.enc".to_string())?;
     let text = String::from_utf8(plain).map_err(|e| format!("secrets.enc not UTF-8: {}", e))?;
     Ok(Some(parse_env_file(&text)))

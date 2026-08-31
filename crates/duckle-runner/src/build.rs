@@ -19,7 +19,6 @@ use base64::Engine as _;
 use duckle_duckdb_engine::{is_secret_prop_key, PipelineDoc};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -1013,9 +1012,8 @@ fn encrypt_secrets(key_map: &[(String, String)]) -> Result<String, String> {
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| format!("cipher init: {}", e))?;
     let mut nonce_bytes = [0u8; 12];
     getrandom::fill(&mut nonce_bytes).map_err(|e| format!("nonce: {}", e))?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
     let ciphertext = cipher
-        .encrypt(nonce, plain.as_bytes())
+        .encrypt(&Nonce::from(nonce_bytes), plain.as_bytes())
         .map_err(|e| format!("encrypt: {}", e))?;
 
     let mut payload = Vec::with_capacity(BUNDLE_MAGIC.len() + BUNDLE_SALT_LEN + 12 + ciphertext.len());
@@ -1103,8 +1101,9 @@ fn render_manifest(
 
 
 #[cfg(test)]
-mod bundle_key_tests {
+mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     /// secrets.enc ships inside the bundle, so whoever holds the artifact can attack
     /// the passphrase offline. The original key was `Sha256::digest(passphrase)`: no

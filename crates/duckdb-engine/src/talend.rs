@@ -3183,7 +3183,7 @@ fn extract_loop_bodies(
 ) -> Vec<Import> {
     let mut children = Vec::new();
     for loop_id in loop_nodes(nodes) {
-        let mut body = loop_body_members(&loop_id, edges);
+        let body = loop_body_members(&loop_id, edges);
         if body.is_empty() {
             continue;
         }

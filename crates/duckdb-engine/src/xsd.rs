@@ -100,7 +100,9 @@ fn attrs(e: &quick_xml::events::BytesStart) -> BTreeMap<String, String> {
         .map(|a| {
             (
                 a.key.as_ref().to_string(),
-                a.unescape_value().map(|v| v.to_string()).unwrap_or_default(),
+                a.normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
             )
         })
         .collect()

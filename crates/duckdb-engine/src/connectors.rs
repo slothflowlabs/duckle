@@ -3137,7 +3137,7 @@ impl DuckdbEngine {
         };
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::None)
-            .set_max_row_group_size(row_group)
+            .set_max_row_group_row_count(Some(row_group))
             .set_compression(codec)
             // The default 1 MB dictionary budget is per column, and a wide fact
             // table full of repeated text blows through it immediately; once it
@@ -3735,7 +3735,7 @@ impl DuckdbEngine {
             .options
             .iter()
             .map(|(k, v)| (OptionDatabase::from(k.as_str()), OptionValue::String(v.clone())));
-        let mut database = driver
+        let database = driver
             .new_database_with_opts(opts)
             .map_err(|e| EngineError::Query(format!("adbc: open database: {}", e)))?;
         let mut conn = database
@@ -3782,7 +3782,7 @@ impl DuckdbEngine {
         use parquet::file::properties::{EnabledStatistics, WriterProperties};
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::None)
-            .set_max_row_group_size(1_000_000)
+            .set_max_row_group_row_count(Some(1_000_000))
             .build();
         let writer_schema = schema.clone();
         let (tx, rx) = std::sync::mpsc::sync_channel::<arrow_array::RecordBatch>(8);
@@ -3913,7 +3913,7 @@ impl DuckdbEngine {
             .options
             .iter()
             .map(|(k, v)| (OptionDatabase::from(k.as_str()), OptionValue::String(v.clone())));
-        let mut database = driver
+        let database = driver
             .new_database_with_opts(opts)
             .map_err(|e| EngineError::Query(format!("adbc: open database: {}", e)))?;
         let mut conn = database
@@ -9652,7 +9652,7 @@ impl DuckdbEngine {
                 .resolve(&schema)
                 .map_err(|e| EngineError::Query(format!("avro: encode row: {}", e)))?;
             writer
-                .append(value)
+                .append_value(value)
                 .map_err(|e| EngineError::Query(format!("avro: append: {}", e)))?;
             total += 1;
         }
@@ -17910,7 +17910,11 @@ pub(crate) fn avro_datum_to_json(
     payload: &[u8],
 ) -> Result<JsonValue, String> {
     let mut cursor = payload;
-    let value = apache_avro::from_avro_datum(schema, &mut cursor, None)
+    let reader = apache_avro::reader::datum::GenericDatumReader::builder(schema)
+        .build()
+        .map_err(|e| format!("avro decode: {}", e))?;
+    let value = reader
+        .read_value(&mut cursor)
         .map_err(|e| format!("avro decode: {}", e))?;
     JsonValue::try_from(value).map_err(|e| format!("avro value to json: {}", e))
 }
