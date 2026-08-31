@@ -628,6 +628,17 @@ has to scrape console text:
 duckle-runner validate --format json    # versioned envelope
 duckle-runner validate --format junit   # every CI renders this as a test report
 duckle-runner validate --format sarif   # GitHub Code Scanning, and most editors
+duckle-runner test     --format junit   # the same three, from the same module
+```
+
+`duckle test` names each case by its assertion and the node it asserts on, so a
+JUnit report is navigable rather than a list of file names:
+
+```xml
+<testcase classname="assert" name="tests/orders.test.json :: a row with no amount is dropped (keep)" />
+<testcase classname="assert" name="tests/orders.test.json :: totals match (rollup)">
+  <failure message="row 1, id: expected 9 (number), got 1 (number)">...</failure>
+</testcase>
 ```
 
 SARIF puts each finding on the file it is about, with forward-slash URIs so Code

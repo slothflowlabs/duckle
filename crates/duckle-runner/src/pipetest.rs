@@ -864,9 +864,29 @@ fn attach_capture_sink(
 pub fn run(duckdb: PathBuf) -> ExitCode {
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut json_out = false;
-    for arg in std::env::args().skip(2) {
+    // #312: the same three shapes `validate` emits, from the same module, so a
+    // CI job reads one format across both gates.
+    let mut format = String::new();
+    let mut args = std::env::args().skip(2);
+    while let Some(arg) = args.next() {
         if arg == "--json" {
             json_out = true;
+            continue;
+        }
+        if arg == "--format" {
+            match args.next().as_deref() {
+                Some(f @ ("json" | "junit" | "sarif")) => format = f.to_string(),
+                Some(other) => {
+                    eprintln!(
+                        "duckle-runner test: unknown --format {other}. Use json, junit or sarif."
+                    );
+                    return ExitCode::from(2);
+                }
+                None => {
+                    eprintln!("duckle-runner test: --format needs json, junit or sarif");
+                    return ExitCode::from(2);
+                }
+            }
             continue;
         }
         if arg.starts_with('-') {
@@ -901,6 +921,7 @@ pub fn run(duckdb: PathBuf) -> ExitCode {
 
     let (mut passed, mut failures) = (0usize, Vec::<Failure>::new());
     let mut results: Vec<JsonValue> = Vec::new();
+    let mut findings: Vec<crate::report::Finding> = Vec::new();
     for path in &paths {
         let text = match std::fs::read_to_string(path) {
             Ok(t) => t,
@@ -935,6 +956,15 @@ pub fn run(duckdb: PathBuf) -> ExitCode {
                     failures.push(Failure { case: case.name.clone(), why: why.clone() });
                 }
             }
+            findings.push(crate::report::Finding {
+                file: path.to_string_lossy().to_string(),
+                // The case name and the node it asserts on, which is what makes
+                // a JUnit report navigable rather than a list of file names.
+                node: Some(format!("{} ({})", case.name, case.node)),
+                rule: "assert".to_string(),
+                message: outcome.clone().unwrap_or_else(|| "passed".to_string()),
+                ok: outcome.is_none(),
+            });
             results.push(serde_json::json!({
                 "suite": path.to_string_lossy(),
                 "pipeline": pipeline.to_string_lossy(),
@@ -947,19 +977,24 @@ pub fn run(duckdb: PathBuf) -> ExitCode {
     }
     let _ = std::fs::remove_dir_all(&tmp);
 
-    if json_out {
-        // One object, so an agent or a CI step reads a result rather than
-        // scraping lines. The assertion text carries the value AND the type of
-        // both sides, which is what makes a failure actionable without a rerun.
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "passed": passed,
-                "failed": failures.len(),
-                "results": results,
-            }))
-            .unwrap_or_default()
-        );
+    if json_out || !format.is_empty() {
+        match format.as_str() {
+            "junit" => println!("{}", crate::report::junit("test", &findings)),
+            "sarif" => println!("{}", crate::report::sarif("test", &findings)),
+            // One object, so an agent or a CI step reads a result rather than
+            // scraping lines. The assertion text carries the value AND the type
+            // of both sides, which is what makes a failure actionable without a
+            // rerun - so it is kept alongside the versioned envelope rather than
+            // replaced by it.
+            _ => println!(
+                "{}",
+                crate::report::json(
+                    "test",
+                    &findings,
+                    serde_json::json!({ "passed": passed, "results": results }),
+                )
+            ),
+        }
         return if failures.is_empty() { ExitCode::from(0) } else { ExitCode::from(1) };
     }
 
