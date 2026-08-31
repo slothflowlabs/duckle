@@ -8692,6 +8692,7 @@ impl DuckdbEngine {
         xsd_path: &str,
         row_path: &str,
         node_id: &str,
+        change_policy: &str,
         artifacts: &mut Vec<crate::ArtifactRef>,
     ) -> Result<Vec<duckle_metadata::Column>, EngineError> {
         let path = xsd_path.trim();
@@ -8770,6 +8771,17 @@ impl DuckdbEngine {
             h.update(t.as_bytes());
             h.finalize().iter().map(|b| format!("{b:02x}")).collect()
         };
+
+        // #315: the manifest records what a run USED, which is only ever read
+        // after the data is out. The whole resolved set is a parser contract,
+        // so check it against the accepted one BEFORE anything is parsed with
+        // it. Checked here rather than in the parser because only this side
+        // knows every document that was actually loaded.
+        let mut contract: Vec<(String, String)> = vec![(base.clone(), sha(&text))];
+        for (location, body) in &fetched {
+            contract.push((location.clone(), sha(body)));
+        }
+        check_xsd_contract(&base, &xsd_contract_fingerprint(&contract), change_policy)?;
         artifacts.push(crate::ArtifactRef {
             node: node_id.to_string(),
             role: "input".into(),
@@ -8842,6 +8854,7 @@ impl DuckdbEngine {
                     &spec.xsd_path,
                     &spec.row_path,
                     &spec.node_id,
+                    &spec.xsd_change_policy,
                     artifacts,
                 )?),
                 None => None,
@@ -20105,6 +20118,134 @@ pub(crate) fn known_hosts_path() -> Option<std::path::PathBuf> {
     Some(std::path::Path::new(&ws).join(".duckle").join("known_hosts"))
 }
 
+/// #315: the fingerprint of a whole resolved schema set, taken as one contract.
+///
+/// The SET decides the columns, not the root: an `xs:include` three levels down
+/// can change a column's type, so a root whose bytes never moved is no evidence
+/// that the parser contract held. Every document in the closure is therefore
+/// part of the identity.
+///
+/// Canonical, so the fingerprint answers to the CONTENT and nothing else:
+/// entries are sorted, which means a change in resolution order (a schema that
+/// reorders its imports, a document reached from a different parent) cannot
+/// move the fingerprint on its own. Only bytes or membership can.
+pub(crate) fn xsd_contract_fingerprint(docs: &[(String, String)]) -> String {
+    let mut lines: Vec<String> = docs
+        .iter()
+        .map(|(location, sha)| format!("{sha}  {location}"))
+        .collect();
+    lines.sort();
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(lines.join("\n").as_bytes());
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Where a workspace remembers the schema contracts it has accepted.
+///
+/// `None` when there is no workspace, exactly like [`known_hosts_path`]: with
+/// nowhere to remember, the check degrades to the old accept-anything
+/// behaviour rather than refusing every run.
+pub(crate) fn xsd_contracts_path() -> Option<std::path::PathBuf> {
+    let ws = std::env::var("DUCKLE_WORKSPACE").ok().filter(|s| !s.is_empty())?;
+    Some(std::path::Path::new(&ws).join(".duckle").join("xsd_contracts"))
+}
+
+/// The contract already accepted for this schema root, if any.
+///
+/// One `<uri> <fingerprint>` per line, `#` for comments. Greppable, and a line
+/// can be deleted by hand - which is the whole escape hatch when a publisher
+/// legitimately reissues a schema.
+pub(crate) fn read_xsd_contract(path: &std::path::Path, uri: &str) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .find_map(|l| {
+            let (u, fp) = l.split_once(char::is_whitespace)?;
+            (u == uri).then(|| fp.trim().to_string())
+        })
+}
+
+/// Accept a contract. Best-effort: a workspace that cannot be written still
+/// runs, because failing a run over bookkeeping would be a worse failure than
+/// the one being prevented.
+fn record_xsd_contract(path: &std::path::Path, uri: &str, fingerprint: &str) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    // Replace any line for this uri rather than appending a second one: unlike
+    // a host behind a load balancer, a schema root has exactly one accepted
+    // contract at a time, and two lines would make "which one held?" ambiguous.
+    let mut out: Vec<String> = existing
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            if t.is_empty() || t.starts_with('#') {
+                return true;
+            }
+            t.split_once(char::is_whitespace).map(|(u, _)| u != uri).unwrap_or(true)
+        })
+        .map(str::to_string)
+        .collect();
+    out.push(format!("{uri} {fingerprint}"));
+    let _ = std::fs::write(path, out.join("\n") + "\n");
+}
+
+/// #315: hold the parser contract still, or say plainly that it moved.
+///
+/// A publisher can replace the bytes behind a URL that never changed, and the
+/// next run then parses with a different contract and publishes the result as
+/// though nothing happened. The run manifest records what was used, but only
+/// after the data is out.
+///
+/// - `allow` does not look. The behaviour before this existed.
+/// - `warn` remembers on first sight, says so once when it moves, and accepts
+///   the new contract so a legitimate reissue does not need a hand edit.
+/// - `fail` refuses the change and does NOT record it, so accepting is a
+///   deliberate act: delete the line.
+pub(crate) fn check_xsd_contract(
+    uri: &str,
+    fingerprint: &str,
+    policy: &str,
+) -> Result<(), EngineError> {
+    if policy.eq_ignore_ascii_case("allow") {
+        return Ok(());
+    }
+    let path = match xsd_contracts_path() {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+    let accepted = match read_xsd_contract(&path, uri) {
+        Some(a) => a,
+        None => {
+            record_xsd_contract(&path, uri, fingerprint);
+            return Ok(());
+        }
+    };
+    if accepted == fingerprint {
+        return Ok(());
+    }
+    if policy.eq_ignore_ascii_case("fail") {
+        return Err(EngineError::Config(format!(
+            "xsd: the schema set behind {uri} is not the one this workspace accepted. \
+             Accepted {accepted}, found {fingerprint}. The columns this feed is parsed \
+             into come from that whole set, including anything it imports, so this is a \
+             change to the parser itself and not only to a file. It is also what a \
+             legitimate reissue looks like. To accept it, delete the line for {uri} from \
+             {} and the next run will record the new one.",
+            path.display()
+        )));
+    }
+    eprintln!(
+        "duckle: xsd: the schema set behind {uri} changed ({accepted} -> {fingerprint}); \
+         accepting it because changePolicy is warn. Set it to fail to require approval."
+    );
+    record_xsd_contract(&path, uri, fingerprint);
+    Ok(())
+}
+
 /// Fingerprints already recorded for `host:port`.
 ///
 /// The format is one `host:port SHA256:fingerprint` per line, `#` for comments.
@@ -20246,6 +20387,162 @@ pub(crate) fn verify_sftp_host_key(
     ))
 }
 
+
+/// #315: a schema set is a parser contract, and it must not move unnoticed.
+#[cfg(test)]
+mod xsd_contract_tests {
+    use super::{check_xsd_contract, read_xsd_contract, xsd_contract_fingerprint, xsd_contracts_path};
+
+    // DUCKLE_WORKSPACE is process-wide, so these take the SAME lock every other
+    // workspace-env test takes. A private mutex here would only serialise these
+    // tests against each other, and would still race the known-hosts tests,
+    // which is exactly what it did before this line.
+    use crate::util::workspace_env_guard as guard;
+
+    fn set(docs: &[(&str, &str)]) -> Vec<(String, String)> {
+        docs.iter().map(|(l, h)| (l.to_string(), h.to_string())).collect()
+    }
+
+    /// The fingerprint answers to CONTENT, not to the order documents happened
+    /// to be resolved in. A schema that reorders its own imports, or one reached
+    /// through a different parent, must not look like a changed contract.
+    #[test]
+    fn the_fingerprint_ignores_resolution_order() {
+        let a = xsd_contract_fingerprint(&set(&[("root.xsd", "aa"), ("common.xsd", "bb")]));
+        let b = xsd_contract_fingerprint(&set(&[("common.xsd", "bb"), ("root.xsd", "aa")]));
+        assert_eq!(a, b, "order must not move the fingerprint");
+    }
+
+    /// The property the whole feature rests on: the root is not the contract.
+    /// An include three levels down decides column types just as much, so a
+    /// root whose bytes never moved is no evidence that anything held.
+    #[test]
+    fn a_changed_import_changes_the_contract_even_when_the_root_did_not() {
+        let before = xsd_contract_fingerprint(&set(&[("root.xsd", "aa"), ("common.xsd", "bb")]));
+        let after = xsd_contract_fingerprint(&set(&[("root.xsd", "aa"), ("common.xsd", "CHANGED")]));
+        assert_ne!(
+            before, after,
+            "the root is unchanged, but the set that decides the columns is not"
+        );
+    }
+
+    /// Adding or dropping a document is a change too, not just editing one.
+    #[test]
+    fn membership_is_part_of_the_contract() {
+        let two = xsd_contract_fingerprint(&set(&[("root.xsd", "aa"), ("common.xsd", "bb")]));
+        let one = xsd_contract_fingerprint(&set(&[("root.xsd", "aa")]));
+        assert_ne!(two, one, "a dropped import changes what can be parsed");
+    }
+
+    /// Trust on first use, and actually remember it - then an identical set is
+    /// silent on every later run.
+    #[test]
+    fn a_first_run_records_and_an_unchanged_set_passes() {
+        let _g = guard();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+
+        let uri = "schemas/company.xsd";
+        let fp = xsd_contract_fingerprint(&set(&[("schemas/company.xsd", "aa")]));
+        assert!(check_xsd_contract(uri, &fp, "fail").is_ok(), "first sight must not refuse");
+
+        let path = xsd_contracts_path().expect("workspace");
+        assert_eq!(
+            read_xsd_contract(&path, uri).as_deref(),
+            Some(fp.as_str()),
+            "it has to be remembered, or every run is a first run"
+        );
+        assert!(check_xsd_contract(uri, &fp, "fail").is_ok(), "the same set must stay accepted");
+
+        std::env::remove_var("DUCKLE_WORKSPACE");
+    }
+
+    /// `fail` refuses the change AND does not record it, so accepting is a
+    /// deliberate act rather than something the next run does for you.
+    #[test]
+    fn fail_refuses_a_changed_set_and_does_not_accept_it() {
+        let _g = guard();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+
+        let uri = "https://registry.example/company.xsd";
+        let first = xsd_contract_fingerprint(&set(&[("https://registry.example/company.xsd", "aa")]));
+        check_xsd_contract(uri, &first, "fail").expect("first sight");
+
+        let moved = xsd_contract_fingerprint(&set(&[("https://registry.example/company.xsd", "bb")]));
+        let err = check_xsd_contract(uri, &moved, "fail").unwrap_err().to_string();
+        assert!(err.contains(uri), "must name the schema: {err}");
+        assert!(err.contains("xsd_contracts"), "must say where to accept it: {err}");
+
+        let path = xsd_contracts_path().expect("workspace");
+        assert_eq!(
+            read_xsd_contract(&path, uri).as_deref(),
+            Some(first.as_str()),
+            "a refused change must NOT be recorded, or the next run passes silently"
+        );
+
+        std::env::remove_var("DUCKLE_WORKSPACE");
+    }
+
+    /// `warn` says so once and accepts, so a legitimate reissue does not need a
+    /// hand edit - and does not warn forever either.
+    #[test]
+    fn warn_accepts_the_change_after_saying_so() {
+        let _g = guard();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+
+        let uri = "schemas/a.xsd";
+        let first = xsd_contract_fingerprint(&set(&[("schemas/a.xsd", "aa")]));
+        check_xsd_contract(uri, &first, "warn").expect("first sight");
+        let moved = xsd_contract_fingerprint(&set(&[("schemas/a.xsd", "bb")]));
+        check_xsd_contract(uri, &moved, "warn").expect("warn must not refuse");
+
+        let path = xsd_contracts_path().expect("workspace");
+        assert_eq!(
+            read_xsd_contract(&path, uri).as_deref(),
+            Some(moved.as_str()),
+            "warn accepts, so the new contract is what is remembered"
+        );
+        // And exactly one line for the uri, not two.
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text.lines().filter(|l| l.starts_with(uri)).count(),
+            1,
+            "a second line would make \"which contract held\" ambiguous: {text}"
+        );
+
+        std::env::remove_var("DUCKLE_WORKSPACE");
+    }
+
+    /// `allow` is the behaviour from before this existed: it does not look, and
+    /// it does not record.
+    #[test]
+    fn allow_does_not_look() {
+        let _g = guard();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+
+        let uri = "schemas/b.xsd";
+        check_xsd_contract(uri, "anything", "allow").expect("allow never refuses");
+        let path = xsd_contracts_path().expect("workspace");
+        assert!(
+            read_xsd_contract(&path, uri).is_none(),
+            "allow must not write a contract somebody did not ask for"
+        );
+
+        std::env::remove_var("DUCKLE_WORKSPACE");
+    }
+
+    /// With no workspace there is nowhere to remember, so the check degrades to
+    /// the old behaviour rather than refusing every run.
+    #[test]
+    fn no_workspace_degrades_to_allowing() {
+        let _g = guard();
+        std::env::remove_var("DUCKLE_WORKSPACE");
+        assert!(check_xsd_contract("x.xsd", "fp", "fail").is_ok());
+    }
+}
 
 /// Unpinned SFTP connections: trust on first use, and actually remember it.
 ///

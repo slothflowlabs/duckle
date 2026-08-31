@@ -689,6 +689,13 @@ pub struct XmlSourceSpec {
     /// schema always wins: the person who typed it knows something the XSD may
     /// not, and having the file quietly override them would be a surprise.
     pub xsd_path: String,
+    /// #315: what to do when the resolved schema SET stops matching the one
+    /// this workspace accepted.
+    ///
+    /// `allow` does not look, `warn` says so once and accepts, `fail` refuses.
+    /// Defaults to `warn`: a publisher reissuing a schema is normal, and a
+    /// silent change of parser contract is what is not.
+    pub xsd_change_policy: String,
     /// #282: the documents to parse, when an upstream relation names them.
     ///
     /// With this wired the node reads a CORPUS rather than one file, and each

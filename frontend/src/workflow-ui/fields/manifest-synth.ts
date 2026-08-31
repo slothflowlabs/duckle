@@ -1659,6 +1659,21 @@ function fileFormatSection(comp: ComponentDef): FormSection[] {
                         filters: [{ name: 'XML Schema', extensions: ['xsd'] }],
                         description: 'A local path or an https:// URL to the published schema. The columns and their types are read from it, so the Schema tab does not have to be filled in by hand. Only used when the Schema tab is empty, so anything you declare there wins. Nothing is validated against the XSD at run time; it is read for types, not as a gate.',
                     },
+                    {
+                        // #315: the schema set IS the parser, so a publisher
+                        // replacing the bytes behind an unchanged URL changes
+                        // how this feed is read without changing the pipeline.
+                        key: 'xsdChangePolicy',
+                        label: 'If the schema changes',
+                        kind: 'select',
+                        defaultValue: 'warn',
+                        options: [
+                            { label: 'Warn and accept', value: 'warn' },
+                            { label: 'Fail the run', value: 'fail' },
+                            { label: 'Ignore', value: 'allow' },
+                        ],
+                        description: 'The whole resolved schema set, including anything it imports, is remembered the first time it is read. If it later changes, the columns this feed is parsed into may change with it. Warn accepts the new set and says so once. Fail refuses the run until you accept the change by deleting the line from .duckle/xsd_contracts. Ignore does not look.',
+                    },
                 ],
             });
         }

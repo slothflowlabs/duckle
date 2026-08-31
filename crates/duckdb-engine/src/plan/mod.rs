@@ -4677,6 +4677,9 @@ fn build_stage(
         }
         xml_source = Some(XmlSourceSpec {
                 xsd_path: string_prop(&props, "xsdPath").unwrap_or_default(),
+            xsd_change_policy: string_prop(&props, "xsdChangePolicy")
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "warn".to_string()),
             input: artifact_input_from_props(&props, upstream),
             on_error: string_prop(&props, "onError")
                 .filter(|s| !s.trim().is_empty())

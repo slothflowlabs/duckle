@@ -774,6 +774,24 @@ keep a schema set from becoming a way to read the disk or the network:
 - Every imported document is hashed into the run manifest alongside the root. A
   change to any of them changes the derived columns just as much.
 
+**The whole set is one parser contract.** A publisher can replace the bytes
+behind a URL that never changed, and the next run then parses the feed into
+different columns and publishes the result as though nothing happened. The
+manifest records what was used, but only after the data is out. So the resolved
+set is fingerprinted, and the fingerprint is remembered the first time it is
+seen, in `.duckle/xsd_contracts`:
+
+| `xsdChangePolicy` | on a change |
+|---|---|
+| `warn` (default) | says so once, accepts the new set, run continues |
+| `fail` | refuses the run until you accept it by deleting the line |
+| `allow` | does not look |
+
+The fingerprint covers **every** document in the closure, not the root, because
+an `xs:include` three levels down decides a column's type just as much - a root
+whose bytes never moved is no evidence that anything held. It is canonical, so
+a schema that merely reorders its own imports is not a change.
+
 Two things are still refused, because the alternative is a column list that
 quietly stops early. An import naming a namespace with **no `schemaLocation`**
 has nothing to resolve. And two schemas declaring a *different* type under the
