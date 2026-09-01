@@ -120,12 +120,24 @@ pub struct Endpoints {
     pub issuer: String,
 }
 
+/// The cookie that ties a callback to the browser that started the login.
+///
+/// Without it the `state` is a bearer token that anyone holding can redeem:
+/// an attacker starts a login, gets a valid callback URL for THEIR identity,
+/// and induces a victim's browser to visit it - the victim is then signed in
+/// as the attacker and whatever they do next happens in the attacker's account.
+/// Single-use and a TTL stop replay; they do not stop that.
+pub const LOGIN_COOKIE: &str = "duckle_oidc_login";
+
 /// One login in flight, from the redirect until the callback.
 #[derive(Debug, Clone)]
 pub struct Pending {
     pub state: String,
     pub nonce: String,
     pub verifier: String,
+    /// Held by the browser that started this login, in an HttpOnly cookie, and
+    /// required back at the callback.
+    pub browser: String,
     pub created: Instant,
 }
 
@@ -150,9 +162,20 @@ impl PendingLogins {
     /// Removed whether or not it turns out to be usable, so a `state` is good
     /// for exactly one callback: a replayed callback finds nothing, which is
     /// what makes the state a CSRF defence rather than a decoration.
-    pub fn take(&mut self, state: &str) -> Option<Pending> {
+    pub fn take(&mut self, state: &str, browser: Option<&str>) -> Option<Pending> {
         self.sweep();
-        self.by_state.remove(state).filter(|p| p.created.elapsed() < PENDING_TTL)
+        let pending = self.by_state.remove(state).filter(|p| p.created.elapsed() < PENDING_TTL)?;
+        // The browser that finishes a login must be the one that started it.
+        // Compared in constant time, because this is a secret and a timing
+        // oracle on it would hand back the state's twin.
+        let presented = browser.unwrap_or_default();
+        let ok = presented.len() == pending.browser.len()
+            && presented
+                .bytes()
+                .zip(pending.browser.bytes())
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0;
+        ok.then_some(pending)
     }
 
     fn sweep(&mut self) {
@@ -200,6 +223,7 @@ pub fn begin(cfg: &Config, endpoints: &Endpoints) -> (String, Pending) {
         state: random_token(),
         nonce: random_token(),
         verifier: random_token(),
+        browser: random_token(),
         created: Instant::now(),
     };
     let query = [
@@ -238,12 +262,29 @@ fn urlencode(v: &str) -> String {
 /// Who signed in, once everything checked out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Identity {
-    /// The provider's stable identifier. What audit records, because an email
-    /// or a display name can be reassigned to a different person.
+    /// The provider's stable identifier.
     pub subject: String,
-    /// For showing in the UI only.
+    /// The display name the provider gave, for a person reading the log.
     pub label: String,
     pub role: Role,
+}
+
+impl Identity {
+    /// What the session stores, and therefore what every later audit line
+    /// names as the actor.
+    ///
+    /// Subject first, and it is the part that identifies. A display name is
+    /// self-service at most providers, so a session labelled with one lets a
+    /// user pick their own actor string - including the label the break-glass
+    /// admin runs under - and every action they take afterwards is recorded
+    /// against it. The name is kept, after the subject, because a log nobody
+    /// can read is its own problem; but it is never what identifies.
+    pub fn actor(&self) -> String {
+        match self.label.trim().is_empty() || self.label == self.subject {
+            true => self.subject.clone(),
+            false => format!("{} ({})", self.subject, self.label),
+        }
+    }
 }
 
 /// Map an ID token's claims to a Duckle role.
@@ -273,6 +314,18 @@ pub fn map_role(claims: &Value, mappings: &[RoleMapping], default: Option<Role>)
     default
 }
 
+/// Compare two issuer identifiers.
+///
+/// Trailing slash ignored on BOTH sides. It was being trimmed off the
+/// configured value and not off the token's claim, so a provider whose issuer
+/// ends in a slash - `https://tenant.auth0.com/`, which is how Auth0 spells it -
+/// could never match, and no value an operator could put in the config would
+/// help, because the trim made both spellings identical. It fails closed, which
+/// is the right direction, but it fails closed for everyone forever.
+fn same_issuer(a: &str, b: &str) -> bool {
+    a.trim_end_matches('/') == b.trim_end_matches('/')
+}
+
 /// Everything about an ID token that can be checked without the network.
 ///
 /// Signature verification happens before this, in [`verify`]; these are the
@@ -287,7 +340,7 @@ pub fn check_claims(
     now_unix: i64,
 ) -> Result<(), String> {
     let s = |k: &str| claims.get(k).and_then(Value::as_str).unwrap_or_default();
-    if s("iss") != issuer {
+    if !same_issuer(s("iss"), issuer) {
         return Err(format!("token issuer {:?} is not {issuer:?}", s("iss")));
     }
     // `aud` is a string or an array of strings, and this client must be in it -
@@ -463,7 +516,10 @@ pub fn verify(
     let decoding = jsonwebtoken::DecodingKey::from_rsa_components(&key.n, &key.e)
         .map_err(|e| format!("OIDC jwks key: {e}"))?;
     let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256);
-    validation.set_issuer(&[cfg.issuer.trim_end_matches('/')]);
+    // An exact set membership, so both spellings are offered - `check_claims`
+    // below is what actually decides, and it compares them properly.
+    let trimmed = cfg.issuer.trim_end_matches('/').to_string();
+    validation.set_issuer(&[trimmed.clone(), format!("{trimmed}/")]);
     validation.set_audience(&[cfg.client_id.as_str()]);
     let data = jsonwebtoken::decode::<Value>(id_token, &decoding, &validation)
         .map_err(|e| format!("OIDC id_token is not valid: {e}"))?;
@@ -610,25 +666,101 @@ mod tests {
             state: "S".into(),
             nonce: "N".into(),
             verifier: "V".into(),
+            browser: "B".into(),
             created: Instant::now(),
         };
         logins.insert(p);
-        assert!(logins.take("S").is_some());
-        assert!(logins.take("S").is_none(), "a replayed callback must find nothing");
+        assert!(logins.take("S", Some("B")).is_some());
+        assert!(logins.take("S", Some("B")).is_none(), "a replayed callback must find nothing");
     }
 
     #[test]
     fn an_unknown_or_stale_state_is_refused() {
         let mut logins = PendingLogins::default();
-        assert!(logins.take("never-issued").is_none());
+        assert!(logins.take("never-issued", Some("B")).is_none());
         logins.insert(Pending {
             state: "old".into(),
             nonce: "N".into(),
             verifier: "V".into(),
+            browser: "B".into(),
             created: Instant::now() - PENDING_TTL - Duration::from_secs(1),
         });
-        assert!(logins.take("old").is_none(), "the window had closed");
+        assert!(logins.take("old", Some("B")).is_none(), "the window had closed");
         assert!(logins.is_empty(), "and it is not left lying around");
+    }
+
+    #[test]
+    fn a_callback_from_a_different_browser_is_refused() {
+        // Login CSRF / session fixation: an attacker starts a login, takes the
+        // callback URL for THEIR identity, and gets a victim to visit it. The
+        // victim would be signed in as the attacker, and whatever they did next
+        // would happen in the attacker's account. Single-use and a TTL do not
+        // stop that; binding the login to the browser does.
+        let mut logins = PendingLogins::default();
+        logins.insert(Pending {
+            state: "S".into(),
+            nonce: "N".into(),
+            verifier: "V".into(),
+            browser: "attacker-cookie".into(),
+            created: Instant::now(),
+        });
+        assert!(logins.take("S", Some("victim-cookie")).is_none(), "another browser got in");
+        assert!(logins.take("S", None).is_none(), "no cookie at all got in");
+    }
+
+    #[test]
+    fn a_login_cookie_is_spent_even_when_the_browser_is_wrong() {
+        // The state must not survive a failed attempt for a second try.
+        let mut logins = PendingLogins::default();
+        logins.insert(Pending {
+            state: "S".into(),
+            nonce: "N".into(),
+            verifier: "V".into(),
+            browser: "B".into(),
+            created: Instant::now(),
+        });
+        assert!(logins.take("S", Some("wrong")).is_none());
+        assert!(logins.take("S", Some("B")).is_none(), "it was still there to retry");
+    }
+
+    #[test]
+    fn an_issuer_with_a_trailing_slash_matches_one_without() {
+        // Auth0 spells its issuer "https://tenant.auth0.com/". The config side
+        // was trimmed and the token's claim was not, so it could never match -
+        // and no config value helped, because the trim made both spellings the
+        // same expected string.
+        let mut c = good();
+        c["iss"] = "https://idp.example.com/".into();
+        assert!(check_claims(&c, "https://idp.example.com", "duckle-console", "N", 1_000).is_ok());
+        assert!(check_claims(&c, "https://idp.example.com/", "duckle-console", "N", 1_000).is_ok());
+        // And a genuinely different issuer is still refused.
+        c["iss"] = "https://idp.example.com.evil.test/".into();
+        assert!(check_claims(&c, "https://idp.example.com", "duckle-console", "N", 1_000).is_err());
+    }
+
+    #[test]
+    fn the_audited_actor_is_the_subject_and_not_a_name_the_user_can_pick() {
+        // A display name is self-service at most providers. A session labelled
+        // with one lets a user choose their own actor string - including the
+        // label the break-glass admin runs under - and every action they take
+        // afterwards is recorded against it.
+        let forged = Identity {
+            subject: "user-123".into(),
+            label: "token".into(),
+            role: Role::Operator,
+        };
+        let actor = forged.actor();
+        assert!(actor.starts_with("user-123"), "{actor}");
+        assert_ne!(actor, "token", "the break-glass admin's label was forgeable");
+        // The name is kept for a person reading the log, after the subject.
+        assert!(actor.contains("token"), "{actor}");
+        // No name, no parenthetical.
+        let plain = Identity {
+            subject: "user-123".into(),
+            label: "user-123".into(),
+            role: Role::Viewer,
+        };
+        assert_eq!(plain.actor(), "user-123");
     }
 
     #[test]

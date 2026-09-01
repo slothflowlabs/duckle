@@ -535,14 +535,8 @@ fn web_sign_in(state: &WebState, req: &Request) -> Reply {
     match state.console.sign_in(token) {
         Some((sid, who)) => {
             audit::record(&state.workspace, Some(&who), "session.sign_in", "editor", audit::Outcome::Allowed);
-            respond_json(&json!({ "label": who.label, "role": who.role.as_str() })).with_header(
-                format!(
-                    "Set-Cookie: {}={}{}",
-                    console_auth::SESSION_COOKIE,
-                    sid,
-                    cookie_attributes(req.forwarded_proto.as_deref())
-                ),
-            )
+            respond_json(&json!({ "label": who.label, "role": who.role.as_str() }))
+                .with_header(session_cookie_header(&sid, req.forwarded_proto.as_deref()))
         }
         None => {
             audit::record(&state.workspace, None, "session.sign_in", "editor", audit::Outcome::Unauthenticated);
@@ -1824,6 +1818,7 @@ fn oidc_route(req: &Request, state: &State) -> Reply {
 
     if req.path == OIDC_LOGIN_PATH {
         let (url, pending) = crate::oidc::begin(cfg, &endpoints);
+        let browser = pending.browser.clone();
         state
             .oidc_logins
             .lock()
@@ -1833,7 +1828,18 @@ fn oidc_route(req: &Request, state: &State) -> Reply {
             status: "302 Found".into(),
             content_type: "text/plain; charset=utf-8".into(),
             body: Vec::new(),
-            headers: vec![format!("Location: {url}")],
+            headers: vec![
+                format!("Location: {url}"),
+                // Ties the callback to THIS browser. Without it the state is a
+                // bearer token: an attacker starts a login, takes the callback
+                // URL for their own identity, and gets a victim to visit it -
+                // the victim is then signed in as the attacker.
+                format!(
+                    "Set-Cookie: {}={browser}{}",
+                    crate::oidc::LOGIN_COOKIE,
+                    cookie_attributes(req.forwarded_proto.as_deref())
+                ),
+            ],
         };
     }
 
@@ -1846,11 +1852,15 @@ fn oidc_route(req: &Request, state: &State) -> Reply {
         // would put attacker text on the page.
         return respond_err("400 Bad Request", "the OIDC callback carried no code");
     };
+    let browser = req
+        .cookie
+        .as_deref()
+        .and_then(|c| console_auth::cookie_value(c, crate::oidc::LOGIN_COOKIE));
     let Some(pending) = state
         .oidc_logins
         .lock()
         .unwrap_or_else(|p| p.into_inner())
-        .take(returned_state)
+        .take(returned_state, browser.as_deref())
     else {
         return respond_err(
             "400 Bad Request",
@@ -1880,18 +1890,21 @@ fn oidc_route(req: &Request, state: &State) -> Reply {
         &state.workspace,
         None,
         "oidc.signin",
-        &format!("{} as {}", identity.subject, identity.role.as_str()),
+        &format!("{} as {}", identity.actor(), identity.role.as_str()),
         audit::Outcome::Allowed,
     );
-    let sid = state.console.sign_in_external(&identity.label, identity.role);
+    let sid = state.console.sign_in_external(&identity.actor(), identity.role);
     Reply {
         status: "302 Found".into(),
         content_type: "text/plain; charset=utf-8".into(),
         body: Vec::new(),
         headers: vec![
             "Location: /".to_string(),
+            session_cookie_header(&sid, req.forwarded_proto.as_deref()),
+            // And the login cookie is spent.
             format!(
-                "Set-Cookie: duckle_sid={sid}{}",
+                "Set-Cookie: {}=; Max-Age=0{}",
+                crate::oidc::LOGIN_COOKIE,
                 cookie_attributes(req.forwarded_proto.as_deref())
             ),
         ],
@@ -2441,25 +2454,35 @@ fn audit_target(req: &Request) -> String {
 ///
 /// The token arrives in the body, never in the URL: a query string reaches the
 /// server log, the browser history and any proxy in between.
+/// The `Set-Cookie` line that hands a browser its session (#310).
+///
+/// One constructor for all three login paths - the console token, the editor
+/// token and OIDC. There were three copies of this and the third spelled the
+/// cookie name as a literal that did not match the one the console reads, so a
+/// completed SSO login authenticated nobody: the session row was written, the
+/// browser held a cookie under a name nothing looks at, and the audit log said
+/// the user had signed in.
+fn session_cookie_header(sid: &str, forwarded_proto: Option<&str>) -> String {
+    // HttpOnly so page scripts cannot read it, SameSite=Strict so another site
+    // cannot ride it, and Secure exactly when the browser's own hop is https.
+    // Always setting it would stop the cookie being stored at all on plain-HTTP
+    // local use; never setting it lets a session cookie travel in clear behind
+    // a proxy that does terminate TLS.
+    format!(
+        "Set-Cookie: {}={sid}{}",
+        console_auth::SESSION_COOKIE,
+        cookie_attributes(forwarded_proto)
+    )
+}
+
 fn sign_in(state: &State, req: &Request) -> Reply {
     let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
     let token = body.get("token").and_then(|v| v.as_str()).unwrap_or("");
     match state.console.sign_in(token) {
         Some((sid, who)) => {
             audit::record(&state.workspace, Some(&who), "session.sign_in", "-", audit::Outcome::Allowed);
-            // HttpOnly so page scripts cannot read it, SameSite=Strict so another site
-            // cannot ride it, and Secure exactly when the browser's own hop is https.
-            // Always setting it would stop the cookie being stored at all on plain-HTTP
-            // local use; never setting it lets a session cookie travel in clear behind a
-            // proxy that does terminate TLS.
-            let cookie = format!(
-                "{}={}{}",
-                console_auth::SESSION_COOKIE,
-                sid,
-                cookie_attributes(req.forwarded_proto.as_deref())
-            );
             respond_json(&json!({ "label": who.label, "role": who.role.as_str() }))
-                .with_header(format!("Set-Cookie: {cookie}"))
+                .with_header(session_cookie_header(&sid, req.forwarded_proto.as_deref()))
         }
         None => {
             audit::record(
@@ -4279,6 +4302,61 @@ mod tests {
             crate::console_auth::Role::Viewer.allows(role),
             "a viewer cannot scrape; requirement is {role:?}"
         );
+    }
+
+    /// Whatever a login hands the browser, the console must find it.
+    ///
+    /// Reads the header the SERVER builds rather than one the test writes -
+    /// which is the difference that matters: the bug that shipped was a login
+    /// path spelling the cookie name itself, and a test that spells it too
+    /// agrees with the bug.
+    #[test]
+    fn the_cookie_a_login_sets_is_the_cookie_the_console_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let console =
+            console_auth::Console::configure(tmp.path(), "0.0.0.0", Some("s3cret")).unwrap();
+        let sid = console.sign_in_external("user-123 (Ada)", console_auth::Role::Operator);
+
+        let header = super::session_cookie_header(&sid, None);
+        let sent_back = header
+            .strip_prefix("Set-Cookie: ")
+            .and_then(|c| c.split(';').next())
+            .expect("a cookie");
+        let who = console
+            .identify(None, Some(sent_back))
+            .expect("the console must find the session its own login just set");
+        assert_eq!(who.role, console_auth::Role::Operator);
+        assert!(header.contains("HttpOnly") && header.contains("SameSite=Strict"), "{header}");
+    }
+
+    /// The session an OIDC login mints must be one the console can actually
+    /// find.
+    ///
+    /// This is the bug that shipped: the callback set `Set-Cookie: duckle_sid=`
+    /// while the console reads `duckle_console`, so a completed SSO login
+    /// authenticated nobody - the row was written, the browser held a cookie
+    /// under a name nothing looks at, and the user landed back on the sign-in
+    /// form while the audit log said they had signed in. Every existing test
+    /// stopped at the 302 or the 400 and never reached the success path.
+    #[test]
+    fn a_session_minted_for_an_external_identity_is_one_the_console_finds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let console =
+            console_auth::Console::configure(tmp.path(), "0.0.0.0", Some("s3cret")).unwrap();
+        let sid = console.sign_in_external("user-123 (Ada)", console_auth::Role::Operator);
+
+        // Exactly the header the browser will send back, built from the same
+        // constant the callback must use.
+        let cookie = format!("{}={sid}", console_auth::SESSION_COOKIE);
+        let who = console
+            .identify(None, Some(&cookie))
+            .expect("the console must find the session its own login minted");
+        assert_eq!(who.role, console_auth::Role::Operator);
+        assert_eq!(who.label, "user-123 (Ada)", "the audited actor must survive");
+
+        // And the name that did not work finds nothing, which is what makes
+        // this test about the name rather than about sessions in general.
+        assert!(console.identify(None, Some(&format!("duckle_sid={sid}"))).is_none());
     }
 
     /// #310: the login routes are public, and a server with no OIDC config

@@ -510,7 +510,7 @@ impl Console {
 pub const SESSION_COOKIE: &str = "duckle_console";
 
 /// Pull one cookie's value out of a `Cookie:` header.
-fn cookie_value(header: &str, name: &str) -> Option<String> {
+pub fn cookie_value(header: &str, name: &str) -> Option<String> {
     header.split(';').find_map(|pair| {
         let (k, v) = pair.split_once('=')?;
         (k.trim() == name).then(|| v.trim().to_string())

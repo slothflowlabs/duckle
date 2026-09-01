@@ -794,6 +794,19 @@ and absent means deny because that is the answer that cannot surprise anyone.
 config rather than of iteration order. A group name matches whole: `contains:
 "data-admins"` does not match a group called `not-data-admins-really`.
 
+**The callback is bound to the browser that started the login.** The redirect
+sets a short-lived HttpOnly cookie and the callback requires it back, compared in
+constant time. Single-use and a five-minute TTL stop a state being replayed; they
+do not stop an attacker starting a login, taking the callback URL for their own
+identity and getting a victim to visit it - which would sign the victim in as the
+attacker.
+
+**Audit names the provider's subject.** A display name is self-service at most
+providers, so a session labelled with one lets a user choose their own actor
+string - including the label the break-glass admin runs under - and every action
+they take afterwards is recorded against it. The actor is `sub (display name)`,
+and the part that identifies is the subject.
+
 **Break-glass is untouched.** The `--token` / `DUCKLE_CONSOLE_TOKEN` admin lives
 only in the process and never in the store, so it still works when the provider
 does not. Scoped API keys are unaffected.
