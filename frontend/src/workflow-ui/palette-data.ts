@@ -119,7 +119,7 @@ export const PALETTE: Category[] = [
                     src('fixedwidth', 'Fixed-width', 'available', 'Read positional / fixed-width text files (mainframe / banking exports). Form provides a columns array - {name, start (1-based), width}; engine builds SUBSTR projections. Trailing whitespace stripped by default.'),
                     src('yaml', 'YAML', 'available', 'Read a YAML file as a table. Top-level YAML arrays become one row per element; non-array docs become a single row. Suits config-data ETL (Helm values, GitHub Actions matrices) not bulk logs.'),
                     src('toml', 'TOML', 'available', 'Read a TOML file as a table. Top-level TOML doc becomes one row (TOML disallows a top-level array). Suits Cargo / pyproject / Hugo config audits.'),
-                    src('spatial', 'Geospatial (GeoJSON / Shapefile / GeoPackage)', 'available', 'Read geospatial files via the DuckDB spatial extension (ST_Read)'),
+                    src('spatial', 'Geospatial (GeoParquet / GeoJSON / Shapefile / GeoPackage)', 'available', 'Read geospatial files: GeoParquet natively, and GeoJSON / Shapefile / GeoPackage / KML / GPX / GML via the DuckDB spatial extension (ST_Read)'),
                     src('gdb', 'Esri File Geodatabase (.gdb)', 'available', 'Read a feature class (layer) from an Esri File Geodatabase via the spatial extension (ST_Read with layer=)'),
                     src('huggingface', 'Hugging Face dataset', 'available', 'Read a Hugging Face Hub dataset directly via DuckDB hf:// (httpfs). Give the repo id and a file/glob; CSV / JSON / Parquet auto-detected. Token for private or gated datasets.'),
                 ],

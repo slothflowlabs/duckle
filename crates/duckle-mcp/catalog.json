@@ -3160,10 +3160,10 @@
     },
     {
       "id": "src.spatial",
-      "label": "Geospatial (GeoJSON / Shapefile / GeoPackage)",
+      "label": "Geospatial (GeoParquet / GeoJSON / Shapefile / GeoPackage)",
       "kind": "source",
       "availability": "available",
-      "summary": "Read geospatial files via the DuckDB spatial extension (ST_Read)",
+      "summary": "Read geospatial files: GeoParquet natively, and GeoJSON / Shapefile / GeoPackage / KML / GPX / GML via the DuckDB spatial extension (ST_Read)",
       "ports": {
         "inputs": [],
         "outputs": [
@@ -3183,8 +3183,8 @@
       "manifest": {
         "id": "src.spatial",
         "kind": "source",
-        "label": "Geospatial (GeoJSON / Shapefile / GeoPackage)",
-        "description": "Read geospatial files via the DuckDB spatial extension (ST_Read)",
+        "label": "Geospatial (GeoParquet / GeoJSON / Shapefile / GeoPackage)",
+        "description": "Read geospatial files: GeoParquet natively, and GeoJSON / Shapefile / GeoPackage / KML / GPX / GML via the DuckDB spatial extension (ST_Read)",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -3199,6 +3199,8 @@
                   {
                     "name": "Geospatial",
                     "extensions": [
+                      "geoparquet",
+                      "parquet",
                       "geojson",
                       "json",
                       "shp",

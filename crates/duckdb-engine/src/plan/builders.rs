@@ -8341,7 +8341,27 @@ pub(crate) fn build_vector_search(inputs: &NodeInputs, props: &JsonValue) -> Res
 /// transforms (e.g. ST_AsText) can convert it.
 pub(crate) fn build_spatial_source(props: &JsonValue) -> String {
     let path = string_prop(props, "path").unwrap_or_default();
+    // #241: GeoParquet is not something ST_Read can open. ST_Read is
+    // GDAL-backed, and the spatial extension DuckDB ships does not carry
+    // GDAL's Parquet driver, so a .geoparquet path fails with "Could not open
+    // GDAL dataset" - the file is perfectly readable, just not by that
+    // function. `read_parquet` reads it natively and returns a real GEOMETRY
+    // with its CRS intact, which is what the rest of the geo components
+    // expect.
+    if is_parquet_path(&path) {
+        return format!("SELECT * FROM read_parquet('{}')", sql_escape(&path));
+    }
     format!("SELECT * FROM ST_Read('{}')", sql_escape(&path))
+}
+
+/// Whether a path names a Parquet file, including a glob or a remote URL.
+///
+/// By extension rather than by sniffing, because the decision is made while
+/// compiling and the file may not be reachable yet - and because a wrong guess
+/// here is a confusing failure at run time rather than a wrong answer.
+fn is_parquet_path(path: &str) -> bool {
+    let p = path.split(['?', '#']).next().unwrap_or(path).trim().to_ascii_lowercase();
+    p.ends_with(".parquet") || p.ends_with(".geoparquet") || p.ends_with(".pq")
 }
 
 /// Esri File Geodatabase (.gdb) source via the spatial extension (#205).

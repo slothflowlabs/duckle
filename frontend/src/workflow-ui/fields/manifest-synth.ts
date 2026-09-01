@@ -1048,9 +1048,12 @@ function synthFileSource(comp: ComponentDef): ComponentManifest {
     };
     // src.spatial reads many geo formats via GDAL; surface the common
     // ones in the file picker rather than a useless ".spatial" filter.
+    // #241: geoparquet/parquet included - the engine reads those with
+    // read_parquet rather than ST_Read, which cannot open them at all, and a
+    // format the picker does not offer is one nobody discovers.
     const filters = comp.id === 'src.spatial'
         ? [
-            { name: 'Geospatial', extensions: ['geojson', 'json', 'shp', 'gpkg', 'kml', 'gpx', 'gml'] },
+            { name: 'Geospatial', extensions: ['geoparquet', 'parquet', 'geojson', 'json', 'shp', 'gpkg', 'kml', 'gpx', 'gml'] },
             { name: 'All files', extensions: ['*'] },
         ]
         : [

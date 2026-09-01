@@ -4279,6 +4279,33 @@
     }
 
     #[test]
+    fn the_geospatial_source_reads_geoparquet_with_read_parquet() {
+        // #241: ST_Read is GDAL-backed and the bundled spatial extension has no
+        // GDAL Parquet driver, so a .geoparquet path fails with "Could not open
+        // GDAL dataset" - the file is fine, that function just cannot open it.
+        for path in ["/data/a.geoparquet", "/data/a.parquet", "s3://b/k.PARQUET", "/d/*.parquet"] {
+            let sql = super::builders::build_spatial_source(
+                &serde_json::json!({ "path": path }),
+            );
+            assert!(sql.contains("read_parquet"), "{path} -> {sql}");
+            assert!(!sql.contains("ST_Read"), "{path} -> {sql}");
+        }
+    }
+
+    #[test]
+    fn every_other_geospatial_format_still_goes_through_st_read() {
+        // ST_Read is what reads these, and routing them to read_parquet would
+        // break every format the component was built for.
+        for path in ["/d/a.geojson", "/d/a.shp", "/d/a.gpkg", "/d/a.kml", "/d/roads.gml"] {
+            let sql = super::builders::build_spatial_source(
+                &serde_json::json!({ "path": path }),
+            );
+            assert!(sql.contains("ST_Read"), "{path} -> {sql}");
+            assert!(!sql.contains("read_parquet"), "{path} -> {sql}");
+        }
+    }
+
+    #[test]
     fn parquet_sink_orders_by_hilbert_without_writing_the_bounds_out() {
         // #319. The issue proposes `CROSS JOIN bounds`, which puts the bbox in
         // the exported file as a column; a scalar subquery does not. And

@@ -764,6 +764,17 @@ does.
 monitored. Nothing prunes `runs/`, so a workspace that has ever run thousands of
 pipelines would otherwise emit thousands of label values forever.
 
+### Reading GeoParquet
+
+The **Geospatial** source reads GeoParquet as well as GeoJSON, Shapefile,
+GeoPackage, KML, GPX and GML.
+
+`ST_Read` is GDAL-backed and the spatial extension DuckDB ships does not carry
+GDAL's Parquet driver, so a `.geoparquet` path failed with `Could not open GDAL
+dataset` - the file was perfectly readable, just not by that function. Parquet
+paths now go through `read_parquet`, which returns a real `GEOMETRY` with its CRS
+intact; everything else still goes through `ST_Read`.
+
 ### Spatial sort on Parquet export
 
 Name a GEOMETRY column on a Parquet sink and rows are sorted along a Hilbert
