@@ -968,6 +968,22 @@ properties. A false "breaking" costs someone thirty seconds; a false
 breaking* rather than dressed up as either, and `--strict` fails the build on
 those too.
 
+**Three tiers, because two would need column lineage Duckle has not got.** A
+direct consumer that references the changed column is **breaking**; a direct
+consumer that does not is **possibly breaking**; everything further downstream is
+listed for **revalidation** and never called broken:
+
+```text
+BREAKING  lake/company.parquet removes vat, read by normalized;
+          revalidate search_index (downstream, no column lineage to prove it either way)
+```
+
+Proving a dropped column propagates through an intervening transform needs
+column lineage across it. Asserting it anyway would put a confident wrong claim
+in front of a reviewer; leaving the pipeline out entirely would hide it from the
+blast radius. Naming it at its own tier is the only honest option, and it does
+not fail the gate.
+
 ### Freshness that does not wait for a failure (`freshness`)
 
 A dataset goes stale in ways that produce no failed run at all: a schedule

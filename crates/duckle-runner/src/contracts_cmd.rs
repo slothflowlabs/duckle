@@ -107,7 +107,24 @@ pub fn run() -> ExitCode {
             .filter(|id| *id != touch.pipeline_id)
             .filter_map(|id| head_typed.iter().find(|(hid, _)| *hid == id).cloned())
             .collect();
-        findings.extend(contracts::check_asset(&touch.asset, &before, &after, &consumers));
+        // #302: everything the asset reaches beyond its direct consumers. The
+        // catalog's own impact walk already computes it with a depth, so depth
+        // 1 is the direct consumers handled above and anything deeper is the
+        // transitive closure Louis asked to see surfaced.
+        let downstream: Vec<String> = head
+            .impact(&touch.asset, None)
+            .pipelines
+            .into_iter()
+            .filter(|p| p.depth > 1 && p.id != touch.pipeline_id)
+            .map(|p| p.id)
+            .collect();
+        findings.extend(contracts::check_asset_with_downstream(
+            &touch.asset,
+            &before,
+            &after,
+            &consumers,
+            &downstream,
+        ));
     }
 
     // Compatible changes are real information, but they are not what a gate is
@@ -178,9 +195,18 @@ fn describe(f: &contracts::Finding) -> String {
         TypeChanged { column, from, to, .. } => format!("changes {column} from {from} to {to}"),
         NullabilityRelaxed { column } => format!("lets {column} be null"),
     };
-    if f.affected.is_empty() {
+    let mut line = if f.affected.is_empty() {
         format!("{} {what}, and nothing in this workspace reads it", f.asset)
     } else {
         format!("{} {what}, read by {}", f.asset, f.affected.join(", "))
+    };
+    if !f.revalidate.is_empty() {
+        // Named as needing revalidation, not as broken. The distinction is the
+        // whole point of the tier.
+        line.push_str(&format!(
+            "; revalidate {} (downstream, no column lineage to prove it either way)",
+            f.revalidate.join(", ")
+        ));
     }
+    line
 }

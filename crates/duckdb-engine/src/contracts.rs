@@ -218,8 +218,18 @@ pub struct Finding {
     #[serde(flatten)]
     pub change: Change,
     pub severity: Severity,
-    /// Downstream pipelines that mention the affected column.
+    /// Direct consumers of this asset that mention the affected column.
     pub affected: Vec<String>,
+    /// Pipelines further downstream that this build cannot prove anything
+    /// about, and which should be revalidated anyway (#302).
+    ///
+    /// Deliberately not `affected`: Duckle has no column lineage across an
+    /// intervening transform, so calling `search_index` breaking because
+    /// `normalized_company` reads a dropped column would be asserting something
+    /// unproven. Leaving it out entirely would be worse - it is in the blast
+    /// radius, and a reviewer needs to see it to decide.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub revalidate: Vec<String>,
 }
 
 /// Judge one asset's change against the pipelines that read it.
@@ -233,6 +243,24 @@ pub fn check_asset(
     after: &[Column],
     consumers: &[(String, crate::PipelineDoc)],
 ) -> Vec<Finding> {
+    check_asset_with_downstream(asset, before, after, consumers, &[])
+}
+
+/// The same, plus the pipelines further down the graph (#302).
+///
+/// `downstream` is everything the asset reaches beyond its direct consumers -
+/// the transitive closure the affected-pipeline walk already computes. They are
+/// reported at their own tier rather than folded into `affected`, because
+/// proving a dropped column propagates through an intervening transform needs
+/// column lineage across it, and Duckle does not have that. Three honest tiers
+/// beat two confident ones.
+pub fn check_asset_with_downstream(
+    asset: &str,
+    before: &[Column],
+    after: &[Column],
+    consumers: &[(String, crate::PipelineDoc)],
+    downstream: &[String],
+) -> Vec<Finding> {
     classify(before, after)
         .into_iter()
         .map(|change| {
@@ -242,7 +270,14 @@ pub fn check_asset(
                 .map(|(id, _)| id.clone())
                 .collect();
             let severity = severity(&change, !affected.is_empty());
-            Finding { asset: asset.to_string(), change, severity, affected }
+            // Anything already named as a direct consumer is not repeated here:
+            // a pipeline shown twice at two tiers reads as two problems.
+            let revalidate: Vec<String> = downstream
+                .iter()
+                .filter(|d| !consumers.iter().any(|(id, _)| id == *d))
+                .cloned()
+                .collect();
+            Finding { asset: asset.to_string(), change, severity, affected, revalidate }
         })
         .collect()
 }
@@ -250,6 +285,83 @@ pub fn check_asset(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #302: three tiers, because two would need column lineage Duckle has not
+    /// got. `producer -> normalized -> search_index`: dropping a column
+    /// `normalized` reads is breaking for `normalized` and unproven for
+    /// `search_index` - which still has to be revalidated, and still must not
+    /// be called broken.
+    #[test]
+    fn a_transitive_consumer_is_surfaced_without_being_called_breaking() {
+        let before = vec![col("id", DataType::Int64, false), col("vat", DataType::String, true)];
+        let after = vec![col("id", DataType::Int64, false)];
+        let direct = vec![consumer("normalized", serde_json::json!({ "predicate": "vat IS NOT NULL" }))];
+        let f = check_asset_with_downstream(
+            "lake/company.parquet",
+            &before,
+            &after,
+            &direct,
+            &["search_index".to_string(), "api_export".to_string()],
+        );
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].severity, Severity::Breaking, "the direct reader proves this one");
+        assert_eq!(f[0].affected, vec!["normalized"]);
+        assert_eq!(
+            f[0].revalidate,
+            vec!["search_index", "api_export"],
+            "the blast radius must still be visible"
+        );
+    }
+
+    #[test]
+    fn downstream_alone_never_makes_a_change_breaking() {
+        // The tier that must NOT escalate. Nothing directly reads the dropped
+        // column, so there is no proof of breakage anywhere - only pipelines
+        // that ought to be looked at. Calling this breaking is exactly the
+        // over-claim the three tiers exist to avoid.
+        let before = vec![col("id", DataType::Int64, false), col("vat", DataType::String, true)];
+        let after = vec![col("id", DataType::Int64, false)];
+        let direct = vec![consumer("normalized", serde_json::json!({ "predicate": "id > 0" }))];
+        let f = check_asset_with_downstream(
+            "a",
+            &before,
+            &after,
+            &direct,
+            &["search_index".to_string()],
+        );
+        assert_eq!(f.len(), 1);
+        assert_ne!(f[0].severity, Severity::Breaking, "nothing proves this breaks anything");
+        assert!(f[0].affected.is_empty());
+        assert_eq!(f[0].revalidate, vec!["search_index"], "and it is still surfaced");
+    }
+
+    #[test]
+    fn a_direct_consumer_is_not_repeated_as_needing_revalidation() {
+        // Shown at two tiers, one pipeline reads as two problems.
+        let before = vec![col("id", DataType::Int64, false), col("vat", DataType::String, true)];
+        let after = vec![col("id", DataType::Int64, false)];
+        let direct = vec![consumer("normalized", serde_json::json!({ "predicate": "vat IS NULL" }))];
+        let f = check_asset_with_downstream(
+            "a",
+            &before,
+            &after,
+            &direct,
+            &["normalized".to_string(), "search_index".to_string()],
+        );
+        assert_eq!(f[0].revalidate, vec!["search_index"]);
+    }
+
+    #[test]
+    fn the_two_argument_form_behaves_exactly_as_before() {
+        let before = vec![col("id", DataType::Int64, false), col("vat", DataType::String, true)];
+        let after = vec![col("id", DataType::Int64, false)];
+        let direct = vec![consumer("normalized", serde_json::json!({ "predicate": "vat IS NULL" }))];
+        let old = check_asset("a", &before, &after, &direct);
+        assert_eq!(old.len(), 1);
+        assert!(old[0].revalidate.is_empty(), "no downstream given, none claimed");
+        assert_eq!(old[0].severity, Severity::Breaking);
+    }
+
 
     fn col(name: &str, t: DataType, nullable: bool) -> Column {
         Column {
