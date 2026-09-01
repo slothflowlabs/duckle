@@ -623,6 +623,45 @@ being able to answer.
 A pipeline that declares nothing behaves exactly as before: any unresolved
 `${name}` is simply prompted for.
 
+### Alerting without scraping the UI (`/metrics`, `/readyz`)
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://console:8080/metrics
+curl http://console:8080/readyz      # no credential; so does /healthz
+```
+
+```text
+duckle_run_last_status{pipeline="nightly"} 0
+duckle_run_last_duration_seconds{pipeline="nightly"} 12.4
+duckle_runs_window{pipeline="nightly",status="error"} 3
+duckle_run_permits_total 4
+duckle_run_permits_free 0
+duckle_runs_in_flight 4
+```
+
+The run-history half is rendered by the engine, the same function that writes
+`logs/duckle_metrics.prom` for a node_exporter textfile collector - so the
+endpoint and the file cannot come to disagree about what a series means. What
+the endpoint adds is what a file cannot carry: what this process is doing right
+now. `duckle_run_permits_free` at zero for any length of time is runs queueing.
+
+**Liveness and readiness are separate**, because they fail differently and an
+orchestrator acts differently on each: a process that is alive but not ready
+should stop receiving traffic, not be restarted. `/readyz` writes and deletes a
+probe file under `.duckle/`, so it catches a read-only mount or a full disk - the
+states that stop runs being recorded while every read still succeeds. It checks
+nothing external: a source being down is not this server being unready.
+
+**Both probes are unauthenticated; `/metrics` is not.** A probe says the process
+is up and tells an anonymous caller nothing else. Pipeline names are the shape of
+someone's business, so a scraper sends the same bearer token any other API client
+does.
+
+**Labels are bounded**, and when the budget bites it says so:
+`duckle_metrics_pipelines_omitted` above zero means those pipelines are not being
+monitored. Nothing prunes `runs/`, so a workspace that has ever run thousands of
+pipelines would otherwise emit thousands of label values forever.
+
 ### Why was this run different? (`runs diff`)
 
 ```bash

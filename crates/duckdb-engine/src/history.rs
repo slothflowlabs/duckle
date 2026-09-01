@@ -190,6 +190,33 @@ pub fn append_run_record(
 /// counters - the metric names say so. Written atomically (temp file +
 /// rename) so a concurrent scrape never reads a half-written file.
 pub fn write_metrics_textfile(workspace: &Path) -> std::io::Result<()> {
+    let out = render_metrics(workspace)?;
+    let logs_dir = workspace.join("logs");
+    std::fs::create_dir_all(&logs_dir)?;
+    let final_path = logs_dir.join("duckle_metrics.prom");
+    let tmp_path = logs_dir.join("duckle_metrics.prom.tmp");
+    std::fs::write(&tmp_path, &out)?;
+    std::fs::rename(&tmp_path, &final_path)
+}
+
+/// How many pipelines may contribute label values.
+///
+/// #300 asks for bounded labels, and nothing prunes `runs/`: a workspace that
+/// has ever run five thousand pipelines would otherwise emit five thousand
+/// label values forever, and serving that over HTTP turns a local file into a
+/// scraped time series that never shrinks. The cap is generous because the
+/// pipeline that breaks is exactly the one you must not have dropped - and
+/// when it does bite, [`OMITTED`] says so rather than the series simply not
+/// being there.
+const MAX_PIPELINE_SERIES: usize = 1000;
+const OMITTED: &str = "duckle_metrics_pipelines_omitted";
+
+/// The metrics document, without writing it anywhere (#300).
+///
+/// Split from [`write_metrics_textfile`] so the console can serve the same
+/// bytes at `/metrics`. Rendering twice - once for the textfile, once for the
+/// endpoint - is how the two would come to disagree about what a series means.
+pub fn render_metrics(workspace: &Path) -> std::io::Result<String> {
     let runs_dir = workspace.join("runs");
     let mut out = String::new();
     out.push_str("# HELP duckle_run_last_status 1 when the pipeline's most recent run succeeded, 0 when it failed or was cancelled.\n# TYPE duckle_run_last_status gauge\n");
@@ -207,6 +234,10 @@ pub fn write_metrics_textfile(workspace: &Path) -> std::io::Result<()> {
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
         .collect();
     files.sort();
+    // Newest first, so if the cap bites it drops pipelines nobody has run in
+    // months rather than whichever happens to sort last. Sorted by name second
+    // so the choice is deterministic when timestamps tie.
+    let mut loaded: Vec<(String, Vec<RunRecord>, i64)> = Vec::new();
     for path in files {
         let Some(pipeline_id) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
@@ -215,6 +246,16 @@ pub fn write_metrics_textfile(workspace: &Path) -> std::io::Result<()> {
         let Some(last) = records.last() else {
             continue;
         };
+        let at = chrono::DateTime::parse_from_rfc3339(&last.at).map(|t| t.timestamp()).unwrap_or(0);
+        loaded.push((pipeline_id.to_string(), records, at));
+    }
+    loaded.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+    let omitted = loaded.len().saturating_sub(MAX_PIPELINE_SERIES);
+    loaded.truncate(MAX_PIPELINE_SERIES);
+
+    for (pipeline_id, records, _) in &loaded {
+        let pipeline_id = pipeline_id.as_str();
+        let last = records.last().expect("only pipelines with a record are loaded");
         let label = escape_label(pipeline_id);
         let ok = if last.status == "ok" { 1 } else { 0 };
         last_status.push_str(&format!(
@@ -280,13 +321,22 @@ pub fn write_metrics_textfile(workspace: &Path) -> std::io::Result<()> {
     out.push_str(&last_ts);
     out.push_str("# HELP duckle_runs_window Runs by status within the retained history window (not a lifetime counter).\n# TYPE duckle_runs_window gauge\n");
     out.push_str(&window_runs);
-
-    let logs_dir = workspace.join("logs");
-    std::fs::create_dir_all(&logs_dir)?;
-    let final_path = logs_dir.join("duckle_metrics.prom");
-    let tmp_path = logs_dir.join("duckle_metrics.prom.tmp");
-    std::fs::write(&tmp_path, &out)?;
-    std::fs::rename(&tmp_path, &final_path)
+    // One push per line. A `\` continuation inside a string literal keeps the
+    // indentation of the next source line, and Prometheus requires every line
+    // to begin in column zero.
+    out.push_str("# HELP duckle_metrics_pipelines Pipelines contributing a label value to this document.
+");
+    out.push_str("# TYPE duckle_metrics_pipelines gauge
+");
+    out.push_str(&format!("duckle_metrics_pipelines {}
+", loaded.len()));
+    out.push_str(&format!("# HELP {OMITTED} Pipelines left out because the label budget was reached. Alert on this being above zero: those pipelines are not being monitored.
+"));
+    out.push_str(&format!("# TYPE {OMITTED} gauge
+"));
+    out.push_str(&format!("{OMITTED} {omitted}
+"));
+    Ok(out)
 }
 
 /// Escape a value for a Prometheus label: backslash, quote, newline.
@@ -365,6 +415,21 @@ mod tests {
             incomplete: false,
             incomplete_reason: None,
         }
+    }
+
+    #[test]
+    fn the_label_budget_is_reported_rather_than_assumed() {
+        // #300 asks for bounded labels, and nothing prunes runs/. The bound is
+        // only trustworthy if hitting it is visible: a pipeline silently
+        // dropped from the metrics is a pipeline nobody is alerting on.
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(ws.path().join("runs")).unwrap();
+        append_run_record(ws.path(), "one", record("ok", 10, 1));
+        let out = render_metrics(ws.path()).unwrap();
+        assert!(out.contains("duckle_metrics_pipelines 1"), "{out}");
+        assert!(out.contains("duckle_metrics_pipelines_omitted 0"), "{out}");
+        // and the cap is a real number, not unbounded by accident
+        assert!(MAX_PIPELINE_SERIES > 0);
     }
 
     #[test]

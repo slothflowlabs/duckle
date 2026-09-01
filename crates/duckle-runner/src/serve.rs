@@ -131,12 +131,27 @@ fn parse_serve_args() -> Result<ServeArgs, String> {
 struct RunGate {
     /// Permits currently free. Guarded by the mutex, waited on via the condvar.
     free: Mutex<usize>,
+    /// How many there were to begin with, so `free` can be read as saturation
+    /// rather than as a bare number (#300).
+    total: usize,
     ready: Condvar,
 }
 
 impl RunGate {
     fn new(permits: usize) -> Self {
-        RunGate { free: Mutex::new(permits.max(1)), ready: Condvar::new() }
+        let permits = permits.max(1);
+        RunGate { free: Mutex::new(permits), total: permits, ready: Condvar::new() }
+    }
+
+    /// Permits free right now, and how many there are in total (#300).
+    ///
+    /// A gauge, read without blocking: an operator alerting on "runs are
+    /// queueing" needs to see saturation while it is happening, and a metrics
+    /// scrape that waited for a permit would be the one thing guaranteed to
+    /// make it worse.
+    fn permits(&self) -> (usize, usize) {
+        let free = *self.free.lock().unwrap_or_else(|p| p.into_inner());
+        (free, self.total)
     }
 
     /// Block until a permit is free, then hold it until the guard drops.
@@ -585,8 +600,8 @@ fn route_web(req: &Request, state: &WebState) -> Reply {
         return respond_403("blocked: cross-origin or non-local request");
     }
     if is_public_route(&req.method, &req.path) {
-        if req.path == HEALTH_PATH {
-            return respond("200 OK", "text/plain; charset=utf-8", b"ok");
+        if let Some(reply) = probe_reply(&req.path, &state.workspace) {
+            return reply;
         }
         return web_sign_in(state, &req);
     }
@@ -1367,6 +1382,16 @@ fn cookie_attributes(forwarded_proto: Option<&str>) -> &'static str {
 /// The liveness route. Unauthenticated by design, and it answers with two bytes.
 pub const HEALTH_PATH: &str = "/healthz";
 
+/// The readiness route (#300).
+///
+/// Separate from liveness because they fail differently and an orchestrator
+/// acts differently on each: a process that is alive but not ready should stop
+/// receiving traffic, not be restarted. Readiness here means the state store is
+/// usable and the server can accept a run. It deliberately checks nothing
+/// external - a source being down is not this server being unready, and probing
+/// sources on every scrape would turn a health check into load.
+pub const READY_PATH: &str = "/readyz";
+
 /// The routes an unauthenticated caller may reach, in one place so the console and the
 /// editor cannot drift apart on it.
 ///
@@ -1375,14 +1400,16 @@ pub const HEALTH_PATH: &str = "/healthz";
 /// credential: every route needing one means a Kubernetes HTTP probe gets 401 and the pod
 /// is marked unhealthy forever. `/healthz` answers `ok` and nothing else, so it can say the
 /// process is up without telling an anonymous caller anything about what is in it.
+pub const PUBLIC_ROUTES: [(&str, &str); 5] = [
+    ("POST", "/api/session"),
+    ("GET", HEALTH_PATH),
+    ("GET", READY_PATH),
+    ("GET", SETUP_PATH),
+    ("POST", SETUP_CLAIM_PATH),
+];
+
 pub fn is_public_route(method: &str, path: &str) -> bool {
-    matches!(
-        (method, path),
-        ("POST", "/api/session")
-            | ("GET", HEALTH_PATH)
-            | ("GET", SETUP_PATH)
-            | ("POST", SETUP_CLAIM_PATH)
-    )
+    PUBLIC_ROUTES.contains(&(method, path))
 }
 
 fn is_loopback_host(h: &str) -> bool {
@@ -1517,6 +1544,68 @@ fn write_reply(stream: &mut TcpStream, reply: &Reply) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether this server could accept a run right now (#300).
+///
+/// One write and one delete under `.duckle/`, which is where run state lives.
+/// Cheap enough to run on every probe, and it fails for the reasons that
+/// actually stop runs being recorded: a read-only mount, a full disk, a
+/// workspace that has gone away underneath the process.
+fn probe_ready(workspace: &Path) -> Result<(), String> {
+    let dir = workspace.join(".duckle");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{} is not writable: {e}", dir.display()))?;
+    let probe = dir.join(".readyz");
+    std::fs::write(&probe, b"ok").map_err(|e| format!("{} is not writable: {e}", dir.display()))?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+
+/// The Prometheus exposition body (#300).
+///
+/// The run-history half is rendered by the engine, so the endpoint and the
+/// textfile exporter cannot come to disagree about what a series means. What is
+/// added here is the half a file cannot carry: what this process is doing right
+/// now.
+fn metrics_body(state: &State) -> String {
+    let mut out = duckle_duckdb_engine::history::render_metrics(&state.workspace)
+        .unwrap_or_else(|_| {
+            // A workspace with no runs yet has no `runs/` directory. That is a
+            // server with nothing to report, not a broken scrape - returning an
+            // error here would make a fresh deployment look down.
+            String::new()
+        });
+    let (free, total) = state.run_lock.permits();
+    let in_flight = state.running.lock().map(|s| s.len()).unwrap_or(0);
+    let accepted = state.runs.lock().map(|r| r.len()).unwrap_or(0);
+    // Written line by line rather than as one continued string literal: a `\`
+    // continuation keeps the indentation of the following source line, which
+    // put nine spaces in front of every `# TYPE` and left the document invalid.
+    // Prometheus requires each line to start in column zero.
+    for (name, help, value) in [
+        ("duckle_runs_in_flight", "Pipelines executing right now.", in_flight),
+        (
+            "duckle_run_permits_total",
+            "Pipelines this process will run at once (DUCKLE_MAX_CONCURRENT_RUNS).",
+            total,
+        ),
+        (
+            "duckle_run_permits_free",
+            "Permits available. Zero for any length of time means runs are queueing.",
+            free,
+        ),
+        (
+            "duckle_runs_tracked",
+            "Async runs this process is still holding, finished or not.",
+            accepted,
+        ),
+    ] {
+        out.push_str(&format!("# HELP {name} {help}
+# TYPE {name} gauge
+{name} {value}
+"));
+    }
+    out
+}
+
 fn respond(status: &str, content_type: &str, body: &[u8]) -> Reply {
     Reply {
         status: status.to_string(),
@@ -1640,9 +1729,37 @@ fn authorize(req: &Request, state: &State) -> Access {
 ///
 /// Kept in one function so the socket path and the framework path answer identically, and
 /// so the list of what needs no credential is somewhere a person can read in one go.
+/// Liveness and readiness, for whichever server is asking.
+///
+/// Shared by the console and the editor because both are processes an
+/// orchestrator probes, and a probe that answers on one and redirects to a
+/// sign-in page on the other is worse than not having it.
+fn probe_reply(path: &str, workspace: &Path) -> Option<Reply> {
+    if path == HEALTH_PATH {
+        return Some(respond("200 OK", "text/plain; charset=utf-8", b"ok"));
+    }
+    if path == READY_PATH {
+        // Writable, not merely present: a workspace mounted read-only, or one
+        // whose disk has filled, answers every read fine and cannot record a
+        // single run. That is exactly the state readiness exists to catch.
+        return Some(match probe_ready(workspace) {
+            Ok(()) => respond("200 OK", "text/plain; charset=utf-8", b"ready"),
+            // 503, so a load balancer takes it out of rotation rather than
+            // restarting it: the process is fine, its storage is not.
+            Err(why) => respond(
+                "503 Service Unavailable",
+                "text/plain; charset=utf-8",
+                format!("not ready: {why}
+").as_bytes(),
+            ),
+        });
+    }
+    None
+}
+
 fn public_route(req: &Request, state: &State) -> Reply {
-    if req.path == HEALTH_PATH {
-        return respond("200 OK", "text/plain; charset=utf-8", b"ok");
+    if let Some(reply) = probe_reply(&req.path, &state.workspace) {
+        return reply;
     }
     if req.method == "GET" && req.path == SETUP_PATH {
         // A console that is already set up has no setup page, and saying so is friendlier
@@ -1698,6 +1815,17 @@ fn dispatch_console(req: &Request, state: &Arc<State>, who: console_auth::Identi
         ("GET", "/") | ("GET", "/index.html") => {
             respond("200 OK", "text/html; charset=utf-8", PANEL_HTML.as_bytes())
         }
+        // #300. Authenticated, unlike /healthz and /readyz: pipeline names are
+        // the shape of someone's business, and a probe saying "this process is
+        // up" gives an anonymous caller nothing. A scraper sends the same
+        // bearer token any other API client does.
+        ("GET", "/metrics") => respond(
+            "200 OK",
+            // The version Prometheus negotiates for the text exposition format;
+            // without it some scrapers fall back to guessing.
+            "text/plain; version=0.0.4; charset=utf-8",
+            metrics_body(state).as_bytes(),
+        ),
         ("GET", "/api/summary") => respond_json(&api_summary(state)),
         ("GET", "/api/pipelines") => respond_json(&api_pipelines(state)),
         ("GET", "/api/pipeline") => match req.query.get("file") {
@@ -3531,13 +3659,24 @@ async fn console_public(
 }
 
 fn console_router(state: Arc<State>) -> axum::Router {
-    axum::Router::new()
-        .route(HEALTH_PATH, axum::routing::get(console_public))
-        .route("/api/session", axum::routing::post(console_public))
-        // Setup is reachable without a credential because there is not yet a credential to
-        // have. `claim` refuses once the console has an owner, so this cannot be replayed.
-        .route(SETUP_PATH, axum::routing::get(console_public))
-        .route(SETUP_CLAIM_PATH, axum::routing::post(console_public))
+    // Built FROM `PUBLIC_ROUTES` rather than beside it. Listing them twice is
+    // how `/readyz` came to be public to the authoriser and unknown to the
+    // router: the fallback then ran the authorised handler, whose extractor
+    // sees a public route and can only answer 500. Every hand-rolled test
+    // passed, because those go through `route_console` and never touch this.
+    //
+    // Setup is reachable without a credential because there is not yet a
+    // credential to have. `claim` refuses once the console has an owner, so it
+    // cannot be replayed.
+    let mut router = axum::Router::new();
+    for (method, path) in PUBLIC_ROUTES {
+        let handler = match method {
+            "POST" => axum::routing::post(console_public),
+            _ => axum::routing::get(console_public),
+        };
+        router = router.route(path, handler);
+    }
+    router
         // Everything else goes through the extractor, so a route added later is
         // authorised by existing, rather than by someone remembering to ask.
         .fallback(console_authed)
@@ -3858,6 +3997,97 @@ mod tests {
             host: "0.0.0.0".into(),
             tick_interval: std::time::Duration::from_secs(15),
         })
+    }
+
+    /// #300: an operator can alert on failed and queued runs without the UI.
+    #[test]
+    fn metrics_serves_run_history_and_what_this_process_is_doing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+        std::fs::create_dir_all(ws.join("runs")).unwrap();
+        std::fs::write(
+            ws.join("runs").join("nightly.json"),
+            // snake_case, which is what append_run_record writes: RunRecord
+            // carries no rename attribute.
+            r#"[{"at":"2026-09-01T00:00:00Z","status":"error","duration_ms":1200,"rows":0,
+                 "node_count":2,"trigger":"scheduled"}]"#,
+        )
+        .unwrap();
+        let state = guarded_state(&ws);
+        let reply = route_console(&request("GET", "/metrics", Some("Bearer s3cret")), &state);
+        assert_eq!(reply.code(), 200);
+        assert!(
+            reply.content_type.starts_with("text/plain; version=0.0.4"),
+            "a scraper negotiates on this: {}",
+            reply.content_type
+        );
+        let body = String::from_utf8_lossy(&reply.body).into_owned();
+        // The failed run, from history.
+        assert!(
+            body.contains("duckle_run_last_status{pipeline=\"nightly\"} 0"),
+            "no failed-run series: {body}"
+        );
+        // And saturation, which no textfile can carry.
+        assert!(body.contains("duckle_run_permits_total 1"), "{body}");
+        assert!(body.contains("duckle_run_permits_free 1"), "{body}");
+        assert!(body.contains("duckle_runs_in_flight 0"), "{body}");
+    }
+
+    #[test]
+    fn metrics_is_not_public() {
+        // Pipeline names are the shape of someone's business. /healthz says the
+        // process is up and tells an anonymous caller nothing else; this would
+        // tell them everything.
+        assert!(!is_public_route("GET", "/metrics"));
+        let tmp = tempfile::tempdir().unwrap();
+        let state = guarded_state(tmp.path());
+        let reply = route_console(&request("GET", "/metrics", None), &state);
+        assert_ne!(reply.code(), 200, "served metrics to an unauthenticated caller");
+    }
+
+    #[test]
+    fn metrics_on_a_workspace_that_has_never_run_is_not_an_error() {
+        // A fresh deployment has no runs/ directory. Reporting a broken scrape
+        // for it would make every new install look down.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = guarded_state(tmp.path());
+        let reply = route_console(&request("GET", "/metrics", Some("Bearer s3cret")), &state);
+        assert_eq!(reply.code(), 200);
+        assert!(String::from_utf8_lossy(&reply.body).contains("duckle_run_permits_total"));
+    }
+
+    /// #300: liveness and readiness fail differently and are acted on
+    /// differently, so they are separate routes.
+    #[test]
+    fn readyz_is_public_and_reports_a_workspace_it_cannot_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+        assert!(is_public_route("GET", "/readyz"), "an orchestrator probe holds no credential");
+        let state = guarded_state(&ws);
+        let ok = route_console(&request("GET", "/readyz", None), &state);
+        assert_eq!(ok.code(), 200);
+        assert_eq!(String::from_utf8_lossy(&ok.body), "ready");
+
+        // Liveness is a different question and must not move with it.
+        assert_eq!(route_console(&request("GET", "/healthz", None), &state).code(), 200);
+    }
+
+    #[test]
+    fn readiness_fails_on_a_workspace_that_cannot_be_written() {
+        // The probe itself rather than the route, because a State cannot be
+        // built on an unwritable workspace at all - configuring the console is
+        // the first thing that writes there. The route maps Err to 503 in three
+        // lines above; what needs proving is that the probe says Err for a
+        // workspace that genuinely cannot record a run.
+        let tmp = tempfile::tempdir().unwrap();
+        let not_a_directory = tmp.path().join("workspace-is-a-file");
+        std::fs::write(&not_a_directory, b"x").unwrap();
+        let why = crate::serve::probe_ready(&not_a_directory).unwrap_err();
+        assert!(why.contains("not writable"), "{why}");
+
+        // And a workspace that is fine says so, so the check is not simply
+        // always failing.
+        assert!(crate::serve::probe_ready(tmp.path()).is_ok());
     }
 
     /// #259: the whole asynchronous contract, end to end without a socket.
