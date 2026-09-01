@@ -9214,12 +9214,51 @@ pub(crate) fn build_parquet_sink(props: &JsonValue, from_view: &str) -> String {
         // leave untouched siblings alone).
         options.push("OVERWRITE_OR_IGNORE".to_string());
     }
-    format!(
-        "COPY ({}) TO '{}' ({})",
-        partition_guarded_source(props, from_view, &partition),
-        sql_escape(&path),
-        options.join(", ")
-    )
+    let source = partition_guarded_source(props, from_view, &partition);
+    // #319: optional Hilbert spatial ordering, so geometries that are close on
+    // the ground land close in the file and row-group pruning can skip more.
+    match hilbert_order(props, from_view) {
+        None => format!("COPY ({}) TO '{}' ({})", source, sql_escape(&path), options.join(", ")),
+        Some(order_by) => format!(
+            // The spatial extension is loaded here rather than relied upon:
+            // geometry usually arrives from a source that already loaded it and
+            // taints this stage, but a GEOMETRY read back from a plain Parquet
+            // file does not, and ST_Hilbert would then fail at write time -
+            // after the whole pipeline had already run.
+            "INSTALL spatial; LOAD spatial; COPY (SELECT * FROM ({}) {}) TO '{}' ({})",
+            source,
+            order_by,
+            sql_escape(&path),
+            options.join(", ")
+        ),
+    }
+}
+
+/// The `ORDER BY ST_Hilbert(...)` clause for a Parquet write, when one is asked
+/// for (#319).
+///
+/// **Bounds relative to the data**, not the default global extent: the curve is
+/// scaled to what is actually being written, which is what makes neighbouring
+/// geometries land in the same row group. It costs one extra scan to find the
+/// extent, which is the trade the feature exists to make.
+///
+/// A scalar subquery rather than the `CROSS JOIN bounds` the issue proposes,
+/// because `SELECT *` across that join writes the bbox out as a **column of the
+/// exported file**. Verified against DuckDB 1.5.4, where the issue's
+/// `ST_Extent_Agg(geom)::BOX_2D` is also rejected outright ("Unimplemented type
+/// for cast (GEOMETRY -> BOX_2D)"); `ST_Extent(ST_Extent_Agg(geom))` is the
+/// form that works.
+///
+/// One property rather than a checkbox and a column: a checkbox ticked with no
+/// column chosen is a state the engine would have to guess at, and guessing
+/// which column holds the geometry is how the wrong one gets sorted on.
+fn hilbert_order(props: &JsonValue, from_view: &str) -> Option<String> {
+    let column = string_prop(props, "hilbertColumn").filter(|c| !c.trim().is_empty())?;
+    let col = quote_ident(column.trim());
+    Some(format!(
+        "ORDER BY ST_Hilbert({col}, (SELECT ST_Extent(ST_Extent_Agg({col})) FROM {}))",
+        quote_ident(from_view)
+    ))
 }
 
 pub(crate) fn build_json_sink(props: &JsonValue, from_view: &str) -> String {

@@ -31728,6 +31728,13 @@
                 "kind": "integer",
                 "defaultValue": 10000,
                 "description": "Safety cap: abort before writing if partitioning would create more than this many files (one per distinct value). 0 = unlimited. Only applies when Partition by columns is set."
+              },
+              {
+                "key": "hilbertColumn",
+                "label": "Spatial sort (Hilbert)",
+                "kind": "text",
+                "placeholder": "geometry column, e.g. geom",
+                "description": "Name a GEOMETRY column to sort rows along a Hilbert curve before writing, so geometries that are close on the ground land in the same row group and a spatial filter can skip more of the file. The curve is scaled to this dataset’s own extent, which costs one extra pass over the data. Leave empty to write rows in the order they arrive."
               }
             ]
           }

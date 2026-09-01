@@ -764,6 +764,27 @@ does.
 monitored. Nothing prunes `runs/`, so a workspace that has ever run thousands of
 pipelines would otherwise emit thousands of label values forever.
 
+### Spatial sort on Parquet export
+
+Name a GEOMETRY column on a Parquet sink and rows are sorted along a Hilbert
+curve before writing, so geometries close on the ground land in the same row
+group and a spatial filter can skip more of the file.
+
+Measured on 2,000 scattered points written in 40 row groups of 50:
+
+| written            | mean row-group bbox area |
+|--------------------|-------------------------:|
+| as they arrive     |                  954,575 |
+| Hilbert            |                   19,549 |
+
+The curve is scaled to **this dataset's own extent**, which costs one extra pass
+to find it - that is the trade the option exists to make. Leave the field empty
+and nothing changes: the emitted SQL is byte-for-byte what it was.
+
+One field rather than a checkbox and a column, because a checkbox ticked with no
+column chosen is a state the engine would have to guess at, and guessing which
+column holds the geometry is how the wrong one gets sorted on.
+
 ### A watcher is not a run
 
 `follow` polls continuously, and most polls find nothing. A source checked every

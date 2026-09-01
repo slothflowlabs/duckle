@@ -1139,6 +1139,18 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                         defaultValue: 10000,
                         description: 'Safety cap: abort before writing if partitioning would create more than this many files (one per distinct value). 0 = unlimited. Only applies when Partition by columns is set.',
                     },
+                    {
+                        // #319. One field rather than a checkbox plus a column:
+                        // a checkbox ticked with no column chosen is a state
+                        // the engine would have to guess at, and guessing which
+                        // column holds the geometry is how the wrong one gets
+                        // sorted on.
+                        key: 'hilbertColumn',
+                        label: 'Spatial sort (Hilbert)',
+                        kind: 'text',
+                        placeholder: 'geometry column, e.g. geom',
+                        description: 'Name a GEOMETRY column to sort rows along a Hilbert curve before writing, so geometries that are close on the ground land in the same row group and a spatial filter can skip more of the file. The curve is scaled to this dataset’s own extent, which costs one extra pass over the data. Leave empty to write rows in the order they arrive.',
+                    },
                 ],
             },
         ],

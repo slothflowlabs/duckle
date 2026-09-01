@@ -4279,6 +4279,48 @@
     }
 
     #[test]
+    fn parquet_sink_orders_by_hilbert_without_writing_the_bounds_out() {
+        // #319. The issue proposes `CROSS JOIN bounds`, which puts the bbox in
+        // the exported file as a column; a scalar subquery does not. And
+        // ST_Extent_Agg(g)::BOX_2D, also from the issue, is rejected by DuckDB
+        // 1.5.4 outright - ST_Extent(ST_Extent_Agg(g)) is the form that works.
+        let sql = super::builders::build_parquet_sink(
+            &serde_json::json!({ "path": "/lake/out.parquet", "hilbertColumn": "geom" }),
+            "v",
+        );
+        assert!(sql.contains("ORDER BY ST_Hilbert(\"geom\""), "{sql}");
+        assert!(sql.contains("ST_Extent(ST_Extent_Agg(\"geom\"))"), "{sql}");
+        assert!(!sql.contains("CROSS JOIN"), "the bbox would become a column: {sql}");
+        assert!(!sql.contains("BOX_2D"), "that cast does not work on 1.5.4: {sql}");
+        // Spatial is loaded by the sink itself: geometry read back from a plain
+        // Parquet file does not taint this stage, and ST_Hilbert would then
+        // fail at write time, after the whole pipeline had run.
+        assert!(sql.starts_with("INSTALL spatial; LOAD spatial;"), "{sql}");
+    }
+
+    #[test]
+    fn a_parquet_sink_without_the_option_is_byte_for_byte_what_it_was() {
+        let sql = super::builders::build_parquet_sink(
+            &serde_json::json!({ "path": "/lake/out.parquet" }),
+            "v",
+        );
+        assert_eq!(sql, "COPY (SELECT * FROM \"v\") TO '/lake/out.parquet' (FORMAT PARQUET, COMPRESSION 'ZSTD')");
+    }
+
+    #[test]
+    fn an_empty_hilbert_column_is_off_rather_than_an_error() {
+        // A field cleared in the form arrives as "", and sorting by a column
+        // called "" would fail the write.
+        for value in ["", "   "] {
+            let sql = super::builders::build_parquet_sink(
+                &serde_json::json!({ "path": "/o.parquet", "hilbertColumn": value }),
+                "v",
+            );
+            assert!(!sql.contains("ST_Hilbert"), "{value:?} -> {sql}");
+        }
+    }
+
+    #[test]
     fn parquet_sink_forwards_row_group_size() {
         // issue-#16 perf report: the "Row group size" UI field was dropped by
         // build_parquet_sink, so DuckDB used its internal default. Forward it.
