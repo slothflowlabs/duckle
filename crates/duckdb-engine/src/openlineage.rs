@@ -213,6 +213,14 @@ fn datasets(
         .filter(|t| t.pipeline_id == pipeline_id && t.direction == direction)
     {
         let Some(node) = receipt.nodes.get(&touch.node_id) else { continue };
+        // Present in the receipt is not the same as ran. The engine back-fills
+        // every stage a budget stop or an earlier failure prevented, as
+        // `skipped`, so joining on presence alone asserts the run wrote a table
+        // it never opened - and a freshness or impact query built on that edge
+        // is wrong in the direction that matters.
+        if node.status == "skipped" {
+            continue;
+        }
         let ds = dataset_of(&touch.asset, hash_names);
         if !seen.insert(format!("{}|{}", ds.namespace, ds.name)) {
             continue;
@@ -245,21 +253,34 @@ fn datasets(
         // a consumer can tell "this dataset" from "some dataset whose identity
         // Duckle does not know". Same rule as the affected-pipeline walk.
         if touch.asset.contains("${") {
-            entry["facets"] = json!({
-                "duckle": {
-                    "_producer": PRODUCER,
-                    "_schemaURL": SCHEMA_URL,
-                    "unresolved": true,
-                    "reason": "the reference is decided at run time, so this name does not address a single dataset"
-                }
+            // Assigned into `facets`, not over it. Replacing the object dropped
+            // the schema facet written just above, and a dated path
+            // (`/lake/orders_${date}.parquet`) is both the common shape for
+            // this and exactly the case that triggers it.
+            entry["facets"]["duckle"] = json!({
+                "_producer": PRODUCER,
+                "_schemaURL": SCHEMA_URL,
+                "unresolved": true,
+                "reason": "the reference is decided at run time, so this name does not address a single dataset"
             });
         }
+        // The spec has a different facet for each direction, and an
+        // OutputDatasetFacet on an input is not a valid input facet: a
+        // collector that validates against `_schemaURL` either rejects it or
+        // files rows-read under a key no consumer of input statistics reads.
         if let Some(rows) = node.rows {
-            entry["facets"]["outputStatistics"] = json!({
-                "_producer": PRODUCER,
-                "_schemaURL": "https://openlineage.io/spec/facets/1-0-0/OutputStatisticsOutputDatasetFacet.json",
-                "rowCount": rows
-            });
+            let (field, schema) = match direction {
+                Direction::Read => (
+                    "inputStatistics",
+                    "https://openlineage.io/spec/facets/1-0-0/InputStatisticsInputDatasetFacet.json",
+                ),
+                Direction::Write => (
+                    "outputStatistics",
+                    "https://openlineage.io/spec/facets/1-0-0/OutputStatisticsOutputDatasetFacet.json",
+                ),
+            };
+            entry["facets"][field] =
+                json!({ "_producer": PRODUCER, "_schemaURL": schema, "rowCount": rows });
         }
         out.push(entry);
     }
@@ -312,7 +333,14 @@ pub fn event(
 
     json!({
         "eventType": kind.as_str(),
-        "eventTime": receipt.at,
+        // When THIS event happened, not when the run began. `receipt.at` is
+        // stamped once, in `begin`; using it for the terminal event too gave
+        // every run in a collector a duration of zero, and left two events
+        // sharing a timestamp with no defined order between them.
+        "eventTime": match kind {
+            EventType::Start => receipt.at.clone(),
+            _ => chrono::Utc::now().to_rfc3339(),
+        },
         "producer": PRODUCER,
         "schemaURL": SCHEMA_URL,
         "run": { "runId": run_uuid(&receipt.run_id), "facets": run_facets },
@@ -354,7 +382,11 @@ pub fn emit(workspace: &Path, cfg: &Config, event: &Value) {
         if let Ok(mut f) =
             std::fs::OpenOptions::new().create(true).append(true).open(dir.join("openlineage.ndjson"))
         {
-            let _ = writeln!(f, "{line}");
+            // One syscall. `writeln!` issues a write per format piece, and
+            // O_APPEND makes each write atomic but not the pair - two runs in
+            // one workspace interleave and the file stops being NDJSON, which
+            // is the durability this whole path rests on.
+            let _ = f.write_all(format!("{line}\n").as_bytes());
         }
     }
     let Some(endpoint) = cfg.endpoint.as_deref().filter(|e| !e.trim().is_empty()) else {
@@ -641,6 +673,88 @@ mod tests {
         emit(ws, &cfg, &json!({ "eventType": "START" }));
         let log = std::fs::read_to_string(ws.join("logs/openlineage.ndjson")).unwrap();
         assert!(log.contains("START"), "{log}");
+    }
+
+    #[test]
+    fn a_terminal_event_is_stamped_when_it_happened() {
+        // Both events carrying `receipt.at` gave every run in a collector a
+        // duration of zero, and left two events sharing one timestamp with no
+        // defined order between them.
+        let r = receipt("ok");
+        let start = event(&Config::default(), EventType::Start, &r, &catalog(), "nightly");
+        let done = event(&Config::default(), EventType::Complete, &r, &catalog(), "nightly");
+        assert_eq!(start["eventTime"], r.at, "START is when the run began");
+        assert_ne!(done["eventTime"], start["eventTime"], "the run took no time at all");
+    }
+
+    #[test]
+    fn a_skipped_node_is_not_a_dataset_the_run_touched() {
+        // The engine back-fills every stage a budget stop or an earlier failure
+        // prevented, as `skipped`. Joining on presence alone asserts the run
+        // wrote a table it never opened.
+        let mut r = receipt("error");
+        r.nodes.get_mut("out").unwrap().status = "skipped".into();
+        r.nodes.get_mut("out").unwrap().rows = None;
+        let e = event(&Config::default(), EventType::Fail, &r, &catalog(), "nightly");
+        assert!(
+            e["outputs"].as_array().unwrap().is_empty(),
+            "a skipped sink was reported as written: {e}"
+        );
+        assert_eq!(e["inputs"].as_array().unwrap().len(), 1, "the source did run");
+    }
+
+    #[test]
+    fn statistics_match_the_direction_they_are_on() {
+        let e = event(&Config::default(), EventType::Complete, &receipt("ok"), &catalog(), "nightly");
+        assert_eq!(e["inputs"][0]["facets"]["inputStatistics"]["rowCount"], 100);
+        assert!(e["inputs"][0]["facets"].get("outputStatistics").is_none(),
+            "an OutputDatasetFacet on an input is not a valid input facet");
+        assert_eq!(e["outputs"][0]["facets"]["outputStatistics"]["rowCount"], 100);
+    }
+
+    #[test]
+    fn an_unresolved_name_keeps_its_schema_facet() {
+        // A dated path is both the common shape for a template placeholder and
+        // exactly the case where the two facets meet.
+        let cat = crate::catalog::build_from_documents(&[(
+            "nightly".to_string(),
+            serde_json::json!({
+                "name": "nightly",
+                "nodes": [{ "id": "out", "type": "sink", "data": { "componentId": "snk.parquet",
+                  "properties": { "path": "/lake/orders_${date}.parquet" },
+                  "schema": [{ "name": "id", "type": "BIGINT" }] } }],
+                "edges": []
+            }),
+        )]);
+        let e = event(&Config::default(), EventType::Complete, &receipt("ok"), &cat, "nightly");
+        let out = &e["outputs"][0]["facets"];
+        assert_eq!(out["duckle"]["unresolved"], true, "{e}");
+        assert!(out.get("schema").is_some(), "the schema facet was overwritten: {e}");
+        assert!(out.get("outputStatistics").is_some(), "{e}");
+    }
+
+    #[test]
+    fn an_interrupted_run_gets_a_terminal_event() {
+        // Without one a collector shows the run RUNNING forever, which is
+        // indistinguishable from a run still in flight - the exact state the
+        // ABORT distinction exists to avoid.
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        std::fs::write(config_path(ws), r#"{"namespace":"prod"}"#).unwrap();
+        let r = crate::retry::begin(ws, "run-x-9", "scheduled", "p", "pipelines/p.json", "h", None);
+        drop(r);
+        // Nothing is alive, so reconcile calls it interrupted.
+        let changed = crate::retry::reconcile(ws, &|_| false);
+        assert_eq!(changed, vec!["run-x-9"]);
+        let events: Vec<serde_json::Value> =
+            std::fs::read_to_string(ws.join("logs/openlineage.ndjson"))
+                .unwrap()
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect();
+        assert_eq!(events.len(), 2, "START and a terminal event");
+        assert_eq!(events[1]["eventType"], "ABORT");
+        assert_eq!(events[0]["run"]["runId"], events[1]["run"]["runId"]);
     }
 
     #[test]

@@ -1574,14 +1574,25 @@ fn metrics_body(state: &State) -> String {
             String::new()
         });
     let (free, total) = state.run_lock.permits();
-    let in_flight = state.running.lock().map(|s| s.len()).unwrap_or(0);
+    // Permits in use, not distinct pipeline ids. `state.running` is a set of
+    // ids for the console's "Running" badge, so two runs of one pipeline count
+    // once and the first to finish removes the id while the other is still
+    // going. Saturation is what an operator alerts on, and the gate knows it
+    // exactly.
+    let in_flight = total.saturating_sub(free);
+    let named = state.running.lock().map(|s| s.len()).unwrap_or(0);
     let accepted = state.runs.lock().map(|r| r.len()).unwrap_or(0);
     // Written line by line rather than as one continued string literal: a `\`
     // continuation keeps the indentation of the following source line, which
     // put nine spaces in front of every `# TYPE` and left the document invalid.
     // Prometheus requires each line to start in column zero.
     for (name, help, value) in [
-        ("duckle_runs_in_flight", "Pipelines executing right now.", in_flight),
+        ("duckle_runs_in_flight", "Run slots in use right now.", in_flight),
+        (
+            "duckle_pipelines_running",
+            "Distinct pipelines with at least one run in flight.",
+            named,
+        ),
         (
             "duckle_run_permits_total",
             "Pipelines this process will run at once (DUCKLE_MAX_CONCURRENT_RUNS).",
@@ -3674,7 +3685,13 @@ fn console_router(state: Arc<State>) -> axum::Router {
             "POST" => axum::routing::post(console_public),
             _ => axum::routing::get(console_public),
         };
-        router = router.route(path, handler);
+        // `.fallback` on the METHOD router, not just on the Router. A path
+        // registered for one method answers 405 to every other method itself,
+        // and the Router-level fallback never runs - which took `DELETE
+        // /api/session` out of service and made the console's Sign out button
+        // a no-op, because `/api/session` is public for POST and authorised
+        // for DELETE.
+        router = router.route(path, handler.fallback(console_authed));
     }
     router
         // Everything else goes through the extractor, so a route added later is
@@ -4031,6 +4048,49 @@ mod tests {
         assert!(body.contains("duckle_run_permits_total 1"), "{body}");
         assert!(body.contains("duckle_run_permits_free 1"), "{body}");
         assert!(body.contains("duckle_runs_in_flight 0"), "{body}");
+    }
+
+    /// Through the REAL axum Router, not the hand-rolled path.
+    ///
+    /// The regression this pins lived only in the router: `/api/session` is
+    /// public for POST and authorised for DELETE, and registering the path for
+    /// POST alone made axum's own method router answer 405 to DELETE, so the
+    /// Router fallback never ran and the console's Sign out did nothing. Every
+    /// existing test went through `route_console` and stayed green.
+    #[tokio::test]
+    async fn the_router_serves_every_method_a_public_path_also_has() {
+        use tower::ServiceExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let router = super::console_router(guarded_state(tmp.path()));
+        let response = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri("/api/session")
+                    .header("authorization", "Bearer s3cret")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(
+            response.status(),
+            axum::http::StatusCode::METHOD_NOT_ALLOWED,
+            "the method router answered 405 and the fallback never ran"
+        );
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+    }
+
+    #[test]
+    fn a_scraper_does_not_need_an_admin_token() {
+        // Handing a monitoring agent a credential that can also add users and
+        // deploy pipelines is a worse trade than not scraping.
+        let (role, action) = crate::audit::requirement("GET", "/metrics");
+        assert_eq!(action, "metrics.read", "left to the fallback, which demands admin");
+        assert!(
+            crate::console_auth::Role::Viewer.allows(role),
+            "a viewer cannot scrape; requirement is {role:?}"
+        );
     }
 
     #[test]

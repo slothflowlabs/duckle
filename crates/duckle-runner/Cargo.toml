@@ -71,4 +71,10 @@ tempfile = "3"
 # #303: retention tests need files with a chosen mtime; already in the tree via
 # notify, so this adds no new dependency to the graph.
 filetime = "0.2"
+# #311 follow-up: the console has TWO request paths, a hand-rolled one and an
+# axum Router, and a bug that lives only in the router (a method fallback) is
+# invisible to every test that goes through the hand-rolled one - which is how
+# `DELETE /api/session` came to answer 405 with the whole suite green. `oneshot`
+# drives the real Router. Already in the tree via axum, so no new dependency.
+tower = { version = "0.5", features = ["util"] }
 

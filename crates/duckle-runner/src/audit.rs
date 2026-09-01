@@ -399,6 +399,12 @@ pub fn requirement(method: &str, path: &str) -> (Role, &'static str) {
         ("POST", "/api/watermarks") => (Role::Operator, "watermark.write"),
         ("DELETE", "/api/watermarks") => (Role::Operator, "watermark.clear"),
 
+        // #300: a scraper is a reader. Named here rather than left to the
+        // fallback, which would demand admin - and handing a monitoring agent a
+        // credential that can also add users and deploy pipelines is a worse
+        // trade than not scraping at all.
+        ("GET", "/metrics") => (Role::Viewer, "metrics.read"),
+
         // Anything unrecognised needs the highest role. A route added later
         // without a line here is locked down rather than left open.
         _ => (Role::Admin, "unknown"),

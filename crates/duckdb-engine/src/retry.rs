@@ -296,6 +296,13 @@ pub fn reconcile(workspace: &Path, live_pids: &dyn Fn(u32) -> bool) -> Vec<Strin
         r.status = INTERRUPTED.to_string();
         r.pid = None;
         if write(workspace, &r).is_ok() {
+            // #311: the run had a START event and would otherwise never get a
+            // terminal one, so a collector shows it RUNNING forever -
+            // indistinguishable from a run still in flight, which is the exact
+            // state the ABORT distinction exists to avoid. This is the only
+            // place `interrupted` is ever produced; without it here the ABORT
+            // mapping is unreachable from anywhere but a unit test.
+            export_lineage(workspace, &r, crate::openlineage::EventType::Abort);
             changed.push(r.run_id.clone());
         }
     }
