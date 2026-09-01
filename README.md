@@ -764,6 +764,36 @@ does.
 monitored. Nothing prunes `runs/`, so a workspace that has ever run thousands of
 pipelines would otherwise emit thousands of label values forever.
 
+### A watcher is not a run
+
+`follow` polls continuously, and most polls find nothing. A source checked every
+ten seconds is unchanged thousands of times between real arrivals, so there are
+two identities rather than one:
+
+```text
+session   follow-orders-1788270909966   the watcher: is it up, when did it last look?
+run       run-follow-orders-1788270910157   one execution: what did it do, can I retry it?
+```
+
+A poll that finds nothing updates the session - `lastPollAt`, `pollCount`,
+`lastError` - and nothing else. A poll that actually moves rows, or fails, gets a
+normal run id from the same primitive every other surface uses, names the session
+as its parent, and lands in run history: retryable, comparable and addressable
+exactly like a scheduled or manual run.
+
+```json
+{ "sessionId": "follow-orders-...", "state": "stopped", "pollCount": 2043, "runCount": 7 }
+```
+
+`pollCount - runCount` is how much of the watching was quiet. `lastPollAt` and
+`lastEventAt` are separate because "healthy and idle" and "healthy and ingesting"
+are different states and one field cannot say which.
+
+**A killed watcher is `interrupted`, not `running` forever.** The session is
+written before the loop starts and reconciled on the next start, the same way a
+run receipt is - because "the box rebooted" and "it is quietly still polling"
+call for opposite responses.
+
 ### One id, all the way through
 
 A run's **receipt**, its **history record** and its **log lines** all carry the

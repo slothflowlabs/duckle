@@ -38,6 +38,7 @@ pub mod drift;
 pub mod qvd;
 pub mod review;
 pub mod alerts;
+pub mod follow_session;
 pub mod sqldiag;
 pub mod openlineage;
 pub mod rundiff;

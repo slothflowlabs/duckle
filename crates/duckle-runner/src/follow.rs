@@ -209,6 +209,19 @@ pub fn run(opts: FollowOptions) -> Result<u64, String> {
     );
     eprintln!("  Ctrl-C stops after the batch in flight finishes.");
 
+    // #259: the watcher gets its own durable identity, separate from the runs
+    // it causes. Reconcile first, so a watcher killed last time shows as
+    // interrupted rather than as still running forever.
+    let _ = duckle_duckdb_engine::follow_session::reconcile(&workspace, &|_| false);
+    let session_id = duckle_duckdb_engine::follow_session::new_session_id(&name);
+    let mut session = duckle_duckdb_engine::follow_session::begin(
+        &workspace,
+        &session_id,
+        &name,
+        &opts.pipeline.display().to_string(),
+    );
+    eprintln!("  session {session_id}");
+
     let started = Instant::now();
     let mut passes = 0u64;
     let mut total_rows = 0u64;
@@ -219,8 +232,50 @@ pub fn run(opts: FollowOptions) -> Result<u64, String> {
         let mut doc = base_doc.clone();
         duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
 
-        let result = engine.execute_pipeline_named(&doc, &name);
+        // A poll that finds nothing is not a run. Most polls find nothing, and a
+        // receipt for each would bury the handful that moved data - so the id
+        // is minted first but only KEPT if the pass turns out to have done
+        // work, which is not knowable until it has run.
+        let run_id = duckle_duckdb_engine::retry::new_run_id(&name, "follow");
+        let hash = duckle_duckdb_engine::retry::pipeline_hash(&doc);
+        let result = engine.clone().with_run_id(&run_id).execute_pipeline_named(&doc, &name);
         passes += 1;
+
+        // Unchanged means the pass checked its sources, found nothing and wrote
+        // nothing. Anything else - rows moved, or it failed - is an execution
+        // worth being able to retry, compare and investigate, so it gets the
+        // same run primitive every other surface uses.
+        let did_work = !result.unchanged;
+        if did_work {
+            let receipt = duckle_duckdb_engine::retry::begin(
+                &workspace,
+                &run_id,
+                "follow",
+                &name,
+                &opts.pipeline.display().to_string(),
+                &hash,
+                // The session is what caused it, and naming it is what lets
+                // someone ask "what has this watcher actually done?".
+                Some(session_id.clone()),
+            );
+            duckle_duckdb_engine::retry::finish(
+                &workspace,
+                receipt,
+                &result.status,
+                duckle_duckdb_engine::retry::nodes_of(&result),
+            );
+            let mut record = duckle_duckdb_engine::RunRecord::from_result_in(
+                &workspace, &name, &result, "follow",
+            );
+            record.run_id = Some(run_id.clone());
+            duckle_duckdb_engine::append_run_record(&workspace, &name, record);
+        }
+        duckle_duckdb_engine::follow_session::record_poll(
+            &workspace,
+            &mut session,
+            did_work.then_some(run_id.as_str()),
+            result.error.as_deref(),
+        );
         let outcome = BatchOutcome {
             ok: result.status == "ok",
             rows: rows_of(&result),
@@ -240,6 +295,10 @@ pub fn run(opts: FollowOptions) -> Result<u64, String> {
                     "follow: stopping on a failed batch. The saved position did not advance, \
                      so restarting re-reads the same records."
                 );
+                // Stopped deliberately, even though on a failure: the process is
+                // about to exit cleanly, and leaving the session `running` would
+                // make the next start call it interrupted.
+                duckle_duckdb_engine::follow_session::finish(&workspace, &mut session);
                 return Err(outcome.error.unwrap_or_else(|| "batch failed".into()));
             }
             break;
@@ -251,9 +310,11 @@ pub fn run(opts: FollowOptions) -> Result<u64, String> {
         }
     }
 
+    duckle_duckdb_engine::follow_session::finish(&workspace, &mut session);
     eprintln!(
-        "follow: {} batch(es), {} row(s), {} failed, {:.1}s elapsed",
+        "follow: {} poll(s), {} run(s), {} row(s), {} failed, {:.1}s elapsed",
         passes,
+        session.run_count,
         total_rows,
         failures,
         started.elapsed().as_secs_f64()
