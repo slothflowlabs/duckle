@@ -422,6 +422,74 @@ function injectPgAdvancedSection(manifest: ComponentManifest): void {
     else manifest.sections.push(section);
 }
 
+// #256: the HTTP transport every HTTP-backed source honours.
+//
+// The engine already reads these four keys - `http_transport_from_props` in
+// plan/builders.rs, applied by run_rest_source and run_html_source - but no
+// component DECLARED them, so the only way to set a corporate proxy was to
+// hand-edit the pipeline JSON. That is the mirror of the usual bug: not a form
+// field nothing reads, but a setting the engine reads that no form offers.
+//
+// Injected from one place rather than added to thirty-four manifests, because
+// the whole point of #256 is that transport is configured once rather than
+// re-implemented per connector. The ids are exactly the branch in
+// plan/mod.rs that builds a spec carrying `transport`; a Rust test keeps the
+// two lists from drifting.
+const HTTP_TRANSPORT_IDS = new Set([
+    'src.rest', 'src.github', 'src.gitlab', 'src.airtable', 'src.notion',
+    'src.hubspot', 'src.jira', 'src.stripe', 'src.sendgrid', 'src.mailchimp',
+    'src.pipedrive', 'src.segment', 'src.salesforce', 'src.xero',
+    'src.quickbooks', 'src.zendesk', 'src.shopify', 'src.intercom',
+    'src.couchdb', 'src.odata', 'src.sap', 'src.soap', 'src.asana',
+    'src.trello', 'src.clickup', 'src.slack', 'src.discord', 'src.twilio',
+    'src.telegram', 'src.dhis2', 'src.graphql', 'src.linear', 'src.monday',
+    'src.html',
+]);
+
+const httpTransportFields = (): Field[] => [
+    {
+        key: 'httpProxy',
+        label: 'Proxy URL',
+        kind: 'text',
+        placeholder: 'http://proxy.example.com:8080',
+        description:
+            'Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in.',
+    },
+    {
+        key: 'httpUserAgent',
+        label: 'User-Agent',
+        kind: 'text',
+        placeholder: 'duckle/1.0 (+https://duckle.org)',
+        description: 'Some sites answer 403 to the default one.',
+    },
+    {
+        key: 'httpConnectTimeoutSecs',
+        label: 'Connect timeout (s)',
+        kind: 'integer',
+        placeholder: '30',
+        description: 'How long to wait for the connection itself.',
+    },
+    {
+        key: 'httpReadTimeoutSecs',
+        label: 'Read timeout (s)',
+        kind: 'integer',
+        placeholder: '300',
+        description:
+            'How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving.',
+    },
+];
+
+// Appended rather than spliced next to a named field: these sources have no one
+// field in common to anchor to, and transport is the last thing anyone sets.
+function injectHttpTransportSection(manifest: ComponentManifest): void {
+    manifest.sections.push({
+        label: 'HTTP transport',
+        fields: httpTransportFields(),
+        collapsible: true,
+        defaultCollapsed: true,
+    });
+}
+
 const dbReadFields = (): Field[] => [
     {
         key: 'mode',
@@ -8060,6 +8128,9 @@ export function synthesizeManifest(componentId: string): ComponentManifest | und
     // Cross-cutting: Postgres wire-family components gain a collapsible advanced
     // TLS/libpq section (issue #161), regardless of which synth path built them.
     if (manifest && PG_ADVANCED_IDS.has(componentId)) injectPgAdvancedSection(manifest);
+    // Cross-cutting: every HTTP-backed source gains the shared transport section
+    // (issue #256), so a proxy or timeout is reachable without hand-editing JSON.
+    if (manifest && HTTP_TRANSPORT_IDS.has(componentId)) injectHttpTransportSection(manifest);
     return manifest;
 }
 

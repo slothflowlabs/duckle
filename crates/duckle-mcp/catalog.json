@@ -1819,6 +1819,41 @@
                 "description": "Keeps what this step produced and serves it again on the next run, as long as the settings above and the rows arriving from upstream are both identical. Change either and the step runs for real. Needs an upstream connection: without one there is nothing to compare, so the setting is ignored rather than guessed at. Cached output lives under the workspace cache folder and is safe to delete."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -9974,6 +10009,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -10398,6 +10468,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -11316,6 +11421,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -11734,6 +11874,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -12181,6 +12356,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -12599,6 +12809,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -13949,6 +14194,41 @@
                 "kind": "integer"
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -46769,6 +47049,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -47420,6 +47735,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -47838,6 +48188,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -48256,6 +48641,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -48674,6 +49094,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -49092,6 +49547,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -49510,6 +50000,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -49928,6 +50453,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -50346,6 +50906,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -50764,6 +51359,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -51182,6 +51812,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -51600,6 +52265,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -52018,6 +52718,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -52436,6 +53171,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -52854,6 +53624,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -54108,6 +54913,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -54526,6 +55366,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -54944,6 +55819,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -55362,6 +56272,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -55780,6 +56725,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -56198,6 +57178,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -56616,6 +57631,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -57034,6 +58084,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -57452,6 +58537,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -57870,6 +58990,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {
@@ -58288,6 +59443,41 @@
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
+          },
+          {
+            "label": "HTTP transport",
+            "fields": [
+              {
+                "key": "httpProxy",
+                "label": "Proxy URL",
+                "kind": "text",
+                "placeholder": "http://proxy.example.com:8080",
+                "description": "Overrides the workspace proxy for this node only. Credentials may be embedded as http://user:pass@host:port - use ${ENV:NAME} rather than typing them in."
+              },
+              {
+                "key": "httpUserAgent",
+                "label": "User-Agent",
+                "kind": "text",
+                "placeholder": "duckle/1.0 (+https://duckle.org)",
+                "description": "Some sites answer 403 to the default one."
+              },
+              {
+                "key": "httpConnectTimeoutSecs",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "placeholder": "30",
+                "description": "How long to wait for the connection itself."
+              },
+              {
+                "key": "httpReadTimeoutSecs",
+                "label": "Read timeout (s)",
+                "kind": "integer",
+                "placeholder": "300",
+                "description": "How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           }
         ],
         "ports": {

@@ -398,6 +398,57 @@ mod tests {
     }
 
     #[test]
+    fn a_setting_the_engine_reads_is_never_called_dead() {
+        // The regression. `http_transport_from_props` (plan/builders.rs) reads
+        // these four on every HTTP-backed source, and none of them was DECLARED
+        // by any manifest - so this checker told the operator "src.rest does
+        // not read httpProxy, so setting it changes nothing", which was
+        // confidently false, and failed `validate` on a working pipeline.
+        //
+        // The mirror of the usual bug: not a form field nothing reads, but a
+        // setting the engine reads that no form offered.
+        let f = check(&doc(
+            "src.rest",
+            serde_json::json!({
+                "url": "https://api.example.com/items",
+                "httpProxy": "http://proxy.corp:8080",
+                "httpUserAgent": "duckle/1.0",
+                "httpConnectTimeoutSecs": 10,
+                "httpReadTimeoutSecs": 60
+            }),
+        ));
+        assert!(f.is_empty(), "a real engine setting reported as dead: {f:?}");
+    }
+
+    #[test]
+    fn every_http_backed_source_offers_the_whole_transport() {
+        // Declaring three of the four is worse than declaring none: the form
+        // looks complete and the missing one still fails validation.
+        const TRANSPORT: [&str; 4] =
+            ["httpProxy", "httpUserAgent", "httpConnectTimeoutSecs", "httpReadTimeoutSecs"];
+        let offering: Vec<&String> = declared()
+            .iter()
+            .filter(|(_, keys)| TRANSPORT.iter().any(|k| keys.contains(*k)))
+            .map(|(id, _)| id)
+            .collect();
+        assert!(
+            offering.len() >= 34,
+            "only {} components offer transport; the injection list shrank",
+            offering.len()
+        );
+        for id in &offering {
+            let keys = &declared()[*id];
+            let missing: Vec<&str> =
+                TRANSPORT.iter().copied().filter(|k| !keys.contains(*k)).collect();
+            assert!(missing.is_empty(), "{id} offers a partial transport, missing {missing:?}");
+        }
+        // The three the engine wires explicitly, named so a silent drop is loud.
+        for id in ["src.rest", "src.html", "src.graphql"] {
+            assert!(offering.iter().any(|o| o.as_str() == id), "{id} lost its transport section");
+        }
+    }
+
+    #[test]
     fn the_shipped_examples_have_no_dead_properties() {
         // The regression gate. These are the pipelines users copy from, so a
         // dead property here is one that spreads.
