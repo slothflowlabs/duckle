@@ -410,6 +410,7 @@ mod tests {
             engine_version: "1.5.4".into(),
             parameters: BTreeMap::new(),
             parameter_sources: Vec::new(),
+            release_id: None,
             nodes: BTreeMap::from([(
                 "load".to_string(),
                 ReceiptNode {

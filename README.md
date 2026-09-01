@@ -764,6 +764,52 @@ does.
 monitored. Nothing prunes `runs/`, so a workspace that has ever run thousands of
 pipelines would otherwise emit thousands of label values forever.
 
+### Which tested version is running? (`release`)
+
+```bash
+duckle-runner release build                              # record the control plane
+duckle-runner release diff <from> [<to>]                 # what changed
+duckle-runner release activate <id> --environment production
+duckle-runner release rollback --environment production
+```
+
+```text
+release c2cc337f3dd609fb...  2 pipeline(s), format v1
+production is now running release 15963a9b750d6492...
+  changed   load
+production rolled back to release c2cc337f3dd609fb...
+```
+
+**A release is its own hash.** Pipelines, their parameter contracts, plans,
+schedules, the format version and the git commit, hashed canonically - so
+rebuilding an unchanged workspace produces the same id, and "has anything
+changed?" is a comparison rather than an investigation. It **records** rather
+than copies, so promoting one through environments cannot rebuild anything.
+
+**Activation refuses before it mutates.** Every check runs and every problem is
+reported: the workspace must still *be* the release, every pipeline must still
+compile, every connection a pipeline names must exist, and policy must load. An
+operator fixing a production activation should not discover the second problem
+after fixing the first.
+
+**The pointer swap is one rename.** Never remove-then-rename: `std::fs::rename`
+replaces the destination even while a reader holds it open, so unlinking first
+buys nothing and costs exactly the guarantee - a window where the environment
+points at nothing.
+
+**Rollback is deliberately not gated** on those checks. It is what an operator
+reaches for when the current release is broken, and one that refuses because the
+workspace is in a bad state is one that never works when it is needed.
+
+**Every run records the release it ran under**, read when the run starts - so a
+run already in flight when someone activates keeps naming the release it began
+with, because it did not silently change code halfway through.
+
+**The hashes are the ones already in use.** A pipeline's hash is
+`retry::pipeline_hash`, the same one its run receipt records; a second hash would
+eventually disagree with the first. Only hashes and declarations are stored -
+connection *references* so activation can check them, never their values.
+
 ### Sign in through an identity provider (OIDC)
 
 Optional, and off unless `<workspace>/.duckle/oidc.json` exists:

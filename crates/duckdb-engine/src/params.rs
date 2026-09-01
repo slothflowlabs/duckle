@@ -39,7 +39,11 @@ pub enum ParamType {
 }
 
 /// What a pipeline says about one of its parameters.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+///
+/// Comparable because #297 records the contract in a release and has to say
+/// whether it changed between two of them. f64 bounds are what stop this being
+/// Eq; PartialEq is what the comparison needs.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParamSpec {
     #[serde(rename = "type", default = "default_type")]

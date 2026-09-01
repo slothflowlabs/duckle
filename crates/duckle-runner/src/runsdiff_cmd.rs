@@ -153,6 +153,7 @@ mod tests {
             engine_version: "1.5.4".into(),
             parameters: Default::default(),
             parameter_sources: Default::default(),
+            release_id: None,
             nodes: Default::default(),
         }
     }

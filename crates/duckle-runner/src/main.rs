@@ -23,6 +23,7 @@ use std::process::ExitCode;
 mod affected_cmd;
 mod migrate_cmd;
 mod oidc;
+mod release_cmd;
 mod runsdiff_cmd;
 mod sql_cmd;
 mod capabilities;
@@ -2044,6 +2045,10 @@ fn main() -> ExitCode {
                 .unwrap_or_default()
         );
         return ExitCode::from(0);
+    }
+    // `release` -> record, verify and activate an immutable control plane (#297).
+    if std::env::args().nth(1).as_deref() == Some("release") {
+        return release_cmd::run();
     }
     // `sql check` -> bind every node's SQL without running it (#314).
     if std::env::args().nth(1).as_deref() == Some("sql") {

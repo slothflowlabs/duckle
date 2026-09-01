@@ -156,6 +156,15 @@ pub struct RunReceipt {
     /// guess made here about the name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parameters: BTreeMap<String, String>,
+    /// The release this run was produced by, when the workspace has an active
+    /// one (#297 criterion 5).
+    ///
+    /// Read at `begin`, so a run is bound to the release that was active when
+    /// it started. A run already in flight when someone activates a new release
+    /// keeps naming the one it started under - it did not silently change code
+    /// halfway through, and its record should not claim otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_id: Option<String>,
     /// Where each parameter came from, and what it displaced (#317).
     ///
     /// Beside `parameters` rather than replacing it: that map is what #309
@@ -211,6 +220,14 @@ pub fn begin(
         pipeline_path: pipeline_path.to_string(),
         pipeline_hash: pipeline_hash.to_string(),
         engine_version: ENGINE_VERSION.to_string(),
+        // Whatever `DUCKLE_ENVIRONMENT` names, defaulting to the one an
+        // unconfigured workspace uses. Absent when the workspace has no
+        // releases at all, which is every workspace that has not asked for
+        // them.
+        release_id: crate::release::active(
+            workspace,
+            &std::env::var("DUCKLE_ENVIRONMENT").unwrap_or_else(|_| "default".into()),
+        ),
         parameters: BTreeMap::new(),
         parameter_sources: Vec::new(),
         nodes: BTreeMap::new(),
@@ -683,6 +700,7 @@ mod tests {
             engine_version: ENGINE_VERSION.into(),
             parameters: Default::default(),
             parameter_sources: Vec::new(),
+            release_id: None,
             nodes: nodes
                 .iter()
                 .map(|(id, st, key, kind)| {
