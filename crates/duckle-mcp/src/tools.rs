@@ -1040,6 +1040,12 @@ fn t_run_pipeline(args: &Value) -> Result<Value, String> {
     });
     // Stopping at a node is the point of asking: an agent changing one step should not
     // have to run everything after it, least of all the sinks, to see what it did.
+    // #259: the engine logs under the id the receipt was written with, so a
+    // run's log lines join to its receipt and its history record.
+    let engine = match &receipt {
+        Some(r) => engine.with_run_id(&r.run_id),
+        None => engine,
+    };
     let result = match arg_str(args, "target") {
         Some(t) => engine.execute_pipeline_with_events(&doc, Some(t), Some(&name), |_| {}),
         None => engine.execute_pipeline_named(&doc, &name),

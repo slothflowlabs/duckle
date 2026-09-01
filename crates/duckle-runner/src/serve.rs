@@ -3342,7 +3342,8 @@ fn execute_one_with(
         ..receipt
     };
     let _ = duckle_duckdb_engine::retry::write(&state.workspace, &receipt);
-    let result = engine.execute_pipeline_named(&doc, &id);
+    // #259: log lines carry the id the receipt was written with.
+    let result = engine.with_run_id(&receipt.run_id).execute_pipeline_named(&doc, &id);
     duckle_duckdb_engine::retry::finish(
         &state.workspace,
         receipt,

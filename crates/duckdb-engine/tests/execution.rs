@@ -1155,6 +1155,64 @@ fn an_ambiguous_token_gets_no_position_rather_than_the_first_guess() {
     assert_eq!(d.candidates, vec!["amount"]);
 }
 
+/// #259: a run's log lines carry the same id as its receipt.
+///
+/// The engine used to mint `run-{pid}-{nanos}` for the log and never persist
+/// it, so "show me the log for run X" had no answer for any X anyone could
+/// hold - the id in the log existed nowhere else. That was the third of the
+/// three competing schemes #259 set out to remove, and the one that survived.
+#[test]
+fn a_run_log_names_the_same_run_as_its_receipt() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().to_path_buf();
+    std::fs::create_dir_all(ws.join("logs")).unwrap();
+    std::fs::write(ws.join("in.csv"), "id
+1
+2
+").unwrap();
+    let doc: duckle_duckdb_engine::PipelineDoc = serde_json::from_value(serde_json::json!({
+        "nodes": [
+            { "id": "s", "type": "source", "position": {"x":0,"y":0},
+              "data": { "label": "in", "componentId": "src.csv",
+                        "properties": { "path": ws.join("in.csv").to_string_lossy(),
+                                        "hasHeader": true } } },
+            { "id": "k", "type": "sink", "position": {"x":200,"y":0},
+              "data": { "label": "out", "componentId": "snk.csv",
+                        "properties": { "path": ws.join("out.csv").to_string_lossy() } } }
+        ],
+        "edges": [ { "id": "e1", "source": "s", "target": "k",
+                     "data": { "connectionType": "main" } } ]
+    }))
+    .unwrap();
+
+    let run_id = duckle_duckdb_engine::retry::new_run_id("logged", "manual");
+    let receipt = duckle_duckdb_engine::retry::begin(
+        &ws, &run_id, "manual", "logged", "pipelines/logged.json", "hash", None,
+    );
+    std::env::set_var("DUCKLE_LOG_DIR", ws.join("logs"));
+    let result = engine
+        .for_new_run()
+        .with_run_id(&receipt.run_id)
+        .execute_pipeline_named(&doc, "logged");
+    std::env::remove_var("DUCKLE_LOG_DIR");
+    assert_eq!(result.status, "ok", "{:?}", result.error);
+
+    let log = std::fs::read_to_string(ws.join("logs/logged/runtime.log"))
+        .expect("a run log was written");
+    assert!(
+        log.contains(&run_id),
+        "the log names a different run than the receipt.
+wanted {run_id}
+got:
+{}",
+        log.lines().take(2).collect::<Vec<_>>().join("
+")
+    );
+    // And the receipt it must join to is really there under that id.
+    assert!(duckle_duckdb_engine::retry::load(&ws, &run_id).is_ok());
+}
+
 /// Criterion 5: a source's SQL is not checked, and the reason is stated.
 #[test]
 fn a_source_query_is_not_validated_against_duckdb() {

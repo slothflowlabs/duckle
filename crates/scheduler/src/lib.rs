@@ -219,7 +219,11 @@ fn run_recorded(
         &hash,
         None,
     );
-    let result = engine.for_new_run().execute_pipeline_named(pipeline, pipeline_id);
+    // #259: same id in the log as in the receipt.
+    let result = engine
+        .for_new_run()
+        .with_run_id(&receipt.run_id)
+        .execute_pipeline_named(pipeline, pipeline_id);
     duckle_duckdb_engine::retry::finish(
         workspace,
         receipt,

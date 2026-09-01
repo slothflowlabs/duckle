@@ -490,6 +490,12 @@ fn run_with(args: Args) -> Result<bool, String> {
         args.retry_of.clone(),
     );
 
+    // #259: the engine logs under the id the receipt was written with, so a
+    // run's log lines join to its receipt and its history record.
+    let engine = engine.with_run_id(&receipt.run_id);
+    // #259: the engine logs under the id the receipt was written with, so a
+    // run's log lines join to its receipt and its history record.
+    let engine = engine.with_run_id(&receipt.run_id);
     let result = match target.as_deref() {
         Some(t) => engine.execute_pipeline_with_events(&doc, Some(t), Some(&name), |_| {}),
         None => engine.execute_pipeline_named(&doc, &name),

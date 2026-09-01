@@ -154,6 +154,13 @@ pub struct DuckdbEngine {
     /// variables reach the child only, so a value that has to survive the whole descent
     /// travels here instead.
     pub(crate) inherited_subs: Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
+    /// The durable run id this engine is executing under (#259).
+    ///
+    /// Set by whoever minted it - always the same `retry::begin` that writes
+    /// the receipt - so the run log, the receipt and the history record all
+    /// name one run. Absent for a bare `execute` with no surrounding run, which
+    /// falls back to a minted id rather than logging under an empty one.
+    run_id: Option<String>,
 }
 
 impl std::fmt::Debug for DuckdbEngine {
@@ -289,7 +296,21 @@ impl DuckdbEngine {
             bin,
             inherited_subs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             cancel: Arc::new(AtomicBool::new(false)),
+            run_id: None,
         }
+    }
+
+    /// Execute under a run id somebody else minted (#259).
+    ///
+    /// Given the id from `retry::begin`, so the run log names the same run as
+    /// the receipt and the history record. Without it the engine mints a
+    /// throwaway id that is written into log lines and nowhere else, which is
+    /// what made run-scoped logs unaddressable by the id every other surface
+    /// uses.
+    pub fn with_run_id(mut self, run_id: impl Into<String>) -> Self {
+        let id = run_id.into();
+        self.run_id = (!id.trim().is_empty()).then_some(id);
+        self
     }
 
     /// Stop fetching per-node preview rows.
@@ -317,6 +338,9 @@ impl DuckdbEngine {
             bin: self.bin.clone(),
             cancel: Arc::new(AtomicBool::new(false)),
             previews: self.previews,
+            // A new run is a new identity; carrying the previous one forward
+            // would file this run's log lines under that run.
+            run_id: None,
             // A new top-level run inherits nothing: what a previous run handed down
             // belonged to that run's call chain.
             inherited_subs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
@@ -1229,7 +1253,17 @@ impl DuckdbEngine {
                 )
             })
             .collect();
-        let run_id = format!("run-{}-{}", std::process::id(), now_nanos());
+        // #259: the DURABLE run id when the caller minted one, so a log line
+        // joins to the receipt and the history record for the same run. The
+        // engine used to mint its own `run-{pid}-{nanos}` here and never
+        // persist it, which is the third of the three competing id schemes
+        // #259 set out to remove - and the one that survived, leaving
+        // "run-scoped logs addressable by run_id" true of everything except
+        // the logs.
+        let run_id = self
+            .run_id
+            .clone()
+            .unwrap_or_else(|| format!("run-{}-{}", std::process::id(), now_nanos()));
         let mut runlog = run_log::RunLog::open(pipeline_name, run_id, node_meta);
         let mut on_event = |evt: PipelineEvent| {
             if runlog.enabled() {

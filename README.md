@@ -764,6 +764,20 @@ does.
 monitored. Nothing prunes `runs/`, so a workspace that has ever run thousands of
 pipelines would otherwise emit thousands of label values forever.
 
+### One id, all the way through
+
+A run's **receipt**, its **history record** and its **log lines** all carry the
+same id, so `runs/receipts/<id>.json`, the Runs tab and
+`logs/<pipeline>/runtime.log` join up:
+
+```bash
+grep '"run_id":"run-scheduled-nightly-1788203742570"' logs/nightly/runtime.log
+```
+
+The engine used to mint its own `run-{pid}-{nanos}` for the log and persist it
+nowhere, so "show me the log for run X" had no answer for any X anyone could
+hold. That was the last of the three competing id schemes.
+
 ### Why was this run different? (`runs diff`)
 
 ```bash
