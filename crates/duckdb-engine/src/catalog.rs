@@ -933,7 +933,20 @@ fn declared_columns(node: &Value) -> Vec<String> {
 /// which files count, and a contract check that silently skipped a pipeline
 /// would report "no breaking changes" for the wrong reason.
 pub fn documents(workspace: &Path) -> Vec<(String, Value)> {
-    let mut docs: Vec<(String, Value)> = Vec::new();
+    document_paths(workspace).into_iter().map(|(id, _, doc)| (id, doc)).collect()
+}
+
+/// The same documents, each with the file it came from (#308).
+///
+/// Split out because a caller that needs to ACT on the file - validate it, run
+/// it, rewrite it - was reconstructing the path from the id by guessing at
+/// `<ws>/pipelines/<id>.json` and `<ws>/<id>.json`. The walk is recursive, so
+/// any pipeline in a nested folder resolved to nothing and was silently
+/// dropped; `validate --affected` then reported "nothing affected" and exited
+/// 0 on a changed pipeline. An id cannot be turned back into a path by
+/// guessing, so the path travels with it.
+pub fn document_paths(workspace: &Path) -> Vec<(String, PathBuf, Value)> {
+    let mut docs: Vec<(String, PathBuf, Value)> = Vec::new();
     for path in discover_pipeline_files(workspace) {
         let Ok(text) = std::fs::read_to_string(&path) else { continue };
         let Ok(doc): Result<Value, _> = serde_json::from_str(&text) else { continue };
@@ -941,7 +954,7 @@ pub fn documents(workspace: &Path) -> Vec<(String, Value)> {
             continue;
         }
         let id = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        docs.push((id, doc));
+        docs.push((id, path, doc));
     }
     docs
 }

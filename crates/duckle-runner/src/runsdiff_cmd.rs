@@ -17,12 +17,19 @@ use std::process::ExitCode;
 /// its record has been trimmed away. That is a normal, expected absence rather
 /// than an error - and it is why the comparison reports what it could not see.
 fn record_for(workspace: &Path, receipt: &RunReceipt) -> Option<RunRecord> {
-    let pipeline_id = Path::new(&receipt.pipeline_path)
+    // History is keyed differently by different surfaces: the console and the
+    // scheduler key by the pipeline id, the CLI by the run's NAME, which
+    // `--name` can set to anything. Both are tried rather than assuming one,
+    // because guessing wrong does not fail - it silently drops the record and
+    // the comparison reports less than it could.
+    let stem = Path::new(&receipt.pipeline_path)
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| receipt.pipeline_name.clone());
-    load_run_history(workspace, &pipeline_id)
-        .into_iter()
+        .unwrap_or_default();
+    [stem, receipt.pipeline_name.clone()]
+        .iter()
+        .filter(|k| !k.is_empty())
+        .flat_map(|key| load_run_history(workspace, key))
         .find(|r| r.run_id.as_deref() == Some(receipt.run_id.as_str()))
 }
 

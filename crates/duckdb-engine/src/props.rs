@@ -41,6 +41,32 @@ use std::sync::OnceLock;
 const CATALOG: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../duckle-mcp/catalog.json"));
 
+/// Settings the engine honours on EVERY node, whatever the component.
+///
+/// The Properties Panel writes these onto any node - the Basic tab's Materialize
+/// control and the whole Advanced tab - and the engine reads them in the
+/// per-node compile loop rather than in any component's builder. No manifest
+/// declares them, and no manifest should: the panel renders them itself, and
+/// declaring them 409 times would draw every one of them twice.
+///
+/// They are therefore accepted everywhere. Without this the check told anyone
+/// who had touched the Advanced tab that `src.csv does not read retryAttempts,
+/// so setting it changes nothing`, and failed `validate` on a pipeline the
+/// editor had just written - the check being confidently wrong about the
+/// product's own UI. `universal_matches_the_properties_panel` keeps this list
+/// and the panel from drifting apart again.
+const UNIVERSAL: [&str; 9] = [
+    "materialize",       // plan/mod.rs:6458, per-node compile loop
+    "materializePath",   // plan/mod.rs:6579
+    "cache",             // plan/mod.rs:566, apply_stage_cache_in over every node
+    "retryAttempts",     // plan/mod.rs:1871, "universal across components"
+    "retryBackoffMs",    // beside retryAttempts
+    "memoryLimitMb",     // plan/mod.rs:1887
+    "continueOnFailure", // plan/mod.rs:1876
+    "logRowCount",       // panel-only today, no runtime read yet
+    "sqlOverride",       // builders.rs:159, generic build_view_sql
+];
+
 /// Keys a builder reads that the component's manifest does not declare.
 ///
 /// Each is a real gap between the two, not an exception to the rule: the engine
@@ -191,6 +217,10 @@ pub fn check(doc: &PipelineDoc) -> Vec<Finding> {
             continue;
         };
         for key in props.keys() {
+            // Honoured on every node, declared by none. See UNIVERSAL.
+            if UNIVERSAL.contains(&key.as_str()) {
+                continue;
+            }
             // A renamed property still works, and saying nothing about it is
             // how a workspace stays on a name that will eventually stop being
             // honoured. Reported with the current name and never fatal - the
@@ -445,6 +475,59 @@ mod tests {
         // The three the engine wires explicitly, named so a silent drop is loud.
         for id in ["src.rest", "src.html", "src.graphql"] {
             assert!(offering.iter().any(|o| o.as_str() == id), "{id} lost its transport section");
+        }
+    }
+
+    #[test]
+    fn a_pipeline_the_editor_wrote_is_not_refused() {
+        // The blocker. Set Materialize on the Basic tab, or anything on the
+        // Advanced tab, and the editor writes these onto the node. The check
+        // called every one of them dead and failed `validate` - the product's
+        // own UI producing pipelines the product refuses.
+        let f = check(&doc(
+            "src.csv",
+            serde_json::json!({
+                "path": "a.csv",
+                "hasHeader": true,
+                "materialize": "memory",
+                "retryAttempts": 3,
+                "retryBackoffMs": 500,
+                "memoryLimitMb": 512,
+                "continueOnFailure": false,
+                "logRowCount": true,
+                "cache": "off"
+            }),
+        ));
+        assert!(f.is_empty(), "the editor's own output was refused: {f:?}");
+    }
+
+    #[test]
+    fn universal_matches_the_properties_panel() {
+        // The drift that caused it: the panel grew universal fields and nothing
+        // told the engine-side check. Read the panel and compare, so the next
+        // one fails here instead of in a user's CI.
+        let panel = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../frontend/src/workflow-ui/PropertiesPanel.tsx");
+        let Ok(text) = std::fs::read_to_string(&panel) else {
+            // A source checkout without the frontend is a legitimate way to
+            // build the engine; skipping is better than a failure nobody can act
+            // on. It still runs everywhere the frontend is present, which is CI.
+            return;
+        };
+        // Only the universal blocks: the file also renders manifest fields.
+        let universal: Vec<&str> = text
+            .split("// Universal")
+            .skip(1)
+            .flat_map(|block| block.split("key: '").skip(1))
+            .filter_map(|rest| rest.split('\'').next())
+            .collect();
+        assert!(universal.len() >= 6, "parsed {universal:?} - the panel's shape changed");
+        for key in universal {
+            assert!(
+                UNIVERSAL.contains(&key),
+                "the Properties Panel writes `{key}` on every node and UNIVERSAL does not \
+list it, so `validate` will refuse any pipeline that sets it"
+            );
         }
     }
 

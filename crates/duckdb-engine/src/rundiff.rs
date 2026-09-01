@@ -308,6 +308,21 @@ fn explain(differences: &[Difference]) -> Vec<String> {
     let in_area = |area: Area| differences.iter().any(|d| d.area == area);
 
     let mut out = Vec::new();
+    // Before anything else. `status` and `errorCategory` were being recorded as
+    // differences and read by no rule, so comparing a successful run against a
+    // failed one produced "the output differs, which points at the sources" -
+    // a confident causal claim about a run that did not finish.
+    if has("status") || has("state") {
+        out.push(
+            "The two runs did not end the same way, so any difference below may be a \
+consequence of that rather than a cause of it."
+                .into(),
+        );
+    }
+    if has("errorCategory") {
+        out.push("They failed for different reasons, or only one of them failed.".into());
+    }
+    let ended_differently = has("status") || has("state");
     let code = has("pipelineHash");
     let runtime = has("engineVersion");
     let params = differences.iter().any(|d| d.field.starts_with("parameter."));
@@ -334,14 +349,16 @@ fn explain(differences: &[Difference]) -> Vec<String> {
     // The useful negative: same code, same runtime, same parameters, and the
     // output still moved. That points outward, and it is the reading an
     // operator most often needs and least often reaches on their own.
-    if !code && !runtime && !params && in_area(Area::Output) {
+    if !code && !runtime && !params && !ended_differently && in_area(Area::Output) {
         out.push(
             "Identical code, engine and parameters, but the output differs - which points at \
              the sources rather than at Duckle."
                 .into(),
         );
     }
-    if !code && !runtime && !params && !inputs && has("durationMs") && !in_area(Area::Output) {
+    if !code && !runtime && !params && !inputs && !ended_differently && has("durationMs")
+        && !in_area(Area::Output)
+    {
         out.push(
             "Nothing about the run differs except how long it took: the same work, slower or \
              faster."
@@ -504,6 +521,24 @@ mod tests {
             d.explanations
         );
         assert!(!d.explanations.iter().any(|e| e.contains("No difference")));
+    }
+
+    #[test]
+    fn a_failed_run_is_not_explained_as_a_source_side_data_change() {
+        let a = receipt("a");
+        let mut b = receipt("b");
+        b.status = "error".into();
+        let d = compare(&a, &b, Some(&record(100, 1_000)), Some(&record(0, 1_000)));
+        assert!(
+            d.explanations.iter().any(|e| e.contains("did not end the same way")),
+            "{:?}",
+            d.explanations
+        );
+        assert!(
+            !d.explanations.iter().any(|e| e.contains("points at the sources")),
+            "a failed run was given a confident causal reading: {:?}",
+            d.explanations
+        );
     }
 
     #[test]

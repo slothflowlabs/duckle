@@ -234,11 +234,19 @@ pub fn select(
     // ---- the two edge indices -------------------------------------------
     let mut writes: HashMap<&str, Vec<&str>> = HashMap::new();
     let mut readers: HashMap<&str, Vec<&str>> = HashMap::new();
-    // A deleted pipeline writes nothing in the HEAD graph, so the head graph
-    // alone says deleting a producer affects nobody - which is the opposite of
-    // the truth, and the one change most worth catching.
+    // What a pipeline USED to write matters as much as what it writes now.
+    //
+    // A deleted producer writes nothing in the HEAD graph, so the head graph
+    // alone says deleting one affects nobody. The same hole swallows the more
+    // common edit: repoint a sink from `a.parquet` to `b.parquet` and the
+    // pipeline still exists, still changed, and every consumer of `a.parquet`
+    // has quietly stopped being refreshed - while the walk, seeing only the new
+    // asset, reaches none of them. So the base graph is consulted for every
+    // pipeline that changed, not only for the ones that are gone.
     let base_graph = crate::catalog::build_from_documents(base);
-    for touch in base_graph.touches.iter().filter(|t| removed.iter().any(|r| *r == t.pipeline_id)) {
+    let seeds: BTreeSet<&str> =
+        reasons.keys().map(String::as_str).chain(removed.iter().map(String::as_str)).collect();
+    for touch in base_graph.touches.iter().filter(|t| seeds.contains(t.pipeline_id.as_str())) {
         if touch.direction == Direction::Write {
             writes.entry(touch.pipeline_id.as_str()).or_default().push(touch.asset.as_str());
         }
@@ -275,6 +283,111 @@ pub fn select(
             queue.push_back(seed);
         }
     }
+    walk(&mut queue, &writes, &readers, &parents, &mut chain, &mut explained, &mut reasons);
+    // ---- uncertainty ------------------------------------------------------
+    // Reported for every pipeline that has one, selected or not: the point is
+    // that the reader sees what the answer could not account for.
+    let mut uncertain: Vec<Uncertainty> = catalog
+        .unresolved
+        .iter()
+        .map(|u| Uncertainty {
+            pipeline: u.pipeline_id.clone(),
+            node: format!("{} ({})", u.node_id, u.component_id),
+            why: u.reason.clone(),
+        })
+        .collect();
+    // A path the catalog DID name but that still holds a `${...}` is the more
+    // common case, and the more dangerous one: the graph gives it a confident
+    // id, and that id is not what the run will read. Two pipelines naming
+    // `${DIR}/x.parquet` may touch different files, and a pipeline naming it
+    // may touch a file another pipeline names literally. Neither the edge nor
+    // its absence can be trusted, so it is uncertain even though nothing failed
+    // to resolve.
+    for touch in &catalog.touches {
+        if !touch.asset.contains("${") {
+            continue;
+        }
+        uncertain.push(Uncertainty {
+            pipeline: touch.pipeline_id.clone(),
+            node: format!("{} ({})", touch.node_id, touch.component_id),
+            why: format!(
+                "{} is decided at run time, so what it {} cannot be known here",
+                touch.asset,
+                match touch.direction {
+                    Direction::Read => "reads",
+                    Direction::Write => "writes",
+                }
+            ),
+        });
+    }
+    uncertain.dedup_by(|a, b| a.pipeline == b.pipeline && a.node == b.node && a.why == b.why);
+    uncertain.sort_by(|a, b| (&a.pipeline, &a.node).cmp(&(&b.pipeline, &b.node)));
+    if include_uncertain {
+        for u in &uncertain {
+            if !head_by_id.contains_key(u.pipeline.as_str()) {
+                continue;
+            }
+            let first = !reasons.contains_key(&u.pipeline);
+            reasons
+                .entry(u.pipeline.clone())
+                .or_default()
+                .push(Reason::Uncertain { node: u.node.clone(), why: u.why.clone() });
+            // And it seeds the walk, rather than only joining the answer. The
+            // module's own rule is that nothing downstream of an unresolvable
+            // dependency can be ruled out; selecting the pipeline while leaving
+            // its known consumers out states the opposite.
+            if first {
+                walk_from(&u.pipeline, &writes, &readers, &parents, &mut chain, &mut reasons);
+            }
+        }
+    }
+
+    // A removed pipeline seeded the walk but cannot be run.
+    for id in &removed {
+        reasons.remove(id);
+    }
+
+    let selected: Vec<Selected> = reasons
+        .into_iter()
+        .map(|(pipeline, reasons)| Selected {
+            uncertain: reasons.iter().any(|r| matches!(r, Reason::Uncertain { .. })),
+            pipeline,
+            reasons,
+        })
+        .collect();
+
+    let ids: BTreeSet<&str> = selected.iter().map(|s| s.pipeline.as_str()).collect();
+    let (order, cycles) = topological(&ids, &writes, &readers, &parents);
+
+    Selection {
+        schema_version: SCHEMA_VERSION,
+        base: String::new(),
+        head: String::new(),
+        selected,
+        removed,
+        order,
+        cycles,
+        uncertain,
+    }
+}
+
+
+/// The breadth-first walk, over whatever is already in `queue`.
+///
+/// A function rather than an inline loop because it is run twice: once from the
+/// changed pipelines, and again from each uncertain one when those are being
+/// included. Sharing `chain` and `explained` across both means the second pass
+/// cannot re-explain a pipeline the first already reached.
+#[allow(clippy::too_many_arguments)]
+fn walk(
+    queue: &mut VecDeque<String>,
+    writes: &HashMap<&str, Vec<&str>>,
+    readers: &HashMap<&str, Vec<&str>>,
+    parents: &HashMap<String, Vec<(String, String)>>,
+    chain: &mut BTreeMap<String, Vec<String>>,
+    explained: &mut BTreeSet<String>,
+    reasons: &mut BTreeMap<String, Vec<Reason>>,
+) {
     while let Some(current) = queue.pop_front() {
         let here = chain.get(&current).cloned().unwrap_or_default();
         let mut assets: Vec<&str> = writes.get(current.as_str()).cloned().unwrap_or_default();
@@ -319,83 +432,25 @@ pub fn select(
             }
         }
     }
+}
 
-    // ---- uncertainty ------------------------------------------------------
-    // Reported for every pipeline that has one, selected or not: the point is
-    // that the reader sees what the answer could not account for.
-    let mut uncertain: Vec<Uncertainty> = catalog
-        .unresolved
-        .iter()
-        .map(|u| Uncertainty {
-            pipeline: u.pipeline_id.clone(),
-            node: format!("{} ({})", u.node_id, u.component_id),
-            why: u.reason.clone(),
-        })
-        .collect();
-    // A path the catalog DID name but that still holds a `${...}` is the more
-    // common case, and the more dangerous one: the graph gives it a confident
-    // id, and that id is not what the run will read. Two pipelines naming
-    // `${DIR}/x.parquet` may touch different files, and a pipeline naming it
-    // may touch a file another pipeline names literally. Neither the edge nor
-    // its absence can be trusted, so it is uncertain even though nothing failed
-    // to resolve.
-    for touch in &catalog.touches {
-        if !touch.asset.contains("${") {
-            continue;
-        }
-        uncertain.push(Uncertainty {
-            pipeline: touch.pipeline_id.clone(),
-            node: format!("{} ({})", touch.node_id, touch.component_id),
-            why: format!(
-                "{} is decided at run time, so what it {} cannot be known here",
-                touch.asset,
-                match touch.direction {
-                    Direction::Read => "reads",
-                    Direction::Write => "writes",
-                }
-            ),
-        });
+/// Seed the walk at one pipeline and run it.
+fn walk_from(
+    start: &str,
+    writes: &HashMap<&str, Vec<&str>>,
+    readers: &HashMap<&str, Vec<&str>>,
+    parents: &HashMap<String, Vec<(String, String)>>,
+    chain: &mut BTreeMap<String, Vec<String>>,
+    reasons: &mut BTreeMap<String, Vec<Reason>>,
+) {
+    if chain.contains_key(start) {
+        return;
     }
-    uncertain.dedup_by(|a, b| a.pipeline == b.pipeline && a.node == b.node && a.why == b.why);
-    uncertain.sort_by(|a, b| (&a.pipeline, &a.node).cmp(&(&b.pipeline, &b.node)));
-    if include_uncertain {
-        for u in &uncertain {
-            if head_by_id.contains_key(u.pipeline.as_str()) {
-                reasons
-                    .entry(u.pipeline.clone())
-                    .or_default()
-                    .push(Reason::Uncertain { node: u.node.clone(), why: u.why.clone() });
-            }
-        }
-    }
-
-    // A removed pipeline seeded the walk but cannot be run.
-    for id in &removed {
-        reasons.remove(id);
-    }
-
-    let selected: Vec<Selected> = reasons
-        .into_iter()
-        .map(|(pipeline, reasons)| Selected {
-            uncertain: reasons.iter().any(|r| matches!(r, Reason::Uncertain { .. })),
-            pipeline,
-            reasons,
-        })
-        .collect();
-
-    let ids: BTreeSet<&str> = selected.iter().map(|s| s.pipeline.as_str()).collect();
-    let (order, cycles) = topological(&ids, &writes, &readers, &parents);
-
-    Selection {
-        schema_version: SCHEMA_VERSION,
-        base: String::new(),
-        head: String::new(),
-        selected,
-        removed,
-        order,
-        cycles,
-        uncertain,
-    }
+    chain.insert(start.to_string(), vec![start.to_string()]);
+    let mut queue: VecDeque<String> = VecDeque::from([start.to_string()]);
+    let mut explained: BTreeSet<String> = chain.keys().cloned().collect();
+    explained.remove(start);
+    walk(&mut queue, writes, readers, parents, chain, &mut explained, reasons);
 }
 
 /// Producers before consumers, children before parents.
@@ -588,6 +643,57 @@ mod tests {
         );
         // and the child runs first
         assert_eq!(sel.order, vec!["child", "parent"]);
+    }
+
+    #[test]
+    fn repointing_a_sink_reaches_the_consumers_of_the_asset_it_abandoned() {
+        // The producer still exists, so the head graph shows it writing
+        // b.parquet and nothing at all about a.parquet - while `serve`, which
+        // reads a.parquet, has just stopped being refreshed by anyone.
+        let base = vec![
+            ("produce".into(), doc("produce", writer("a.parquet"))),
+            ("serve".into(), doc("serve", reader("a.parquet"))),
+        ];
+        let mut head = base.clone();
+        head[0].1 = doc("produce", writer("b.parquet"));
+        let sel = select(&base, &head, &graph(&head), &[], false);
+        assert_eq!(ids(&sel), vec!["produce", "serve"], "the abandoned reader was missed");
+        let serve = sel.selected.iter().find(|s| s.pipeline == "serve").unwrap();
+        assert_eq!(
+            serve.reasons,
+            vec![Reason::Downstream {
+                path: vec!["produce".into(), "a.parquet".into(), "serve".into()]
+            }]
+        );
+    }
+
+    #[test]
+    fn an_uncertain_pipeline_seeds_the_walk_when_it_is_included() {
+        // Selecting the uncertain pipeline while leaving its KNOWN consumers
+        // out states the opposite of the rule the module is built on.
+        let vague = doc("vague", reader_writer("${DIR}/in.parquet", "mid.parquet"));
+        let base = vec![
+            ("vague".into(), vague.clone()),
+            ("after".into(), doc("after", reader("mid.parquet"))),
+        ];
+        let head = base.clone();
+        let g = graph(&head);
+
+        let quiet = select(&base, &head, &g, &[], false);
+        assert!(quiet.selected.is_empty(), "nothing changed");
+
+        let conservative = select(&base, &head, &g, &[], true);
+        assert_eq!(
+            ids(&conservative),
+            vec!["after", "vague"],
+            "the uncertain pipeline was selected but its consumer was not"
+        );
+        let after = conservative.selected.iter().find(|s| s.pipeline == "after").unwrap();
+        assert!(
+            matches!(after.reasons.first(), Some(Reason::Downstream { .. })),
+            "{:?}",
+            after.reasons
+        );
     }
 
     #[test]

@@ -88,6 +88,13 @@ fn rewrite(original: &str, migrated: &serde_json::Value, changes: &[String]) -> 
 }
 
 fn survey(workspace: &Path) -> Result<(Vec<Plan>, Vec<String>), String> {
+    // A path that is not there is not a workspace with nothing to do. Without
+    // this the walk finds no files, reports no plans, and the caller prints
+    // "every pipeline is already at format version 1" with exit 0 - a clean
+    // bill of health for a directory that does not exist.
+    if !workspace.is_dir() {
+        return Err(format!("{} is not a directory", workspace.display()));
+    }
     let mut plans = Vec::new();
     let mut refused = Vec::new();
     for path in pipeline_files(workspace) {
@@ -232,6 +239,13 @@ mod tests {
     const OLD: &str = r#"{"name":"p","nodes":[{"id":"out","type":"sink","position":{"x":0,"y":0},
         "data":{"label":"Out","componentId":"snk.csv","properties":{"path":"o.csv","hasHeader":false}}}],
         "edges":[]}"#;
+
+    #[test]
+    fn a_workspace_that_is_not_there_is_an_error_not_an_all_clear() {
+        let missing = std::env::temp_dir().join("duckle-migrate-no-such-workspace-xyz");
+        let _ = std::fs::remove_dir_all(&missing);
+        assert!(survey(&missing).is_err(), "a missing workspace reported a clean bill of health");
+    }
 
     #[test]
     fn a_survey_reports_without_touching_anything() {

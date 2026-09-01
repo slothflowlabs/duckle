@@ -94,10 +94,15 @@ fn shared_changes(workspace: &Path, base: &str, head: &str, changed: &[String]) 
 
 /// Everything that changed between the two sides, as repository-relative paths.
 fn changed_files(workspace: &Path, base: &str, head: &str) -> Result<Vec<String>, String> {
+    // `--relative` is load-bearing, not tidiness. Without it git reports paths
+    // from the REPOSITORY root, while every consumer of this list - the
+    // `contexts/` prefix test, `read_at`, the unclassified filter - treats them
+    // as workspace-relative. For a workspace that is a subdirectory of the
+    // repository that mismatch is total: no context change was ever detected.
     let listed = if head.is_empty() {
-        git(workspace, &["diff", "--name-only", base, "--", "."])?
+        git(workspace, &["diff", "--name-only", "--relative", base, "--", "."])?
     } else {
-        git(workspace, &["diff", "--name-only", base, head, "--", "."])?
+        git(workspace, &["diff", "--name-only", "--relative", base, head, "--", "."])?
     };
     let mut files: Vec<String> =
         listed.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect();
@@ -152,7 +157,7 @@ pub fn run() -> ExitCode {
     }
 
     match select(&workspace, &base, &head, include_uncertain) {
-        Ok((selection, unclassified)) => {
+        Ok(Affected { selection, unclassified, .. }) => {
             if json {
                 let mut doc = serde_json::to_value(&selection).unwrap_or_default();
                 doc["unclassified"] = serde_json::json!(unclassified);
@@ -169,6 +174,22 @@ pub fn run() -> ExitCode {
     }
 }
 
+/// What `affected` worked out, in the terms a caller needs to act on it.
+pub struct Affected {
+    pub selection: affected::Selection,
+    /// Changed files this command did not model as an input to any pipeline.
+    pub unclassified: Vec<String>,
+    /// Where each pipeline actually lives.
+    ///
+    /// Carried rather than reconstructed from the id: the workspace walk is
+    /// recursive, and `validate --affected` was guessing at
+    /// `<ws>/pipelines/<id>.json` and `<ws>/<id>.json`. A pipeline in any other
+    /// folder resolved to nothing, was dropped without a word, and when every
+    /// one dropped the gate printed "nothing affected" and exited 0 on a
+    /// changed pipeline.
+    pub paths: BTreeMap<String, PathBuf>,
+}
+
 /// The selection, plus the changed files this command did not model.
 ///
 /// Shared with `validate --affected`, so the two cannot drift into disagreeing
@@ -178,14 +199,22 @@ pub fn select(
     base: &str,
     head: &str,
     include_uncertain: bool,
-) -> Result<(affected::Selection, Vec<String>), String> {
+) -> Result<Affected, String> {
     let base_docs = catalog::documents_at_revision(workspace, base)
         .map_err(|e| format!("cannot read {base}: {e}"))?;
-    let head_docs = if head.is_empty() {
-        catalog::documents(workspace)
+    let (head_docs, paths) = if head.is_empty() {
+        let walked = catalog::document_paths(workspace);
+        let paths: BTreeMap<String, PathBuf> =
+            walked.iter().map(|(id, path, _)| (id.clone(), path.clone())).collect();
+        (walked.into_iter().map(|(id, _, doc)| (id, doc)).collect(), paths)
     } else {
-        catalog::documents_at_revision(workspace, head)
-            .map_err(|e| format!("cannot read {head}: {e}"))?
+        // A revision has no files on disk to point at; a caller that needs to
+        // act on them is comparing two commits and must check one out first.
+        (
+            catalog::documents_at_revision(workspace, head)
+                .map_err(|e| format!("cannot read {head}: {e}"))?,
+            BTreeMap::new(),
+        )
     };
     let graph = catalog::build_from_documents(&head_docs);
     let changed = changed_files(workspace, base, head)?;
@@ -213,7 +242,7 @@ pub fn select(
         affected::select(&base_docs, &head_docs, &graph, &shared, include_uncertain);
     selection.base = base.to_string();
     selection.head = if head.is_empty() { "working tree".into() } else { head.to_string() };
-    Ok((selection, unclassified))
+    Ok(Affected { selection, unclassified, paths })
 }
 
 fn describe(reason: &Reason) -> String {
@@ -276,6 +305,35 @@ fn print_text(s: &affected::Selection, unclassified: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pipeline_in_a_nested_folder_still_has_a_path() {
+        // The blocker: `validate --affected` reconstructed the path from the id
+        // by trying `<ws>/pipelines/<id>.json` and `<ws>/<id>.json`, so a
+        // pipeline anywhere else resolved to nothing, was dropped in silence,
+        // and the gate printed "nothing affected" and exited 0.
+        let ws = std::env::temp_dir().join(format!(
+            "duckle-affected-nested-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&ws);
+        std::fs::create_dir_all(ws.join("warehouse/staging")).unwrap();
+        std::fs::write(
+            ws.join("warehouse/staging/orders.json"),
+            r#"{"name":"orders","nodes":[{"id":"s","type":"source","position":{"x":0,"y":0},
+               "data":{"label":"In","componentId":"src.csv","properties":{"path":"a.csv"}}}],
+               "edges":[]}"#,
+        )
+        .unwrap();
+        let found = duckle_duckdb_engine::catalog::document_paths(&ws);
+        let entry = found.iter().find(|(id, _, _)| id == "orders").expect("walk finds it");
+        assert!(entry.1.ends_with("orders.json"));
+        // And the two guesses the old code made both miss it, which is the
+        // whole point of carrying the path.
+        assert!(!ws.join("pipelines/orders.json").is_file());
+        assert!(!ws.join("orders.json").is_file());
+    }
 
     #[test]
     fn a_changed_context_value_is_detected_without_the_value_being_read_out() {

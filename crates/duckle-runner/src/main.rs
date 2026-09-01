@@ -1367,7 +1367,10 @@ fn run_validate() -> ExitCode {
             // compile-to-SQL engine being inspectable: you can read exactly
             // what will run before it runs.
             "--sql" => with_sql = true,
-            "--affected" => affected_base = Some(String::new()),
+            // `--affected` only turns the mode on. It must not overwrite a
+            // revision `--base` has already parsed, or the two flags fight and
+            // whichever came last wins.
+            "--affected" => affected_base = affected_base.or(Some(String::new())),
             "--base" => affected_base = Some(it.next().unwrap_or_default()),
             "--head" => affected_head = it.next().unwrap_or_default(),
             "--workspace" => {
@@ -1403,8 +1406,8 @@ fn run_validate() -> ExitCode {
             &affected_head,
             include_uncertain,
         );
-        let selection = match selection {
-            Ok((s, _)) => s,
+        let affected = match selection {
+            Ok(a) => a,
             Err(e) => {
                 eprintln!("duckle-runner validate --affected: {e}");
                 return ExitCode::from(2);
@@ -1412,23 +1415,29 @@ fn run_validate() -> ExitCode {
         };
         // In the order the selection gives, so reading the output follows the
         // dependency chain rather than the alphabet.
-        let mut order = selection.order.clone();
-        for entry in &selection.selected {
+        let mut order = affected.selection.order.clone();
+        for entry in &affected.selection.selected {
             if !order.contains(&entry.pipeline) {
                 order.push(entry.pipeline.clone());
             }
         }
-        for id in order {
-            let file = format!("{id}.json");
-            for candidate in [
-                affected_workspace.join("pipelines").join(&file),
-                affected_workspace.join(&file),
-            ] {
-                if candidate.is_file() {
-                    paths.push(candidate);
-                    break;
-                }
+        // The path comes from the same walk that found the pipeline. Guessing
+        // it back from the id silently dropped anything in a nested folder, and
+        // a gate that drops what it cannot find reports a clean run.
+        let mut unresolved: Vec<String> = Vec::new();
+        for id in &order {
+            match affected.paths.get(id) {
+                Some(path) => paths.push(path.clone()),
+                None => unresolved.push(id.clone()),
             }
+        }
+        if !unresolved.is_empty() {
+            eprintln!(
+                "duckle-runner validate --affected: selected but could not be located: {}. \
+Refusing rather than reporting a clean run.",
+                unresolved.join(", ")
+            );
+            return ExitCode::from(2);
         }
         if paths.is_empty() {
             println!("nothing affected against {base}");
