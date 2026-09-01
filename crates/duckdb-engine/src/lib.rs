@@ -38,6 +38,7 @@ pub mod drift;
 pub mod qvd;
 pub mod review;
 pub mod alerts;
+pub mod sqldiag;
 pub mod openlineage;
 pub mod rundiff;
 pub mod props;
@@ -166,6 +167,116 @@ impl std::fmt::Debug for DuckdbEngine {
 /// Does this SQL read a figure that only exists once an earlier node has finished?
 fn references_node_stat(sql: &str) -> bool {
     sql.contains("_NB_LINE}") || sql.contains("_NB_FILE}") || sql.contains("_DURATION}")
+}
+
+/// What binding one node's SQL said (#314).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeAnalysis {
+    pub node_id: String,
+    pub component: String,
+    /// `duckdb` when Duckle runs the SQL itself, `remote` when it is sent to
+    /// another system. Criterion 5: never claim a DuckDB bind says anything
+    /// about BigQuery.
+    pub dialect: String,
+    /// The inferred output schema, when DuckDB bound it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<Column>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<sqldiag::Diagnostic>,
+    /// Whether DuckDB actually looked. False means nothing was checked, which
+    /// is not the same as checked and clean - the difference this field exists
+    /// to keep.
+    pub validated: bool,
+    /// Why it did not look, when it did not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// The SQL a node's author actually wrote, if it has any.
+fn authored_sql(node: &duckle_metadata::PipelineNode) -> Option<String> {
+    let props = node.data.properties.as_ref()?;
+    for key in ["sql", "query"] {
+        if let Some(text) = props.get(key).and_then(|v| v.as_str()) {
+            if !text.trim().is_empty() {
+                return Some(text.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Locate a diagnostic by the identifier its message names, when the caret
+/// cannot be used.
+///
+/// DuckDB truncates the source line it echoes as soon as the statement is wide
+/// - and Duckle's compiled statement always is, because it prepends
+/// `CREATE OR REPLACE VIEW "q" AS WITH input AS (...)`. The caret is then
+/// aligned to a window whose starting offset is not printed, so it cannot be
+/// turned into an offset in anything.
+///
+/// The message still names the token: `Referenced column "regionn" not found`.
+/// Searching for it is honest only when it occurs EXACTLY once in the authored
+/// SQL - twice and there is no way to tell which one DuckDB meant, and pointing
+/// at the wrong one is the failure this whole path is trying to avoid.
+fn by_token(mut d: sqldiag::Diagnostic, authored: &str) -> sqldiag::Diagnostic {
+    d.line = None;
+    d.column = None;
+    let Some(token) = sqldiag::quoted(&d.message).into_iter().next() else { return d };
+    let mut found = authored.match_indices(&token);
+    let Some((at, _)) = found.next() else { return d };
+    if found.next().is_some() {
+        return d;
+    }
+    let before = &authored[..at];
+    d.line = Some(before.lines().count().max(1) as u32);
+    d.column = Some(before.lines().next_back().unwrap_or("").len() as u32 + 1);
+    d
+}
+
+/// Move a diagnostic's position from the compiled SQL onto the SQL the user
+/// wrote, or drop it.
+///
+/// The compiled text is not the authored text: a `WITH input AS (...)` preamble
+/// is prepended, stub views for every upstream are prepended before that, and a
+/// prelude can be prepended before those. A position that still pointed at the
+/// compiled text would send the reader to a line they never typed, with total
+/// confidence - so unless the authored SQL appears verbatim in what was run and
+/// the diagnostic falls inside it, the position is removed and the diagnostic
+/// stays node-level.
+fn reposition(
+    mut d: sqldiag::Diagnostic,
+    executed: &str,
+    authored: Option<&str>,
+) -> sqldiag::Diagnostic {
+    let Some(authored) = authored else {
+        d.line = None;
+        d.column = None;
+        return d;
+    };
+    let (Some(line), Some(column)) = (d.line, d.column) else {
+        return by_token(d, authored);
+    };
+    let Some(start) = executed.find(authored) else {
+        return by_token(d, authored);
+    };
+    // Absolute offset of the diagnostic within what was executed.
+    let mut offset = 0usize;
+    for (n, text) in executed.lines().enumerate() {
+        if n + 1 == line as usize {
+            offset += (column as usize).saturating_sub(1);
+            break;
+        }
+        offset += text.len() + 1;
+    }
+    if offset < start || offset >= start + authored.len() {
+        return by_token(d, authored);
+    }
+    // And the same offset expressed against the authored text.
+    let inner = &authored[..offset - start];
+    d.line = Some(inner.lines().count().max(1) as u32);
+    d.column = Some(inner.lines().next_back().unwrap_or("").len() as u32 + 1);
+    d
 }
 
 impl DuckdbEngine {
@@ -3233,6 +3344,125 @@ impl DuckdbEngine {
         node_id: &str,
         inputs: &[(String, Vec<Column>)],
     ) -> Result<Vec<Column>, EngineError> {
+        let analysis = self.analyze_node_sql(doc, node_id, inputs)?;
+        // The contract this had before #314, kept exactly. A node that was not
+        // looked at, and a node that would not bind, are both errors here - not
+        // an empty column list, which a caller would read as "it has no
+        // columns". Callers wanting the detail ask `analyze_node_sql`.
+        if let Some(note) = analysis.note {
+            return Err(EngineError::Config(note));
+        }
+        match analysis.diagnostics.first() {
+            Some(first) => Err(EngineError::Query(first.message.clone())),
+            None => Ok(analysis.columns),
+        }
+    }
+
+    /// #314: analyse every SQL-bearing node of a pipeline, in dependency order.
+    ///
+    /// Each node is bound against the columns its upstreams were just found to
+    /// produce, so a whole pipeline can be checked without a run and without
+    /// the caller having to resolve schemas itself. This is what makes
+    /// criterion 4 true by construction: the CLI, MCP and the editor call the
+    /// same function rather than three that agree until they do not.
+    ///
+    /// Nodes whose upstream could not be resolved are analysed with whatever
+    /// was resolved; a node with no known inputs at all binds against nothing
+    /// and says so through its own diagnostics rather than being skipped
+    /// silently.
+    pub fn analyze_pipeline_sql(&self, doc: &PipelineDoc) -> Result<Vec<NodeAnalysis>, EngineError> {
+        let stages = compile_pipeline_sql(doc)?;
+        let mut known: std::collections::HashMap<String, Vec<Column>> =
+            std::collections::HashMap::new();
+        // A declared schema is the author's statement of what a source
+        // produces, and it is the only thing available for one: binding a
+        // source would mean connecting to it.
+        for node in &doc.nodes {
+            if let Some(schema) = node.data.schema.as_ref() {
+                if !schema.is_empty() {
+                    known.insert(node.id.clone(), schema.clone());
+                }
+            }
+        }
+        let mut upstreams: std::collections::HashMap<&str, Vec<&str>> =
+            std::collections::HashMap::new();
+        for e in &doc.edges {
+            upstreams.entry(e.target.as_str()).or_default().push(e.source.as_str());
+        }
+
+        let mut out = Vec::new();
+        // Stage order is already dependency order, which is what lets one pass
+        // carry each node's columns forward to the nodes that read it.
+        for stage in &stages {
+            let inputs: Vec<(String, Vec<Column>)> = upstreams
+                .get(stage.node_id.as_str())
+                .into_iter()
+                .flatten()
+                .filter_map(|u| known.get(*u).map(|c| ((*u).to_string(), c.clone())))
+                .collect();
+            let analysis = self.analyze_node_sql(doc, &stage.node_id, &inputs)?;
+            if !analysis.columns.is_empty() {
+                known.insert(stage.node_id.clone(), analysis.columns.clone());
+            }
+            out.push(analysis);
+        }
+        Ok(out)
+    }
+
+    /// #314: bind a node's SQL without running anything, and report what DuckDB
+    /// said about it.
+    ///
+    /// The same side-effect-free bind [`describe_node_columns`] does, keeping
+    /// its diagnostics instead of collapsing them into one string. A typo was
+    /// already being caught here; the message naming the column, its position
+    /// and DuckDB's suggested replacement were all thrown away, so every
+    /// surface could say only that the node did not resolve.
+    ///
+    /// Never returns Err for a SQL problem: a pipeline whose SQL is wrong is
+    /// exactly the case this exists to describe. Err is reserved for not being
+    /// able to look at all.
+    pub fn analyze_node_sql(
+        &self,
+        doc: &PipelineDoc,
+        node_id: &str,
+        inputs: &[(String, Vec<Column>)],
+    ) -> Result<NodeAnalysis, EngineError> {
+        let node = doc.nodes.iter().find(|n| n.id == node_id);
+        let component = node.and_then(|n| n.data.component_id.clone()).unwrap_or_default();
+        let authored = node.and_then(authored_sql);
+        // A source only has a REMOTE dialect if it has SQL at all. `src.csv`
+        // reads a file and sends nothing anywhere; calling it remote and saying
+        // its SQL was not validated describes a node that has none, which is
+        // both wrong and the sort of thing that teaches people to skim the
+        // output.
+        let remote = component.starts_with("src.") && authored.is_some();
+        let mut analysis = NodeAnalysis {
+            node_id: node_id.to_string(),
+            component: component.clone(),
+            dialect: match remote {
+                true => "remote".into(),
+                false => "duckdb".into(),
+            },
+            columns: Vec::new(),
+            diagnostics: Vec::new(),
+            validated: false,
+            note: None,
+        };
+        // Criterion 5, said once and plainly. A source's `query` runs on
+        // Postgres or BigQuery or Snowflake; binding it against DuckDB would
+        // either reject valid SQL or accept invalid SQL, and either way the
+        // answer would be about the wrong engine.
+        if remote {
+            analysis.note = Some(format!(
+                "{component} sends its SQL to the remote system, so DuckDB cannot validate it. Checking it here would say nothing true about that dialect."
+            ));
+            return Ok(analysis);
+        }
+        if authored.is_none() && component.starts_with("src.") {
+            analysis.note = Some(format!("{component} has no SQL to check"));
+            return Ok(analysis);
+        }
+
         let stages = compile_pipeline_sql(doc)?;
         let stage = stages
             .iter()
@@ -3247,10 +3477,11 @@ impl DuckdbEngine {
         // Guarded here rather than in the caller: this is the code that holds
         // the loaded gun, and a sink has no output columns to describe anyway.
         if stage.kind != "view" {
-            return Err(EngineError::Config(format!(
-                "node {node_id:?} is a {} stage, which produces no relation to describe - and                  running it to find out would perform its writes",
+            analysis.note = Some(format!(
+                "node {node_id:?} is a {} stage, which produces no relation to describe - and running it to find out would perform its writes",
                 stage.kind
-            )));
+            ));
+            return Ok(analysis);
         }
         // Defence in depth, because this function RUNS what it is handed and a
         // "view" is not automatically inert: a source view can carry an ATTACH
@@ -3264,9 +3495,10 @@ impl DuckdbEngine {
             .to_ascii_uppercase()
             .starts_with("CREATE OR REPLACE VIEW")
         {
-            return Err(EngineError::Config(format!(
-                "node {node_id:?} does not compile to a plain view, so describing it would run                  something with effects. Only derived relations can be described this way."
-            )));
+            analysis.note = Some(format!(
+                "node {node_id:?} does not compile to a plain view, so describing it would run something with effects. Only derived relations can be described this way."
+            ));
+            return Ok(analysis);
         }
 
         let mut sql = String::new();
@@ -3297,13 +3529,39 @@ impl DuckdbEngine {
         sql.push_str(";\n");
         sql.push_str(&format!("DESCRIBE {};", plan::quote_ident(node_id)));
 
-        let out = self.run(None, &sql, true)?;
-        let arrays = parse_json_arrays(&out);
-        // The DESCRIBE is the last statement, so its rows are the last array.
-        let described = arrays
-            .last()
-            .ok_or_else(|| EngineError::Query("no schema came back".into()))?;
-        Ok(described.iter().filter_map(parse_describe_row).collect())
+        match self.run(None, &sql, true) {
+            Ok(out) => {
+                let arrays = parse_json_arrays(&out);
+                // The DESCRIBE is the last statement, so its rows are last.
+                let described = arrays
+                    .last()
+                    .ok_or_else(|| EngineError::Query("no schema came back".into()))?;
+                analysis.columns = described.iter().filter_map(parse_describe_row).collect();
+                analysis.validated = true;
+            }
+            Err(EngineError::Query(stderr)) => {
+                analysis.diagnostics = sqldiag::parse(&stderr)
+                    .into_iter()
+                    .map(|d| reposition(d, &sql, authored.as_deref()))
+                    .collect();
+                // Nothing came back, but DuckDB DID bind it and object, which
+                // is a different thing from not having looked.
+                analysis.validated = true;
+                if analysis.diagnostics.is_empty() {
+                    // A failure this build cannot parse. Saying nothing about
+                    // it would report the node as clean.
+                    analysis.diagnostics.push(sqldiag::Diagnostic {
+                        kind: crate::error_category::categorize_error(&stderr).to_string(),
+                        message: stderr,
+                        line: None,
+                        column: None,
+                        candidates: Vec::new(),
+                    });
+                }
+            }
+            Err(other) => return Err(other),
+        }
+        Ok(analysis)
     }
 
     /// Run a single read-only SELECT and return its schema + up to `row_limit`

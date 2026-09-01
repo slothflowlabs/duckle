@@ -964,6 +964,8 @@ pub fn run(duckdb: PathBuf) -> ExitCode {
                 rule: "assert".to_string(),
                 message: outcome.clone().unwrap_or_else(|| "passed".to_string()),
                 ok: outcome.is_none(),
+                line: None,
+                column: None,
             });
             results.push(serde_json::json!({
                 "suite": path.to_string_lossy(),

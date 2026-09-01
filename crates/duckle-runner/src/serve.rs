@@ -987,6 +987,33 @@ fn dispatch_cmd(state: &WebState, cmd: &str, body: &[u8]) -> Reply {
                 Err(e) => respond_err("400 Bad Request", &e.to_string()),
             }
         }
+        // #314. The web editor had none of the binder primitive at all: an
+        // unknown command 404s and the web shim turns a 404 into a null no-op,
+        // so the whole feature was silently dead here while the desktop had it.
+        // `apply_workspace_context` first, like every other command on this
+        // path and unlike the desktop one - without it a `${workspace}` in SQL
+        // binds differently on the two surfaces.
+        "analyze_node_sql" => {
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let mut doc: PipelineDoc = match serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)) {
+                Ok(d) => d,
+                Err(e) => return respond_err("400 Bad Request", &format!("bad pipeline: {}", e)),
+            };
+            duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
+            let engine = DuckdbEngine::new(state.duckdb.clone());
+            match engine.analyze_pipeline_sql(&doc) {
+                Ok(mut nodes) => {
+                    if let Some(only) = args.get("node").and_then(Value::as_str) {
+                        nodes.retain(|n| n.node_id == only);
+                    }
+                    match serde_json::to_value(&nodes) {
+                        Ok(v) => respond_json(&v),
+                        Err(e) => respond_err("500 Internal Server Error", &e.to_string()),
+                    }
+                }
+                Err(e) => respond_err("400 Bad Request", &e.to_string()),
+            }
+        }
         "pipeline_column_lineage" => {
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
             let mut doc: PipelineDoc = match serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)) {

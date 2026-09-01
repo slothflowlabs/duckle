@@ -104,6 +104,14 @@ pub fn list_tools() -> Value {
                 "path": { "type": "string", "description": "Path to a pipeline .json (use instead of 'pipeline')." },
                 "duckdb": { "type": "string", "description": "DuckDB CLI path for lineage resolution. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb' on PATH." }
             }})),
+        tool("check_node_sql",
+            "Bind a pipeline's SQL against its upstream columns WITHOUT running it, and report what DuckDB said: the message, the position in the node's own SQL, and the column it suggests instead of a typo. Also returns each node's inferred output schema. Scope to one node with 'node'. A source's query is sent to a remote system and is reported as not validated rather than checked against DuckDB. Read-only; runs nothing with effects.",
+            json!({ "type": "object", "properties": {
+                "pipeline": { "type": "object", "description": "Inline pipeline object." },
+                "path": { "type": "string", "description": "Path to a pipeline .json (use instead of 'pipeline')." },
+                "node": { "type": "string", "description": "Only this node. Omit for the whole pipeline." },
+                "duckdb": { "type": "string", "description": "DuckDB CLI path. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb' on PATH." }
+            }})),
         tool("suggest_contracts",
             "Profile a pipeline's columns and suggest data contracts to add: PII tags (heuristic, name-based) and source requireColumns anchors. Returns per-node suggestedContracts you can merge with update_pipeline, after which verify_pipeline enforces the PII-to-sink guard. Static; uses declared schemas, and column lineage too when a DuckDB binary is available.",
             json!({ "type": "object", "properties": {
@@ -283,6 +291,7 @@ pub fn call_tool(params: Value) -> Result<Value, (i64, String)> {
         "run_tests" => t_run_tests(&args),
         "pipeline_lineage" => t_pipeline_lineage(&args),
         "verify_pipeline" => t_verify_pipeline(&args),
+        "check_node_sql" => t_check_node_sql(&args),
         "suggest_contracts" => t_suggest_contracts(&args),
         "pipeline_impact" => t_pipeline_impact(&args),
         "workspace_impact" => t_workspace_impact(&args),
@@ -524,6 +533,37 @@ fn t_trust_report(args: &Value) -> Result<Value, String> {
         }
     }
     Ok(duckle_duckdb_engine::trust::trust_report(&v, None))
+}
+
+/// #314. Calls the same `analyze_pipeline_sql` the CLI and the editor call, so
+/// criterion 4 - identical diagnostics on every surface - holds by
+/// construction rather than by three implementations agreeing.
+fn t_check_node_sql(args: &Value) -> Result<Value, String> {
+    let (v, _name) = load_pipeline_value(args)?;
+    let doc = to_doc(&v)?;
+    let Some(duckdb) = resolve_duckdb(arg_str(args, "duckdb")) else {
+        // Said plainly rather than returning an empty, clean-looking report:
+        // "nothing was checked" and "nothing was wrong" must not look alike.
+        return Ok(json!({
+            "checked": false,
+            "reason": "no DuckDB binary; set DUCKLE_DUCKDB_BIN or pass 'duckdb'"
+        }));
+    };
+    let engine = duckle_duckdb_engine::DuckdbEngine::new(duckdb);
+    let mut nodes = engine.analyze_pipeline_sql(&doc).map_err(|e| e.to_string())?;
+    if let Some(only) = arg_str(args, "node") {
+        nodes.retain(|n| n.node_id == only);
+        if nodes.is_empty() {
+            return Err(format!("no node {only:?} in this pipeline"));
+        }
+    }
+    let problems: usize = nodes.iter().map(|n| n.diagnostics.len()).sum();
+    Ok(json!({
+        "checked": true,
+        "ok": problems == 0,
+        "problems": problems,
+        "nodes": nodes,
+    }))
 }
 
 fn t_verify_pipeline(args: &Value) -> Result<Value, String> {

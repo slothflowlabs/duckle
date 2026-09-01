@@ -1056,6 +1056,127 @@ fn text_to_columns_splits_into_named_columns() {
 ///
 /// Asserted on components the resolver does NOT model, because those are the
 /// ones this exists for.
+/// #314 criteria 1 and 2: a missing upstream column is caught before any run,
+/// and the diagnostic names the node, the position, and what DuckDB suggests
+/// instead.
+///
+/// The typo was ALWAYS caught here - DuckDB rejects the bind. What was missing
+/// is everything about it: the message, the position and the candidate were
+/// collapsed into one error string and the editor showed only that the node
+/// did not resolve.
+#[test]
+fn a_typo_is_caught_with_its_position_and_the_column_that_was_meant() {
+    let engine = engine_or_skip!();
+    let col = |name: &str, t: duckle_duckdb_engine::DataType| duckle_duckdb_engine::Column {
+        tags: Vec::new(),
+        name: name.into(),
+        data_type: t,
+        nullable: true,
+        primary_key: None,
+        format: None,
+    };
+    let upstream = vec![
+        col("id", duckle_duckdb_engine::DataType::Int64),
+        col("region", duckle_duckdb_engine::DataType::String),
+    ];
+    let doc: duckle_duckdb_engine::PipelineDoc = serde_json::from_value(serde_json::json!({
+        "nodes": [
+            { "id": "s", "type": "source", "position": {"x":0,"y":0},
+              "data": { "label": "in", "componentId": "src.csv",
+                        "properties": { "path": "in.csv", "hasHeader": true } } },
+            { "id": "q", "type": "transform", "position": {"x":200,"y":0},
+              "data": { "label": "sql", "componentId": "code.sql",
+                        "properties": { "sql": "SELECT id, regionn FROM input" } } }
+        ],
+        "edges": [ { "id": "e1", "source": "s", "target": "q",
+                     "data": { "connectionType": "main" } } ]
+    }))
+    .unwrap();
+
+    let a = engine
+        .analyze_node_sql(&doc, "q", &[("s".to_string(), upstream)])
+        .expect("analysis is not an error just because the SQL is wrong");
+    assert!(a.validated, "DuckDB did look at it");
+    assert_eq!(a.dialect, "duckdb");
+    assert_eq!(a.diagnostics.len(), 1, "{:?}", a.diagnostics);
+    let d = &a.diagnostics[0];
+    assert_eq!(d.kind, "schema");
+    assert!(d.message.contains("regionn"), "{}", d.message);
+    assert_eq!(d.candidates, vec!["region"], "the suggestion was lost before #314");
+    // The position is against the SQL the AUTHOR wrote, not the compiled text.
+    let authored = "SELECT id, regionn FROM input";
+    let column = d.column.expect("a column") as usize;
+    assert_eq!(d.line, Some(1));
+    assert_eq!(
+        &authored[column - 1..column - 1 + 7],
+        "regionn",
+        "column {column} points somewhere else in {authored:?}"
+    );
+}
+
+/// A token that appears twice gets no position at all.
+///
+/// DuckDB truncates the line it echoes for any wide statement, and Duckle's
+/// compiled statement always is - so the position comes from finding the named
+/// token in the authored SQL. That is only honest when there is one of it:
+/// pointing at the first of two occurrences would be a confident guess, and
+/// this whole path exists to avoid exactly that.
+#[test]
+fn an_ambiguous_token_gets_no_position_rather_than_the_first_guess() {
+    let engine = engine_or_skip!();
+    let upstream = vec![duckle_duckdb_engine::Column {
+        tags: Vec::new(),
+        name: "amount".into(),
+        data_type: duckle_duckdb_engine::DataType::Int64,
+        nullable: true,
+        primary_key: None,
+        format: None,
+    }];
+    let doc: duckle_duckdb_engine::PipelineDoc = serde_json::from_value(serde_json::json!({
+        "nodes": [
+            { "id": "s", "type": "source", "position": {"x":0,"y":0},
+              "data": { "label": "in", "componentId": "src.csv",
+                        "properties": { "path": "in.csv", "hasHeader": true } } },
+            { "id": "q", "type": "transform", "position": {"x":200,"y":0},
+              "data": { "label": "sql", "componentId": "code.sql",
+                        "properties": { "sql": "SELECT amountt, amountt * 2 AS doubled FROM input" } } }
+        ],
+        "edges": [ { "id": "e1", "source": "s", "target": "q",
+                     "data": { "connectionType": "main" } } ]
+    }))
+    .unwrap();
+    let a = engine.analyze_node_sql(&doc, "q", &[("s".to_string(), upstream)]).unwrap();
+    assert_eq!(a.diagnostics.len(), 1, "{:?}", a.diagnostics);
+    let d = &a.diagnostics[0];
+    assert!(d.message.contains("amountt"), "{}", d.message);
+    assert_eq!(d.line, None, "two occurrences, so no honest position");
+    assert_eq!(d.column, None);
+    // The candidate is still worth having even without a position.
+    assert_eq!(d.candidates, vec!["amount"]);
+}
+
+/// Criterion 5: a source's SQL is not checked, and the reason is stated.
+#[test]
+fn a_source_query_is_not_validated_against_duckdb() {
+    let engine = engine_or_skip!();
+    let doc: duckle_duckdb_engine::PipelineDoc = serde_json::from_value(serde_json::json!({
+        "nodes": [
+            { "id": "s", "type": "source", "position": {"x":0,"y":0},
+              "data": { "label": "pg", "componentId": "src.postgres",
+                        "properties": { "host": "db", "database": "app",
+                                        "mode": "sql",
+                                        "sql": "SELECT id FROM public.orders LIMIT 1" } } }
+        ],
+        "edges": []
+    }))
+    .unwrap();
+    let a = engine.analyze_node_sql(&doc, "s", &[]).unwrap();
+    assert_eq!(a.dialect, "remote");
+    assert!(!a.validated, "a DuckDB bind says nothing about Postgres");
+    assert!(a.diagnostics.is_empty(), "and must not invent objections");
+    assert!(a.note.as_deref().unwrap_or("").contains("remote"), "{:?}", a.note);
+}
+
 #[test]
 fn a_node_reports_its_real_columns_without_running() {
     let engine = engine_or_skip!();

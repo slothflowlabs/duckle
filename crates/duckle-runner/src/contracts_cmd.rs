@@ -129,6 +129,8 @@ pub fn run() -> ExitCode {
                 .to_string(),
                 message: describe(f),
                 ok: false,
+                line: None,
+                column: None,
             })
             .collect();
         match format.as_str() {

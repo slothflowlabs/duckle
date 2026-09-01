@@ -623,6 +623,47 @@ being able to answer.
 A pipeline that declares nothing behaves exactly as before: any unresolved
 `${name}` is simply prompted for.
 
+### Is this SQL right? (`sql check`)
+
+```bash
+duckle-runner sql check pipeline.json [--node q] [--format json|junit|sarif]
+```
+
+```text
+skip  src                src.csv has no SQL to check
+FAIL  q                  2:12: Referenced column "amountt" not found in FROM clause!  (did you mean amount?)
+skip  out                node "out" is a sink stage, which produces no relation to describe - and
+                         running it to find out would perform its writes
+
+3 node(s) checked, 1 problem(s)
+```
+
+Every SQL-bearing node is bound against the columns its upstreams actually
+produce, **before anything runs**, and the output schema each node infers is
+carried forward to the next. Nothing with effects is executed: a sink is refused
+rather than run to see what it returns, and only a plain derived view is bound.
+
+**The diagnostics were always there and were being thrown away.** DuckDB already
+says which column, where, and what it thinks you meant; all of it was collapsed
+into one error string, so the editor could report only that a node did not
+resolve. The candidate list is the most useful part and was the first thing lost.
+
+**A wrong position is worse than none.** The position DuckDB reports is an offset
+into the SQL Duckle *compiled*, not the SQL you wrote - and DuckDB truncates the
+line it echoes for any wide statement, which Duckle's always is. So the position
+is recovered by finding the named token in your own SQL, and only when it occurs
+exactly once. Twice, and there is no position at all rather than a confident
+guess at the first one.
+
+**A source's query is not checked, and says so.** It runs on Postgres or
+BigQuery; binding it against DuckDB would either reject valid SQL or accept
+invalid SQL, and either way the answer would be about the wrong engine. "Not
+checked" and "checked and clean" never read the same.
+
+Same analysis from `duckle-runner sql check`, the MCP tool `check_node_sql`, and
+the editor - one function, so they cannot come to disagree. SARIF carries a real
+`region`, so a code-scanning viewer jumps to the token.
+
 ### OpenLineage export
 
 Drop an `openlineage.json` in the workspace and every run emits START and a

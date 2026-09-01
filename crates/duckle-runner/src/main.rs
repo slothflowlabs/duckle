@@ -23,6 +23,7 @@ use std::process::ExitCode;
 mod affected_cmd;
 mod migrate_cmd;
 mod runsdiff_cmd;
+mod sql_cmd;
 mod capabilities;
 mod contracts_cmd;
 mod report;
@@ -2036,6 +2037,10 @@ fn main() -> ExitCode {
                 .unwrap_or_default()
         );
         return ExitCode::from(0);
+    }
+    // `sql check` -> bind every node's SQL without running it (#314).
+    if std::env::args().nth(1).as_deref() == Some("sql") {
+        return sql_cmd::run();
     }
     // `runs diff` -> what was different about these two runs (#309).
     if std::env::args().nth(1).as_deref() == Some("runs") {

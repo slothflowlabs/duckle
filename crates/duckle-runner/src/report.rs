@@ -40,19 +40,32 @@ pub struct Finding {
     pub rule: String,
     pub message: String,
     pub ok: bool,
+    /// #314: where in the node's own SQL, when that can be said honestly.
+    /// Absent for everything that has no position, which is most findings.
+    pub line: Option<u32>,
+    pub column: Option<u32>,
 }
 
 impl Finding {
     pub fn pass(file: &str, rule: &str, message: String) -> Self {
-        Finding { file: file.into(), node: None, rule: rule.into(), message, ok: true }
+        Finding { file: file.into(), node: None, rule: rule.into(), message, ok: true, line: None, column: None }
     }
     pub fn fail(file: &str, rule: &str, message: String) -> Self {
-        Finding { file: file.into(), node: None, rule: rule.into(), message, ok: false }
+        Finding { file: file.into(), node: None, rule: rule.into(), message, ok: false, line: None, column: None }
     }
 }
 
 /// The version of the JSON envelope. Bump when a consumer would break.
 pub const SCHEMA_VERSION: u32 = 1;
+
+/// The SARIF region for a finding, or nothing at all.
+fn region_of(f: &Finding) -> serde_json::Value {
+    match (f.line, f.column) {
+        (Some(l), Some(c)) => serde_json::json!({ "startLine": l, "startColumn": c }),
+        (Some(l), None) => serde_json::json!({ "startLine": l }),
+        _ => serde_json::json!(null),
+    }
+}
 
 pub fn json(command: &str, findings: &[Finding], extra: serde_json::Value) -> String {
     let failed = findings.iter().filter(|f| !f.ok).count();
@@ -73,6 +86,12 @@ pub fn json(command: &str, findings: &[Finding], extra: serde_json::Value) -> St
                 });
                 if let Some(n) = &f.node {
                     o["node"] = serde_json::Value::String(n.clone());
+                }
+                if let Some(l) = f.line {
+                    o["line"] = serde_json::Value::from(l);
+                }
+                if let Some(c) = f.column {
+                    o["column"] = serde_json::Value::from(c);
                 }
                 o
             })
@@ -179,7 +198,11 @@ pub fn sarif(command: &str, findings: &[Finding]) -> String {
                         "physicalLocation": {
                             // A workspace-relative URI, and forward slashes, or
                             // Code Scanning cannot match it to a repo file.
-                            "artifactLocation": { "uri": f.file.replace('\\', "/") }
+                            "artifactLocation": { "uri": f.file.replace('\\', "/") },
+                            // A SARIF region is 1-based and a viewer jumps to
+                            // it, so it is emitted only when there is a real
+                            // position - never a placeholder line 1.
+                            "region": region_of(f)
                         }
                     }],
                 });
