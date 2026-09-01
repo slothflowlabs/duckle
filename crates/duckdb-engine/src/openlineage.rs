@@ -436,6 +436,7 @@ mod tests {
             pipeline_hash: "abc123".into(),
             engine_version: "1.5.4".into(),
             parameters: BTreeMap::new(),
+            parameter_sources: Vec::new(),
             nodes: BTreeMap::from([
                 (
                     "src".to_string(),

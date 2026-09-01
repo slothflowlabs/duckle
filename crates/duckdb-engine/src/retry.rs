@@ -156,6 +156,14 @@ pub struct RunReceipt {
     /// guess made here about the name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parameters: BTreeMap<String, String>,
+    /// Where each parameter came from, and what it displaced (#317).
+    ///
+    /// Beside `parameters` rather than replacing it: that map is what #309
+    /// compares two runs on, and it stays a plain name-to-value document. This
+    /// answers the different question - was this value deliberately overridden,
+    /// or bound twice by accident - which last-write-wins with no record cannot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameter_sources: Vec<crate::params::Effective>,
     pub nodes: BTreeMap<String, ReceiptNode>,
 }
 
@@ -204,6 +212,7 @@ pub fn begin(
         pipeline_hash: pipeline_hash.to_string(),
         engine_version: ENGINE_VERSION.to_string(),
         parameters: BTreeMap::new(),
+        parameter_sources: Vec::new(),
         nodes: BTreeMap::new(),
     };
     // Best effort: a run that cannot record itself is still a run that happens.
@@ -673,6 +682,7 @@ mod tests {
             pipeline_hash: hash.into(),
             engine_version: ENGINE_VERSION.into(),
             parameters: Default::default(),
+            parameter_sources: Vec::new(),
             nodes: nodes
                 .iter()
                 .map(|(id, st, key, kind)| {

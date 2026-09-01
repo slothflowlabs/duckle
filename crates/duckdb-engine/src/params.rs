@@ -82,11 +82,43 @@ pub struct ParamError {
     pub expected: Option<String>,
 }
 
+/// One value, and where it came from (#317).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Supplied {
+    pub name: String,
+    pub value: String,
+    /// Free text naming the surface: `schedule`, `run input`, `context`, `CLI`.
+    /// Free rather than an enum because the set of things that can bind a
+    /// parameter is not fixed, and an unknown source must still be reportable.
+    pub source: String,
+}
+
+/// What a parameter ended up as, and what that displaced.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Effective {
+    pub name: String,
+    /// Redacted when the pipeline declared the parameter secret.
+    pub value: String,
+    pub source: String,
+    /// Sources that supplied a DIFFERENT value for this name and lost.
+    ///
+    /// Only differing ones. Two surfaces binding a parameter to the same value
+    /// is a duplicate and harmless; two binding it to different values is an
+    /// override, and whether that was intended is exactly what an operator has
+    /// to be able to see. Recording both alike would make the interesting case
+    /// invisible in the noise of the boring one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overrode: Vec<String>,
+}
+
 /// Validated parameters, ready to substitute.
 #[derive(Debug, Clone, Default)]
 pub struct Resolved {
     values: BTreeMap<String, String>,
     secrets: BTreeSet<String>,
+    /// name -> (winning source, sources whose different value it replaced)
+    provenance: BTreeMap<String, (String, Vec<String>)>,
 }
 
 impl Resolved {
@@ -96,6 +128,43 @@ impl Resolved {
 
     pub fn is_secret(&self, name: &str) -> bool {
         self.secrets.contains(name)
+    }
+
+    /// Every effective parameter with its provenance (#317).
+    ///
+    /// Empty when nothing was supplied. A parameter that came from one place
+    /// carries that place and an empty `overrode`; the ones worth looking at
+    /// are those with anything in it.
+    pub fn effective(&self) -> Vec<Effective> {
+        self.values
+            .iter()
+            .map(|(name, value)| {
+                let (source, overrode) = self
+                    .provenance
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| ("default".to_string(), Vec::new()));
+                Effective {
+                    name: name.clone(),
+                    value: match self.secrets.contains(name) {
+                        true => "***".to_string(),
+                        false => value.clone(),
+                    },
+                    source,
+                    overrode,
+                }
+            })
+            .collect()
+    }
+
+    /// Parameters supplied by more than one source with different values.
+    ///
+    /// The precedence rule is documented and deterministic, so this is not an
+    /// error - but it is the difference between an operator deliberately
+    /// overriding a schedule and one accidentally binding the same name twice,
+    /// and last-write-wins with no record cannot tell them apart.
+    pub fn conflicts(&self) -> Vec<Effective> {
+        self.effective().into_iter().filter(|e| !e.overrode.is_empty()).collect()
     }
 
     /// The same parameters, safe to persist.
@@ -146,6 +215,50 @@ fn type_ok(kind: ParamType, v: &str) -> Result<(), &'static str> {
 /// Returns EVERY problem rather than the first. A caller filling in a form, or
 /// an agent correcting itself, should not have to make one round trip per
 /// mistake.
+/// Merge several sources into one set, keeping what each displaced.
+///
+/// **Precedence is order: later wins.** Callers pass sources lowest-authority
+/// first, so a run input given at the moment of running beats a value bound to
+/// the schedule that started it - which is what an operator overriding one run
+/// expects. The rule is documented rather than clever, because a surprising
+/// precedence is worse than a blunt one.
+///
+/// What is NOT thrown away is that a value was displaced at all.
+pub fn merge(supplied: &[Supplied]) -> (BTreeMap<String, String>, BTreeMap<String, (String, Vec<String>)>) {
+    let mut values: BTreeMap<String, String> = BTreeMap::new();
+    let mut provenance: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
+    for item in supplied {
+        match values.get(&item.name) {
+            // Same value from two places is a duplicate, not an override.
+            // Recording it would bury the case that matters.
+            Some(existing) if *existing == item.value => continue,
+            Some(_) => {
+                let entry = provenance.entry(item.name.clone()).or_default();
+                let displaced = std::mem::replace(&mut entry.0, item.source.clone());
+                if !displaced.is_empty() && !entry.1.contains(&displaced) {
+                    entry.1.push(displaced);
+                }
+            }
+            None => {
+                provenance.insert(item.name.clone(), (item.source.clone(), Vec::new()));
+            }
+        }
+        values.insert(item.name.clone(), item.value.clone());
+    }
+    (values, provenance)
+}
+
+/// [`validate`], over sources rather than an already-flattened map (#317).
+pub fn validate_supplied(
+    schema: &Schema,
+    supplied: &[Supplied],
+) -> Result<Resolved, Vec<ParamError>> {
+    let (values, provenance) = merge(supplied);
+    let mut resolved = validate(schema, &values)?;
+    resolved.provenance = provenance;
+    Ok(resolved)
+}
+
 pub fn validate(
     schema: &Schema,
     supplied: &BTreeMap<String, String>,
@@ -343,6 +456,79 @@ mod tests {
 
     /// A typo is far more likely than a new parameter, and a silently ignored
     /// one means the run used the default and nobody noticed.
+    fn from(pairs: &[(&str, &str, &str)]) -> Vec<Supplied> {
+        pairs
+            .iter()
+            .map(|(n, v, s)| Supplied {
+                name: (*n).into(),
+                value: (*v).into(),
+                source: (*s).into(),
+            })
+            .collect()
+    }
+
+    /// #317: Louis's case. A schedule binds BE, the run that starts supplies
+    /// NL. Last-write-wins is a fine rule; a result that cannot afterwards be
+    /// told apart from an accidental double binding is not.
+    #[test]
+    fn an_override_records_what_it_displaced() {
+        let supplied = from(&[
+            ("jurisdiction", "BE", "schedule"),
+            ("effective_date", "2026-01-31", "schedule"),
+            ("jurisdiction", "NL", "run input"),
+            ("api_token", "hunter2", "run input"),
+        ]);
+        let r = validate_supplied(&registry(), &supplied).expect("valid");
+        let by = |name: &str| r.effective().into_iter().find(|e| e.name == name).unwrap();
+
+        let j = by("jurisdiction");
+        assert_eq!(j.value, "NL", "later source wins, as documented");
+        assert_eq!(j.source, "run input");
+        assert_eq!(j.overrode, vec!["schedule"], "and says what it replaced");
+
+        // One source, nothing displaced.
+        assert!(by("effective_date").overrode.is_empty());
+        // And a secret is still redacted here - a provenance record must not
+        // become the one place a credential is written down.
+        assert_eq!(by("api_token").value, "***");
+
+        assert_eq!(r.conflicts().len(), 1, "only the one that actually differed");
+        assert_eq!(r.conflicts()[0].name, "jurisdiction");
+    }
+
+    #[test]
+    fn the_same_value_from_two_places_is_a_duplicate_not_an_override() {
+        // Recording it would bury the case that matters in the noise of the
+        // one that does not.
+        let supplied = from(&[
+            ("jurisdiction", "BE", "schedule"),
+            ("jurisdiction", "BE", "run input"),
+            ("effective_date", "2026-01-31", "schedule"),
+            ("api_token", "t", "schedule"),
+        ]);
+        let r = validate_supplied(&registry(), &supplied).unwrap();
+        assert!(r.conflicts().is_empty(), "{:?}", r.conflicts());
+        let j = r.effective().into_iter().find(|e| e.name == "jurisdiction").unwrap();
+        assert_eq!(j.value, "BE");
+        assert!(j.overrode.is_empty());
+    }
+
+    #[test]
+    fn a_declared_default_is_attributed_to_the_default_and_not_to_a_source() {
+        // full_refresh has a declared default and is supplied by nobody.
+        let supplied = from(&[
+            ("jurisdiction", "BE", "schedule"),
+            ("effective_date", "2026-01-31", "schedule"),
+            ("api_token", "t", "schedule"),
+        ]);
+        let r = validate_supplied(&registry(), &supplied).unwrap();
+        let d = r.effective().into_iter().find(|e| e.name == "full_refresh");
+        if let Some(d) = d {
+            assert_eq!(d.source, "default", "a default did not come from a caller");
+            assert!(d.overrode.is_empty());
+        }
+    }
+
     #[test]
     fn an_undeclared_parameter_is_refused_and_suggests_the_near_ones() {
         let e = validate(

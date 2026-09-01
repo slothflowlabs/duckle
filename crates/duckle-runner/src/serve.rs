@@ -3293,7 +3293,22 @@ fn execute_one_with(
     // from the substitution boundary rather than from `params` here, because
     // that is the only place that knows the effective set (declared defaults
     // included) and which of them the pipeline declared secret.
-    let recorded_params = duckle_duckdb_engine::context::apply_params(&mut doc, params)?;
+    // #317: named, so the receipt can later say where a value came from. There
+    // is one source on this path today, which is why nothing here ever reports
+    // an override - but a schedule that binds parameters is the obvious second,
+    // and the difference between a deliberate override and an accidental
+    // double binding has to be recoverable the first time it happens, not
+    // after someone notices it did not get recorded.
+    let supplied: Vec<duckle_duckdb_engine::params::Supplied> = params
+        .iter()
+        .map(|(name, value)| duckle_duckdb_engine::params::Supplied {
+            name: name.clone(),
+            value: value.clone(),
+            source: "run input".to_string(),
+        })
+        .collect();
+    let (recorded_params, parameter_sources) =
+        duckle_duckdb_engine::context::apply_params_from(&mut doc, &supplied)?;
     // Match the web cmd paths and headless `duckle-runner --pipeline`: resolve
     // ${workspace}/${projectroot} and workspace-relative file paths before run,
     // so file-loaded pipelines (manual /api/run + scheduled runs) work too.
@@ -3321,8 +3336,11 @@ fn execute_one_with(
     // Written again straight away rather than only at `finish`: a run that is
     // killed still leaves a receipt, and "what was that run given?" is exactly
     // the question asked of a run that did not come back.
-    let receipt =
-        duckle_duckdb_engine::retry::RunReceipt { parameters: recorded_params, ..receipt };
+    let receipt = duckle_duckdb_engine::retry::RunReceipt {
+        parameters: recorded_params,
+        parameter_sources,
+        ..receipt
+    };
     let _ = duckle_duckdb_engine::retry::write(&state.workspace, &receipt);
     let result = engine.execute_pipeline_named(&doc, &id);
     duckle_duckdb_engine::retry::finish(

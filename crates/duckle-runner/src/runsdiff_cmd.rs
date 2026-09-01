@@ -152,6 +152,7 @@ mod tests {
             pipeline_hash: "aaa".into(),
             engine_version: "1.5.4".into(),
             parameters: Default::default(),
+            parameter_sources: Default::default(),
             nodes: Default::default(),
         }
     }

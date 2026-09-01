@@ -409,6 +409,7 @@ mod tests {
             pipeline_hash: "aaa".into(),
             engine_version: "1.5.4".into(),
             parameters: BTreeMap::new(),
+            parameter_sources: Vec::new(),
             nodes: BTreeMap::from([(
                 "load".to_string(),
                 ReceiptNode {

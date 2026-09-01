@@ -464,10 +464,40 @@ pub fn apply_params(
     doc: &mut PipelineDoc,
     params: &HashMap<String, String>,
 ) -> Result<std::collections::BTreeMap<String, String>, String> {
+    // One unnamed source. A caller that knows where its values came from should
+    // say so through `apply_params_from`, which is what makes an override
+    // visible.
+    let supplied: Vec<crate::params::Supplied> = params
+        .iter()
+        .map(|(name, value)| crate::params::Supplied {
+            name: name.clone(),
+            value: value.clone(),
+            source: "run input".to_string(),
+        })
+        .collect();
+    Ok(apply_params_from(doc, &supplied)?.0)
+}
+
+/// #317: substitute, knowing where each value came from.
+///
+/// Returns the redacted map for history AND what each parameter displaced.
+/// Louis's case: a schedule binds `jurisdiction = BE` and the run that starts
+/// supplies `NL`. Last-write-wins is a fine RULE - what is not fine is that the
+/// result cannot afterwards be told apart from someone binding the same name
+/// twice by accident. Sources are given lowest-authority first.
+pub fn apply_params_from(
+    doc: &mut PipelineDoc,
+    supplied: &[crate::params::Supplied],
+) -> Result<(std::collections::BTreeMap<String, String>, Vec<crate::params::Effective>), String> {
+    let params: HashMap<String, String> =
+        crate::params::merge(supplied).0.into_iter().collect();
+    let params = &params;
     // #317: the one normalization boundary. Every surface reaches substitution
     // through here, so validating here is what makes the desktop, the console,
     // the CLI, MCP and the scheduler agree - validating per surface is how one
     // of them ends up accepting a value another refuses.
+    // Provenance survives validation, so what is reported is what actually ran.
+    let provenance = crate::params::merge(supplied).1;
     let resolved = validate_params(doc, params).map_err(|errs| {
         errs.iter()
             .map(|e| e.message.clone())
@@ -486,6 +516,24 @@ pub fn apply_params(
     } else {
         resolved.for_history()
     };
+    // Built from `recorded`, so a secret is `***` here for exactly the same
+    // reason it is there - a provenance record must not become the one place a
+    // credential is written down.
+    let effective: Vec<crate::params::Effective> = recorded
+        .iter()
+        .map(|(name, value)| {
+            let (source, overrode) = provenance
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| ("default".to_string(), Vec::new()));
+            crate::params::Effective {
+                name: name.clone(),
+                value: value.clone(),
+                source,
+                overrode,
+            }
+        })
+        .collect();
     // Declared parameters carry defaults, so the effective set can be larger
     // than what the caller supplied.
     let params: HashMap<String, String> = if doc.parameters.is_empty() {
@@ -495,18 +543,18 @@ pub fn apply_params(
     };
     let params = &params;
     if params.is_empty() {
-        return Ok(recorded);
+        return Ok((recorded, effective));
     }
     let re = match regex::Regex::new(r"\$\{([^}]+)\}") {
         Ok(re) => re,
-        Err(_) => return Ok(recorded),
+        Err(_) => return Ok((recorded, effective)),
     };
     for node in &mut doc.nodes {
         if let Some(props) = node.data.properties.as_mut() {
             substitute_params_deep(props, None, params, &re, &node.id)?;
         }
     }
-    Ok(recorded)
+    Ok((recorded, effective))
 }
 
 /// A short, stable stand-in for a value nobody declared the sensitivity of.

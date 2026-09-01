@@ -602,6 +602,23 @@ Types: `string`, `integer`, `number`, `boolean`, `date`, `datetime`, `secret`.
 Constraints: `required`, `default`, `enum`, `minimum`, `maximum`, `pattern`,
 `description`.
 
+**Where a value came from is kept.** When two surfaces bind the same parameter -
+a schedule and the run that starts, say - the later one wins, which is a
+documented rule and not a clever one. What is not thrown away is that something
+was displaced:
+
+```json
+{ "name": "jurisdiction", "value": "NL", "source": "run input", "overrode": ["schedule"] }
+```
+
+Only a *differing* value counts as an override. Two places binding a parameter
+to the same value is a duplicate and harmless; recording both alike would bury
+the case that matters in the noise of the one that does not. The record lands on
+the run receipt, so "was this deliberately overridden, or bound twice by
+accident?" is answerable after the fact rather than only while it happens. A
+secret is `***` here for exactly the reason it is elsewhere - a provenance record
+must not become the one place a credential is written down.
+
 **Validated at one boundary.** Every surface - desktop, console, CLI, HTTP API,
 MCP, scheduler, Plans - reaches substitution through the same function, so the
 contract is enforced there. Validating per surface is how the desktop ends up
