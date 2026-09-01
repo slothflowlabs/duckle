@@ -65,6 +65,13 @@ pub struct Policy {
     /// who genuinely needs DuckDB-native remote reads sets this back to true
     /// and accepts that those reads are outside the domain boundary.
     pub allow_duckdb_external_io: bool,
+    /// May this workspace ship lineage events to an external collector (#311)?
+    ///
+    /// Separate from writing them locally, which is not an egress. The thing a
+    /// server policy needs to be able to forbid is the POST: a workspace file
+    /// naming an endpoint is otherwise enough to send the shape of the estate
+    /// somewhere the operator did not choose.
+    pub allow_lineage_export: bool,
 }
 
 impl Policy {
@@ -83,6 +90,7 @@ impl Policy {
             allow_state_mutation: true,
             allow_unsigned_extensions: true,
             allow_duckdb_external_io: false,
+            allow_lineage_export: true,
         }
     }
 
@@ -113,6 +121,9 @@ impl Policy {
         if let Some(false) = other.allow_duckdb_external_io {
             self.allow_duckdb_external_io = false;
         }
+        if let Some(false) = other.allow_lineage_export {
+            self.allow_lineage_export = false;
+        }
     }
 }
 
@@ -141,6 +152,7 @@ struct Layer {
     allow_state_mutation: Option<bool>,
     allow_unsigned_extensions: Option<bool>,
     allow_duckdb_external_io: Option<bool>,
+    allow_lineage_export: Option<bool>,
 }
 
 fn set_of(v: Option<&JsonValue>) -> Option<BTreeSet<String>> {
@@ -173,6 +185,7 @@ fn parse_layer(text: &str, what: &str) -> Result<Layer, EngineError> {
         allow_state_mutation: get("state", "allowMutation").and_then(|b| b.as_bool()),
         allow_unsigned_extensions: get("extensions", "allowUnsigned").and_then(|b| b.as_bool()),
         allow_duckdb_external_io: get("network", "allowDuckdbExternalIo").and_then(|b| b.as_bool()),
+        allow_lineage_export: get("network", "allowLineageExport").and_then(|b| b.as_bool()),
     })
 }
 

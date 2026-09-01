@@ -218,6 +218,24 @@ fn datasets(
             continue;
         }
         let mut entry = json!({ "namespace": ds.namespace, "name": ds.name });
+        // The columns the pipelines declare for this asset, which the catalog
+        // already unions across every node that touches it. Emitted only when
+        // there are some: an empty field list would read as "this dataset has
+        // no columns", and the catalog cannot tell that apart from "nobody
+        // declared any" - which it says so itself.
+        if let Some(asset) = catalog.assets.iter().find(|a| a.id == touch.asset) {
+            if !asset.columns.is_empty() {
+                entry["facets"]["schema"] = json!({
+                    "_producer": PRODUCER,
+                    "_schemaURL": "https://openlineage.io/spec/facets/1-1-0/SchemaDatasetFacet.json",
+                    "fields": asset
+                        .columns
+                        .iter()
+                        .map(|c| json!({ "name": c }))
+                        .collect::<Vec<_>>()
+                });
+            }
+        }
         // The output-statistics facet, only when a count was actually
         // recorded. Absent is not zero: a run that stopped early counted
         // nothing, and emitting 0 would report an empty table.
@@ -304,6 +322,21 @@ pub fn event(
     })
 }
 
+/// Whether policy allows shipping events off the machine (#311).
+///
+/// The local file is not gated by this: writing a workspace's own lineage into
+/// its own logs is not an egress, and refusing it would take away the
+/// operator's copy for no security gain. What a server policy has to be able to
+/// forbid is the POST, because a workspace file naming an endpoint is otherwise
+/// enough to send the shape of the estate somewhere nobody chose.
+///
+/// A policy that cannot be READ refuses. An unreadable policy file is exactly
+/// when an operator most wants the conservative answer, and this cannot end a
+/// run either way.
+pub fn export_permitted(workspace: &Path) -> bool {
+    crate::policy::load(Some(workspace)).map(|p| p.allow_lineage_export).unwrap_or(false)
+}
+
 /// Append the event to the workspace's local log, then try the collector.
 ///
 /// In that order deliberately. The file IS the buffer #311 asks for: a
@@ -327,6 +360,16 @@ pub fn emit(workspace: &Path, cfg: &Config, event: &Value) {
     let Some(endpoint) = cfg.endpoint.as_deref().filter(|e| !e.trim().is_empty()) else {
         return;
     };
+    // The local file is written either way; only the egress is gated. A server
+    // policy has to be able to forbid shipping the shape of the estate to a
+    // collector a workspace file named, and refusing the write as well would
+    // take away the operator's own copy for no security gain.
+    if !export_permitted(workspace) {
+        eprintln!(
+            "duckle: policy forbids lineage export; the event is in logs/openlineage.ndjson only"
+        );
+        return;
+    }
     let agent = crate::tls::http_agent_with(&crate::tls::HttpTransport {
         read_timeout_secs: Some(cfg.timeout_secs),
         connect_timeout_secs: Some(cfg.timeout_secs),
@@ -552,6 +595,52 @@ mod tests {
             !ws.join("logs/openlineage.ndjson").exists(),
             "export must be off unless the workspace asked for it"
         );
+    }
+
+    #[test]
+    fn declared_columns_travel_with_the_dataset() {
+        let cat = crate::catalog::build_from_documents(&[(
+            "nightly".to_string(),
+            serde_json::json!({
+                "name": "nightly",
+                "nodes": [{ "id": "out", "type": "sink", "data": { "componentId": "snk.parquet",
+                  "properties": { "path": "s3://lake/curated/orders.parquet" },
+                  "schema": [{ "name": "id", "type": "BIGINT" }, { "name": "amount", "type": "DOUBLE" }] } }],
+                "edges": []
+            }),
+        )]);
+        let e = event(&Config::default(), EventType::Complete, &receipt("ok"), &cat, "nightly");
+        let fields = e["outputs"][0]["facets"]["schema"]["fields"].as_array().expect("schema facet");
+        let names: Vec<&str> = fields.iter().filter_map(|f| f["name"].as_str()).collect();
+        assert!(names.contains(&"id") && names.contains(&"amount"), "{names:?}");
+    }
+
+    #[test]
+    fn an_asset_nobody_declared_columns_for_gets_no_schema_facet() {
+        // An empty field list reads as "this dataset has no columns", which is
+        // a different claim from "nobody said".
+        let e = event(&Config::default(), EventType::Complete, &receipt("ok"), &catalog(), "nightly");
+        assert!(e["outputs"][0]["facets"].get("schema").is_none(), "{e}");
+    }
+
+    #[test]
+    fn policy_can_forbid_the_egress_without_taking_the_local_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        assert!(export_permitted(ws), "no policy means no restriction");
+
+        std::fs::create_dir_all(ws.join(".duckle")).unwrap();
+        std::fs::write(ws.join(".duckle/policy.yaml"), "network:
+  allowLineageExport: false
+")
+            .unwrap();
+        assert!(!export_permitted(ws), "policy did not forbid the export");
+
+        // The operator still gets their own copy: the file is not an egress.
+        let cfg = Config { endpoint: Some("http://collector.invalid/x".into()), ..Config::default() };
+        emit(ws, &cfg, &json!({ "eventType": "START" }));
+        let log = std::fs::read_to_string(ws.join("logs/openlineage.ndjson")).unwrap();
+        assert!(log.contains("START"), "{log}");
     }
 
     #[test]
