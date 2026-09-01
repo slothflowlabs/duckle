@@ -208,6 +208,15 @@ struct State {
     /// Scheduler poll cadence (issue #135). Default 15s; overridable via
     /// --tick-interval or DUCKLE_TICK_INTERVAL.
     tick_interval: Duration,
+    /// #310: OIDC login, when this deployment configured one. `None` leaves
+    /// every route below exactly as it was.
+    oidc: Option<crate::oidc::Config>,
+    /// Discovered once and reused. Behind a lock rather than resolved at
+    /// startup so a provider that is briefly down delays a login instead of
+    /// stopping the server from starting.
+    oidc_endpoints: Mutex<Option<crate::oidc::Endpoints>>,
+    /// Logins between the redirect and the callback.
+    oidc_logins: Mutex<crate::oidc::PendingLogins>,
     /// #259: runs accepted through POST /api/run/async, by run id. Holds the
     /// engine handle so the run can be cancelled, and the result once it is
     /// done. `running` above is pipeline ids only and cannot answer "how is
@@ -313,6 +322,18 @@ pub fn run() -> Result<(), String> {
         console,
         host: args.host.clone(),
         tick_interval: args.tick_interval,
+        // #310: absent leaves every route exactly as it was. A config that
+        // exists and cannot be read stops the server rather than quietly
+        // falling back to local accounts while an operator believes SSO is on.
+        oidc: match crate::oidc::load(&workspace) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("duckle-runner: {e}");
+                std::process::exit(2);
+            }
+        },
+        oidc_endpoints: Mutex::new(None),
+        oidc_logins: Mutex::new(Default::default()),
     });
 
     // Fold any pre-unification console store into schedules.json before the
@@ -1427,12 +1448,23 @@ pub const READY_PATH: &str = "/readyz";
 /// credential: every route needing one means a Kubernetes HTTP probe gets 401 and the pod
 /// is marked unhealthy forever. `/healthz` answers `ok` and nothing else, so it can say the
 /// process is up without telling an anonymous caller anything about what is in it.
-pub const PUBLIC_ROUTES: [(&str, &str); 5] = [
+/// Where a browser starts an OIDC login, and where the provider sends it back.
+///
+/// Public because signing in cannot require being signed in - the same reason
+/// `POST /api/session` is. Neither route trusts anything it is handed: the
+/// callback is worthless without a `state` this process issued and is still
+/// holding.
+pub const OIDC_LOGIN_PATH: &str = "/auth/oidc/login";
+pub const OIDC_CALLBACK_PATH: &str = "/auth/oidc/callback";
+
+pub const PUBLIC_ROUTES: [(&str, &str); 7] = [
     ("POST", "/api/session"),
     ("GET", HEALTH_PATH),
     ("GET", READY_PATH),
     ("GET", SETUP_PATH),
     ("POST", SETUP_CLAIM_PATH),
+    ("GET", OIDC_LOGIN_PATH),
+    ("GET", OIDC_CALLBACK_PATH),
 ];
 
 pub fn is_public_route(method: &str, path: &str) -> bool {
@@ -1767,6 +1799,105 @@ fn authorize(req: &Request, state: &State) -> Access {
 ///
 /// Kept in one function so the socket path and the framework path answer identically, and
 /// so the list of what needs no credential is somewhere a person can read in one go.
+/// The OIDC login and callback (#310).
+///
+/// Both halves in one function because they are two steps of one exchange and
+/// splitting them would put the state handling in two places.
+fn oidc_route(req: &Request, state: &State) -> Reply {
+    let Some(cfg) = state.oidc.as_ref() else {
+        // Not configured is 404 and not 401: there is no such login here, and
+        // saying "unauthorised" would suggest there is one to get past.
+        return respond_err("404 Not Found", "this server has no OIDC login configured");
+    };
+    // Discovered lazily and cached, so a provider that is briefly unavailable
+    // delays a login rather than preventing the server from starting.
+    let endpoints = {
+        let mut slot = state.oidc_endpoints.lock().unwrap_or_else(|p| p.into_inner());
+        if slot.is_none() {
+            match crate::oidc::discover(&cfg.issuer) {
+                Ok(e) => *slot = Some(e),
+                Err(e) => return respond_err("502 Bad Gateway", &e),
+            }
+        }
+        slot.clone().expect("just discovered")
+    };
+
+    if req.path == OIDC_LOGIN_PATH {
+        let (url, pending) = crate::oidc::begin(cfg, &endpoints);
+        state
+            .oidc_logins
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(pending);
+        return Reply {
+            status: "302 Found".into(),
+            content_type: "text/plain; charset=utf-8".into(),
+            body: Vec::new(),
+            headers: vec![format!("Location: {url}")],
+        };
+    }
+
+    // The callback. Everything here is attacker-supplied until proven
+    // otherwise, which is why the state is checked before anything is fetched.
+    let (Some(code), Some(returned_state)) =
+        (req.query.get("code"), req.query.get("state"))
+    else {
+        // A provider error comes back as ?error=..., and echoing it verbatim
+        // would put attacker text on the page.
+        return respond_err("400 Bad Request", "the OIDC callback carried no code");
+    };
+    let Some(pending) = state
+        .oidc_logins
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .take(returned_state)
+    else {
+        return respond_err(
+            "400 Bad Request",
+            "this callback does not match a login this server started, or it took too long",
+        );
+    };
+
+    let id_token = match crate::oidc::exchange(cfg, &endpoints, code, &pending.verifier) {
+        Ok(t) => t,
+        Err(e) => return respond_err("502 Bad Gateway", &e),
+    };
+    let now = chrono::Utc::now().timestamp();
+    let identity = match crate::oidc::verify(cfg, &endpoints, &id_token, &pending.nonce, now) {
+        Ok(i) => i,
+        // 403 and not 502: the provider answered, and the answer was that this
+        // person does not get in.
+        Err(e) => {
+            audit::record(&state.workspace, None, "oidc.refused", &e, audit::Outcome::Denied);
+            return respond_err("403 Forbidden", &e);
+        }
+    };
+
+    // Audit carries the provider's STABLE subject, not the display name: a
+    // name or an email can be reassigned to a different person, and an audit
+    // trail that follows the label rather than the identity is worse than none.
+    audit::record(
+        &state.workspace,
+        None,
+        "oidc.signin",
+        &format!("{} as {}", identity.subject, identity.role.as_str()),
+        audit::Outcome::Allowed,
+    );
+    let sid = state.console.sign_in_external(&identity.label, identity.role);
+    Reply {
+        status: "302 Found".into(),
+        content_type: "text/plain; charset=utf-8".into(),
+        body: Vec::new(),
+        headers: vec![
+            "Location: /".to_string(),
+            format!(
+                "Set-Cookie: duckle_sid={sid}{}",
+                cookie_attributes(req.forwarded_proto.as_deref())
+            ),
+        ],
+    }
+}
+
 /// Liveness and readiness, for whichever server is asking.
 ///
 /// Shared by the console and the editor because both are processes an
@@ -1798,6 +1929,13 @@ fn probe_reply(path: &str, workspace: &Path) -> Option<Reply> {
 fn public_route(req: &Request, state: &State) -> Reply {
     if let Some(reply) = probe_reply(&req.path, &state.workspace) {
         return reply;
+    }
+    // Before the sign-in fallthrough below. A path in PUBLIC_ROUTES with no
+    // branch here does not 404 - it is treated as a token sign-in attempt and
+    // answered 401, which for a login route is a bug that looks like a
+    // misconfigured provider.
+    if req.path == OIDC_LOGIN_PATH || req.path == OIDC_CALLBACK_PATH {
+        return oidc_route(req, state);
     }
     if req.method == "GET" && req.path == SETUP_PATH {
         // A console that is already set up has no setup page, and saying so is friendlier
@@ -3754,6 +3892,7 @@ mod tests {
         scheduler_notice, Request,
         migrate_legacy_schedules, normalize_cron, read_pipeline_file, read_request,
         save_schedule_at, web_gate, confine_to_workspace, RunGate, State, WebState, HEALTH_PATH, MAX_BODY,
+        OIDC_CALLBACK_PATH, OIDC_LOGIN_PATH,
     };
     use std::sync::Mutex;
     use duckle_duckdb_engine::schedules::{self, ScheduleKind};
@@ -4059,6 +4198,9 @@ mod tests {
             console: console_auth::Console::configure(ws, "0.0.0.0", Some("s3cret")).unwrap(),
             host: "0.0.0.0".into(),
             tick_interval: std::time::Duration::from_secs(15),
+            oidc: None,
+            oidc_endpoints: Mutex::new(None),
+            oidc_logins: Mutex::new(Default::default()),
         })
     }
 
@@ -4136,6 +4278,101 @@ mod tests {
         assert!(
             crate::console_auth::Role::Viewer.allows(role),
             "a viewer cannot scrape; requirement is {role:?}"
+        );
+    }
+
+    /// #310: the login routes are public, and a server with no OIDC config
+    /// answers 404 rather than 401.
+    #[test]
+    fn the_oidc_routes_are_public_and_absent_when_unconfigured() {
+        assert!(is_public_route("GET", OIDC_LOGIN_PATH), "signing in cannot require being signed in");
+        assert!(is_public_route("GET", OIDC_CALLBACK_PATH));
+        let tmp = tempfile::tempdir().unwrap();
+        let state = guarded_state(tmp.path());
+        for path in [OIDC_LOGIN_PATH, OIDC_CALLBACK_PATH] {
+            let reply = route_console(&request("GET", path, None), &state);
+            // 404 and not 401: there is no such login here, and "unauthorised"
+            // would suggest there is one to get past. And NOT 401 by accident
+            // either - a public path with no branch falls through to the token
+            // sign-in and answers 401, which for a login route is a bug that
+            // looks like a misconfigured provider.
+            assert_eq!(reply.code(), 404, "{path} answered {}", reply.code());
+        }
+    }
+
+    /// A callback with no login behind it is refused before anything is
+    /// fetched, so an attacker cannot make this server talk to a provider.
+    #[test]
+    fn a_callback_without_a_matching_state_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+        std::fs::create_dir_all(ws.join(".duckle")).unwrap();
+        std::fs::write(
+            crate::oidc::config_path(&ws),
+            r#"{"issuer":"https://idp.invalid","clientId":"c",
+                "redirectUri":"https://console.invalid/auth/oidc/callback"}"#,
+        )
+        .unwrap();
+        let mut state = guarded_state(&ws);
+        std::sync::Arc::get_mut(&mut state).unwrap().oidc =
+            crate::oidc::load(&ws).unwrap();
+        // Endpoints pre-seeded so the test never touches the network: the point
+        // is that the state check happens BEFORE the exchange.
+        *std::sync::Arc::get_mut(&mut state).unwrap().oidc_endpoints.get_mut().unwrap() =
+            Some(crate::oidc::Endpoints {
+                authorization: "https://idp.invalid/authorize".into(),
+                token: "https://idp.invalid/token".into(),
+                jwks: "https://idp.invalid/jwks".into(),
+                issuer: "https://idp.invalid".into(),
+            });
+        let state = state;
+
+        let mut req = request("GET", OIDC_CALLBACK_PATH, None);
+        req.query.insert("code".into(), "stolen".into());
+        req.query.insert("state".into(), "never-issued".into());
+        let reply = route_console(&req, &state);
+        assert_eq!(reply.code(), 400);
+        let body = String::from_utf8_lossy(&reply.body);
+        assert!(body.contains("does not match a login"), "{body}");
+    }
+
+    /// The redirect carries a state this process is holding, and never the
+    /// PKCE verifier.
+    #[test]
+    fn a_login_issues_a_state_and_keeps_the_verifier() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+        std::fs::create_dir_all(ws.join(".duckle")).unwrap();
+        std::fs::write(
+            crate::oidc::config_path(&ws),
+            r#"{"issuer":"https://idp.invalid","clientId":"c",
+                "redirectUri":"https://console.invalid/auth/oidc/callback"}"#,
+        )
+        .unwrap();
+        let mut state = guarded_state(&ws);
+        std::sync::Arc::get_mut(&mut state).unwrap().oidc = crate::oidc::load(&ws).unwrap();
+        *std::sync::Arc::get_mut(&mut state).unwrap().oidc_endpoints.get_mut().unwrap() =
+            Some(crate::oidc::Endpoints {
+                authorization: "https://idp.invalid/authorize".into(),
+                token: "https://idp.invalid/token".into(),
+                jwks: "https://idp.invalid/jwks".into(),
+                issuer: "https://idp.invalid".into(),
+            });
+        let state = state;
+
+        let reply = route_console(&request("GET", OIDC_LOGIN_PATH, None), &state);
+        assert_eq!(reply.code(), 302);
+        let location = reply
+            .headers
+            .iter()
+            .find(|h| h.starts_with("Location: "))
+            .expect("a redirect");
+        assert!(location.contains("code_challenge_method=S256"), "{location}");
+        assert!(location.contains("state="), "{location}");
+        assert_eq!(
+            state.oidc_logins.lock().unwrap().len(),
+            1,
+            "the login must be held, or the callback has nothing to match"
         );
     }
 
@@ -4589,6 +4826,9 @@ mod tests {
             console: console_auth::Console::configure(&ws_canon, "127.0.0.1", None).unwrap(),
             host: "127.0.0.1".into(),
             tick_interval: std::time::Duration::from_secs(15),
+            oidc: None,
+            oidc_endpoints: Mutex::new(None),
+            oidc_logins: Mutex::new(Default::default()),
         };
 
         let leaked = read_pipeline_file(&state, "connections/prod-db.json");

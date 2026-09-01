@@ -764,6 +764,47 @@ does.
 monitored. Nothing prunes `runs/`, so a workspace that has ever run thousands of
 pipelines would otherwise emit thousands of label values forever.
 
+### Sign in through an identity provider (OIDC)
+
+Optional, and off unless `<workspace>/.duckle/oidc.json` exists:
+
+```json
+{
+  "issuer": "https://idp.example.com",
+  "clientId": "duckle-console",
+  "clientSecret": "...",
+  "redirectUri": "https://console.example.com/auth/oidc/callback",
+  "roleMappings": [
+    { "claim": "groups", "contains": "data-admins",    "role": "admin" },
+    { "claim": "groups", "contains": "data-operators", "role": "operator" }
+  ]
+}
+```
+
+Authorization-code flow with PKCE (S256), `state`, `nonce`, and RS256 ID-token
+verification against the provider's JWKS. It adds a protocol and nothing else -
+the flow ends by minting the same session a password login mints, and every
+request after that is authorised by the same code as before.
+
+**A subject no rule matches is refused**, unless `defaultRole` says otherwise.
+An identity provider saying who someone is does not say what they may do here,
+and absent means deny because that is the answer that cannot surprise anyone.
+
+**First matching rule wins**, in file order, so the result is a property of the
+config rather than of iteration order. A group name matches whole: `contains:
+"data-admins"` does not match a group called `not-data-admins-really`.
+
+**Break-glass is untouched.** The `--token` / `DUCKLE_CONSOLE_TOKEN` admin lives
+only in the process and never in the store, so it still works when the provider
+does not. Scoped API keys are unaffected.
+
+**No reverse-proxy identity headers**, by not implementing them: in any
+deployment where the proxy can be bypassed, an `X-Forwarded-User` header is an
+admin login. **No provider tokens are stored** - the ID token is verified and
+dropped, and only the subject, a display name and the mapped role reach the
+session. Audit records the provider's stable `sub`, not the display name, because
+a name or an email can be reassigned to a different person.
+
 ### Reading GeoParquet
 
 The **Geospatial** source reads GeoParquet as well as GeoJSON, Shapefile,

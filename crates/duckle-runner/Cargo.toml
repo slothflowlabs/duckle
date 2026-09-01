@@ -46,6 +46,12 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 tokio = { workspace = true, features = ["net"] }
 base64 = "0.23"
 getrandom = "0.4"
+# #310: OIDC ID-token verification (RS256 over a JWKS key). Already in the tree
+# via the engine's Snowflake JWT signing, so no new dependency to the graph.
+jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "rust_crypto"] }
+# The shared HTTP transport lives in the engine and hands back a ureq Agent, so
+# the type has to be nameable here.
+ureq = { version = "2.10", default-features = false, features = ["tls", "json"] }
 ed25519-dalek = "3"
 # Self-extracting artifact payload (single-file build output). deflate-only
 # (drops aes/zstd/bzip2/lzma/xz); pulls flate2 rust_backend already in the lock.

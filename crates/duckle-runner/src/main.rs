@@ -22,6 +22,7 @@ use std::process::ExitCode;
 
 mod affected_cmd;
 mod migrate_cmd;
+mod oidc;
 mod runsdiff_cmd;
 mod sql_cmd;
 mod capabilities;

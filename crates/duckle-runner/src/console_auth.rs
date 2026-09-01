@@ -450,6 +450,28 @@ impl Console {
         Some((sid, identity))
     }
 
+    /// Mint a session for an identity another mechanism has already verified
+    /// (#310).
+    ///
+    /// Deliberately separate from [`sign_in`], which verifies a token first.
+    /// This one verifies NOTHING - the caller has, and the only caller is the
+    /// OIDC callback, after a signature check, an issuer, audience, expiry and
+    /// nonce check, and a role mapping that refuses a subject no rule matched.
+    /// Naming it plainly is the point: a function that hands out a session for
+    /// a label and a role should be obvious in a grep, not hidden behind a
+    /// parameter on the ordinary path.
+    pub fn sign_in_external(&self, label: &str, role: Role) -> String {
+        let mut raw = [0u8; 32];
+        // Not `ok()?` - a session id that is not random is not a session id,
+        // and returning a short one would be worse than failing loudly.
+        getrandom::fill(&mut raw).expect("the OS random source");
+        let sid = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw);
+        if let Ok(store) = self.store.lock() {
+            let _ = store.put_session(&sid, label, role, now_secs() + SESSION_TTL_SECS);
+        }
+        sid
+    }
+
     pub fn sign_out(&self, cookie: Option<&str>) {
         if let Some(sid) = cookie.and_then(|c| cookie_value(c, SESSION_COOKIE)) {
             if let Ok(store) = self.store.lock() {
