@@ -41,6 +41,9 @@ rustls-pemfile = "2"
 jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "rust_crypto"] }
 rsa = { version = "0.9", features = ["pem", "sha2"] }
 sha2 = "0.11"
+# #311: OpenLineage requires runId to be a UUID, and Duckle run ids are readable
+# strings, so they are mapped by name. v5 is the name-based flavour.
+uuid = { workspace = true }
 chrono-tz = "0.10"
 cron = { workspace = true }
 # HMAC-SHA256 for AWS SigV4 signing in src.dynamodb (and any future

@@ -4332,6 +4332,8 @@ dependencies = [
  "base64 0.23.1",
  "boa_engine",
  "chrono",
+ "chrono-tz",
+ "cron",
  "dom_query 0.28.0",
  "duckle-metadata",
  "duckle-plugin-sdk",
@@ -4383,6 +4385,7 @@ dependencies = [
  "toml 1.1.4+spec-1.1.0",
  "tonic",
  "ureq",
+ "uuid",
  "wasmi",
  "wat",
  "webpki-roots 1.0.9",
@@ -4467,6 +4470,7 @@ dependencies = [
  "duckle-duckdb-engine",
  "duckle-secrets",
  "ed25519-dalek 3.0.0",
+ "filetime",
  "getrandom 0.4.3",
  "regex",
  "rusqlite",
@@ -12560,6 +12564,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14617,6 +14627,7 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

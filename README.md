@@ -623,6 +623,50 @@ being able to answer.
 A pipeline that declares nothing behaves exactly as before: any unresolved
 `${name}` is simply prompted for.
 
+### OpenLineage export
+
+Drop an `openlineage.json` in the workspace and every run emits START and a
+terminal event. No file means no events, no local writes and no network.
+
+```json
+{ "namespace": "prod-eu", "endpoint": "http://marquez:5000/api/v1/lineage" }
+```
+
+```text
+START    | prod-eu/nightly | runId 79f0c574-56ee-5025-b0f4-addee7acb28a
+COMPLETE | prod-eu/nightly | runId 79f0c574-56ee-5025-b0f4-addee7acb28a
+   outputs: file  ${workspace}/data/curated.parquet  rowCount 3  unresolved
+```
+
+**Emitted from `retry::begin` and `retry::finish`**, which every execution
+surface already goes through - the desktop, the console, the CLI, MCP, the
+scheduler and Plans. A feed covering six of eight surfaces is one nobody can
+reason about, because the missing runs look like runs that never happened.
+
+**The run id is derived, not random.** OpenLineage requires a UUID and Duckle's
+ids are readable strings, so they are mapped by name: START and COMPLETE are
+emitted by different calls and must agree, or a collector shows two unrelated
+runs and no completed one. The original id travels in a facet.
+
+**`interrupted` is ABORT, not FAIL** - the run stopped being observed, it did
+not fail, and a consumer that treats those the same re-runs work that may have
+finished.
+
+**A run-time reference is marked, not asserted.** A dataset name still holding a
+`${...}` does not address a single dataset, and it is emitted with
+`unresolved: true` rather than silently joining to the wrong thing in someone's
+graph. Datasets come from the catalog joined to the receipt **by node id**, so a
+node the run never reached is not reported as touched: absent is not zero.
+
+**Telemetry cannot fail a run.** Events are appended to
+`logs/openlineage.ndjson` first and only then POSTed, so a collector that is
+down costs one short timeout and the events are already durable. Catalog asset
+ids are credential-free by construction; query strings are stripped on top of
+that, so a signed URL never carries its signature off the machine.
+`hashDatasetNames` replaces names with a digest and keeps the namespace, for an
+organisation that wants the shape of its graph in a shared tool without the
+table names.
+
 ### Alerting without scraping the UI (`/metrics`, `/readyz`)
 
 ```bash

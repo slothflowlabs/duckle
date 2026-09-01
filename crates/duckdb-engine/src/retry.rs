@@ -208,7 +208,43 @@ pub fn begin(
     };
     // Best effort: a run that cannot record itself is still a run that happens.
     let _ = write(workspace, &receipt);
+    export_lineage(workspace, &receipt, crate::openlineage::EventType::Start);
     receipt
+}
+
+/// Emit one OpenLineage event, if the workspace has asked for them (#311).
+///
+/// Called from `begin` and `finish` rather than from each surface, because
+/// there are eight of those and a lineage feed that covers six is one nobody
+/// can reason about - the missing runs look like runs that never happened. The
+/// same reason `nodes_of` exists.
+///
+/// Every step is best effort. Nothing here may end a run.
+fn export_lineage(workspace: &Path, receipt: &RunReceipt, kind: crate::openlineage::EventType) {
+    let Some(cfg) = crate::openlineage::load(workspace) else { return };
+    // The catalog names what each node touches. `load` reads the SAVED graph
+    // and does not rebuild: rebuilding scans every pipeline in the workspace,
+    // and paying that on the path of every run start to decorate a telemetry
+    // event is the wrong trade. A workspace with no catalog yet still gets the
+    // run's identity, timing and outcome - with `catalogAvailable` false, so a
+    // consumer can see that the empty dataset lists are unknown rather than
+    // empty.
+    let catalog = crate::catalog::load(workspace).ok().flatten();
+    let pipeline_id = Path::new(&receipt.pipeline_path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| receipt.pipeline_name.clone());
+    let empty = crate::catalog::Catalog::default();
+    let mut event = crate::openlineage::event(
+        &cfg,
+        kind,
+        receipt,
+        catalog.as_ref().unwrap_or(&empty),
+        &pipeline_id,
+    );
+    event["run"]["facets"]["duckle"]["catalogAvailable"] =
+        serde_json::Value::Bool(catalog.is_some());
+    crate::openlineage::emit(workspace, &cfg, &event);
 }
 
 /// Record how a run ended.
@@ -223,6 +259,9 @@ pub fn finish(
     receipt.pid = None;
     receipt.nodes = nodes;
     let _ = write(workspace, &receipt);
+    // After the receipt is durable, so a crash between the two loses the
+    // telemetry rather than the record.
+    export_lineage(workspace, &receipt, crate::openlineage::EventType::from_status(status));
 }
 
 /// Turn abandoned `running` receipts into an honest `interrupted`.

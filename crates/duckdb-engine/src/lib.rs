@@ -38,6 +38,7 @@ pub mod drift;
 pub mod qvd;
 pub mod review;
 pub mod alerts;
+pub mod openlineage;
 pub mod rundiff;
 pub mod props;
 pub mod affected;

@@ -62,7 +62,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Common
-uuid = { version = "1.11", features = ["v4", "serde"] }
+uuid = { version = "1.11", features = ["v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Arrow / columnar
