@@ -1213,6 +1213,78 @@ got:
     assert!(duckle_duckdb_engine::retry::load(&ws, &run_id).is_ok());
 }
 
+/// #314: raw SQL that names its upstream by the alias the author gave it.
+///
+/// The executor creates `"<alias>"` so raw SQL can say `FROM orders` instead of
+/// `FROM node_3`. Only the node ids were stubbed here, so that SQL failed to
+/// bind and the author was told their pipeline "does not compile to a plain
+/// view" - about a node that compiles and runs perfectly well.
+#[test]
+fn raw_sql_can_name_its_upstream_by_alias() {
+    let engine = engine_or_skip!();
+    let upstream = vec![duckle_duckdb_engine::Column {
+        tags: Vec::new(),
+        name: "amount".into(),
+        data_type: duckle_duckdb_engine::DataType::Int64,
+        nullable: true,
+        primary_key: None,
+        format: None,
+    }];
+    let doc: duckle_duckdb_engine::PipelineDoc = serde_json::from_value(serde_json::json!({
+        "nodes": [
+            { "id": "n3", "type": "source", "position": {"x":0,"y":0},
+              "data": { "label": "Orders", "componentId": "src.csv", "alias": "orders",
+                        "properties": { "path": "in.csv", "hasHeader": true } } },
+            { "id": "q", "type": "transform", "position": {"x":200,"y":0},
+              "data": { "label": "sql", "componentId": "code.sql",
+                        "properties": { "rawSql": true,
+                                        "sql": "SELECT sum(amount) AS total FROM orders" } } }
+        ],
+        "edges": [ { "id": "e1", "source": "n3", "target": "q",
+                     "data": { "connectionType": "main" } } ]
+    }))
+    .unwrap();
+
+    let a = engine
+        .analyze_node_sql(&doc, "q", &[("n3".to_string(), upstream)])
+        .expect("analysable");
+    assert!(
+        a.diagnostics.is_empty(),
+        "the alias did not bind: {:?} {:?}",
+        a.diagnostics,
+        a.note
+    );
+    assert!(a.validated);
+    assert!(
+        a.columns.iter().any(|c| c.name == "total"),
+        "expected the aggregate's column, got {:?}",
+        a.columns
+    );
+}
+
+/// A Pure SQL node is refused, and told why in its own terms.
+#[test]
+fn a_pure_sql_node_is_refused_as_an_effect_step_not_as_a_defect() {
+    let engine = engine_or_skip!();
+    let doc: duckle_duckdb_engine::PipelineDoc = serde_json::from_value(serde_json::json!({
+        "nodes": [
+            { "id": "p", "type": "transform", "position": {"x":0,"y":0},
+              "data": { "label": "Pure", "componentId": "code.sql",
+                        "properties": { "pureSql": true,
+                                        "sql": "CREATE TABLE t AS SELECT 1 AS a;" } } }
+        ],
+        "edges": []
+    }))
+    .unwrap();
+    let a = engine.analyze_node_sql(&doc, "p", &[]).unwrap();
+    let note = a.note.unwrap_or_default();
+    // The author configured this deliberately; "does not compile to a plain
+    // view" reads as a defect in something that is working as designed.
+    assert!(note.contains("Pure SQL"), "{note}");
+    assert!(note.contains("run verbatim") || note.contains("perform those effects"), "{note}");
+    assert!(!a.validated, "nothing was bound, and it must not claim otherwise");
+}
+
 /// Criterion 5: a source's SQL is not checked, and the reason is stated.
 #[test]
 fn a_source_query_is_not_validated_against_duckdb() {

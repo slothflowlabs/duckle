@@ -3645,9 +3645,23 @@ impl DuckdbEngine {
             .to_ascii_uppercase()
             .starts_with("CREATE OR REPLACE VIEW")
         {
-            analysis.note = Some(format!(
-                "node {node_id:?} does not compile to a plain view, so describing it would run something with effects. Only derived relations can be described this way."
-            ));
+            // Two different nodes reach here and they deserve different
+            // answers: a Pure SQL node is an effect step by design, and being
+            // told it "does not compile to a plain view" reads as a defect in
+            // something the author configured deliberately.
+            let pure = node
+                .and_then(|n| n.data.properties.as_ref())
+                .and_then(|p| p.get("pureSql"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            analysis.note = Some(match pure {
+                true => format!(
+                    "node {node_id:?} is a Pure SQL node: its statements run verbatim and may create, write or PRAGMA, so binding it to find its columns would perform those effects. That is what Pure SQL is for; it cannot also be checked without running."
+                ),
+                false => format!(
+                    "node {node_id:?} does not compile to a plain view, so describing it would run something with effects. Only derived relations can be described this way."
+                ),
+            });
             return Ok(analysis);
         }
 
@@ -3674,6 +3688,27 @@ impl DuckdbEngine {
                 plan::quote_ident(name),
                 projected.join(", ")
             ));
+            // #314: also under the upstream's ALIAS, when it has one. The
+            // executor creates `"<alias>"` so raw SQL can say `FROM orders`
+            // instead of `FROM node_3`; stubbing only the node ids meant that
+            // SQL failed to bind here and the author was told their pipeline
+            // "does not compile to a plain view" - about a node that compiles
+            // and runs perfectly well.
+            if let Some(alias) = doc
+                .nodes
+                .iter()
+                .find(|n| &n.id == name)
+                .and_then(|n| n.data.alias.as_deref())
+                .map(str::trim)
+                .filter(|a| !a.is_empty() && a != name)
+            {
+                sql.push_str(&format!(
+                    "CREATE OR REPLACE VIEW {} AS SELECT {} WHERE 1=0;
+",
+                    plan::quote_ident(alias),
+                    projected.join(", ")
+                ));
+            }
         }
         sql.push_str(stage.sql.trim_end_matches(';'));
         sql.push_str(";\n");
