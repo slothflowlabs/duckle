@@ -156,6 +156,14 @@ pub struct RunReceipt {
     /// guess made here about the name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parameters: BTreeMap<String, String>,
+    /// The external components this run's pipeline named, with their hashes
+    /// (#307 criterion 4).
+    ///
+    /// A version alone would not answer "what exactly did this run execute":
+    /// a component edited in place keeps its version, which is the case worth
+    /// guarding against.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<crate::plugin::Used>,
     /// The partition this run processed (#295).
     ///
     /// With `parent_run_id` naming the backfill, this makes "which slice
@@ -273,6 +281,7 @@ pub fn begin(
         ),
         parameters: BTreeMap::new(),
         parameter_sources: Vec::new(),
+        components: Vec::new(),
         partition_key: None,
         resource_pool: None,
         queue_reason: None,
@@ -806,6 +815,7 @@ mod tests {
             pid: None,
             parent_run_id: None,
             at: "2026-08-31T00:00:00Z".into(),
+            components: Vec::new(),
             partition_key: None,
             status: status.into(),
             pipeline_name: "p".into(),

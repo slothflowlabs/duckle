@@ -411,6 +411,7 @@ mod tests {
             parameters: BTreeMap::new(),
             parameter_sources: Vec::new(),
             release_id: None,
+            components: Vec::new(),
             partition_key: None,
             resource_pool: None,
             queue_reason: None,

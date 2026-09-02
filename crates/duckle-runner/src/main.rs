@@ -506,6 +506,12 @@ fn run_with(args: Args) -> Result<bool, String> {
         resource_pool: Some(
             duckle_duckdb_engine::pools::Pools::load(&workspace).resolve(&doc.resource_pool),
         ),
+        // #307: which external components this pipeline names, and what they
+        // hashed to when it ran.
+        components: duckle_duckdb_engine::plugin::used_by(
+            &workspace,
+            &serde_json::to_value(&doc).unwrap_or_default(),
+        ),
         ..receipt
     };
     let _ = duckle_duckdb_engine::retry::write(&workspace, &receipt);

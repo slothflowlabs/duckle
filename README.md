@@ -817,6 +817,20 @@ compiled in.
 **A component that hangs is killed** at its declared timeout, and a manifest that
 does not parse is reported rather than silently missing from the list.
 
+**Every run records what it ran against.** The receipt carries each external
+component the pipeline names with its manifest and lock hashes:
+
+```json
+"components": [ { "id": "ext.upper", "version": "1.0.0",
+                  "manifestHash": "56c3b085...", "lockHash": "984849a1..." } ]
+```
+
+The hash is the point, not the version: a component edited in place keeps its
+version, which is exactly the case worth being able to detect. A component the
+pipeline names and the workspace does not have is recorded as `missing` rather
+than omitted - an absent entry is indistinguishable from a run that used no
+external components at all.
+
 ### Planning a chunked extract
 
 A single query over a billion-row table holds a snapshot for hours, fails near

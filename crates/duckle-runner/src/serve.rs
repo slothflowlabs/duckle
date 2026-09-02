@@ -1205,8 +1205,18 @@ fn begin_editor_run(
         &hash,
         None,
     );
+    let receipt = duckle_duckdb_engine::retry::RunReceipt {
+        components: duckle_duckdb_engine::plugin::used_by(
+            workspace,
+            &serde_json::to_value(doc).unwrap_or_default(),
+        ),
+        ..receipt
+    };
     match admission {
-        None => receipt,
+        None => {
+            let _ = duckle_duckdb_engine::retry::write(workspace, &receipt);
+            receipt
+        }
         Some((pool, queue_ms)) => {
             let receipt = duckle_duckdb_engine::retry::RunReceipt {
                 resource_pool: Some(pool),
@@ -3614,6 +3624,11 @@ fn execute_one_with(
     let receipt = duckle_duckdb_engine::retry::RunReceipt {
         parameters: recorded_params,
         parameter_sources,
+        // #307: the external components this pipeline names, with their hashes.
+        components: duckle_duckdb_engine::plugin::used_by(
+            &state.workspace,
+            &serde_json::to_value(&doc).unwrap_or_default(),
+        ),
         ..receipt
     };
     let _ = duckle_duckdb_engine::retry::write(&state.workspace, &receipt);

@@ -427,6 +427,10 @@ fn run_one(
         parameters: recorded,
         parameter_sources: sources,
         partition_key: Some(slice.key.clone()),
+        components: duckle_duckdb_engine::plugin::used_by(
+            workspace,
+            &serde_json::to_value(&doc).unwrap_or_default(),
+        ),
         release_id: release.clone().or(receipt.release_id.clone()),
         ..receipt
     };

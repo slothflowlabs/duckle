@@ -297,6 +297,68 @@ pub fn as_catalog_entry(installed: &Installed) -> serde_json::Value {
     })
 }
 
+/// What a run used, recorded on its receipt (#307 criterion 4).
+///
+/// The hashes are of the manifest and the lock file, so "what exactly did this
+/// run execute" is answerable afterwards. A version alone would not be: a
+/// component edited in place keeps its version, and the whole point of
+/// recording this is the case where somebody changed something.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Used {
+    pub id: String,
+    pub version: String,
+    pub manifest_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock_hash: Option<String>,
+    /// True when the pipeline names a component this workspace does not have.
+    /// Recorded rather than omitted: a receipt that simply lacks an entry is
+    /// indistinguishable from a run that used no external components at all.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub missing: bool,
+}
+
+/// The external components a pipeline document names, with their hashes.
+///
+/// Derived from the document rather than from what happened to execute, so a
+/// component on a branch that did not run this time is still recorded as part
+/// of what the pipeline was.
+pub fn used_by(workspace: &Path, doc: &serde_json::Value) -> Vec<Used> {
+    let mut ids: std::collections::BTreeSet<String> = Default::default();
+    if let Some(nodes) = doc.get("nodes").and_then(|n| n.as_array()) {
+        for n in nodes {
+            if let Some(id) = n
+                .get("data")
+                .and_then(|d| d.get("componentId"))
+                .and_then(|v| v.as_str())
+            {
+                if id.starts_with("ext.") {
+                    ids.insert(id.to_string());
+                }
+            }
+        }
+    }
+    let installed = discover(workspace).0;
+    ids.into_iter()
+        .map(|id| match installed.iter().find(|i| i.manifest.id == id) {
+            Some(i) => Used {
+                id,
+                version: i.manifest.version.clone(),
+                manifest_hash: i.manifest_hash.clone(),
+                lock_hash: i.lock_hash.clone(),
+                missing: false,
+            },
+            None => Used {
+                id,
+                version: String::new(),
+                manifest_hash: String::new(),
+                lock_hash: None,
+                missing: true,
+            },
+        })
+        .collect()
+}
+
 /// Every external component this workspace declares, catalog-shaped.
 pub fn catalog_entries(workspace: &Path) -> Vec<serde_json::Value> {
     discover(workspace).0.iter().map(as_catalog_entry).collect()
@@ -400,6 +462,58 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (found, problems) = discover(tmp.path());
         assert!(found.is_empty() && problems.is_empty());
+    }
+
+    #[test]
+    fn a_run_records_the_components_it_used_with_their_hashes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut m = manifest("ext.upper");
+        m.runtime.lock = Some("requirements.txt".into());
+        install(tmp.path(), "upper", &serde_json::to_string(&m).unwrap());
+        std::fs::write(dir(tmp.path()).join("upper").join("requirements.txt"), "duckdb==1.5.0")
+            .unwrap();
+
+        let doc = serde_json::json!({ "nodes": [
+            { "id": "s", "data": { "componentId": "src.csv" } },
+            { "id": "u", "data": { "componentId": "ext.upper" } },
+            { "id": "v", "data": { "componentId": "ext.upper" } }
+        ]});
+        let used = used_by(tmp.path(), &doc);
+        assert_eq!(used.len(), 1, "one entry per component, not per node: {used:?}");
+        assert_eq!(used[0].id, "ext.upper");
+        assert_eq!(used[0].version, "1.0.0");
+        assert_eq!(used[0].manifest_hash.len(), 64);
+        assert_eq!(used[0].lock_hash.as_ref().map(String::len), Some(64));
+        assert!(!used[0].missing);
+
+        // The hash is what makes this worth recording: a component edited in
+        // place keeps its version, and that is exactly the case being guarded.
+        std::fs::write(dir(tmp.path()).join("upper").join("requirements.txt"), "duckdb==9.9.9")
+            .unwrap();
+        assert_ne!(used_by(tmp.path(), &doc)[0].lock_hash, used[0].lock_hash);
+    }
+
+    #[test]
+    fn a_component_the_workspace_does_not_have_is_recorded_as_missing() {
+        // Omitted, it would be indistinguishable from a run that used no
+        // external components at all.
+        let tmp = tempfile::tempdir().unwrap();
+        let doc = serde_json::json!({ "nodes": [
+            { "id": "x", "data": { "componentId": "ext.absent" } }
+        ]});
+        let used = used_by(tmp.path(), &doc);
+        assert_eq!(used.len(), 1);
+        assert!(used[0].missing);
+        assert_eq!(used[0].id, "ext.absent");
+    }
+
+    #[test]
+    fn a_pipeline_with_no_external_components_records_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let doc = serde_json::json!({ "nodes": [
+            { "id": "s", "data": { "componentId": "src.csv" } }
+        ]});
+        assert!(used_by(tmp.path(), &doc).is_empty());
     }
 
     #[test]
