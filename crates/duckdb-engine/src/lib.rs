@@ -178,6 +178,14 @@ pub struct DuckdbEngine {
     /// name one run. Absent for a bare `execute` with no surrounding run, which
     /// falls back to a minted id rather than logging under an empty one.
     run_id: Option<String>,
+    /// Whether this engine is a PROBE and must not change anything.
+    ///
+    /// Autodetect learns a driver source's schema by running it (#148), and
+    /// some sources have effects when they run: a DuckLake CDC read advances
+    /// the consumed snapshot, a Kafka read advances the offset. Persisting that
+    /// from a probe makes the next real run see no changes - the schema preview
+    /// silently eats the data it was only supposed to look at.
+    probing: bool,
 }
 
 impl std::fmt::Debug for DuckdbEngine {
@@ -324,6 +332,7 @@ impl DuckdbEngine {
             cancel: Arc::new(AtomicBool::new(false)),
             artifacts: Arc::new(std::sync::Mutex::new(Vec::new())),
             run_id: None,
+            probing: false,
         }
     }
 
@@ -386,6 +395,25 @@ impl DuckdbEngine {
             // A new top-level run inherits nothing: what a previous run handed down
             // belonged to that run's call chain.
             inherited_subs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            // A real run is not a probe, whatever this engine was.
+            probing: false,
+        }
+    }
+
+    /// A clone of this engine that must not change anything.
+    ///
+    /// Shares this run's cancel flag, so cancelling still stops a probe, and
+    /// nothing else: a probe's identity, artifacts and inherited substitutions
+    /// are its own.
+    fn for_probe(&self) -> DuckdbEngine {
+        DuckdbEngine {
+            bin: self.bin.clone(),
+            cancel: Arc::clone(&self.cancel),
+            previews: false,
+            run_id: None,
+            artifacts: Arc::new(std::sync::Mutex::new(Vec::new())),
+            inherited_subs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            probing: true,
         }
     }
 
@@ -743,6 +771,17 @@ impl DuckdbEngine {
         use std::sync::atomic::{AtomicU64, Ordering};
         static INSPECT_SEQ: AtomicU64 = AtomicU64::new(0);
 
+        // A probe RUNS the component, and DuckLake Maintenance compacts files,
+        // expires snapshots and deletes orphans. Performing that to find out
+        // which columns it returns is not a preview; it is maintenance nobody
+        // asked for - and unlike a CDC snapshot it cannot be made repeatable by
+        // declining to save state.
+        if format == "ducklake.maintain" {
+            return Err(EngineError::Unsupported(
+                "src.ducklake.maintain cannot be autodetected: finding out what it returns would                  mean performing the maintenance operation. It emits what it did, so run it to                  see the columns."
+                    .to_string(),
+            ));
+        }
         let component_id = format!("src.{}", format);
         // Cap the driver fetch where we can; correctness does not depend on it.
         let mut src_props = options.clone();
@@ -789,8 +828,9 @@ impl DuckdbEngine {
         // relies on the unwind panic strategy set in the release profile; the
         // probe DB / parquet / NDJSON are throwaway per-call temporaries, so
         // AssertUnwindSafe is sound.
+        let probe = self.for_probe();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.execute_pipeline(&doc)
+            probe.execute_pipeline(&doc)
         }))
         .map_err(|_| {
             let _ = std::fs::remove_file(&out);
@@ -985,8 +1025,9 @@ impl DuckdbEngine {
         // The catalog queries return only decodable column types, so the tiberius
         // panic path is never taken; keep the guard so a driver quirk can never
         // abort the whole app. Temp parquet is a throwaway per-call file.
+        let probe = self.for_probe();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.execute_pipeline(&doc)
+            probe.execute_pipeline(&doc)
         }))
         .map_err(|_| {
             let _ = std::fs::remove_file(&out);
@@ -2626,7 +2667,10 @@ impl DuckdbEngine {
         // processed part of it; recording the end of that window would make the
         // next run skip everything the budget stopped, permanently. This is the
         // one place where "not a failure" must still behave like one.
-        if final_status == "ok" && target.is_none() && incomplete_reason.is_none() {
+        // `!self.probing`: autodetect RUNS the source to learn its schema, and a
+        // probe that advanced a CDC snapshot or a Kafka offset would make the
+        // next real run skip the rows it was only looking at.
+        if final_status == "ok" && target.is_none() && incomplete_reason.is_none() && !self.probing {
             // A failure here is NOT ignorable, which is what it used to be.
             // "ok" from a pipeline that registered a model means the card is on
             // disk; if the write failed, saying ok is a lie a later run acts on -
@@ -7847,5 +7891,69 @@ network:
             "an odd number of quotes means the literal is not closed: {line}"
         );
         std::env::remove_var("DUCKLE_MEMORY_LIMIT");
+    }
+}
+
+#[cfg(test)]
+mod autodetect_probe_tests {
+    use super::*;
+
+    fn engine() -> DuckdbEngine {
+        DuckdbEngine::new(PathBuf::from("no-such-duckdb-binary"))
+    }
+
+    /// Autodetect learns a driver source's schema by RUNNING it. DuckLake
+    /// Maintenance compacts files, expires snapshots and deletes orphans, so
+    /// running it to find out which columns it returns is not a preview - it is
+    /// maintenance nobody asked for, against a real lake.
+    #[test]
+    fn maintenance_is_not_performed_to_find_out_what_it_returns() {
+        let e = engine().inspect("ducklake.maintain", serde_json::json!({ "path": "x.ducklake" }));
+        let err = e.expect_err("autodetect ran a maintenance operation");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cannot be autodetected"),
+            "the refusal does not say why: {msg}"
+        );
+    }
+
+    /// The reported bug: Autodetect on DuckLake CDC or Data Diff said
+    /// "autodetect failed for src.ducklake" - a component the author had not
+    /// chosen. The probe has to be of the component that was selected, or the
+    /// error describes something else entirely.
+    #[test]
+    fn a_probe_is_of_the_component_that_was_chosen() {
+        for format in ["ducklake.changes", "ducklake.diff"] {
+            let err = engine()
+                .inspect(format, serde_json::json!({ "path": "x.ducklake", "table": "t" }))
+                .expect_err("a probe with no DuckDB should fail");
+            let msg = err.to_string();
+            assert!(
+                msg.contains(format),
+                "the probe was of some other component: {msg}"
+            );
+        }
+    }
+
+    /// A probe must not advance anything a run would.
+    ///
+    /// Read from the source rather than exercised, because the failure has no
+    /// visible symptom here: it shows up later, as a real CDC run that finds no
+    /// changes because the schema preview already consumed them. The needle is
+    /// built from pieces so it cannot match itself in this file.
+    #[test]
+    fn a_probe_never_persists_what_a_run_would() {
+        let src = include_str!("lib.rs");
+        let gate = format!("!self.{}", "probing");
+        let line = src
+            .lines()
+            .map(str::trim_start)
+            .find(|l| l.starts_with("if final_status ==") && l.contains("incomplete_reason"))
+            .expect("the deferred-state persistence condition");
+        assert!(
+            line.contains(&gate),
+            "deferred state is persisted without checking for a probe, so autodetecting a CDC \
+             source would advance its snapshot: {line}"
+        );
     }
 }

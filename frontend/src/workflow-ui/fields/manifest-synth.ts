@@ -625,10 +625,17 @@ function base(
 
 /// Map a component id to the autodetect format the runtime understands.
 function formatFromComponent(componentId: string): string | undefined {
-    const part = componentId.split('.')[1];
-    if (!part) return undefined;
-    // src.csv -> csv, snk.parquet -> parquet, etc.
-    return part;
+    // Everything after the kind, not just the next segment: taking
+    // `split('.')[1]` turned src.ducklake.changes into `ducklake`, so
+    // Autodetect on DuckLake CDC probed a plain DuckLake source with CDC
+    // properties and reported "autodetect failed for src.ducklake" - naming a
+    // component the author had not chosen. The same applied to DuckLake Data
+    // Diff and Maintenance, Salesforce Bulk and SAP RFC.
+    const parts = componentId.split('.');
+    if (parts.length < 2) return undefined;
+    // src.csv -> csv, snk.parquet -> parquet, src.ducklake.changes ->
+    // ducklake.changes.
+    return parts.slice(1).join('.');
 }
 
 // Port topology per component ----------------------------------------------
