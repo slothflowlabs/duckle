@@ -688,8 +688,27 @@ suggests instead:
 Cleared as soon as the node binds again, because a stale error under a line the
 author has already fixed is worse than no error at all.
 
-Same analysis from `duckle-runner sql check`, the MCP tool `check_node_sql`, and
-both editors - one function, so they cannot come to disagree. SARIF carries a real
+**And what could come next.** `complete_node_sql` suggests upstream columns with
+their types, the relations the node can read, the pipeline's declared parameters,
+DuckDB's functions and keywords - ranked for the position:
+
+```text
+SELECT reg          ->  column region (String)   ${region_filter}   regexp_escape(
+SELECT * FROM       ->  input   src              (relations only)
+WHERE x = ${re      ->  ${region_filter}         (nothing else can be meant)
+```
+
+A column beats a function where a column belongs, a prefix beats a substring, and
+the list is stable between identical edits - a list that reshuffles between
+keystrokes is one nobody builds muscle memory against.
+
+**It never runs your SQL.** The only thing read from DuckDB is its own function
+list, cached for the process; the columns come from the caller. That is what lets
+it answer on every keystroke when the bind cannot.
+
+Same analysis from `duckle-runner sql check`, the MCP tools `check_node_sql` and
+`complete_node_sql`, and both editors - one function, so they cannot come to
+disagree. SARIF carries a real
 `region`, so a code-scanning viewer jumps to the token.
 
 ### OpenLineage export

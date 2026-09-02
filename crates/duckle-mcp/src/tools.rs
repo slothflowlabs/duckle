@@ -114,6 +114,16 @@ pub fn list_tools() -> Value {
                 "node": { "type": "string", "description": "Only this node. Omit for the whole pipeline." },
                 "duckdb": { "type": "string", "description": "DuckDB CLI path. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb' on PATH." }
             }})),
+        tool("complete_node_sql",
+            "What could come next at a cursor position in a node's SQL: upstream columns with their types, the relations it can read, the pipeline's declared parameters, DuckDB functions and keywords - ranked, best first. Never executes the SQL and never touches a source; the only thing read is DuckDB's own function list.",
+            json!({ "type": "object", "properties": {
+                "pipeline": { "type": "object", "description": "Inline pipeline object." },
+                "path": { "type": "string", "description": "Path to a pipeline .json (use instead of 'pipeline')." },
+                "node": { "type": "string", "description": "The node whose SQL is being edited." },
+                "cursor": { "type": "integer", "description": "Byte offset into that node's SQL. Defaults to the end." },
+                "limit": { "type": "integer", "description": "How many suggestions (default 12)." },
+                "duckdb": { "type": "string", "description": "DuckDB CLI path, for the function list. Without it, columns and keywords are still suggested." }
+            }, "required": ["node"] })),
         tool("suggest_contracts",
             "Profile a pipeline's columns and suggest data contracts to add: PII tags (heuristic, name-based) and source requireColumns anchors. Returns per-node suggestedContracts you can merge with update_pipeline, after which verify_pipeline enforces the PII-to-sink guard. Static; uses declared schemas, and column lineage too when a DuckDB binary is available.",
             json!({ "type": "object", "properties": {
@@ -294,6 +304,7 @@ pub fn call_tool(params: Value) -> Result<Value, (i64, String)> {
         "pipeline_lineage" => t_pipeline_lineage(&args),
         "verify_pipeline" => t_verify_pipeline(&args),
         "check_node_sql" => t_check_node_sql(&args),
+        "complete_node_sql" => t_complete_node_sql(&args),
         "suggest_contracts" => t_suggest_contracts(&args),
         "pipeline_impact" => t_pipeline_impact(&args),
         "workspace_impact" => t_workspace_impact(&args),
@@ -598,6 +609,50 @@ fn t_check_node_sql(args: &Value) -> Result<Value, String> {
         "problems": problems,
         "nodes": nodes,
     }))
+}
+
+/// #314. The same engine call the editor makes, so an agent writing SQL sees
+/// the columns an author would.
+fn t_complete_node_sql(args: &Value) -> Result<Value, String> {
+    let (v, _name) = load_pipeline_value(args)?;
+    let doc = to_doc(&v)?;
+    let node = arg_str(args, "node").ok_or("missing 'node'")?;
+    // Without a binary the function list is empty and everything else still
+    // works, which is better than refusing to suggest a column because DuckDB
+    // could not be found.
+    let engine = duckle_duckdb_engine::DuckdbEngine::new(
+        resolve_duckdb(arg_str(args, "duckdb")).unwrap_or_else(|| std::path::PathBuf::from("duckdb")),
+    );
+    // The upstream columns an agent has are whatever the declared schemas say;
+    // it is not editing in a canvas with a resolver behind it.
+    let upstream: Vec<(String, Vec<duckle_duckdb_engine::Column>)> = doc
+        .edges
+        .iter()
+        .filter(|e| e.target == node)
+        .filter_map(|e| {
+            let n = doc.nodes.iter().find(|n| n.id == e.source)?;
+            Some((e.source.clone(), n.data.schema.clone().unwrap_or_default()))
+        })
+        .collect();
+    let sql_len = doc
+        .nodes
+        .iter()
+        .find(|n| n.id == node)
+        .and_then(|n| n.data.properties.as_ref())
+        .and_then(|p| p.get("sql").or_else(|| p.get("query")))
+        .and_then(|v| v.as_str())
+        .map(str::len)
+        .unwrap_or(0);
+    let cursor = args
+        .get("cursor")
+        .and_then(Value::as_u64)
+        .map(|c| c as usize)
+        .unwrap_or(sql_len);
+    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(12) as usize;
+    let items = engine
+        .complete_node_sql(&doc, node, &upstream, cursor, limit)
+        .map_err(|e| e.to_string())?;
+    Ok(json!({ "node": node, "cursor": cursor, "completions": items }))
 }
 
 fn t_verify_pipeline(args: &Value) -> Result<Value, String> {

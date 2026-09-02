@@ -45,6 +45,7 @@ pub mod plugin;
 pub mod pools;
 pub mod release;
 pub mod follow_session;
+pub mod sqlcomplete;
 pub mod sqldiag;
 pub mod openlineage;
 pub mod rundiff;
@@ -3438,6 +3439,73 @@ impl DuckdbEngine {
             Some(first) => Err(EngineError::Query(first.message.clone())),
             None => Ok(analysis.columns),
         }
+    }
+
+    /// #314: what could come next at this position in a node's SQL.
+    ///
+    /// Completion answers on every keystroke, so nothing expensive may depend
+    /// on the edit. The only thing read from DuckDB is its own function list,
+    /// which is a property of the binary and is cached for the process; the
+    /// columns come from the caller, who already has them. The user's SQL is
+    /// never executed - #314 is explicit that completion must not run source
+    /// queries or cause side effects.
+    pub fn complete_node_sql(
+        &self,
+        doc: &PipelineDoc,
+        node_id: &str,
+        inputs: &[(String, Vec<Column>)],
+        cursor: usize,
+        limit: usize,
+    ) -> Result<Vec<sqlcomplete::Completion>, EngineError> {
+        let node = doc.nodes.iter().find(|n| n.id == node_id);
+        let sql = node.and_then(authored_sql).unwrap_or_default();
+        let candidates = sqlcomplete::Candidates {
+            columns: inputs
+                .iter()
+                .flat_map(|(_, cols)| cols.iter())
+                .map(|c| (c.name.clone(), format!("{:?}", c.data_type)))
+                .collect(),
+            // `input` is what a default-mode code.sql node reads; the node ids
+            // are what a raw-mode one does. Offering both means the author does
+            // not have to know which mode they are in to get the name right.
+            relations: std::iter::once("input".to_string())
+                .chain(inputs.iter().map(|(id, _)| id.clone()))
+                .collect(),
+            functions: self.sql_functions(),
+            parameters: doc.parameters.keys().cloned().collect(),
+        };
+        Ok(sqlcomplete::complete(&sql, cursor, &candidates, limit.max(1)))
+    }
+
+    /// Every function this DuckDB has, cached for the process.
+    ///
+    /// It cannot change under a running binary, and asking per keystroke would
+    /// spawn a process per keystroke - which is the whole reason completion is
+    /// a separate path from the bind.
+    fn sql_functions(&self) -> Vec<String> {
+        static FUNCTIONS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+        FUNCTIONS
+            .get_or_init(|| {
+                let Ok(out) = self.run(
+                    None,
+                    "SELECT DISTINCT function_name FROM duckdb_functions() ORDER BY 1;",
+                    true,
+                ) else {
+                    // No binary, no suggestions from it. Columns and keywords
+                    // still work, which is most of the value.
+                    return Vec::new();
+                };
+                parse_json_arrays(&out)
+                    .last()
+                    .map(|rows| {
+                        rows.iter()
+                            .filter_map(|r| r.get("function_name").and_then(|v| v.as_str()))
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .clone()
     }
 
     /// #314: analyse every SQL-bearing node of a pipeline, in dependency order.
