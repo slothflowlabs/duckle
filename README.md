@@ -1055,6 +1055,16 @@ bf-accounts-...: 1 failed, 4 succeeded
 retrying 1 partition(s)          -> 5 succeeded, and one new run, not five
 ```
 
+**A backfill's own bound is an additional ceiling, not a way around the
+machine's.** Each slice still acquires the pool its pipeline asks for, so
+`--max-concurrent 4` over a pipeline in a pool of one runs one at a time:
+
+```text
+2020-01-01  pool=heavy  queuedMs=0
+2020-01-02  pool=heavy  queuedMs=215
+2020-01-04  pool=heavy  queuedMs=494
+```
+
 **Each slice is an ordinary durable run** - its own receipt, run id, release and
 log lines - with the backfill named as its parent, so "which slice produced this
 output" is answerable from the receipt alone.

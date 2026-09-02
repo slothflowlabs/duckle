@@ -300,6 +300,12 @@ fn execute(workspace: &Path, plan: Backfill, json: bool) -> ExitCode {
         .max_concurrent
         .min(plan.partitions.iter().filter(|p| p.state.is_claimable()).count())
         .max(1);
+    // #295: a backfill's own bound is an ADDITIONAL ceiling, not a way around
+    // the machine's. Each slice still acquires the pool its pipeline asks for,
+    // so `--max-concurrent 4` over a pipeline in a pool of 1 runs one at a
+    // time - the protection exists to stop two heavy jobs competing, and a
+    // backfill is the most likely thing to try.
+    let gates = std::sync::Arc::new(duckle_duckdb_engine::pools::Gates::load(workspace));
     let id = plan.id.clone();
     let path = PathBuf::from(&plan.pipeline_path);
     let pipeline = plan.pipeline.clone();
@@ -315,6 +321,7 @@ fn execute(workspace: &Path, plan: Backfill, json: bool) -> ExitCode {
             let pipeline = pipeline.clone();
             let release = release.clone();
             let id = id.clone();
+            let gates = std::sync::Arc::clone(&gates);
             scope.spawn(move || loop {
                 // Claim one slice under the lock and mark it running on disk
                 // before starting, so a crash leaves it `running` for the next
@@ -331,7 +338,8 @@ fn execute(workspace: &Path, plan: Backfill, json: bool) -> ExitCode {
                     (idx, plan.partitions[idx].clone())
                 };
                 let (idx, slice) = claimed;
-                let outcome = run_one(&workspace, &duckdb, &path, &pipeline, &id, &slice, &release);
+                let outcome =
+                    run_one(&workspace, &duckdb, &path, &pipeline, &id, &slice, &release, &gates);
                 {
                     let mut plan = shared.lock().unwrap_or_else(|p| p.into_inner());
                     let p = &mut plan.partitions[idx];
@@ -389,8 +397,11 @@ fn run_one(
     backfill_id: &str,
     slice: &PartitionRun,
     release: &Option<String>,
+    gates: &duckle_duckdb_engine::pools::Gates,
 ) -> Result<String, (Option<String>, String)> {
     let (_, mut doc) = read_doc(path).map_err(|e| (None, e))?;
+    // Held for the whole slice, like any other run.
+    let (_permit, pool, queued_ms) = gates.acquire(&doc.resource_pool);
     // #317's boundary, with `partition` as the source - so an operator reading
     // the receipt can see that a value came from the slice rather than from
     // them, and a partition value colliding with one they passed is recorded as
@@ -427,6 +438,8 @@ fn run_one(
         parameters: recorded,
         parameter_sources: sources,
         partition_key: Some(slice.key.clone()),
+        resource_pool: Some(pool),
+        queue_ms: Some(queued_ms),
         components: duckle_duckdb_engine::plugin::used_by(
             workspace,
             &serde_json::to_value(&doc).unwrap_or_default(),
@@ -451,5 +464,40 @@ fn run_one(
     match status == "ok" {
         true => Ok(run_id),
         false => Err((Some(run_id), error.unwrap_or_else(|| "the run failed".into()))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// #295: a backfill slice is admitted by the machine's pool, not only by
+    /// the backfill's own bound.
+    ///
+    /// Reads the source, because the failure is an executor that stops
+    /// acquiring: `--max-concurrent 4` over a pipeline in a pool of one must
+    /// still run one at a time, and a backfill is the most likely thing to try
+    /// to get around that.
+    #[test]
+    fn every_partition_run_acquires_a_pool() {
+        let src = include_str!("backfill_cmd.rs");
+        // Built from pieces so the needle does not appear in this file as a
+        // literal and match itself - which it did, and made this test pass
+        // against an executor that had stopped acquiring anything.
+        let needle = format!("gates.{}(&doc.resource_pool)", "acquire");
+        let bound = format!("let (_permit, pool, queued_ms) = gates.{}", "acquire");
+        let call = src
+            .lines()
+            .map(str::trim_start)
+            // A real call site, not a comment and not a string in this test.
+            .filter(|l| l.starts_with("let "))
+            .find(|l| l.contains(&needle));
+        let call = call.unwrap_or_else(|| {
+            panic!("run_one no longer acquires a resource pool, so a backfill can outrun the machine")
+        });
+        // Bound for the life of the slice: a permit dropped at once admits
+        // everything while still looking like it acquired.
+        assert!(
+            call.starts_with(&bound),
+            "the permit is not held for the slice: {call}"
+        );
     }
 }

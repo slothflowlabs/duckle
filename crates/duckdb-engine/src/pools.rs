@@ -144,6 +144,111 @@ impl Pools {
     }
 }
 
+/// A counting gate over one pool's permits.
+///
+/// Lives here rather than in a caller so every in-process admission uses one
+/// implementation as well as one set of numbers. The console had its own and a
+/// backfill nearly got a second: two gates drift the way two schedulers drifted
+/// over time zones, and the second one is always the one that forgets a rule.
+pub struct Gate {
+    free: std::sync::Mutex<usize>,
+    total: usize,
+    ready: std::sync::Condvar,
+}
+
+impl Gate {
+    pub fn new(permits: usize) -> Gate {
+        let permits = permits.max(1);
+        Gate { free: std::sync::Mutex::new(permits), total: permits, ready: std::sync::Condvar::new() }
+    }
+
+    /// Free and total, without blocking - a gauge for metrics.
+    pub fn permits(&self) -> (usize, usize) {
+        let free = *self.free.lock().unwrap_or_else(|p| p.into_inner());
+        (free, self.total)
+    }
+
+    /// Block until a permit is free, then hold it until the guard drops.
+    pub fn acquire(&self) -> Permit<'_> {
+        let mut free = self.free.lock().unwrap_or_else(|p| p.into_inner());
+        while *free == 0 {
+            free = self.ready.wait(free).unwrap_or_else(|p| p.into_inner());
+        }
+        *free -= 1;
+        Permit { gate: self }
+    }
+}
+
+pub struct Permit<'a> {
+    gate: &'a Gate,
+}
+
+impl Drop for Permit<'_> {
+    fn drop(&mut self) {
+        let mut free = self.gate.free.lock().unwrap_or_else(|p| p.into_inner());
+        *free += 1;
+        // One waiter, because one permit came back.
+        self.gate.ready.notify_one();
+    }
+}
+
+/// A gate per pool, built once from the resolved pools.
+pub struct Gates {
+    by_pool: std::collections::HashMap<String, Gate>,
+    pools: Pools,
+}
+
+impl Gates {
+    pub fn new(pools: Pools) -> Gates {
+        let by_pool = pools
+            .as_map()
+            .iter()
+            .map(|(name, limit)| (name.clone(), Gate::new(*limit)))
+            .collect();
+        Gates { by_pool, pools }
+    }
+
+    pub fn load(workspace: &Path) -> Gates {
+        Gates::new(Pools::load(workspace))
+    }
+
+    /// The pool a request resolves to, without waiting for it.
+    pub fn pool_for(&self, asked: &str) -> String {
+        self.pools.resolve(asked)
+    }
+
+    pub fn is_saturated(&self, pool: &str) -> bool {
+        self.by_pool.get(pool).map(|g| g.permits().0 == 0).unwrap_or(false)
+    }
+
+    /// Wait for a permit in the pool this pipeline asked for.
+    ///
+    /// Returns the pool it was admitted to and how long it waited.
+    pub fn acquire(&self, asked: &str) -> (Permit<'_>, String, u64) {
+        let pool = self.pools.resolve(asked);
+        let gate = self.by_pool.get(&pool).unwrap_or_else(|| {
+            self.by_pool.get(DEFAULT).expect("the default pool always exists")
+        });
+        let queued = std::time::Instant::now();
+        let permit = gate.acquire();
+        (permit, pool, queued.elapsed().as_millis() as u64)
+    }
+
+    /// Free and total per pool, sorted, for metrics.
+    pub fn permits(&self) -> Vec<(String, usize, usize)> {
+        let mut out: Vec<(String, usize, usize)> = self
+            .by_pool
+            .iter()
+            .map(|(name, gate)| {
+                let (free, total) = gate.permits();
+                (name.clone(), free, total)
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+}
+
 /// The pool a pipeline document asks for, if any.
 ///
 /// Read off the raw JSON so a document written by an older build, or one
@@ -248,6 +353,33 @@ mod tests {
         // from running anything at all.
         let tmp = ws(Some("{ not json"));
         assert_eq!(Pools::load(tmp.path()).limit(DEFAULT), env_default());
+    }
+
+    #[test]
+    fn a_gate_admits_exactly_its_permits_at_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let mut limits = BTreeMap::new();
+        limits.insert("heavy".to_string(), 1usize);
+        limits.insert("network".to_string(), 4usize);
+        let gates = std::sync::Arc::new(Gates::new(Pools::from_limits(limits)));
+        for (pool, cap) in [("heavy", 1usize), ("network", 4usize)] {
+            let peak = std::sync::Arc::new(AtomicUsize::new(0));
+            let live = std::sync::Arc::new(AtomicUsize::new(0));
+            std::thread::scope(|s| {
+                for _ in 0..8 {
+                    let (gates, peak, live) = (gates.clone(), peak.clone(), live.clone());
+                    s.spawn(move || {
+                        let (_permit, got, _) = gates.acquire(pool);
+                        assert_eq!(got, pool);
+                        let now = live.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(now, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(15));
+                        live.fetch_sub(1, Ordering::SeqCst);
+                    });
+                }
+            });
+            assert_eq!(peak.load(Ordering::SeqCst), cap, "pool {pool}");
+        }
     }
 
     #[test]

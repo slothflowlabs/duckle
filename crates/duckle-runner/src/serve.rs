@@ -187,73 +187,10 @@ fn max_concurrent_runs() -> usize {
         .unwrap_or(1)
 }
 
-/// #289: one [`RunGate`] per named pool.
-///
-/// Built once at startup from the workspace's pools, because a gate created
-/// per request would bound nothing - each request would get its own permits.
-struct Gates {
-    by_pool: std::collections::HashMap<String, RunGate>,
-    pools: duckle_duckdb_engine::pools::Pools,
-}
-
-impl Gates {
-    fn new(pools: duckle_duckdb_engine::pools::Pools) -> Gates {
-        let by_pool = pools
-            .as_map()
-            .iter()
-            .map(|(name, limit)| (name.clone(), RunGate::new(*limit)))
-            .collect();
-        Gates { by_pool, pools }
-    }
-
-    /// Wait for a permit in the pool this pipeline asked for.
-    ///
-    /// An unknown name resolves to `default` rather than to a new pool, so a
-    /// pipeline cannot opt out of admission control by inventing one.
-    fn acquire(&self, asked: &str) -> (RunPermit<'_>, String, u64) {
-        let pool = self.pools.resolve(asked);
-        let gate = self.by_pool.get(&pool).unwrap_or_else(|| {
-            self.by_pool
-                .get(duckle_duckdb_engine::pools::DEFAULT)
-                .expect("the default pool always exists")
-        });
-        // How long the run waited, which is the number an operator sizing a
-        // pool actually needs - a pool that is never saturated and one that
-        // queues for ten minutes look identical without it.
-        let queued = std::time::Instant::now();
-        let permit = gate.acquire();
-        (permit, pool, queued.elapsed().as_millis() as u64)
-    }
-
-    /// The pool a request would be admitted to, without waiting for it.
-    fn pool_for(&self, asked: &str) -> String {
-        self.pools.resolve(asked)
-    }
-
-    /// Whether that pool has no free permit right now (#289).
-    ///
-    /// A hint, not a reservation: it can change between this call and the
-    /// acquire. It only decides whether to record the run as queued first, and
-    /// recording one that then starts immediately is harmless - the reverse,
-    /// blocking with no durable record, is what an API caller cannot work with.
-    fn is_saturated(&self, pool: &str) -> bool {
-        self.by_pool.get(pool).map(|g| g.permits().0 == 0).unwrap_or(false)
-    }
-
-    /// Free and total permits, per pool, for #300's metrics.
-    fn permits(&self) -> Vec<(String, usize, usize)> {
-        let mut out: Vec<(String, usize, usize)> = self
-            .by_pool
-            .iter()
-            .map(|(name, gate)| {
-                let (free, total) = gate.permits();
-                (name.clone(), free, total)
-            })
-            .collect();
-        out.sort_by(|a, b| a.0.cmp(&b.0));
-        out
-    }
-}
+// #289/#295: the gate lives in the engine's `pools` module now, so the console
+// and a backfill admit runs through one implementation rather than two that
+// drift.
+use duckle_duckdb_engine::pools::Gates;
 
 struct State {
     workspace: PathBuf,
