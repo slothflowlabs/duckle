@@ -764,6 +764,51 @@ does.
 monitored. Nothing prunes `runs/`, so a workspace that has ever run thousands of
 pipelines would otherwise emit thousands of label values forever.
 
+### Partitioned backfills
+
+Declare how a pipeline is sliced:
+
+```json
+{ "name": "accounts",
+  "partition": { "type": "time", "cadence": "day", "timezone": "Europe/Brussels" },
+  "nodes": [ { "...": "reads ${partition_key}, ${window_start}, ${window_end}" } ] }
+```
+
+```bash
+duckle-runner backfill create pipelines/accounts.json --from 2020-01-01 --to 2020-01-05                               --max-concurrent 2 [--dry-run]
+duckle-runner backfill status <backfill-id>
+duckle-runner backfill retry  <backfill-id> [--partition 2020-01-03]
+duckle-runner backfill cancel <backfill-id>
+```
+
+```text
+  2020-01-01   succeeded    run-backfill-accounts-...
+  2020-01-03   failed       run-backfill-accounts-...  IO Error: No files found ...
+bf-accounts-...: 1 failed, 4 succeeded
+
+# the missing file arrives
+retrying 1 partition(s)          -> 5 succeeded, and one new run, not five
+```
+
+**Each slice is an ordinary durable run** - its own receipt, run id, release and
+log lines - with the backfill named as its parent, so "which slice produced this
+output" is answerable from the receipt alone.
+
+**Boundaries are computed in the partition's own zone.** A Brussels day is 23
+hours in March and 25 in October; generating UTC days would silently process an
+hour twice and skip another. Each window ends exactly where the next begins.
+
+**The plan is written before anything runs** and updated after every slice, so a
+kill halfway through leaves something resumable. Slices still marked `running` on
+the next start become `interrupted`, the same reconciliation a run receipt gets.
+
+**Retrying touches only the failures.** A thousand days failing on four costs
+four runs to finish, not a thousand.
+
+**Parameters go through the same boundary as everything else**, with `partition`
+as the source - so a value that came from the slice is distinguishable from one
+you passed.
+
 ### Named execution pools
 
 One heavy join should not have to serialise eight cheap HTTP jobs. Name the kinds

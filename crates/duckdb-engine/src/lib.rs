@@ -38,6 +38,8 @@ pub mod drift;
 pub mod qvd;
 pub mod review;
 pub mod alerts;
+pub mod backfill;
+pub mod partition;
 pub mod pools;
 pub mod release;
 pub mod follow_session;

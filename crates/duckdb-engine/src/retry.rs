@@ -156,6 +156,13 @@ pub struct RunReceipt {
     /// guess made here about the name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parameters: BTreeMap<String, String>,
+    /// The partition this run processed (#295).
+    ///
+    /// With `parent_run_id` naming the backfill, this makes "which slice
+    /// produced this output" answerable from the receipt alone, rather than by
+    /// correlating timestamps against a plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition_key: Option<String>,
     /// The admission pool this run was queued in (#289).
     ///
     /// Absent for a run that predates pools or went through a path with no
@@ -245,6 +252,7 @@ pub fn begin(
         ),
         parameters: BTreeMap::new(),
         parameter_sources: Vec::new(),
+        partition_key: None,
         resource_pool: None,
         queue_ms: None,
         nodes: BTreeMap::new(),
@@ -710,6 +718,7 @@ mod tests {
             pid: None,
             parent_run_id: None,
             at: "2026-08-31T00:00:00Z".into(),
+            partition_key: None,
             status: status.into(),
             pipeline_name: "p".into(),
             pipeline_path: "/tmp/p.json".into(),

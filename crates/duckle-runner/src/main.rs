@@ -23,6 +23,7 @@ use std::process::ExitCode;
 mod affected_cmd;
 mod migrate_cmd;
 mod oidc;
+mod backfill_cmd;
 mod release_cmd;
 mod runsdiff_cmd;
 mod sql_cmd;
@@ -1962,6 +1963,18 @@ fn main() -> ExitCode {
     // the desktop app. Must sit above the fallthrough run path, or the verb is
     // parsed as a bare pipeline path.
     if std::env::args().nth(1).as_deref() == Some("backfill") {
+        // #295: partitioned backfills share the verb with watermark editing,
+        // which owns list/set/clear. Split on the subcommand rather than
+        // inventing a second verb, because the issue asks for `backfill
+        // create` and an operator should not have to know which half of the
+        // feature they are in.
+        if std::env::args()
+            .nth(2)
+            .as_deref()
+            .is_some_and(backfill_cmd::is_partition_verb)
+        {
+            return backfill_cmd::run();
+        }
         return match backfill::run() {
             Ok(code) => ExitCode::from(code as u8),
             Err(e) => {
