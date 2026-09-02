@@ -924,20 +924,33 @@ impl Scheduler {
             // A scheduler with no workspace path cannot read a pipeline to
             // find its pool, so it stays on the default - which is exactly the
             // behaviour it had before pools existed.
-            // A plan has no single pipeline id, and a scheduler with no
-            // workspace path cannot read one to find its pool: both stay on
-            // the default, which is exactly the behaviour they had before
-            // pools existed.
+            // #289: a Plan takes NO workload slot.
+            //
+            // Plan orchestration is a supervisor: it does almost nothing itself
+            // and spends its time waiting for children, each of which acquires
+            // the pool its own pipeline asks for. Holding a slot while waiting
+            // for a child that needs the same pool is a deadlock the size of
+            // the pool - with `heavy: 1`, a Plan whose first step is a heavy
+            // pipeline would wait forever for the permit it is itself holding.
+            //
+            // A scheduler with no workspace path cannot read a pipeline to find
+            // its pool, so it stays on the default - exactly the behaviour it
+            // had before pools existed.
             let permit = match (workspace.as_deref(), pipeline_id.as_deref()) {
-                (Some(ws), Some(id)) => pool_permits(ws, &pool_of(ws, id)),
-                _ => run_permits().clone(),
+                (Some(ws), Some(id)) => Some(pool_permits(ws, &pool_of(ws, id))),
+                // No pipeline id means a Plan.
+                (_, None) => None,
+                _ => Some(run_permits().clone()),
             };
             tokio::spawn(async move {
                 // Hold a permit for the whole run. Every schedule that comes due
                 // in the same tick used to fire at once, so ten due at midnight
                 // meant ten pipelines each sized for the whole machine. The
                 // permit bounds that; the run still happens, it just queues.
-                let _slot = permit.acquire_owned().await;
+                let _slot = match permit {
+                    Some(p) => Some(p.acquire_owned().await),
+                    None => None,
+                };
                 // The semaphore above bounds this process only. Skipping on a
                 // clash rather than queueing is deliberate: the next tick comes
                 // round anyway, and a backlog of identical overdue runs helps

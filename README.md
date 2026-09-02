@@ -878,6 +878,19 @@ with a tokio semaphore because one is sync and the other async - but both read
 the same numbers, because two limiters each parsing their own config is how the
 two schedulers came to disagree about time zones.
 
+**A run waiting for capacity already exists.** It is written as `queued` with a
+`queueReason` before the wait, so an API or MCP caller gets a durable id
+immediately instead of holding its request open, and can inspect or cancel it
+while it waits - nothing has started, so there is nothing to undo. When the
+permit arrives it becomes `running` with `startedAt` and `queueMs`. A queued run
+whose process died is reconciled to `interrupted` on the next start, so a restart
+does not leave stale capacity behind.
+
+**A Plan takes no workload slot.** It is a supervisor that spends its time
+waiting for children, each of which acquires the pool its own pipeline asks for.
+Holding a slot while waiting for a child that needs the same pool is a deadlock
+the size of the pool.
+
 Every run records `resourcePool` and, where it actually waited, `queueMs` - a
 pool that is never saturated and one that queues for ten minutes are otherwise
 indistinguishable. `/metrics` carries `duckle_pool_permits_free{pool="..."}`,

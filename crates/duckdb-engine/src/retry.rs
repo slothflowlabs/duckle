@@ -171,6 +171,19 @@ pub struct RunReceipt {
     /// four minutes waiting rather than running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_pool: Option<String>,
+    /// Why the run is queued, when it is.
+    ///
+    /// `resource_pool_capacity` is the only reason today. Named rather than
+    /// implied so pool capacity is distinguishable from the other things that
+    /// can hold a run back - pipeline overlap, a backfill's own bound - without
+    /// having to infer it from what else is running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_reason: Option<String>,
+    /// When the run entered the queue, and when it actually started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
     /// How long the run waited for a permit, in milliseconds.
     ///
     /// Separate from duration, which is time spent running. A pool that is
@@ -210,6 +223,14 @@ fn unknown_state() -> String {
 }
 
 /// The states a run passes through (#259).
+/// #289: the run exists and is waiting for an admission permit.
+///
+/// A distinct state rather than an early `running`, because the two need
+/// opposite handling: a queued run has started nothing, can be cancelled with
+/// no side effects to undo, and its wait is not execution time. It also gives
+/// an API or MCP caller a durable id immediately instead of holding the request
+/// open until capacity appears.
+pub const QUEUED: &str = "queued";
 pub const RUNNING: &str = "running";
 pub const INTERRUPTED: &str = "interrupted";
 pub const FINISHED: &str = "finished";
@@ -254,6 +275,9 @@ pub fn begin(
         parameter_sources: Vec::new(),
         partition_key: None,
         resource_pool: None,
+        queue_reason: None,
+        queued_at: None,
+        started_at: None,
         queue_ms: None,
         nodes: BTreeMap::new(),
     };
@@ -325,6 +349,29 @@ pub fn finish(
 ///
 /// Receipts belonging to a LIVE process are left alone, so a second runner on
 /// the same workspace does not declare the first one dead.
+/// Record that a run exists and is waiting for capacity (#289).
+///
+/// Written before the wait, so an API caller has a durable id to cancel or
+/// inspect while it waits, and a restart finds the run rather than losing it.
+pub fn enqueue(workspace: &Path, receipt: &mut RunReceipt, pool: &str, reason: &str) {
+    receipt.state = QUEUED.to_string();
+    receipt.status = QUEUED.to_string();
+    receipt.resource_pool = Some(pool.to_string());
+    receipt.queue_reason = Some(reason.to_string());
+    receipt.queued_at = Some(chrono::Utc::now().to_rfc3339());
+    let _ = write(workspace, receipt);
+}
+
+/// The permit arrived; the run is now executing.
+pub fn admitted(workspace: &Path, receipt: &mut RunReceipt, waited_ms: u64) {
+    receipt.state = RUNNING.to_string();
+    receipt.status = RUNNING.to_string();
+    receipt.queue_reason = None;
+    receipt.started_at = Some(chrono::Utc::now().to_rfc3339());
+    receipt.queue_ms = Some(waited_ms);
+    let _ = write(workspace, receipt);
+}
+
 pub fn reconcile(workspace: &Path, live_pids: &dyn Fn(u32) -> bool) -> Vec<String> {
     let mut changed = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir(workspace)) else {
@@ -337,7 +384,10 @@ pub fn reconcile(workspace: &Path, live_pids: &dyn Fn(u32) -> bool) -> Vec<Strin
         }
         let Ok(text) = std::fs::read_to_string(&p) else { continue };
         let Ok(mut r) = serde_json::from_str::<RunReceipt>(&text) else { continue };
-        if r.state != RUNNING {
+        // A QUEUED run whose process is gone is as interrupted as a running
+        // one: nobody is waiting for its permit any more, and leaving it queued
+        // forever is the stale capacity Louis asked to avoid.
+        if r.state != RUNNING && r.state != QUEUED {
             continue;
         }
         if r.pid.is_some_and(|pid| live_pids(pid)) {
@@ -696,6 +746,44 @@ pub fn plan(
 mod tests {
     use super::*;
 
+    /// #289: a run waiting for capacity exists, and says why.
+    #[test]
+    fn a_queued_run_is_durable_and_names_its_reason() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut r = begin(tmp.path(), "run-q-1", "api", "p", "pipelines/p.json", "h", None);
+        enqueue(tmp.path(), &mut r, "heavy", "resource_pool_capacity");
+
+        // An API caller can find it while it waits - which is the point.
+        let stored = load(tmp.path(), "run-q-1").expect("a queued run is on disk");
+        assert_eq!(stored.state, QUEUED);
+        assert_eq!(stored.status, QUEUED);
+        assert_eq!(stored.resource_pool.as_deref(), Some("heavy"));
+        assert_eq!(stored.queue_reason.as_deref(), Some("resource_pool_capacity"));
+        assert!(stored.queued_at.is_some());
+        assert!(stored.started_at.is_none(), "it has not started");
+
+        admitted(tmp.path(), &mut r, 4200);
+        let started = load(tmp.path(), "run-q-1").unwrap();
+        assert_eq!(started.state, RUNNING);
+        assert_eq!(started.queue_ms, Some(4200));
+        assert!(started.started_at.is_some());
+        assert_eq!(started.queue_reason, None, "it is no longer waiting for anything");
+        // The wait is recorded separately from execution time.
+        assert!(started.queued_at.is_some());
+    }
+
+    #[test]
+    fn a_queued_run_whose_process_died_is_interrupted_not_left_queued() {
+        // Otherwise it sits in the queue forever, which is the stale capacity
+        // a restart is supposed to clear.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut r = begin(tmp.path(), "run-q-2", "api", "p", "pipelines/p.json", "h", None);
+        enqueue(tmp.path(), &mut r, "heavy", "resource_pool_capacity");
+        let changed = reconcile(tmp.path(), &|_| false);
+        assert_eq!(changed, vec!["run-q-2".to_string()]);
+        assert_eq!(load(tmp.path(), "run-q-2").unwrap().state, INTERRUPTED);
+    }
+
     fn doc_with(nodes: &[(&str, &str)]) -> crate::PipelineDoc {
         let ns: Vec<serde_json::Value> = nodes
             .iter()
@@ -728,6 +816,9 @@ mod tests {
             parameter_sources: Vec::new(),
             release_id: None,
             resource_pool: None,
+            queue_reason: None,
+            queued_at: None,
+            started_at: None,
             queue_ms: None,
             nodes: nodes
                 .iter()

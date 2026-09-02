@@ -156,6 +156,9 @@ mod tests {
             release_id: None,
             partition_key: None,
             resource_pool: None,
+            queue_reason: None,
+            queued_at: None,
+            started_at: None,
             queue_ms: None,
             nodes: Default::default(),
         }

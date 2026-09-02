@@ -225,6 +225,21 @@ impl Gates {
         (permit, pool, queued.elapsed().as_millis() as u64)
     }
 
+    /// The pool a request would be admitted to, without waiting for it.
+    fn pool_for(&self, asked: &str) -> String {
+        self.pools.resolve(asked)
+    }
+
+    /// Whether that pool has no free permit right now (#289).
+    ///
+    /// A hint, not a reservation: it can change between this call and the
+    /// acquire. It only decides whether to record the run as queued first, and
+    /// recording one that then starts immediately is harmless - the reverse,
+    /// blocking with no durable record, is what an API caller cannot work with.
+    fn is_saturated(&self, pool: &str) -> bool {
+        self.by_pool.get(pool).map(|g| g.permits().0 == 0).unwrap_or(false)
+    }
+
     /// Free and total permits, per pool, for #300's metrics.
     fn permits(&self) -> Vec<(String, usize, usize)> {
         let mut out: Vec<(String, usize, usize)> = self
@@ -3514,7 +3529,6 @@ fn execute_one_with(
 
     let id = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "pipeline".into());
 
-    let (_guard, pool, queued_ms) = state.run_lock.acquire(&doc.resource_pool);
 
     // Mark this pipeline as running for the duration of the execution so the
     // console can show a live "Running" status (discussion #155). The guard
@@ -3588,13 +3602,28 @@ fn execute_one_with(
     let receipt = duckle_duckdb_engine::retry::RunReceipt {
         parameters: recorded_params,
         parameter_sources,
-        // #289: which pool admitted it, and how long it waited to be admitted.
-        resource_pool: Some(pool),
-        queue_ms: Some(queued_ms),
         ..receipt
     };
     let _ = duckle_duckdb_engine::retry::write(&state.workspace, &receipt);
     // #259: log lines carry the id the receipt was written with.
+    // #289: the receipt exists BEFORE the wait, so an API caller has a durable
+    // id to inspect or cancel while capacity is unavailable rather than holding
+    // the request open. `queued` is a real state - nothing has started, so
+    // there is nothing to undo if it is cancelled here.
+    let mut receipt = receipt;
+    let asked = state.run_lock.pool_for(&doc.resource_pool);
+    if state.run_lock.is_saturated(&asked) {
+        duckle_duckdb_engine::retry::enqueue(
+            &state.workspace,
+            &mut receipt,
+            &asked,
+            "resource_pool_capacity",
+        );
+    }
+    let (_guard, pool, queued_ms) = state.run_lock.acquire(&doc.resource_pool);
+    duckle_duckdb_engine::retry::admitted(&state.workspace, &mut receipt, queued_ms);
+    let receipt = duckle_duckdb_engine::retry::RunReceipt { resource_pool: Some(pool), ..receipt };
+
     let result = engine.with_run_id(&receipt.run_id).execute_pipeline_named(&doc, &id);
     duckle_duckdb_engine::retry::finish(
         &state.workspace,
