@@ -648,11 +648,16 @@ duckle-runner sql check pipeline.json [--node q] [--format json|junit|sarif]
 
 ```text
 skip  src                src.csv has no SQL to check
+skip  pg                 src.postgres sends its SQL to the remote system, so DuckDB cannot
+                         validate it. Checking it here would say nothing true about that dialect.
+hint  pg                 more than one statement: a source sends ONE query, wrapped as
+                         `SELECT * FROM (...)`, so anything after the first semicolon is a
+                         syntax error rather than a second step
 FAIL  q                  2:12: Referenced column "amountt" not found in FROM clause!  (did you mean amount?)
 skip  out                node "out" is a sink stage, which produces no relation to describe - and
                          running it to find out would perform its writes
 
-3 node(s) checked, 1 problem(s)
+4 node(s) checked, 2 problem(s)
 ```
 
 Every SQL-bearing node is bound against the columns its upstreams actually
@@ -676,6 +681,16 @@ guess at the first one.
 BigQuery; binding it against DuckDB would either reject valid SQL or accept
 invalid SQL, and either way the answer would be about the wrong engine. "Not
 checked" and "checked and clean" never read the same.
+
+**But some things are wrong in every dialect.** An unclosed quote, an unbalanced
+parenthesis, a second statement where exactly one query is sent, a `DELETE` in a
+position that reads rows, a `${placeholder}` nothing substituted. Those are
+reported as `hint` on a node that still says it was not validated - the round
+trip to the remote system tells you the same thing, slower, in a message about a
+token far from the mistake. Nothing here guesses at a dialect: `ARRAY_AGG`,
+`QUALIFY`, `LISTAGG`, `toDateTime` and `GENERATE_UUID()` are left alone, because
+checking Postgres SQL with anything other than Postgres tells you about the
+checker rather than about your query. A test asserts exactly that.
 
 **The editor shows them.** Selecting a node runs the same bind and puts what
 DuckDB said above the form - the position in your own SQL, and the column it

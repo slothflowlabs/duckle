@@ -3607,6 +3607,12 @@ impl DuckdbEngine {
             analysis.note = Some(format!(
                 "{component} sends its SQL to the remote system, so DuckDB cannot validate it. Checking it here would say nothing true about that dialect."
             ));
+            // What CAN be said without knowing the dialect. Not a validation
+            // and not claimed as one - `validated` stays false - but an
+            // unclosed quote is an error on every engine there is, and saying
+            // so beats sending it and waiting for the round trip to say it in
+            // a message about a token far from the mistake.
+            analysis.diagnostics = sqldiag::remote_hints(&authored.unwrap_or_default());
             return Ok(analysis);
         }
         if authored.is_none() && component.starts_with("src.") {

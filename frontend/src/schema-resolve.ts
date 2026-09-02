@@ -92,7 +92,18 @@ export async function deriveSchemaFromEngine(
         .filter(e => e.target === nodeId)
         .map(e => [e.source, resolveOutputSchema(e.source, nodes, edges)] as const)
         .filter(([, cols]) => cols.length > 0);
-    if (inputs.length === 0) return false;
+    // A remote source has no upstream by definition, and is exactly the node
+    // whose SQL Duckle cannot bind - so it is also the node the dialect-neutral
+    // hints (#314) are for. The condition mirrors the engine's own `remote`
+    // test (`src.` + authored SQL), so lifting the guard here cannot start
+    // showing bind errors for an unconnected transform: the engine returns
+    // early for these and never runs anything.
+    const props = node.data.properties as Record<string, unknown> | undefined;
+    const authoredSql = ['sql', 'query'].some(
+        k => typeof props?.[k] === 'string' && (props[k] as string).trim() !== '',
+    );
+    const remoteSource = componentId.startsWith('src.') && authoredSql;
+    if (inputs.length === 0 && !remoteSource) return false;
 
     const key = derivedKey(nodeId, componentId, node.data.properties, inputs.flatMap(([, c]) => c));
     if (derived.has(key)) return false;

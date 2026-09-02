@@ -152,6 +152,119 @@ pub fn parse(stderr: &str) -> Vec<Diagnostic> {
     out
 }
 
+/// #314: what can honestly be said about SQL destined for another engine.
+///
+/// A source's query runs on Postgres, BigQuery or Snowflake. Checking it with
+/// DuckDB would tell you about DuckDB, so nothing here parses the SQL against
+/// any dialect. What it reports is the small set of things that are wrong in
+/// EVERY dialect, plus one that is wrong in Duckle regardless of dialect.
+///
+/// Deliberately not here: "that function does not exist in BigQuery". Duckle
+/// does not know what your BigQuery has, and a confident wrong warning about a
+/// perfectly good query is worse than no warning - people stop reading the ones
+/// that are right.
+///
+/// Also not here: a trailing semicolon. Duckle trims it before wrapping the
+/// query, so warning about it would be a false alarm about something already
+/// handled.
+pub fn remote_hints(sql: &str) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    let trimmed = sql.trim().trim_end_matches(';').trim();
+    if trimmed.is_empty() {
+        return out;
+    }
+    let hint = |message: String| Diagnostic {
+        kind: "hint".to_string(),
+        message,
+        line: None,
+        column: None,
+        candidates: Vec::new(),
+    };
+
+    // 1. An unclosed quote or bracket. Wrong everywhere, and the error the
+    //    remote engine returns for it is usually about a token far from the
+    //    real mistake.
+    let mut single = 0usize;
+    let mut double = 0usize;
+    let mut depth: i64 = 0;
+    for c in trimmed.chars() {
+        match c {
+            // Counting is enough for an escaped quote: `''` inside a literal is
+            // two quotes, so a balanced string stays balanced. A special case
+            // for it was written and did nothing that counting did not already
+            // do.
+            '\'' if double % 2 == 0 => single += 1,
+            '"' if single % 2 == 0 => double += 1,
+            '(' if single % 2 == 0 && double % 2 == 0 => depth += 1,
+            ')' if single % 2 == 0 && double % 2 == 0 => depth -= 1,
+            _ => {}
+        }
+    }
+    if single % 2 == 1 {
+        out.push(hint("an unclosed single quote".into()));
+    }
+    if double % 2 == 1 {
+        out.push(hint("an unclosed double quote".into()));
+    }
+    if depth != 0 {
+        out.push(hint(match depth > 0 {
+            true => format!("{depth} unclosed parenthesis/es"),
+            false => format!("{} unmatched closing parenthesis/es", -depth),
+        }));
+    }
+
+    // 2. More than one statement. Duckle wraps a source query as
+    //    `SELECT * FROM (<your sql>)`, so a second statement is a syntax error
+    //    wherever it lands - it never runs, whatever the engine.
+    let outside_literals: String = {
+        let (mut s, mut in_single, mut in_double) = (String::new(), false, false);
+        for c in trimmed.chars() {
+            match c {
+                '\'' if !in_double => in_single = !in_single,
+                '"' if !in_single => in_double = !in_double,
+                _ => {}
+            }
+            s.push(if in_single || in_double { ' ' } else { c });
+        }
+        s
+    };
+    if outside_literals.trim_end_matches(';').contains(';') {
+        out.push(hint(
+            "more than one statement: a source sends ONE query, wrapped as `SELECT * FROM (...)`, so anything after the first semicolon is a syntax error rather than a second step"
+                .into(),
+        ));
+    }
+
+    // 3. A statement that does not return rows, in a position that reads them.
+    let first = outside_literals
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_uppercase();
+    if matches!(
+        first.as_str(),
+        "INSERT" | "UPDATE" | "DELETE" | "DROP" | "TRUNCATE" | "ALTER" | "CREATE" | "GRANT"
+    ) {
+        out.push(hint(format!(
+            "starts with {first}, and a source position expects something that returns rows - Duckle wraps it as `SELECT * FROM (...)`. If the remote system must be changed, that is a job for a step that is allowed to change it."
+        )));
+    }
+
+    // 4. A placeholder nothing filled in. Not a dialect question at all: it
+    //    would be sent to the remote system literally, as the characters
+    //    `${name}`.
+    if let Some(start) = outside_literals.find("${") {
+        let name: String = outside_literals[start + 2..]
+            .chars()
+            .take_while(|c| *c != '}')
+            .collect();
+        out.push(hint(format!(
+            "`${{{name}}}` was not substituted, so it would reach the remote system as those characters. Declare it as a parameter, or set it in the context."
+        )));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +275,72 @@ mod tests {
     const PARSER: &str = "Parser Error: syntax error at or near \"WHERE\"\n\nLINE 1: CREATE OR REPLACE VIEW n AS SELECT FROM WHERE;\n                                                ^\n";
 
     const CATALOG: &str = "Catalog Error: Table with name no_such_table does not exist!\nDid you mean \"pg_tables\"?\n\nLINE 1: SELECT * FROM no_such_table;\n                      ^\n";
+
+    #[test]
+    fn an_unclosed_quote_is_wrong_on_every_engine() {
+        let h = remote_hints("SELECT * FROM t WHERE name = 'ada");
+        assert_eq!(h.len(), 1, "{h:?}");
+        assert!(h[0].message.contains("unclosed single quote"), "{}", h[0].message);
+        assert_eq!(h[0].kind, "hint", "a hint, not a validation");
+        // A doubled quote is an escaped one, not a close and an open.
+        assert!(remote_hints("SELECT 'it''s fine' FROM t").is_empty());
+    }
+
+    #[test]
+    fn unbalanced_parentheses_are_counted_not_guessed() {
+        assert!(remote_hints("SELECT * FROM (SELECT 1").is_empty() == false);
+        assert!(remote_hints("SELECT * FROM (SELECT 1)").is_empty());
+        // A bracket inside a literal is text, not structure.
+        assert!(remote_hints("SELECT '(' FROM t").is_empty());
+    }
+
+    #[test]
+    fn a_second_statement_never_runs_so_it_is_worth_saying() {
+        // A source query is wrapped as `SELECT * FROM (...)`, so anything after
+        // the first semicolon is a syntax error rather than a second step.
+        let h = remote_hints("SELECT 1; SELECT 2");
+        assert!(h.iter().any(|d| d.message.contains("more than one statement")), "{h:?}");
+        // A trailing semicolon is trimmed by Duckle, so it is NOT a hint - a
+        // warning about something already handled teaches people to ignore
+        // warnings.
+        assert!(remote_hints("SELECT 1;").is_empty());
+        // And a semicolon inside a string is not a statement break.
+        assert!(remote_hints("SELECT 'a;b' FROM t").is_empty());
+    }
+
+    #[test]
+    fn a_write_in_a_read_position_is_flagged() {
+        let h = remote_hints("DELETE FROM orders WHERE id = 1");
+        assert!(h.iter().any(|d| d.message.contains("returns rows")), "{h:?}");
+        for ok in ["SELECT 1", "WITH t AS (SELECT 1) SELECT * FROM t", "select * from x"] {
+            assert!(remote_hints(ok).is_empty(), "{ok} was flagged");
+        }
+    }
+
+    #[test]
+    fn an_unsubstituted_placeholder_would_be_sent_literally() {
+        // Not a dialect question at all: those characters reach the remote
+        // system as themselves.
+        let h = remote_hints("SELECT * FROM t WHERE d = ${as_of}");
+        assert!(h.iter().any(|d| d.message.contains("as_of")), "{h:?}");
+        assert!(h[0].message.contains("not substituted"), "{}", h[0].message);
+    }
+
+    #[test]
+    fn nothing_here_claims_to_know_the_remote_dialect() {
+        // The line this must not cross: Duckle does not know what functions
+        // that engine has, and a confident wrong warning about a good query is
+        // worse than none - people stop reading the ones that are right.
+        for fine in [
+            "SELECT ARRAY_AGG(x) FROM t",              // Postgres
+            "SELECT GENERATE_UUID()",                   // BigQuery
+            "SELECT toDateTime(x) FROM t",              // ClickHouse
+            "SELECT LISTAGG(x, ',') FROM t",            // Oracle / Snowflake
+            "SELECT * FROM t QUALIFY row_number() OVER () = 1",
+        ] {
+            assert!(remote_hints(fine).is_empty(), "{fine} was flagged as a problem");
+        }
+    }
 
     #[test]
     fn a_missing_column_yields_its_name_position_and_the_near_one() {
