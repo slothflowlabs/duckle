@@ -41,6 +41,7 @@ pub mod alerts;
 pub mod backfill;
 pub mod chunking;
 pub mod partition;
+pub mod plugin;
 pub mod pools;
 pub mod release;
 pub mod follow_session;
@@ -2187,6 +2188,15 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::Javascript(spec)) => self.run_javascript(&db_path, spec),
                     Some(RuntimeSpec::Jq(spec)) => self.run_jq(&db_path, spec),
                     Some(RuntimeSpec::Python(spec)) => self.run_python(&db_path, spec),
+                    Some(RuntimeSpec::Plugin(spec)) => {
+                        // The workspace is where components are installed and
+                        // where policy lives; both are needed before this can
+                        // run anything.
+                        let ws = std::env::var("DUCKLE_WORKSPACE")
+                            .map(std::path::PathBuf::from)
+                            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                        self.run_plugin(&db_path, spec, &ws, self.run_id.as_deref().unwrap_or(""))
+                    }
                     Some(RuntimeSpec::AiChunk(spec)) => self.run_ai_chunk(&db_path, spec),
                     Some(RuntimeSpec::AiPii(spec)) => self.run_ai_pii(&db_path, spec),
                     Some(RuntimeSpec::AiLlm(spec)) => {

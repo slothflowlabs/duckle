@@ -1216,6 +1216,16 @@ pub struct JqSpec {
 /// `process(row)` returning a dict (the output row); returning None drops the
 /// row. The engine passes rows in/out as JSON, so it carries no Python runtime.
 #[derive(Debug, Clone)]
+/// #307: an external component, run out of process.
+pub struct PluginSpec {
+    pub node_id: String,
+    pub component_id: String,
+    /// Absent for a source, which has nothing upstream to hand over.
+    pub from_view: Option<String>,
+    pub properties: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
 pub struct PythonSpec {
     pub node_id: String,
     pub from_view: String,

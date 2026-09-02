@@ -2062,8 +2062,47 @@ fn main() -> ExitCode {
     // `components schema` -> the accepted property names, per component, so an
     // agent or editor does not have to scrape source to avoid #198 (#298).
     if std::env::args().nth(1).as_deref() == Some("components") {
+        // #307: the external components this workspace installs, so a
+        // third-party component is discoverable the same way a built-in is
+        // rather than only by opening the pipeline that uses it.
+        if std::env::args().nth(2).as_deref() == Some("external") {
+            let ws = std::env::args()
+                .skip_while(|a| a != "--workspace")
+                .nth(1)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            let (found, problems) = duckle_duckdb_engine::plugin::discover(&ws);
+            if std::env::args().any(|a| a == "--json") {
+                println!("{}", serde_json::to_string_pretty(&found).unwrap_or_default());
+            } else {
+                if found.is_empty() && problems.is_empty() {
+                    println!("no external components installed in {}", ws.display());
+                }
+                for c in &found {
+                    println!(
+                        "  {:<22} {:<10} {}",
+                        c.manifest.id, c.manifest.version, c.manifest.label
+                    );
+                    println!("  {:<22} manifest {}", "", &c.manifest_hash[..16]);
+                    if let Some(l) = &c.lock_hash {
+                        println!("  {:<22} lock     {}", "", &l[..16]);
+                    }
+                }
+            }
+            // Reported rather than skipped: a component missing from the list
+            // because its manifest is broken is a bug report about the wrong
+            // thing.
+            for p in &problems {
+                eprintln!("  problem: {p}");
+            }
+            return match problems.is_empty() {
+                true => ExitCode::from(0),
+                false => ExitCode::from(1),
+            };
+        }
         if std::env::args().nth(2).as_deref() != Some("schema") {
-            eprintln!("usage: duckle-runner components schema [--json]");
+            eprintln!("usage: duckle-runner components schema [--json]
+       duckle-runner components external [--workspace DIR] [--json]");
             return ExitCode::from(2);
         }
         println!(

@@ -764,6 +764,47 @@ does.
 monitored. Nothing prunes `runs/`, so a workspace that has ever run thousands of
 pipelines would otherwise emit thousands of label values forever.
 
+### External components
+
+An iXBRL parser, an OCR adapter, a country-specific registry reader - Duckle
+should not contain all of those, and they should not have to be escape hatches
+either. Drop one in `<workspace>/components/<name>/`:
+
+```json
+{ "id": "ext.upper", "version": "1.0.0", "label": "Uppercase (external)",
+  "inputs": [{"name": "main"}], "outputs": [{"name": "main"}],
+  "properties": { "sections": [ ... ] },
+  "runtime": { "command": ["python", "run.py"], "timeoutSecs": 60, "lock": "requirements.txt" } }
+```
+
+and use `ext.upper` like any other component. A component reads a JSON control
+message on stdin, reads and writes **Parquet**, and answers with JSON:
+
+```python
+req = json.load(sys.stdin)
+# req["inputs"]["main"], req["output"], req["properties"]
+print(json.dumps({"ok": True, "rows": n}))
+```
+
+**Bulk data is Parquet, never row JSON** - typed, and native at both ends.
+Control messages are JSON because they are small and structured.
+
+**An external id must start with `ext.`**, so a component can never shadow a
+built-in one. A component called `xf.filter` that quietly replaced the real one
+would be the worst failure this could have.
+
+**Policy gates them like anything else.** `components.deny: ["ext.*"]` refuses
+the family; the existing denylist covers external components by construction
+rather than by remembering to.
+
+**Declared, not discovered by running.** Ports, properties and version come from
+the manifest, so "what components exist here" never means executing third-party
+code. `duckle-runner components external` lists them with their manifest and lock
+hashes.
+
+**A component that hangs is killed** at its declared timeout, and a manifest that
+does not parse is reported rather than silently missing from the list.
+
 ### Planning a chunked extract
 
 A single query over a billion-row table holds a snapshot for hours, fails near

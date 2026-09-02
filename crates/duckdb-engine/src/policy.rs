@@ -425,6 +425,18 @@ pub struct Violation {
     pub detail: String,
 }
 
+impl Policy {
+    /// Whether this workspace may use a component (#307).
+    ///
+    /// The same denylist that already covers built-ins, reused rather than
+    /// duplicated: an operator should not learn a second mechanism for
+    /// external components, and a server policy that denies `ext.*` covers
+    /// every one of them by construction rather than by remembering to.
+    pub fn allows_component(&self, component_id: &str) -> bool {
+        !self.denied_components.iter().any(|e| denied(e, component_id))
+    }
+}
+
 /// Does a component id match a deny entry? `code.*` denies the family.
 fn denied(entry: &str, component: &str) -> bool {
     match entry.strip_suffix('*') {

@@ -12161,6 +12161,153 @@ impl DuckdbEngine {
     /// defines process(row) -> dict; the engine wraps it in a harness that reads
     /// the upstream rows as JSON, applies process per row (None drops the row),
     /// and writes the result JSON back for materialization. No Python in-engine.
+    /// #307: run an external component out of process.
+    ///
+    /// Parquet in, Parquet out, JSON control message on stdin. The component
+    /// never sees the pipeline, the database or a secret: it is handed the two
+    /// file paths and its own properties, which is the whole contract and the
+    /// reason a component written in any language can participate.
+    pub(crate) fn run_plugin(
+        &self,
+        db: &Path,
+        spec: &crate::plan::PluginSpec,
+        workspace: &Path,
+        run_id: &str,
+    ) -> Result<String, EngineError> {
+        // Policy first: an external component runs code this workspace did not
+        // write, and finding out it was forbidden after running it is finding
+        // out too late.
+        crate::plugin::check_allowed(Some(workspace), &spec.component_id)
+            .map_err(EngineError::Config)?;
+        let installed = crate::plugin::find(workspace, &spec.component_id).ok_or_else(|| {
+            EngineError::Config(format!(
+                "{} is not installed in this workspace (looked in {}/)",
+                spec.component_id,
+                crate::plugin::DIR
+            ))
+        })?;
+
+        let (in_path, out_path, _) = python_temp_paths(db, &spec.node_id);
+        let in_pq = in_path.with_extension("parquet");
+        let out_pq = out_path.with_extension("parquet");
+        let esc = |p: &Path| p.to_string_lossy().replace(char::from(92), "/").replace(char::from(39), "''");
+        let mut inputs = std::collections::BTreeMap::new();
+        if let Some(from) = &spec.from_view {
+            // An empty upstream still writes a file, so the component sees a
+            // table with the right columns and no rows rather than nothing -
+            // the empty-typed-input case the conformance kit asks for.
+            self.run(
+                Some(db),
+                &format!(
+                    "COPY (SELECT * FROM {}) TO '{}' (FORMAT PARQUET);",
+                    plan::quote_ident(from),
+                    esc(&in_pq)
+                ),
+                false,
+            )?;
+            inputs.insert("main".to_string(), in_pq.display().to_string());
+        }
+
+        let request = crate::plugin::Request {
+            protocol: crate::plugin::PROTOCOL,
+            component: spec.component_id.clone(),
+            version: installed.manifest.version.clone(),
+            properties: spec.properties.clone(),
+            inputs,
+            output: out_pq.display().to_string(),
+            run_id: run_id.to_string(),
+        };
+        let body = serde_json::to_vec(&request)
+            .map_err(|e| EngineError::Other(format!("{}: {e}", spec.component_id)))?;
+
+        let cmd = &installed.manifest.runtime.command;
+        let mut child = std::process::Command::new(&cmd[0]);
+        child
+            .args(&cmd[1..])
+            .current_dir(&installed.dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // No console flash on Windows, like every other spawn here.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            child.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        let mut child = child.spawn().map_err(|e| {
+            EngineError::Config(format!(
+                "{}: cannot start {:?}: {e}",
+                spec.component_id, cmd[0]
+            ))
+        })?;
+        {
+            use std::io::Write;
+            let mut stdin = child.stdin.take().expect("piped");
+            stdin.write_all(&body).map_err(|e| EngineError::Other(e.to_string()))?;
+        }
+        // Deterministic cleanup: a component that hangs is killed at its
+        // declared timeout rather than holding the run open forever.
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(installed.manifest.runtime.timeout_secs.max(1));
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = std::fs::remove_file(&in_pq);
+                    return Err(EngineError::Other(format!(
+                        "{} did not finish within {}s",
+                        spec.component_id, installed.manifest.runtime.timeout_secs
+                    )));
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
+                Err(e) => return Err(EngineError::Other(e.to_string())),
+            }
+        }
+        let out = child.wait_with_output().map_err(|e| EngineError::Other(e.to_string()))?;
+        let _ = std::fs::remove_file(&in_pq);
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        if !out.status.success() {
+            return Err(EngineError::Other(format!(
+                "{} failed: {}",
+                spec.component_id,
+                if stderr.is_empty() { "no message".into() } else { stderr }
+            )));
+        }
+        let reply: crate::plugin::Response = serde_json::from_slice(&out.stdout).map_err(|e| {
+            EngineError::Other(format!(
+                "{} did not answer with a control message ({e}). stderr: {stderr}",
+                spec.component_id
+            ))
+        })?;
+        if !reply.ok {
+            return Err(EngineError::Other(format!(
+                "{}: {}",
+                spec.component_id,
+                reply.error.unwrap_or_else(|| "the component reported a failure".into())
+            )));
+        }
+        if !out_pq.exists() {
+            return Err(EngineError::Other(format!(
+                "{} said it succeeded but wrote no output at {}",
+                spec.component_id,
+                out_pq.display()
+            )));
+        }
+        self.run(
+            Some(db),
+            &format!(
+                "CREATE OR REPLACE TABLE {} AS SELECT * FROM read_parquet('{}');",
+                plan::quote_ident(&spec.node_id),
+                esc(&out_pq)
+            ),
+            false,
+        )?;
+        let _ = std::fs::remove_file(&out_pq);
+        let count = self.count_rows(db, &spec.node_id).unwrap_or(0);
+        Ok(format!("{}: {} row(s) -> {}", spec.component_id, count, spec.node_id))
+    }
+
     pub(crate) fn run_python(
         &self,
         db: &Path,

@@ -470,6 +470,7 @@ pub enum RuntimeSpec {
     Wasm(WasmSpec),
     Javascript(JavaScriptSpec),
     Python(PythonSpec),
+    Plugin(PluginSpec),
     AiChunk(AiChunkSpec),
     AiPii(AiPiiSpec),
     AiLlm(AiLlmSpec),
@@ -1872,6 +1873,7 @@ fn build_stage(
     let mut javascript: Option<JavaScriptSpec> = None;
     let mut jq: Option<JqSpec> = None;
     let mut python: Option<PythonSpec> = None;
+    let mut plugin: Option<PluginSpec> = None;
     let mut ai_chunk: Option<AiChunkSpec> = None;
     let mut ai_pii: Option<AiPiiSpec> = None;
     let mut ai_llm: Option<AiLlmSpec> = None;
@@ -6001,6 +6003,18 @@ fn build_stage(
                 .unwrap_or_else(|| "fail".into()),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id.starts_with("ext.") {
+        // #307: an external component. Its ports and properties come from its
+        // manifest, which the catalog already merged, so nothing here needs to
+        // know what the component does - only how to hand it its input and take
+        // its output back.
+        plugin = Some(PluginSpec {
+            node_id: node.id.clone(),
+            component_id: component_id.to_string(),
+            from_view: inputs.main().map(|v| v.to_string()),
+            properties: props.clone(),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "code.python" {
         // Per-row Python transform. Script must define process(row) -> dict.
         // The scripts-group manifest stores the body under `code`; accept `script`
@@ -6773,6 +6787,7 @@ fn build_stage(
         .or_else(|| wasm.map(RuntimeSpec::Wasm))
         .or_else(|| javascript.map(RuntimeSpec::Javascript))
         .or_else(|| python.map(RuntimeSpec::Python))
+        .or_else(|| plugin.map(RuntimeSpec::Plugin))
         .or_else(|| ai_chunk.map(RuntimeSpec::AiChunk))
         .or_else(|| ai_pii.map(RuntimeSpec::AiPii))
         .or_else(|| ai_llm.map(RuntimeSpec::AiLlm))
