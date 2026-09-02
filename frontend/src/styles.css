@@ -9456,3 +9456,64 @@ select.modal-select:focus {
     font-style: normal;
     opacity: 0.85;
 }
+
+
+/* #314: completions under the SQL field. Anchored to the field rather than the
+   page, so the list follows the textarea when the panel scrolls. */
+.sql-field {
+    position: relative;
+}
+
+.sql-completions {
+    position: absolute;
+    z-index: 20;
+    left: 0;
+    right: 0;
+    margin: 2px 0 0;
+    padding: 4px;
+    list-style: none;
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--duckle-slate-300, #cbd5e1);
+    border-radius: 6px;
+    background: var(--duckle-surface, #fff);
+    box-shadow: 0 6px 18px rgb(0 0 0 / 12%);
+    font-size: 12px;
+}
+
+.sql-completions li {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.sql-completions li.is-active {
+    background: color-mix(in srgb, var(--duckle-maya, #4aa8e0) 18%, transparent);
+}
+
+/* One letter, so the kind is readable without reading. */
+.sql-completion-kind {
+    flex: 0 0 14px;
+    text-align: center;
+    text-transform: uppercase;
+    font-size: 10px;
+    font-weight: 600;
+    opacity: 0.75;
+}
+
+.sql-completion-kind.kind-column { color: var(--duckle-maya, #4aa8e0); }
+.sql-completion-kind.kind-relation { color: var(--duckle-orange, #e08a3c); }
+.sql-completion-kind.kind-parameter { color: var(--duckle-lemon-ink, #8a7a20); }
+
+.sql-completion-text {
+    font-family: var(--duckle-mono, ui-monospace, monospace);
+}
+
+.sql-completion-detail {
+    margin-left: auto;
+    opacity: 0.6;
+    font-size: 11px;
+}

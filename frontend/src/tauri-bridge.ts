@@ -850,6 +850,44 @@ export async function analyzeNodeSql(
     });
 }
 
+/** One suggestion for a cursor position in a node's SQL (#314). */
+export type SqlCompletion = {
+    text: string;
+    kind: 'column' | 'function' | 'keyword' | 'parameter' | 'relation';
+    detail?: string;
+};
+
+/**
+ * #314: what could come next, for the SQL field.
+ *
+ * Cheap on the engine side - a cached function list and a pure ranking - so it
+ * is safe to ask while someone types. Returns nothing rather than throwing when
+ * there is no backend, because a missing suggestion list must never interrupt
+ * typing.
+ */
+export async function completeNodeSql(
+    nodes: Node<DuckleNodeData>[],
+    edges: Edge[],
+    nodeId: string,
+    inputs: Array<[string, Column[]]>,
+    cursor: number,
+): Promise<SqlCompletion[]> {
+    if (!isTauri() && !isWebBackend()) return [];
+    try {
+        return (
+            (await invoke<SqlCompletion[]>('complete_node_sql', {
+                pipeline: { nodes, edges },
+                nodeId,
+                inputs,
+                cursor,
+                limit: 12,
+            })) ?? []
+        );
+    } catch {
+        return [];
+    }
+}
+
 /** A resolved origin column for lineage (#103). */
 export type LineageRoot = { node: string; column: string };
 /** node id -> [output column name, root source columns][]. */

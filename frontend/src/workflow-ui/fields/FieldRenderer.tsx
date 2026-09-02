@@ -8,6 +8,7 @@ import {
     TextField,
     TextareaField,
 } from './PrimitiveFields';
+import SqlField from './SqlField';
 import { FilePathField } from './FilePathField';
 import { ExpressionField } from './ExpressionField';
 import { ColumnField, ColumnsField } from './ColumnField';
@@ -23,6 +24,9 @@ import { PipelineRefField } from './PipelineRefField';
 import { FieldContext } from './FieldContext';
 import { buildContextVars, builtinVars } from '../../run-resolve';
 import type { ContextPayload } from '../../repo-types';
+
+/** Fields whose text is SQL, and therefore worth completing (#314). */
+const SQL_KEYS = new Set(['sql', 'query', 'code']);
 
 type Props = {
     field: Field;
@@ -214,7 +218,18 @@ function renderInput(field: Field, value: unknown, onChange: (v: unknown) => voi
         case 'text':
             return <TextField field={field} value={value as string | undefined} onChange={onChange} />;
         case 'textarea':
-            return (
+            // #314: the SQL-bearing keys get completion; every other textarea
+            // is unchanged. Keyed on the field rather than on the component so
+            // a new SQL-carrying component gets it without being listed here.
+            return SQL_KEYS.has(field.key) ? (
+                <SqlField
+                    value={(value as string | undefined) ?? ''}
+                    onChange={onChange as (v: string) => void}
+                    placeholder={field.placeholder}
+                    rows={field.rows ?? 6}
+                    mono={field.monospace}
+                />
+            ) : (
                 <TextareaField field={field} value={value as string | undefined} onChange={onChange} />
             );
         case 'number':

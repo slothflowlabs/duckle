@@ -706,6 +706,13 @@ keystrokes is one nobody builds muscle memory against.
 list, cached for the process; the columns come from the caller. That is what lets
 it answer on every keystroke when the bind cannot.
 
+**The editor uses it.** A SQL field suggests as you type, with arrow keys, Enter
+or Tab to accept, Escape to dismiss and Ctrl-Space to ask at a fresh position. It
+is still a plain textarea: swapping it for a code editor to add completion would
+change everything about typing in order to change one thing. Requests are
+debounced, and a reply for an earlier keystroke is discarded rather than shown -
+it describes text that is no longer there.
+
 Same analysis from `duckle-runner sql check`, the MCP tools `check_node_sql` and
 `complete_node_sql`, and both editors - one function, so they cannot come to
 disagree. SARIF carries a real

@@ -185,6 +185,7 @@ pub fn run() {
             cancel_pipeline,
             compile_pipeline,
             analyze_node_sql,
+            complete_node_sql,
             describe_node_columns,
             pipeline_column_lineage,
             pipeline_trust_report,
@@ -695,6 +696,24 @@ fn analyze_node_sql(
 ) -> Result<duckle_duckdb_engine::NodeAnalysis, String> {
     engine()?
         .analyze_node_sql(&pipeline, &node_id, &inputs)
+        .map_err(|e| e.to_string())
+}
+
+/// #314: what could come next at a cursor position in a node's SQL.
+///
+/// Cheap by construction - the function list is cached for the process and the
+/// rest is a pure function - so an editor may call it while someone types.
+/// Reads nothing and runs nothing.
+#[tauri::command]
+fn complete_node_sql(
+    pipeline: PipelineDoc,
+    node_id: String,
+    inputs: Vec<(String, Vec<duckle_duckdb_engine::Column>)>,
+    cursor: usize,
+    limit: Option<usize>,
+) -> Result<Vec<duckle_duckdb_engine::sqlcomplete::Completion>, String> {
+    engine()?
+        .complete_node_sql(&pipeline, &node_id, &inputs, cursor, limit.unwrap_or(12))
         .map_err(|e| e.to_string())
 }
 

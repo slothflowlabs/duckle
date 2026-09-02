@@ -1056,6 +1056,27 @@ fn dispatch_cmd(state: &WebState, cmd: &str, body: &[u8]) -> Reply {
                 "problems": problems,
             }))
         }
+        // #314: the same completion the desktop gets, so the web editor is not
+        // a lesser place to write SQL.
+        "complete_node_sql" => {
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let mut doc: PipelineDoc = match serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)) {
+                Ok(d) => d,
+                Err(e) => return respond_err("400 Bad Request", &format!("bad pipeline: {}", e)),
+            };
+            duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
+            let node_id = args.get("nodeId").and_then(Value::as_str).unwrap_or_default().to_string();
+            let inputs: Vec<(String, Vec<duckle_duckdb_engine::Column>)> =
+                serde_json::from_value(args.get("inputs").cloned().unwrap_or(json!([])))
+                    .unwrap_or_default();
+            let cursor = args.get("cursor").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(12) as usize;
+            let engine = DuckdbEngine::new(state.duckdb.clone());
+            match engine.complete_node_sql(&doc, &node_id, &inputs, cursor, limit) {
+                Ok(items) => respond_json(&serde_json::to_value(&items).unwrap_or_default()),
+                Err(e) => respond_err("400 Bad Request", &e.to_string()),
+            }
+        }
         "pipeline_column_lineage" => {
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
             let mut doc: PipelineDoc = match serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)) {
@@ -4647,6 +4668,57 @@ mod tests {
         // And the name that did not work finds nothing, which is what makes
         // this test about the name rather than about sessions in general.
         assert!(console.identify(None, Some(&format!("duckle_sid={sid}"))).is_none());
+    }
+
+    /// #314: the web editor can complete SQL, the same way the desktop does.
+    #[test]
+    fn the_web_editor_completes_a_nodes_sql() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let state = WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from("duckdb"),
+            dist: ws.clone(),
+            host: "0.0.0.0".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "0.0.0.0", Some("s3cret")).unwrap(),
+        };
+        let mut req = request("POST", "/api/cmd/complete_node_sql", Some("Bearer s3cret"));
+        req.body = serde_json::to_vec(&serde_json::json!({
+            "pipeline": { "nodes": [
+                { "id": "q", "type": "transform", "position": {"x":0,"y":0},
+                  "data": { "label": "sql", "componentId": "code.sql",
+                            // A statement where the answer DEPENDS on the
+                            // cursor: a column belongs at the start and a
+                            // relation after FROM, so a request that ignored
+                            // the position could not pass both halves.
+                            "properties": { "sql": "SELECT region FROM " } } }
+            ], "edges": [] },
+            "nodeId": "q",
+            "inputs": [["src", [{ "name": "region", "type": "string" }]]],
+            "cursor": 19
+        }))
+        .unwrap();
+        let reply = route_web(&req, &state);
+        assert_eq!(reply.code(), 200, "{}", String::from_utf8_lossy(&reply.body));
+        let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        let items = body.as_array().expect("a list");
+        // After FROM, only relations belong.
+        assert_eq!(items[0]["kind"], "relation", "{body}");
+        assert!(
+            items.iter().all(|i| i["kind"] == "relation"),
+            "a column was offered where a relation belongs: {body}"
+        );
+
+        // The same request at the start of the statement answers differently,
+        // which is what makes the cursor load-bearing rather than decorative.
+        let mut payload: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+        payload["cursor"] = serde_json::json!(7);
+        let mut at_start = request("POST", "/api/cmd/complete_node_sql", Some("Bearer s3cret"));
+        at_start.body = serde_json::to_vec(&payload).unwrap();
+        let early = route_web(&at_start, &state);
+        let early: serde_json::Value = serde_json::from_slice(&early.body).unwrap();
+        assert_eq!(early[0]["kind"], "column", "{early}");
     }
 
     /// #295: the backfill plan is addressable over the API, and a dry run

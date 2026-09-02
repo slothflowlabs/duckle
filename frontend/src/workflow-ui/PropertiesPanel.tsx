@@ -4,6 +4,7 @@ import type { Edge, Node } from '@xyflow/react';
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, MousePointer2, Workflow } from 'lucide-react';
 import { resolveUpstreamSchema, resolveUpstreamSampleRows, resolveOutputSchema, deriveSchemaFromEngine, diagnosticsFor } from '../schema-resolve';
 import { analyzeNodeSql } from '../tauri-bridge';
+import { setSqlContext } from './fields/sql-context';
 import { buildContextVars, builtinVars, substituteDeep } from '../run-resolve';
 import type { Column, DuckleNodeData } from '../pipeline-types';
 import type {
@@ -185,6 +186,26 @@ export default function PropertiesPanel({
             live = false;
         };
     }, [selected, allNodes, edges]);
+
+    // #314: what a SQL field in this panel can be completed against. Published
+    // when the selection changes, so the field asks about the node the author
+    // is actually editing.
+    useEffect(() => {
+        if (!selected) {
+            setSqlContext(null);
+            return;
+        }
+        setSqlContext({
+            nodes: allNodes,
+            edges,
+            nodeId: selected.id,
+            inputs: edges
+                .filter(e => e.target === selected.id)
+                .map(e => [e.source, resolveOutputSchema(e.source, allNodes, edges)] as [string, Column[]])
+                .filter(([, cols]) => cols.length > 0),
+        });
+        return () => setSqlContext(null);
+    }, [selected, allNodes, edges, derivedTick]);
 
     // #314: what DuckDB objected to about this node's SQL, if anything. Read
     // from the same cache the columns come from, so it lands on the same
