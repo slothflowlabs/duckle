@@ -411,6 +411,8 @@ mod tests {
             parameters: BTreeMap::new(),
             parameter_sources: Vec::new(),
             release_id: None,
+            resource_pool: None,
+            queue_ms: None,
             nodes: BTreeMap::from([(
                 "load".to_string(),
                 ReceiptNode {

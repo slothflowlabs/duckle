@@ -492,9 +492,22 @@ fn run_with(args: Args) -> Result<bool, String> {
         args.retry_of.clone(),
     );
 
-    // #259: the engine logs under the id the receipt was written with, so a
-    // run's log lines join to its receipt and its history record.
-    let engine = engine.with_run_id(&receipt.run_id);
+    // #289: the pool this pipeline belongs to, recorded so a CLI run answers
+    // the same "which pool" as a console or scheduled one.
+    //
+    // `queue_ms` is deliberately absent rather than zero: this path has no
+    // gate to wait on, and a recorded zero would read as "admitted instantly"
+    // rather than "never queued". A one-shot process cannot be bounded by an
+    // in-process semaphore anyway - two invocations do not see each other -
+    // and pretending otherwise would be the more dangerous half-truth.
+    let receipt = duckle_duckdb_engine::retry::RunReceipt {
+        resource_pool: Some(
+            duckle_duckdb_engine::pools::Pools::load(&workspace).resolve(&doc.resource_pool),
+        ),
+        ..receipt
+    };
+    let _ = duckle_duckdb_engine::retry::write(&workspace, &receipt);
+
     // #259: the engine logs under the id the receipt was written with, so a
     // run's log lines join to its receipt and its history record.
     let engine = engine.with_run_id(&receipt.run_id);

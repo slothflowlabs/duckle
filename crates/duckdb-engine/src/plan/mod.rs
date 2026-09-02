@@ -29,6 +29,16 @@ pub struct PipelineDoc {
     pub nodes: Vec<PipelineNode>,
     #[serde(default)]
     pub edges: Vec<PipelineEdge>,
+    /// #289: which admission pool this pipeline is queued in.
+    ///
+    /// A typed field rather than something each caller digs out of the raw
+    /// JSON, because a pool checked at four entry points out of five is worse
+    /// than one checked nowhere - an agent or an API call would bypass exactly
+    /// the protection scheduled runs get, which is the hole the issue names.
+    ///
+    /// Empty is the default pool, which is sized as it always was.
+    #[serde(default, rename = "resourcePool", skip_serializing_if = "String::is_empty")]
+    pub resource_pool: String,
     /// #317: the typed parameter contract, when the pipeline declares one.
     ///
     /// Empty means the #127 behaviour is unchanged: any unresolved `${name}`
@@ -645,6 +655,9 @@ pub fn compile_partial(
         // Carried, not defaulted: a subgraph of a document is in the same
         // format as the document.
         format_version: pipeline.format_version,
+        // Carried for the same reason: a subgraph of a pipeline is queued in
+        // the pool the pipeline chose, not in the default one.
+        resource_pool: pipeline.resource_pool.clone(),
         parameters: Default::default(),
         nodes: pipeline
             .nodes

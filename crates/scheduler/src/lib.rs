@@ -919,7 +919,19 @@ impl Scheduler {
         for (id, pipeline_id) in due {
             let me = self.clone();
             let workspace = workspace.clone();
-            let permit = run_permits().clone();
+            // #289: the pool this pipeline asks for, resolved against what the
+            // workspace (and any server ceiling) actually defines.
+            // A scheduler with no workspace path cannot read a pipeline to
+            // find its pool, so it stays on the default - which is exactly the
+            // behaviour it had before pools existed.
+            // A plan has no single pipeline id, and a scheduler with no
+            // workspace path cannot read one to find its pool: both stay on
+            // the default, which is exactly the behaviour they had before
+            // pools existed.
+            let permit = match (workspace.as_deref(), pipeline_id.as_deref()) {
+                (Some(ws), Some(id)) => pool_permits(ws, &pool_of(ws, id)),
+                _ => run_permits().clone(),
+            };
             tokio::spawn(async move {
                 // Hold a permit for the whole run. Every schedule that comes due
                 // in the same tick used to fire at once, so ten due at midnight
@@ -982,6 +994,50 @@ fn run_permits() -> &'static std::sync::Arc<tokio::sync::Semaphore> {
             .unwrap_or(8);
         std::sync::Arc::new(tokio::sync::Semaphore::new(n))
     })
+}
+
+/// #289: the semaphore for one named pool.
+///
+/// The numbers come from [`duckle_duckdb_engine::pools`], the same definition
+/// the runner's gate reads. Two limiters that each parsed their own config is
+/// how the two schedulers came to disagree about time zones, and a pool that
+/// means 8 here and 1 there is worth less than no pool at all.
+///
+/// The default pool keeps [`run_permits`] - a generous 8 rather than 1 -
+/// because firing due schedules concurrently is long-standing behaviour here
+/// and changing it silently would be a regression dressed as a feature.
+fn pool_permits(workspace: &std::path::Path, pool: &str) -> std::sync::Arc<tokio::sync::Semaphore> {
+    use std::collections::HashMap;
+    if pool == duckle_duckdb_engine::pools::DEFAULT {
+        return run_permits().clone();
+    }
+    static POOLS: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<String, std::sync::Arc<tokio::sync::Semaphore>>>,
+    > = std::sync::OnceLock::new();
+    let map = POOLS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let mut map = map.lock().unwrap_or_else(|p| p.into_inner());
+    map.entry(pool.to_string())
+        .or_insert_with(|| {
+            let n = duckle_duckdb_engine::pools::Pools::load(workspace).limit(pool);
+            std::sync::Arc::new(tokio::sync::Semaphore::new(n))
+        })
+        .clone()
+}
+
+/// Which pool a scheduled pipeline belongs to.
+///
+/// Reads the document, because the pool is a property of the pipeline rather
+/// than of the schedule - a pipeline moved between pools should not need every
+/// schedule that fires it edited too.
+fn pool_of(workspace: &std::path::Path, pipeline_id: &str) -> String {
+    let pools = duckle_duckdb_engine::pools::Pools::load(workspace);
+    let path = workspace.join("pipelines").join(format!("{pipeline_id}.json"));
+    let asked = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .map(|v| duckle_duckdb_engine::pools::requested(&v))
+        .unwrap_or_default();
+    pools.resolve(&asked)
 }
 
 /// Advance next_run_at to the next occurrence strictly after `now`.

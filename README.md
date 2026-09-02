@@ -764,6 +764,48 @@ does.
 monitored. Nothing prunes `runs/`, so a workspace that has ever run thousands of
 pipelines would otherwise emit thousands of label values forever.
 
+### Named execution pools
+
+One heavy join should not have to serialise eight cheap HTTP jobs. Name the kinds
+of work in `<workspace>/.duckle/pools.json`:
+
+```json
+{ "heavy":   { "maxConcurrentRuns": 1 },
+  "network": { "maxConcurrentRuns": 8 },
+  "ai":      { "maxConcurrentRuns": 16 } }
+```
+
+and a pipeline picks one:
+
+```json
+{ "name": "registry-parse", "resourcePool": "heavy", "nodes": [ ... ] }
+```
+
+**Admission only.** A pool answers *may this run start now*. What a run may then
+use - threads, memory, temp disk - is the existing `resources` block and is
+untouched; otherwise a pipeline could widen its own memory limit by choosing a
+different pool.
+
+**A pipeline may choose a pool, never widen one.** Point `DUCKLE_POOLS_FILE` at a
+server-authoritative file and a workspace can select among those pools and ask
+for *less*, never more; a name the server does not define falls back to `default`
+rather than becoming a new unbounded pool.
+
+**One definition, two gates.** The runner gates with a condvar and the scheduler
+with a tokio semaphore because one is sync and the other async - but both read
+the same numbers, because two limiters each parsing their own config is how the
+two schedulers came to disagree about time zones.
+
+Every run records `resourcePool` and, where it actually waited, `queueMs` - a
+pool that is never saturated and one that queues for ten minutes are otherwise
+indistinguishable. `/metrics` carries `duckle_pool_permits_free{pool="..."}`,
+because a network pool at 8/8 and an idle heavy pool sum to something that looks
+half busy.
+
+**A separate `duckle-runner` invocation is a separate process** and an in-process
+semaphore cannot bound it. That path records the pool it belongs to and no queue
+time, because it never queued.
+
 ### Which tested version is running? (`release`)
 
 ```bash

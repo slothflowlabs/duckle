@@ -187,12 +187,65 @@ fn max_concurrent_runs() -> usize {
         .unwrap_or(1)
 }
 
+/// #289: one [`RunGate`] per named pool.
+///
+/// Built once at startup from the workspace's pools, because a gate created
+/// per request would bound nothing - each request would get its own permits.
+struct Gates {
+    by_pool: std::collections::HashMap<String, RunGate>,
+    pools: duckle_duckdb_engine::pools::Pools,
+}
+
+impl Gates {
+    fn new(pools: duckle_duckdb_engine::pools::Pools) -> Gates {
+        let by_pool = pools
+            .as_map()
+            .iter()
+            .map(|(name, limit)| (name.clone(), RunGate::new(*limit)))
+            .collect();
+        Gates { by_pool, pools }
+    }
+
+    /// Wait for a permit in the pool this pipeline asked for.
+    ///
+    /// An unknown name resolves to `default` rather than to a new pool, so a
+    /// pipeline cannot opt out of admission control by inventing one.
+    fn acquire(&self, asked: &str) -> (RunPermit<'_>, String, u64) {
+        let pool = self.pools.resolve(asked);
+        let gate = self.by_pool.get(&pool).unwrap_or_else(|| {
+            self.by_pool
+                .get(duckle_duckdb_engine::pools::DEFAULT)
+                .expect("the default pool always exists")
+        });
+        // How long the run waited, which is the number an operator sizing a
+        // pool actually needs - a pool that is never saturated and one that
+        // queues for ten minutes look identical without it.
+        let queued = std::time::Instant::now();
+        let permit = gate.acquire();
+        (permit, pool, queued.elapsed().as_millis() as u64)
+    }
+
+    /// Free and total permits, per pool, for #300's metrics.
+    fn permits(&self) -> Vec<(String, usize, usize)> {
+        let mut out: Vec<(String, usize, usize)> = self
+            .by_pool
+            .iter()
+            .map(|(name, gate)| {
+                let (free, total) = gate.permits();
+                (name.clone(), free, total)
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+}
+
 struct State {
     workspace: PathBuf,
     duckdb: PathBuf,
     /// Bounds concurrent pipeline execution. Defaults to one at a time; raise
     /// with DUCKLE_MAX_CONCURRENT_RUNS. See [`RunGate`].
-    run_lock: RunGate,
+    run_lock: Gates,
     /// Pipeline ids currently executing, so the console can show a live
     /// "Running" status (discussion #155). Populated for the duration of a run.
     running: Mutex<std::collections::HashSet<String>>,
@@ -316,7 +369,7 @@ pub fn run() -> Result<(), String> {
     let state = Arc::new(State {
         workspace: workspace.clone(),
         duckdb: duckdb.clone(),
-        run_lock: RunGate::new(max_concurrent_runs()),
+        run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::load(&workspace)),
         running: Mutex::new(std::collections::HashSet::new()),
         runs: Mutex::new(std::collections::HashMap::new()),
         console,
@@ -434,7 +487,7 @@ struct WebState {
     host: String,
     /// Bounds concurrent runs from the browser. One at a time by default; raise
     /// with DUCKLE_MAX_CONCURRENT_RUNS. See [`RunGate`].
-    run_lock: RunGate,
+    run_lock: Gates,
     /// Who may use this editor. Same policy object the console uses, so one
     /// set of accounts covers both.
     console: console_auth::Console,
@@ -487,7 +540,7 @@ pub fn run_web() -> Result<(), String> {
         duckdb: duckdb.clone(),
         dist: dist.clone(),
         host: args.host.clone(),
-        run_lock: RunGate::new(max_concurrent_runs()),
+        run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::load(&workspace)),
         console,
     });
     let addr = format!("{}:{}", args.host, args.port);
@@ -863,9 +916,10 @@ fn dispatch_cmd(state: &WebState, cmd: &str, body: &[u8]) -> Reply {
             duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
             duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
             let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
-            let _guard = state.run_lock.acquire();
+            let (_guard, pool, queued_ms) = state.run_lock.acquire(&doc.resource_pool);
             let engine = DuckdbEngine::new(state.duckdb.clone());
-            let receipt = begin_editor_run(&state.workspace, &doc, &name, "web");
+            let receipt =
+                begin_editor_run(&state.workspace, &doc, &name, "web", Some((pool, queued_ms)));
             let result = engine.execute_pipeline_named(&doc, &name);
             duckle_duckdb_engine::retry::finish(
                 &state.workspace,
@@ -1109,10 +1163,13 @@ fn begin_editor_run(
     doc: &PipelineDoc,
     name: &str,
     trigger: &str,
+    // #289: recorded on the receipt so an editor or streaming run answers the
+    // same "which pool, and how long did it wait" as a scheduled one.
+    admission: Option<(String, u64)>,
 ) -> duckle_duckdb_engine::retry::RunReceipt {
     let hash = duckle_duckdb_engine::retry::pipeline_hash(doc);
     let run_id = duckle_duckdb_engine::retry::new_run_id(name, trigger);
-    duckle_duckdb_engine::retry::begin(
+    let receipt = duckle_duckdb_engine::retry::begin(
         workspace,
         &run_id,
         trigger,
@@ -1120,7 +1177,19 @@ fn begin_editor_run(
         &workspace.join("pipelines").join(format!("{name}.json")).display().to_string(),
         &hash,
         None,
-    )
+    );
+    match admission {
+        None => receipt,
+        Some((pool, queue_ms)) => {
+            let receipt = duckle_duckdb_engine::retry::RunReceipt {
+                resource_pool: Some(pool),
+                queue_ms: Some(queue_ms),
+                ..receipt
+            };
+            let _ = duckle_duckdb_engine::retry::write(workspace, &receipt);
+            receipt
+        }
+    }
 }
 
 /// `event: result` line. The frontend turns these back into the same live
@@ -1162,7 +1231,7 @@ fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(
     stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
     stream.flush().map_err(|e| e.to_string())?;
 
-    let _guard = state.run_lock.acquire();
+    let (_guard, pool, queued_ms) = state.run_lock.acquire(&doc.resource_pool);
     // A second handle to the same socket for the event callback (the run is
     // synchronous, so events stream first, the result line follows).
     let mut ev = stream.try_clone().map_err(|e| e.to_string())?;
@@ -1174,6 +1243,7 @@ fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(
         &doc,
         &name,
         if target.is_some() { "web-partial" } else { "web" },
+        Some((pool, queued_ms)),
     );
     let result = engine.execute_pipeline_with_events(&doc, target.as_deref(), Some(&name), |evt| {
         if let Ok(j) = serde_json::to_string(&evt) {
@@ -1626,13 +1696,13 @@ fn metrics_body(state: &State) -> String {
             // error here would make a fresh deployment look down.
             String::new()
         });
-    let (free, total) = state.run_lock.permits();
+    let per_pool = state.run_lock.permits();
     // Permits in use, not distinct pipeline ids. `state.running` is a set of
     // ids for the console's "Running" badge, so two runs of one pipeline count
     // once and the first to finish removes the id while the other is still
     // going. Saturation is what an operator alerts on, and the gate knows it
     // exactly.
-    let in_flight = total.saturating_sub(free);
+    let in_flight: usize = per_pool.iter().map(|(_, free, total)| total.saturating_sub(*free)).sum();
     let named = state.running.lock().map(|s| s.len()).unwrap_or(0);
     let accepted = state.runs.lock().map(|r| r.len()).unwrap_or(0);
     // Written line by line rather than as one continued string literal: a `\`
@@ -1648,13 +1718,13 @@ fn metrics_body(state: &State) -> String {
         ),
         (
             "duckle_run_permits_total",
-            "Pipelines this process will run at once (DUCKLE_MAX_CONCURRENT_RUNS).",
-            total,
+            "Run slots across every pool.",
+            per_pool.iter().map(|(_, _, total)| *total).sum::<usize>(),
         ),
         (
             "duckle_run_permits_free",
-            "Permits available. Zero for any length of time means runs are queueing.",
-            free,
+            "Slots available. Zero for any length of time means runs are queueing.",
+            per_pool.iter().map(|(_, free, _)| *free).sum::<usize>(),
         ),
         (
             "duckle_runs_tracked",
@@ -1665,6 +1735,24 @@ fn metrics_body(state: &State) -> String {
         out.push_str(&format!("# HELP {name} {help}
 # TYPE {name} gauge
 {name} {value}
+"));
+    }
+    // #289: per-pool, labelled. The totals above cannot answer "which pool is
+    // saturated", which is the only question worth asking once there is more
+    // than one - a network pool at 8/8 and a heavy pool idle sum to something
+    // that looks half busy.
+    out.push_str("# HELP duckle_pool_permits_total Run slots in this pool.
+# TYPE duckle_pool_permits_total gauge
+");
+    for (pool, _, total) in &per_pool {
+        out.push_str(&format!("duckle_pool_permits_total{{pool=\"{pool}\"}} {total}
+"));
+    }
+    out.push_str("# HELP duckle_pool_permits_free Slots free in this pool. Zero for any length of time means runs are queueing here.
+# TYPE duckle_pool_permits_free gauge
+");
+    for (pool, free, _) in &per_pool {
+        out.push_str(&format!("duckle_pool_permits_free{{pool=\"{pool}\"}} {free}
 "));
     }
     out
@@ -3426,7 +3514,7 @@ fn execute_one_with(
 
     let id = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "pipeline".into());
 
-    let _guard = state.run_lock.acquire();
+    let (_guard, pool, queued_ms) = state.run_lock.acquire(&doc.resource_pool);
 
     // Mark this pipeline as running for the duration of the execution so the
     // console can show a live "Running" status (discussion #155). The guard
@@ -3500,6 +3588,9 @@ fn execute_one_with(
     let receipt = duckle_duckdb_engine::retry::RunReceipt {
         parameters: recorded_params,
         parameter_sources,
+        // #289: which pool admitted it, and how long it waited to be admitted.
+        resource_pool: Some(pool),
+        queue_ms: Some(queued_ms),
         ..receipt
     };
     let _ = duckle_duckdb_engine::retry::write(&state.workspace, &receipt);
@@ -3916,6 +4007,7 @@ mod tests {
         migrate_legacy_schedules, normalize_cron, read_pipeline_file, read_request,
         save_schedule_at, web_gate, confine_to_workspace, RunGate, State, WebState, HEALTH_PATH, MAX_BODY,
         OIDC_CALLBACK_PATH, OIDC_LOGIN_PATH,
+        Gates,
     };
     use std::sync::Mutex;
     use duckle_duckdb_engine::schedules::{self, ScheduleKind};
@@ -4215,7 +4307,7 @@ mod tests {
         std::sync::Arc::new(State {
             workspace: ws.to_path_buf(),
             duckdb: std::path::PathBuf::from("duckdb"),
-            run_lock: RunGate::new(1),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
             running: Mutex::new(std::collections::HashSet::new()),
             runs: Mutex::new(std::collections::HashMap::new()),
             console: console_auth::Console::configure(ws, "0.0.0.0", Some("s3cret")).unwrap(),
@@ -4302,6 +4394,86 @@ mod tests {
             crate::console_auth::Role::Viewer.allows(role),
             "a viewer cannot scrape; requirement is {role:?}"
         );
+    }
+
+    /// #289: a pool of one admits one run at a time, and a bigger pool admits
+    /// more - measured on the real gate, not asserted from the config.
+    #[test]
+    fn a_pool_bounds_what_runs_at_once() {
+        use std::collections::BTreeMap;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let mut limits = BTreeMap::new();
+        limits.insert("heavy".to_string(), 1usize);
+        limits.insert("network".to_string(), 4usize);
+        let gates = std::sync::Arc::new(super::Gates::new(
+            duckle_duckdb_engine::pools::Pools::from_limits(limits),
+        ));
+
+        for (pool, cap) in [("heavy", 1usize), ("network", 4usize)] {
+            let peak = std::sync::Arc::new(AtomicUsize::new(0));
+            let live = std::sync::Arc::new(AtomicUsize::new(0));
+            let mut handles = Vec::new();
+            for _ in 0..8 {
+                let gates = gates.clone();
+                let peak = peak.clone();
+                let live = live.clone();
+                handles.push(std::thread::spawn(move || {
+                    let (_permit, got, _waited) = gates.acquire(pool);
+                    assert_eq!(got, pool);
+                    let now = live.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    live.fetch_sub(1, Ordering::SeqCst);
+                }));
+            }
+            for h in handles {
+                h.join().unwrap();
+            }
+            assert_eq!(
+                peak.load(Ordering::SeqCst),
+                cap,
+                "pool {pool} admitted the wrong number at once"
+            );
+        }
+    }
+
+    /// A pipeline naming a pool nobody defined is admitted to the default
+    /// rather than to a new unbounded one.
+    #[test]
+    fn an_invented_pool_does_not_escape_admission_control() {
+        use std::collections::BTreeMap;
+        let mut limits = BTreeMap::new();
+        limits.insert("heavy".to_string(), 1usize);
+        let gates = super::Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(limits));
+        let (_permit, got, _) = gates.acquire("i-made-this-up");
+        assert_eq!(got, duckle_duckdb_engine::pools::DEFAULT);
+    }
+
+    /// Every entry point that starts a run goes through a pool.
+    ///
+    /// The issue's own warning: a pool applied to scheduled runs but not to the
+    /// API would let an agent bypass exactly the protection it exists for. This
+    /// reads the source rather than trusting a review, because the failure is
+    /// an acquire site that was never edited.
+    #[test]
+    fn no_run_path_acquires_without_naming_a_pool() {
+        let src = include_str!("serve.rs");
+        for (n, line) in src.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            // `let ... = state.run_lock.acquire(...)`, so the test does not
+            // match its own assertion text below.
+            if trimmed.starts_with("let ") && line.contains("run_lock.acquire(") {
+                assert!(
+                    line.contains("resource_pool"),
+                    "serve.rs:{}: a run is admitted without naming a pool: {}",
+                    n + 1,
+                    line.trim()
+                );
+            }
+        }
     }
 
     /// Whatever a login hands the browser, the console must find it.
@@ -4691,7 +4863,7 @@ mod tests {
             duckdb: std::path::PathBuf::from("duckdb"),
             dist: ws.clone(),
             host: "0.0.0.0".into(),
-            run_lock: RunGate::new(1),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
             console: console_auth::Console::configure(&ws, "0.0.0.0", Some("s3cret")).unwrap(),
         };
 
@@ -4898,7 +5070,7 @@ mod tests {
         let state = State {
             workspace: ws_canon.clone(),
             duckdb: std::path::PathBuf::from("duckdb"),
-            run_lock: RunGate::new(1),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
             running: Mutex::new(std::collections::HashSet::new()),
             runs: Mutex::new(std::collections::HashMap::new()),
             console: console_auth::Console::configure(&ws_canon, "127.0.0.1", None).unwrap(),

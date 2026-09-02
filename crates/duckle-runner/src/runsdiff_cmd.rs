@@ -154,6 +154,8 @@ mod tests {
             parameters: Default::default(),
             parameter_sources: Default::default(),
             release_id: None,
+            resource_pool: None,
+            queue_ms: None,
             nodes: Default::default(),
         }
     }

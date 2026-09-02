@@ -156,6 +156,21 @@ pub struct RunReceipt {
     /// guess made here about the name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parameters: BTreeMap<String, String>,
+    /// The admission pool this run was queued in (#289).
+    ///
+    /// Absent for a run that predates pools or went through a path with no
+    /// gate. Recorded because "which pool was this in" is the first question
+    /// when a pipeline is slower than expected and the answer is that it spent
+    /// four minutes waiting rather than running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_pool: Option<String>,
+    /// How long the run waited for a permit, in milliseconds.
+    ///
+    /// Separate from duration, which is time spent running. A pool that is
+    /// never saturated and one that queues for ten minutes are
+    /// indistinguishable without this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_ms: Option<u64>,
     /// The release this run was produced by, when the workspace has an active
     /// one (#297 criterion 5).
     ///
@@ -230,6 +245,8 @@ pub fn begin(
         ),
         parameters: BTreeMap::new(),
         parameter_sources: Vec::new(),
+        resource_pool: None,
+        queue_ms: None,
         nodes: BTreeMap::new(),
     };
     // Best effort: a run that cannot record itself is still a run that happens.
@@ -701,6 +718,8 @@ mod tests {
             parameters: Default::default(),
             parameter_sources: Vec::new(),
             release_id: None,
+            resource_pool: None,
+            queue_ms: None,
             nodes: nodes
                 .iter()
                 .map(|(id, st, key, kind)| {
