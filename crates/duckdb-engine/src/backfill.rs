@@ -68,6 +68,49 @@ impl State {
     }
 }
 
+/// What kind of slice a ledger holds.
+///
+/// #306: a chunk is a slice with a different generator, so it is the same
+/// ledger with the same lifecycle - requested/running/succeeded/failed, retry,
+/// restart reconciliation, run ids, provenance - rather than a second one that
+/// would quietly drift from this one. Only what a slice IS differs: a partition
+/// binds parameters over a time window, a chunk binds a predicate over a key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    /// A window of a partitioned pipeline (#295).
+    #[default]
+    Partition,
+    /// A bounded read of one source, by predicate (#306).
+    Chunk,
+}
+
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Partition => "partition",
+            Kind::Chunk => "chunk",
+        }
+    }
+}
+
+/// The durable output a slice produced.
+///
+/// #306: "the query finished" is not "the slice succeeded". A process that dies
+/// between the read and the commit would otherwise leave a slice marked done
+/// whose output is not there, and the retry that is supposed to fix exactly
+/// that would skip it - silently. So the file is committed and hashed BEFORE
+/// the ledger moves, and this is what was committed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SliceArtifact {
+    pub uri: String,
+    pub hash: String,
+    pub bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PartitionRun {
@@ -95,6 +138,16 @@ pub struct PartitionRun {
     /// work is already done instead of doing it again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurrence: Option<String>,
+    /// #306: what this slice READS, when it is a chunk. A WHERE fragment over
+    /// the key, generated once and stored, so a retry sends the same bytes the
+    /// first attempt did rather than regenerating them from bounds the source
+    /// may have grown past.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<String>,
+    /// #306: what this slice PRODUCED, committed and hashed before the state
+    /// moved to succeeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<SliceArtifact>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,6 +165,16 @@ pub struct Backfill {
     /// The process that is executing it, when one is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
+    /// #306. Defaulted rather than required, so every ledger written before
+    /// chunks existed still loads and still reads as what it is.
+    #[serde(default)]
+    pub kind: Kind,
+    /// The source node a chunked extract reads, when this is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_node: Option<String>,
+    /// Where a chunked extract stages its parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staging: Option<String>,
     pub partitions: Vec<PartitionRun>,
 }
 
@@ -143,6 +206,50 @@ impl Backfill {
             }
         }
         n
+    }
+
+    /// #306: a slice is only still succeeded if what it produced is still there.
+    ///
+    /// A crash between the read and the commit cannot leave a bad `succeeded`:
+    /// [`commit`] hashes and then renames, so an incomplete part is never at the
+    /// final path. What this catches is the output going away or changing
+    /// afterwards, which a retry must treat as work to redo rather than skip -
+    /// the exact failure resumability exists to prevent, and the one that would
+    /// otherwise be silent.
+    ///
+    /// `deep` re-hashes every part. Off, the check is existence and length,
+    /// which is what crash-safety needs and costs nothing. On, it reads every
+    /// byte, which is the only thing that catches a file edited in place, and
+    /// on a chunked extract that means reading the whole extract again.
+    pub fn recheck_artifacts(&mut self, deep: bool) -> Vec<String> {
+        let mut reset = Vec::new();
+        for p in self.partitions.iter_mut() {
+            if p.state != State::Succeeded {
+                continue;
+            }
+            let Some(a) = p.artifact.clone() else { continue };
+            let wrong = match std::fs::metadata(&a.uri) {
+                Err(_) => Some("its output is gone".to_string()),
+                Ok(m) if m.len() != a.bytes => {
+                    Some(format!("its output is {} bytes and {} were committed", m.len(), a.bytes))
+                }
+                Ok(_) if deep => match hash_file(Path::new(&a.uri)) {
+                    Some(h) if !h.eq_ignore_ascii_case(&a.hash) => {
+                        Some("its output no longer hashes to what was committed".to_string())
+                    }
+                    None => Some("its output could not be read".to_string()),
+                    Some(_) => None,
+                },
+                Ok(_) => None,
+            };
+            if let Some(why) = wrong {
+                p.state = State::Requested;
+                p.error = Some(format!("must be redone: {why}"));
+                p.artifact = None;
+                reset.push(p.key.clone());
+            }
+        }
+        reset
     }
 
     pub fn cancel(&mut self) -> usize {
@@ -196,15 +303,79 @@ pub fn occurrence_id(
 /// "has this been done" is a question about the work, not about which backfill
 /// happened to ask. A restart that recreates a plan, or two schedules firing
 /// the same occurrence, both land here.
-pub fn already_succeeded(workspace: &Path, occurrence: &str) -> Option<(String, String)> {
+///
+/// Returns the slice itself, not just its run id: a chunk's output is the
+/// point of reusing it (#306), and a reuse that forgot the artifact would mark
+/// the new slice succeeded with nothing to show for it.
+pub fn already_succeeded(workspace: &Path, occurrence: &str) -> Option<(String, PartitionRun)> {
     for b in list(workspace) {
         for p in &b.partitions {
             if p.state == State::Succeeded && p.occurrence.as_deref() == Some(occurrence) {
-                return Some((b.id.clone(), p.run_id.clone().unwrap_or_default()));
+                return Some((b.id.clone(), p.clone()));
             }
         }
     }
     None
+}
+
+/// sha256 of a file, streamed.
+pub fn hash_file(path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut h = Sha256::new();
+    // Streamed rather than read to a Vec: a chunk part is the size of a chunk,
+    // and the whole point of chunking is that the whole thing does not fit
+    // comfortably in memory.
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        match f.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => h.update(&buf[..n]),
+            Err(_) => return None,
+        }
+    }
+    Some(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Publish a slice's output, and say what was published.
+///
+/// The order is the rule (#306): the bytes are flushed to disk, then hashed,
+/// then moved into place. Nothing is ever at the final path that was not
+/// complete when it got there, so a process killed at any point leaves either
+/// no part or a whole one, and never a truncated file that a later run would
+/// count as done.
+pub fn commit(tmp: &Path, final_path: &Path, rows: Option<u64>) -> Result<SliceArtifact, String> {
+    let bytes = {
+        // Opened for WRITE even though nothing is written: FlushFileBuffers
+        // needs write access, so a read-only handle fails the fsync below with
+        // "Access is denied" on Windows and with nothing at all on Unix.
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(tmp)
+            .map_err(|e| format!("{}: {e}", tmp.display()))?;
+        // fsync before hashing and renaming: a rename is atomic with respect to
+        // other readers, not with respect to power loss, and the file's own
+        // contents have to be durable before its name says they are.
+        f.sync_all().map_err(|e| format!("{}: {e}", tmp.display()))?;
+        f.metadata().map_err(|e| format!("{}: {e}", tmp.display()))?.len()
+    };
+    let hash = hash_file(tmp).ok_or_else(|| format!("{}: could not be hashed", tmp.display()))?;
+    if let Some(parent) = final_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    // Rename, never remove-then-rename: on Windows a rename over an existing
+    // file replaces it, and unlinking first opens a window where the part is
+    // simply absent.
+    std::fs::rename(tmp, final_path)
+        .map_err(|e| format!("{} -> {}: {e}", tmp.display(), final_path.display()))?;
+    Ok(SliceArtifact {
+        uri: final_path.display().to_string().replace(char::from(92), "/"),
+        hash,
+        bytes,
+        rows,
+    })
 }
 
 pub fn dir(workspace: &Path) -> PathBuf {
@@ -313,6 +484,9 @@ mod tests {
             release_id: Some("rel-1".into()),
             max_concurrent: 4,
             pid: Some(std::process::id()),
+            kind: Kind::Partition,
+            chunk_node: None,
+            staging: None,
             partitions: parts
                 .into_iter()
                 .map(|p| PartitionRun {
@@ -324,6 +498,8 @@ mod tests {
                     finished_at: None,
                     params: p.params,
                     occurrence: None,
+                    predicate: None,
+                    artifact: None,
                 })
                 .collect(),
         }
@@ -374,7 +550,9 @@ mod tests {
         save(tmp.path(), &first).unwrap();
 
         let found = already_succeeded(tmp.path(), &occ);
-        assert_eq!(found, Some(("bf-first".to_string(), "run-a".to_string())));
+        let (from, slice) = found.expect("an identical slice that succeeded was not found");
+        assert_eq!(from, "bf-first");
+        assert_eq!(slice.run_id.as_deref(), Some("run-a"));
 
         // A slice that only FAILED is not done, and must be retried rather
         // than skipped.
@@ -384,7 +562,7 @@ mod tests {
         second.partitions[0].occurrence = Some(other.clone());
         second.partitions[0].state = State::Failed;
         save(tmp.path(), &second).unwrap();
-        assert_eq!(already_succeeded(tmp.path(), &other), None);
+        assert!(already_succeeded(tmp.path(), &other).is_none());
     }
 
     #[test]
@@ -488,4 +666,111 @@ mod tests {
         assert!(b.is_done());
         assert_eq!(b.counts().get("succeeded"), Some(&2));
     }
+
+    /// A chunk slice writes a file, and the file is what "succeeded" means.
+    #[test]
+    fn a_part_is_durable_and_hashed_before_it_is_named() {
+        let dir = std::env::temp_dir().join(format!("duckle-commit-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let tmp = dir.join("part-0.tmp");
+        let out = dir.join("part-0.parquet");
+        std::fs::write(&tmp, b"chunk one").unwrap();
+
+        let a = commit(&tmp, &out, Some(9)).unwrap();
+
+        assert!(!tmp.exists(), "the temp file is still there, so the move was a copy");
+        assert!(out.exists(), "the part is not at its final path");
+        assert_eq!(a.bytes, 9);
+        assert_eq!(a.rows, Some(9));
+        assert_eq!(a.hash, hash_file(&out).unwrap(), "the recorded hash is not the file's");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn one_chunk(uri: &str, hash: &str, bytes: u64) -> Backfill {
+        let mut b = plan(("2020-01-01", "2020-01-01"));
+        b.kind = Kind::Chunk;
+        b.partitions[0].state = State::Succeeded;
+        b.partitions[0].predicate = Some("id >= 0 AND id < 10".into());
+        b.partitions[0].artifact = Some(SliceArtifact {
+            uri: uri.into(),
+            hash: hash.into(),
+            bytes,
+            rows: None,
+        });
+        b
+    }
+
+    /// The failure resumability exists to prevent: a slice marked done whose
+    /// output is not there, which a retry would skip.
+    #[test]
+    fn a_succeeded_slice_whose_output_vanished_is_redone() {
+        let mut b = one_chunk("/no/such/part.parquet", "deadbeef", 9);
+        let reset = b.recheck_artifacts(false);
+        assert_eq!(reset.len(), 1, "a missing part was left as succeeded");
+        assert_eq!(b.partitions[0].state, State::Requested);
+        assert!(b.partitions[0].artifact.is_none(), "a gone artifact is still recorded");
+    }
+
+    /// Length alone catches the truncation case, without reading the file.
+    #[test]
+    fn a_short_output_is_redone_without_reading_it() {
+        let dir = std::env::temp_dir().join(format!("duckle-short-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let f = dir.join("part.parquet");
+        std::fs::write(&f, b"tiny").unwrap();
+        let mut b = one_chunk(&f.display().to_string(), &hash_file(&f).unwrap(), 999);
+        assert_eq!(b.recheck_artifacts(false).len(), 1, "a short part was left as succeeded");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// And the case only a re-read can see: same length, different bytes.
+    #[test]
+    fn an_edited_output_is_caught_only_by_the_deep_check() {
+        let dir = std::env::temp_dir().join(format!("duckle-edited-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let f = dir.join("part.parquet");
+        std::fs::write(&f, b"aaaa").unwrap();
+        let recorded = hash_file(&f).unwrap();
+        std::fs::write(&f, b"bbbb").unwrap();
+
+        let mut shallow = one_chunk(&f.display().to_string(), &recorded, 4);
+        assert!(
+            shallow.recheck_artifacts(false).is_empty(),
+            "the cheap check claimed to detect an edit it cannot see"
+        );
+        let mut deep = one_chunk(&f.display().to_string(), &recorded, 4);
+        assert_eq!(deep.recheck_artifacts(true).len(), 1, "the deep check missed an edited part");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every ledger written before chunks existed must still load, and read as
+    /// what it is rather than as a chunked extract with no chunks.
+    #[test]
+    fn a_ledger_written_before_chunks_existed_still_loads() {
+        let old = serde_json::json!({
+            "id": "bf-accounts-1",
+            "pipeline": "accounts",
+            "pipelinePath": "pipelines/accounts.json",
+            "createdAt": "2026-08-01T00:00:00Z",
+            "maxConcurrent": 4,
+            "partitions": [{
+                "key": "2020-01-01",
+                "state": "succeeded",
+                "attempts": 1,
+                "params": { "window_start": "2020-01-01" }
+            }]
+        });
+        let b: Backfill = serde_json::from_value(old).expect("an existing ledger no longer loads");
+        assert_eq!(b.kind, Kind::Partition);
+        assert_eq!(b.partitions[0].state, State::Succeeded);
+        assert!(b.partitions[0].predicate.is_none());
+        // And a partition slice has no artifact, so the rule that a slice is
+        // only succeeded once its output is committed must not demote it.
+        let mut b = b;
+        assert!(
+            b.recheck_artifacts(true).is_empty(),
+            "a partition slice was reset for not having a chunk's artifact"
+        );
+    }
+
 }

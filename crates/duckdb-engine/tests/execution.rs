@@ -21370,3 +21370,113 @@ fn src_rest_keeps_the_original_response_named_by_its_hash() {
     let after = std::fs::read_dir(&raw_dir).unwrap().flatten().count();
     assert_eq!(after, 1, "the same body must not make a second capture");
 }
+
+/// #306: a chunked extract, run for real, end to end.
+///
+/// The unit tests cover the predicates and the ledger rules. This covers the
+/// property that actually matters and that no amount of SQL inspection proves:
+/// N bounded reads together contain every source row EXACTLY once - no gap
+/// between two chunks, no row counted by both - and a part that goes missing is
+/// redone rather than skipped.
+///
+/// Both halves have failed before in this design. An off-by-one in a half-open
+/// range loses one row per chunk and the total still looks plausible; a slice
+/// marked done whose output is gone makes a retry silently produce a short
+/// extract.
+#[test]
+fn a_chunked_extract_reads_every_row_exactly_once_and_resumes() {
+    let _ = engine_or_skip!();
+    let duckdb = std::path::PathBuf::from(std::env::var("DUCKLE_DUCKDB_BIN").unwrap());
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let srcdb = out_path(ws, "src.duckdb");
+    duckdb_exec(
+        &srcdb,
+        "CREATE TABLE orders AS SELECT i AS id, 'name-' || i AS name FROM range(1, 101) t(i)",
+    );
+
+    let pipeline = json!({
+        "nodes": [ node("db", "src.duckdb", json!({
+            "database": srcdb,
+            "tableName": "orders",
+            // 100 rows in chunks of 30 is deliberately not a whole number of
+            // chunks: an off-by-one at the last boundary is the easy mistake.
+            "chunking": { "type": "range", "column": "id", "chunkSize": 30, "concurrency": 2 }
+        })) ],
+        "edges": []
+    });
+    let ppath = ws.join("extract.json");
+    std::fs::write(&ppath, serde_json::to_string_pretty(&pipeline).unwrap()).unwrap();
+
+    let plan = duckle_duckdb_engine::chunk_exec::plan_for(
+        ws,
+        &ppath,
+        "db",
+        &duckle_duckdb_engine::chunking::Bounds::Range { min: 1, max: 100 },
+        0,
+    )
+    .expect("planning a chunked extract");
+    assert_eq!(plan.partitions.len(), 4, "1..100 by 30 is four chunks");
+
+    let ran = std::sync::Mutex::new(Vec::<String>::new());
+    let done = duckle_duckdb_engine::chunk_exec::execute(ws, &duckdb, plan, false, &|o| {
+        ran.lock().unwrap().push(o.key.clone());
+    })
+    .expect("running a chunked extract");
+    assert!(
+        done.is_done(),
+        "not every chunk finished: {:?} {:?}",
+        done.counts(),
+        done.partitions.iter().filter_map(|p| p.error.clone()).collect::<Vec<_>>()
+    );
+    assert_eq!(ran.lock().unwrap().len(), 4);
+    for p in &done.partitions {
+        let a = p.artifact.as_ref().expect("a committed part");
+        assert!(std::path::Path::new(&a.uri).exists(), "part {} is not on disk", a.uri);
+        assert_eq!(
+            a.hash,
+            duckle_duckdb_engine::backfill::hash_file(std::path::Path::new(&a.uri)).unwrap(),
+            "the committed hash is not the part's"
+        );
+    }
+
+    // The property: every row, exactly once.
+    let read = duckle_duckdb_engine::chunk_exec::assembled_read(&done).unwrap();
+    let stats = scalar_string(&format!(
+        "SELECT COUNT(*) || '/' || COUNT(DISTINCT id) || '/' || MIN(id) || '/' || MAX(id) AS s \
+         FROM ({read})"
+    ));
+    assert_eq!(stats, "100/100/1/100", "rows/distinct/min/max of the assembled extract");
+
+    // And resumability: a part goes missing, and the chunk that produced it is
+    // redone rather than skipped.
+    let lost = done.partitions[1].artifact.clone().unwrap().uri;
+    std::fs::remove_file(&lost).unwrap();
+    duckle_duckdb_engine::backfill::save(ws, &done).unwrap();
+    // Nothing resets the slice by hand here on purpose: the executor has to
+    // notice by itself, or the guarantee only holds when someone remembers to
+    // ask for it. Every chunk still SAYS succeeded at this point.
+    assert!(done.is_done(), "the ledger should still claim to be complete");
+
+    let again = std::sync::Mutex::new(Vec::<String>::new());
+    let done = duckle_duckdb_engine::chunk_exec::execute(ws, &duckdb, done, false, &|o| {
+        again.lock().unwrap().push(o.key.clone());
+    })
+    .expect("resuming a chunked extract");
+    assert_eq!(
+        again.lock().unwrap().len(),
+        1,
+        "resuming re-ran chunks whose parts were still there: {:?}",
+        again.lock().unwrap()
+    );
+    assert!(done.is_done(), "{:?}", done.counts());
+    assert!(
+        std::path::Path::new(&lost).exists(),
+        "the chunk was marked done again without its part being written: {lost}"
+    );
+    let read = duckle_duckdb_engine::chunk_exec::assembled_read(&done).unwrap();
+    let stats = scalar_string(&format!(
+        "SELECT COUNT(*) || '/' || COUNT(DISTINCT id) AS s FROM ({read})"
+    ));
+    assert_eq!(stats, "100/100", "the resumed extract is not the same extract");
+}

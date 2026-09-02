@@ -1014,7 +1014,7 @@ pipeline names and the workspace does not have is recorded as `missing` rather
 than omitted - an absent entry is indistinguishable from a run that used no
 external components at all.
 
-### Planning a chunked extract
+### Chunked, resumable extraction
 
 A single query over a billion-row table holds a snapshot for hours, fails near
 the end and restarts from zero. Declare how it should be split:
@@ -1024,7 +1024,8 @@ the end and restarts from zero. Declare how it should be split:
 ```
 
 ```bash
-duckle-runner source plan pipelines/big.json --node src --min 1 --max 4200000 --nulls 0
+duckle-runner source plan    pipelines/big.json --node src --min 1 --max 4200000 --nulls 0
+duckle-runner source extract pipelines/big.json --node src --min 1 --max 4200000 --nulls 0
 ```
 
 ```text
@@ -1048,8 +1049,40 @@ a trusted source of SQL fragments. Hash bucketing is spelled out per family -
 `hashtext`, `ORA_HASH`, `CHECKSUM`, `CRC32` - because getting it wrong does not
 error, it silently produces overlapping or empty buckets.
 
-**This prints the plan; it does not yet run it.** Chunked reads are not wired
-into the source path, and the command says so on every invocation.
+**A chunk is a slice, so it is the same ledger.** `source extract` writes one
+entry per chunk into the ledger a partitioned backfill uses, and everything
+around it comes from there rather than from a second executor: claiming,
+bounded concurrency, resource-pool admission, reuse of an identical occurrence,
+restart reconciliation, run ids and receipts. `backfill status <id>` shows a
+chunked extract, and `backfill retry <id>` resumes one - neither of them knows
+it is an extract, which is the point. Only the generator differs: a partition
+binds a time window, a chunk binds a predicate.
+
+**"The query finished" is not "the chunk succeeded."**
+
+```text
+query completed -> part fsynced, hashed, renamed into place -> slice succeeds
+```
+
+A process that dies between the read and the commit would otherwise leave a
+chunk marked done whose part is not there, and the retry that exists to fix
+exactly that would skip it - silently, after an hour of database time. So the
+part is committed before the ledger moves, and the executor refuses to record a
+success without one. On a restart, a chunk whose part is gone or the wrong size
+goes back to `requested`; `--verify` re-hashes every part, which is the only
+thing that catches one edited in place and costs a full read to do.
+
+Assembly is free: the extract IS the parts read together, so a completed extract
+prints its `read_parquet([...])` and nothing is merged or copied. A partial one
+refuses to print a read at all, because a short extract that looks whole is the
+failure the design exists to prevent.
+
+**The predicate goes into the read, not after it.** A filter applied on Duckle's
+side would make every chunk fetch the whole table. With `pushdown` on and your
+own SQL, the predicate is placed inside the statement that runs on the server;
+otherwise the node's read is wrapped and pushdown is turned off, because the
+rewritten SQL names the local attach alias and a remote server has never heard
+of it.
 
 ### Partitioned backfills
 

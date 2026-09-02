@@ -40,6 +40,7 @@ pub mod review;
 pub mod alerts;
 pub mod backfill;
 pub mod backfill_exec;
+pub mod chunk_exec;
 pub mod chunking;
 pub mod partition;
 pub mod plugin;

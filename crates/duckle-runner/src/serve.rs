@@ -1808,10 +1808,18 @@ fn api_backfill_action(state: &Arc<State>, req: &Request) -> Reply {
                 return respond_err("500 Internal Server Error", &e);
             }
             let id = plan.id.clone();
+            let logged = id.clone();
             let count = plan.partitions.len();
             let force = body.get("force").and_then(Value::as_bool).unwrap_or(false);
             std::thread::spawn(move || {
-                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, force, &|_| {});
+                if let Err(e) =
+                    duckle_duckdb_engine::backfill_exec::execute_ledger(&ws, &duckdb, plan, force, &|_| {})
+                {
+                    // Accepted-then-failed is still a failure, and a background
+                    // thread that swallows it leaves the ledger as the only
+                    // evidence.
+                    eprintln!("backfill {logged}: {e}");
+                }
             });
             respond_json(&json!({ "accepted": true, "id": id, "partitions": count }))
         }
@@ -1836,10 +1844,18 @@ fn api_backfill_action(state: &Arc<State>, req: &Request) -> Reply {
                 return respond_err("500 Internal Server Error", &e);
             }
             let id = id.to_string();
+            let logged = id.clone();
             std::thread::spawn(move || {
                 // A retry is explicit: the operator decided this slice should
                 // run, so it is not skipped as already-done.
-                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, true, &|_| {});
+                if let Err(e) =
+                    duckle_duckdb_engine::backfill_exec::execute_ledger(&ws, &duckdb, plan, true, &|_| {})
+                {
+                    // Accepted-then-failed is still a failure, and a background
+                    // thread that swallows it leaves the ledger as the only
+                    // evidence.
+                    eprintln!("backfill {logged}: {e}");
+                }
             });
             respond_json(&json!({ "accepted": true, "id": id, "retried": n }))
         }

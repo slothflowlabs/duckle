@@ -707,7 +707,7 @@ fn t_backfill(args: &Value) -> Result<Value, String> {
             };
             let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
             let done =
-                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, force, &|_| {});
+                duckle_duckdb_engine::backfill_exec::execute_ledger(&ws, &duckdb, plan, force, &|_| {})?;
             Ok(serde_json::to_value(&done).unwrap_or(Value::Null))
         }
         "status" => match arg_str(args, "id") {
@@ -730,7 +730,7 @@ fn t_backfill(args: &Value) -> Result<Value, String> {
             // A retry is an explicit act: the operator has looked and decided
             // this slice should run, so it is not skipped as already-done.
             let done =
-                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, true, &|_| {});
+                duckle_duckdb_engine::backfill_exec::execute_ledger(&ws, &duckdb, plan, true, &|_| {})?;
             Ok(json!({ "retried": n, "backfill": done }))
         }
         "cancel" => {

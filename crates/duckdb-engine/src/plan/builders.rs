@@ -5860,7 +5860,7 @@ fn pushdown_query_fn(component_id: &str) -> Option<&'static str> {
 }
 
 /// Whether the `pushdown` toggle is on (bool true or a truthy string).
-fn relational_pushdown_on(props: &JsonValue) -> bool {
+pub(crate) fn relational_pushdown_on(props: &JsonValue) -> bool {
     props.get("pushdown").and_then(JsonValue::as_bool).unwrap_or(false)
         || matches!(
             string_prop(props, "pushdown")

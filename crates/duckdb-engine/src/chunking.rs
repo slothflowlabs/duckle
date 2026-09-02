@@ -329,6 +329,35 @@ pub fn capabilities(component_id: &str) -> &'static [&'static str] {
     }
 }
 
+/// Which SQL family to write predicates for.
+///
+/// Here rather than at each caller: the plan command and the executor deciding
+/// this separately is how one would print `ORA_HASH` and the other send
+/// `hashtext`, and the plan would be describing a different extract from the
+/// one that ran.
+pub fn dialect_of(component_id: &str) -> Dialect {
+    match component_id {
+        "src.oracle" => Dialect::Oracle,
+        "src.mssql" => Dialect::MsSql,
+        "src.mysql" | "src.mariadb" => Dialect::MySql,
+        "src.duckdb" | "src.ducklake" => Dialect::Duckdb,
+        _ => Dialect::Postgres,
+    }
+}
+
+/// What this connector can honestly promise across the chunks.
+///
+/// Only Oracle can pin one today, through the SCN path the parallel reader
+/// already uses. Everything else says best-effort rather than implying a
+/// consistency it cannot provide - which is the distinction #306 asks for, and
+/// the reason it is a value rather than a line of documentation.
+pub fn snapshot_of(component_id: &str) -> Snapshot {
+    match component_id {
+        "src.oracle" => Snapshot::Pinned { id: "SCN, pinned at read time".into() },
+        _ => Snapshot::BestEffort,
+    }
+}
+
 /// Whether this component may be asked for this strategy, with the reason when
 /// it may not.
 pub fn check_supported(component_id: &str, strategy: &Strategy) -> Result<(), String> {

@@ -20,7 +20,7 @@ pub fn usage() -> ExitCode {
          \x20 create <pipeline.json> --from YYYY-MM-DD --to YYYY-MM-DD [--max-concurrent N]\n\
          \x20                        [--dry-run] [--workspace DIR] [--json]\n\
          \x20 status [<backfill-id>] [--workspace DIR] [--json]\n\
-         \x20 retry <backfill-id> [--partition KEY] [--workspace DIR]\n\
+         \x20 retry <backfill-id> [--partition KEY] [--verify] [--workspace DIR]\n\
          \x20 cancel <backfill-id> [--workspace DIR]\n\
          \n\
          \x20 list | set | clear   inspect and edit incremental state (unpartitioned)"
@@ -42,6 +42,8 @@ struct Args {
     partition: Option<String>,
     occurrence: Option<String>,
     force: bool,
+    /// #306: re-hash every committed part before deciding what to retry.
+    verify: bool,
     dry_run: bool,
     json: bool,
     positional: Vec<String>,
@@ -56,6 +58,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
         partition: None,
         occurrence: None,
         force: false,
+        verify: false,
         dry_run: false,
         json: false,
         positional: Vec::new(),
@@ -68,6 +71,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             "--partition" => a.partition = it.next(),
             "--occurrence" => a.occurrence = it.next(),
             "--force" => a.force = true,
+            "--verify" => a.verify = true,
             "--max-concurrent" => {
                 a.max_concurrent = it
                     .next()
@@ -243,8 +247,24 @@ fn retry(args: &Args) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // #306: a chunked extract's parts are checked for existence and size on
+    // every run. `--verify` re-READS them, which is the only thing that catches
+    // one edited or corrupted in place - and costs a full pass over the extract
+    // to do, which is why it is asked for rather than assumed.
+    let redo = b.recheck_artifacts(args.verify);
+    if !redo.is_empty() {
+        println!(
+            "{} part(s) no longer match what was committed: {}",
+            redo.len(),
+            redo.join(", ")
+        );
+    }
     let only = args.partition.clone().map(|k| vec![k]);
-    let n = b.retry_open(only.as_deref());
+    // A slice the recheck reset is work to do, and counting only `retry_open`
+    // here meant `retry` DETECTED a lost part, moved it back to requested, then
+    // reported "nothing to retry" and returned - leaving the extract short with
+    // the ledger saying it had just been checked.
+    let n = redo.len() + b.retry_open(only.as_deref());
     if n == 0 {
         println!("nothing to retry in {id}");
         return ExitCode::from(0);
@@ -289,7 +309,9 @@ fn execute(workspace: &Path, plan: Backfill, json: bool, force: bool) -> ExitCod
             return ExitCode::from(2);
         }
     };
-    let plan = duckle_duckdb_engine::backfill_exec::execute(
+    // #306: dispatched by the ledger's kind, so retrying a chunked extract
+    // resumes the extract rather than running the whole pipeline per chunk.
+    let plan = match duckle_duckdb_engine::backfill_exec::execute_ledger(
         workspace,
         &duckdb,
         plan,
@@ -305,7 +327,13 @@ fn execute(workspace: &Path, plan: Backfill, json: bool, force: bool) -> ExitCod
                 }
             );
         },
-    );
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("duckle-runner backfill: {e}");
+            return ExitCode::from(2);
+        }
+    };
     let counts = plan.counts();
     if json {
         println!("{}", serde_json::to_string_pretty(&plan).unwrap_or_default());
