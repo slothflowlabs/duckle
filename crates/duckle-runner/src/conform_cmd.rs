@@ -95,11 +95,7 @@ pub fn run() -> ExitCode {
     cases.push(crash_cleanup_case(&installed, &dir));
     cases.push(secret_redaction_case(&installed, &dir));
     cases.push(timeout_case(&installed));
-    cases.push(Case {
-        name: "reject output",
-        verdict: Verdict::Unsupported,
-        detail: "the host has no reject port for external components yet".into(),
-    });
+    cases.push(reject_case(&engine, &duckdb, &installed, &dir));
     cases.push(Case {
         name: "artifact lineage",
         verdict: Verdict::Unsupported,
@@ -208,6 +204,7 @@ fn request_for(installed: &Installed, input: Option<&Path>, output: &Path) -> Re
         properties: sample_properties(installed),
         inputs,
         output: output.display().to_string(),
+        reject: output.with_extension("reject.parquet").display().to_string(),
         run_id: "conformance".into(),
     }
 }
@@ -456,6 +453,32 @@ mod tests {
     }
 
     #[test]
+    fn a_component_that_writes_no_rejects_is_not_a_failure() {
+        // Most components have no reject semantics. Reporting that as a pass
+        // would suggest something was verified; as a failure it would make
+        // every ordinary component look broken.
+        let c = Case {
+            name: "reject output",
+            verdict: Verdict::NotApplicable,
+            detail: String::new(),
+        };
+        assert_ne!(c.verdict, Verdict::Fail);
+        assert_ne!(c.verdict, Verdict::Pass);
+    }
+
+    #[test]
+    fn the_request_names_a_reject_path_distinct_from_the_output() {
+        // The component needs somewhere to put rejected rows that is not the
+        // output it is also writing.
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("out.parquet");
+        let r = request_for(&installed(serde_json::json!([])), None, &out);
+        assert!(!r.reject.is_empty());
+        assert_ne!(r.reject, r.output);
+        assert!(r.reject.ends_with(".parquet"), "{}", r.reject);
+    }
+
+    #[test]
     fn a_source_is_not_failed_for_having_no_input() {
         let tmp = tempfile::tempdir().unwrap();
         let mut i = installed(serde_json::json!([]));
@@ -463,5 +486,55 @@ mod tests {
         let engine = DuckdbEngine::new(std::path::PathBuf::from("duckdb"));
         let c = empty_input_case(&engine, std::path::Path::new("duckdb"), &i, tmp.path());
         assert_eq!(c.verdict, Verdict::NotApplicable, "{}", c.detail);
+    }
+}
+
+/// #307: does a component that writes rejects write something readable?
+///
+/// Not writing any is fine and common - most components have no reject
+/// semantics - so that is reported as not-applicable rather than as a pass,
+/// which would suggest something was verified. What IS a failure is writing a
+/// reject file the host cannot read, because the pipeline then fails at the
+/// point where somebody wired the port.
+fn reject_case(engine: &DuckdbEngine, duckdb: &Path, installed: &Installed, dir: &Path) -> Case {
+    if installed.manifest.inputs.is_empty() {
+        return Case {
+            name: "reject output",
+            verdict: Verdict::NotApplicable,
+            detail: "a source has no input rows to reject".into(),
+        };
+    }
+    let input = dir.join("reject-in.parquet");
+    let output = dir.join("reject-out.parquet");
+    let rejects = output.with_extension("reject.parquet");
+    let _ = std::fs::remove_file(&output);
+    let _ = std::fs::remove_file(&rejects);
+    if let Err(e) = fixture(duckdb, &input, 10) {
+        return Case { name: "reject output", verdict: Verdict::Fail, detail: e };
+    }
+    match plugin::invoke(installed, &request_for(installed, Some(&input), &output)) {
+        Err(e) => Case { name: "reject output", verdict: Verdict::Fail, detail: e },
+        Ok(r) if !r.ok => Case {
+            name: "reject output",
+            verdict: Verdict::Fail,
+            detail: r.error.unwrap_or_else(|| "reported a failure".into()),
+        },
+        Ok(_) if !rejects.exists() => Case {
+            name: "reject output",
+            verdict: Verdict::NotApplicable,
+            detail: "wrote no rejects; the host still makes an empty reject relation".into(),
+        },
+        Ok(_) => match count(engine, &rejects) {
+            Ok(n) => Case {
+                name: "reject output",
+                verdict: Verdict::Pass,
+                detail: format!("wrote {n} rejected row(s) the host can read"),
+            },
+            Err(e) => Case {
+                name: "reject output",
+                verdict: Verdict::Fail,
+                detail: format!("wrote a reject file the host cannot read: {e}"),
+            },
+        },
     }
 }

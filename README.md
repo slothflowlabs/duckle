@@ -789,6 +789,20 @@ print(json.dumps({"ok": True, "rows": n}))
 **Bulk data is Parquet, never row JSON** - typed, and native at both ends.
 Control messages are JSON because they are small and structured.
 
+**Rows it cannot handle go to the reject port**, on the same `__reject` contract
+every built-in uses, so a downstream edge reads them identically whoever wrote
+the component:
+
+```python
+con.execute(f"COPY (SELECT * FROM read_parquet(?) WHERE name IS NULL) "
+            f"TO '{req['reject']}' (FORMAT PARQUET)", [src])
+```
+
+A component that writes no rejects still gets an empty reject relation with the
+right columns. Without it, wiring the port to a component that happens never to
+reject fails the run with `Table with name v__reject does not exist` - and
+"this component rejects nothing" is an ordinary thing for a component to be.
+
 **An external id must start with `ext.`**, so a component can never shadow a
 built-in one. A component called `xf.filter` that quietly replaced the real one
 would be the worst failure this could have.
@@ -830,7 +844,7 @@ duckle-runner components conform ext.upper --workspace .
   pass         crash cleanup        reported the failure: IO Error: No files found ...
   pass         secret redaction     the request carries property values and paths, no credentials
   pass         cancellation         killed after 60s; the host enforces this bound
-  unsupported  reject output        the host has no reject port for external components yet
+  pass         reject output        wrote 2 rejected row(s) the host can read
   unsupported  artifact lineage     the host has no artifact URI interchange yet
 ```
 

@@ -238,6 +238,11 @@ pub struct Request {
     pub inputs: BTreeMap<String, String>,
     /// Parquet the component must write.
     pub output: String,
+    /// Parquet the component MAY write with the rows it could not handle
+    /// (#307). Optional by design: a component with no reject semantics writes
+    /// nothing here and the host makes an empty relation, so a wired reject
+    /// port is always safe to read.
+    pub reject: String,
     pub run_id: String,
 }
 
@@ -635,6 +640,7 @@ mod tests {
             properties: serde_json::json!({ "url": "https://x", "tokenRef": "MY_TOKEN" }),
             inputs: BTreeMap::from([("main".into(), "in.parquet".into())]),
             output: "out.parquet".into(),
+            reject: "rej.parquet".into(),
             run_id: "run-1".into(),
         };
         let json = serde_json::to_string(&r).unwrap();

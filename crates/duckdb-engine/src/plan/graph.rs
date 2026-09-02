@@ -365,7 +365,7 @@ impl NodeInputs {
 }
 
 /// Suffix for a node's secondary "reject" output table.
-pub(crate) const REJECT_SUFFIX: &str = "__reject";
+pub const REJECT_SUFFIX: &str = "__reject";
 
 /// Which materialized table an edge reads, based on the source node's
 /// OUTPUT handle. Reject/filter outputs read the node's `__reject`

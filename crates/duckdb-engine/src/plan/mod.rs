@@ -1428,6 +1428,9 @@ fn prepare_publish_groups(
 
 mod graph;
 use graph::*;
+// #307: an external component publishes its rejects on the same contract
+// every built-in uses, so the connector layer needs the suffix by name.
+pub use graph::REJECT_SUFFIX;
 
 /// Key columns for a sink's "upsert" write mode, or empty for plain insert.
 /// Driver sinks (SQL Server / Oracle / Snowflake / Databricks) MERGE on these

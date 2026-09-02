@@ -12208,6 +12208,8 @@ impl DuckdbEngine {
             inputs.insert("main".to_string(), in_pq.display().to_string());
         }
 
+        let rej_pq = out_path.with_extension("reject.parquet");
+        let _ = std::fs::remove_file(&rej_pq);
         let request = crate::plugin::Request {
             protocol: crate::plugin::PROTOCOL,
             component: spec.component_id.clone(),
@@ -12215,6 +12217,7 @@ impl DuckdbEngine {
             properties: spec.properties.clone(),
             inputs,
             output: out_pq.display().to_string(),
+            reject: rej_pq.display().to_string(),
             run_id: run_id.to_string(),
         };
         let body = serde_json::to_vec(&request)
@@ -12248,9 +12251,48 @@ impl DuckdbEngine {
             ),
             false,
         )?;
+        // #307: the reject relation, on the same `<node>__reject` contract every
+        // built-in uses - so a downstream edge reads it identically whoever
+        // wrote the component.
+        //
+        // Created even when the component wrote nothing, shaped like the rows
+        // it was given. A wired reject port whose table does not exist fails
+        // the whole run at bind time, and "this component rejects nothing" is a
+        // perfectly ordinary thing for a component to be.
+        let reject_view = format!("{}{}", spec.node_id, plan::REJECT_SUFFIX);
+        let reject_sql = match rej_pq.exists() {
+            true => format!(
+                "CREATE OR REPLACE TABLE {} AS SELECT * FROM read_parquet('{}');",
+                plan::quote_ident(&reject_view),
+                esc(&rej_pq)
+            ),
+            false => match &spec.from_view {
+                Some(from) => format!(
+                    "CREATE OR REPLACE TABLE {} AS SELECT * FROM {} WHERE 1=0;",
+                    plan::quote_ident(&reject_view),
+                    plan::quote_ident(from)
+                ),
+                // A source has no upstream to take a shape from, so the reject
+                // relation mirrors what it produced.
+                None => format!(
+                    "CREATE OR REPLACE TABLE {} AS SELECT * FROM {} WHERE 1=0;",
+                    plan::quote_ident(&reject_view),
+                    plan::quote_ident(&spec.node_id)
+                ),
+            },
+        };
+        self.run(Some(db), &reject_sql, false)?;
+        let rejected = self.count_rows(db, &reject_view).unwrap_or(0);
+        let _ = std::fs::remove_file(&rej_pq);
         let _ = std::fs::remove_file(&out_pq);
         let count = self.count_rows(db, &spec.node_id).unwrap_or(0);
-        Ok(format!("{}: {} row(s) -> {}", spec.component_id, count, spec.node_id))
+        Ok(match rejected {
+            0 => format!("{}: {} row(s) -> {}", spec.component_id, count, spec.node_id),
+            n => format!(
+                "{}: {} row(s) -> {}, {n} rejected",
+                spec.component_id, count, spec.node_id
+            ),
+        })
     }
 
     pub(crate) fn run_python(
