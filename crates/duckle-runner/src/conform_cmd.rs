@@ -96,11 +96,7 @@ pub fn run() -> ExitCode {
     cases.push(secret_redaction_case(&installed, &dir));
     cases.push(timeout_case(&installed));
     cases.push(reject_case(&engine, &duckdb, &installed, &dir));
-    cases.push(Case {
-        name: "artifact lineage",
-        verdict: Verdict::Unsupported,
-        detail: "the host has no artifact URI interchange yet".into(),
-    });
+    cases.push(artifact_case(&duckdb, &installed, &dir));
 
     let failed = cases.iter().filter(|c| c.verdict == Verdict::Fail).count();
     if json {
@@ -205,6 +201,12 @@ fn request_for(installed: &Installed, input: Option<&Path>, output: &Path) -> Re
         inputs,
         output: output.display().to_string(),
         reject: output.with_extension("reject.parquet").display().to_string(),
+        artifact_dir: output
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("artifacts")
+            .display()
+            .to_string(),
         run_id: "conformance".into(),
     }
 }
@@ -536,5 +538,53 @@ fn reject_case(engine: &DuckdbEngine, duckdb: &Path, installed: &Installed, dir:
                 detail: format!("wrote a reject file the host cannot read: {e}"),
             },
         },
+    }
+}
+
+/// #307: are the files a component says it produced actually there, and do they
+/// hash to what it claimed?
+///
+/// A component producing no files is the common case and is reported
+/// not-applicable. What fails is declaring a file that is missing, or one whose
+/// declared hash does not match its bytes - which is the entire reason to
+/// record a hash rather than a path.
+fn artifact_case(duckdb: &Path, installed: &Installed, dir: &Path) -> Case {
+    let input = dir.join("artifact-in.parquet");
+    let output = dir.join("artifact-out.parquet");
+    let artifacts = dir.join("artifacts");
+    let _ = std::fs::create_dir_all(&artifacts);
+    if !installed.manifest.inputs.is_empty() {
+        if let Err(e) = fixture(duckdb, &input, 3) {
+            return Case { name: "artifact lineage", verdict: Verdict::Fail, detail: e };
+        }
+    }
+    let has_input = !installed.manifest.inputs.is_empty();
+    let req = request_for(installed, has_input.then_some(input.as_path()), &output);
+    match plugin::invoke(installed, &req) {
+        Err(e) => Case { name: "artifact lineage", verdict: Verdict::Fail, detail: e },
+        Ok(r) if !r.ok => Case {
+            name: "artifact lineage",
+            verdict: Verdict::Fail,
+            detail: r.error.unwrap_or_else(|| "reported a failure".into()),
+        },
+        Ok(r) if r.artifacts.is_empty() => Case {
+            name: "artifact lineage",
+            verdict: Verdict::NotApplicable,
+            detail: "produced no files; nothing to reference".into(),
+        },
+        Ok(r) => {
+            let declared = r.artifacts.len();
+            match plugin::verify_artifacts(Path::new(&req.artifact_dir), &r.artifacts) {
+                Ok(v) => Case {
+                    name: "artifact lineage",
+                    verdict: Verdict::Pass,
+                    detail: format!(
+                        "{declared} artifact(s) exist and hash as declared ({} byte(s))",
+                        v.iter().filter_map(|a| a.bytes).sum::<u64>()
+                    ),
+                },
+                Err(e) => Case { name: "artifact lineage", verdict: Verdict::Fail, detail: e },
+            }
+        }
     }
 }

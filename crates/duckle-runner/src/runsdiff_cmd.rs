@@ -155,6 +155,7 @@ mod tests {
             parameter_sources: Default::default(),
             release_id: None,
             components: Vec::new(),
+            artifacts: Vec::new(),
             partition_key: None,
             resource_pool: None,
             queue_reason: None,

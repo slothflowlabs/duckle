@@ -156,6 +156,13 @@ pub struct RunReceipt {
     /// guess made here about the name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parameters: BTreeMap<String, String>,
+    /// Files this run produced through an external component (#307).
+    ///
+    /// Referenced rather than streamed: a document, a model or a report is a
+    /// file, and a run's provenance should say where it is and what it hashed
+    /// to rather than carrying its bytes through a table.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<crate::ProducedArtifact>,
     /// The external components this run's pipeline named, with their hashes
     /// (#307 criterion 4).
     ///
@@ -282,6 +289,7 @@ pub fn begin(
         parameters: BTreeMap::new(),
         parameter_sources: Vec::new(),
         components: Vec::new(),
+        artifacts: Vec::new(),
         partition_key: None,
         resource_pool: None,
         queue_reason: None,
@@ -816,6 +824,7 @@ mod tests {
             parent_run_id: None,
             at: "2026-08-31T00:00:00Z".into(),
             components: Vec::new(),
+            artifacts: Vec::new(),
             partition_key: None,
             status: status.into(),
             pipeline_name: "p".into(),

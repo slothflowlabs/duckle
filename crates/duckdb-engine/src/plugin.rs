@@ -238,6 +238,14 @@ pub struct Request {
     pub inputs: BTreeMap<String, String>,
     /// Parquet the component must write.
     pub output: String,
+    /// A directory the component MAY write files into (#307).
+    ///
+    /// Files, models and documents are exchanged by reference rather than
+    /// streamed as rows: the component writes the file and names it back, and
+    /// the host records where it is and what it hashes to. Given by the host so
+    /// a component does not invent a path, and so everything one run produced
+    /// is in one place.
+    pub artifact_dir: String,
     /// Parquet the component MAY write with the rows it could not handle
     /// (#307). Optional by design: a component with no reject semantics writes
     /// nothing here and the host makes an empty relation, so a wired reject
@@ -247,6 +255,28 @@ pub struct Request {
 }
 
 /// What a component answers.
+/// A file a component produced, referenced rather than streamed.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Artifact {
+    /// Where it is. A path, or any URI the workspace can resolve.
+    pub uri: String,
+    /// sha256 of the bytes. The component may declare it - a component that
+    /// fetched a document usually knows it already - and the host verifies
+    /// rather than trusts. Absent, the host computes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    /// Free text: `model`, `report`, `page-3`. For a person reading a receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Bytes, recorded so a receipt says how big the thing was without
+    /// needing the file to still exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Response {
@@ -256,6 +286,52 @@ pub struct Response {
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rows: Option<u64>,
+    /// Files this run produced (#307).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<Artifact>,
+}
+
+/// Check what a component said about the files it produced, and fill in what it
+/// did not say.
+///
+/// A declared hash is VERIFIED rather than trusted: a hash a component asserts
+/// about its own output is worth nothing if nobody checks it, and the whole
+/// reason to record one is to be able to tell later that the file changed.
+pub fn verify_artifacts(dir: &Path, declared: &[Artifact]) -> Result<Vec<Artifact>, String> {
+    let mut out = Vec::new();
+    for a in declared {
+        let raw = a.uri.trim();
+        if raw.is_empty() {
+            return Err("an artifact was declared with no uri".to_string());
+        }
+        // A relative uri is resolved inside the directory the host provided, so
+        // a component cannot name a file outside the run's own artifacts by
+        // accident. An absolute path it wrote itself is taken as given.
+        let path = match Path::new(raw).is_absolute() {
+            true => PathBuf::from(raw),
+            false => dir.join(raw),
+        };
+        let bytes = std::fs::read(&path)
+            .map_err(|e| format!("artifact {raw:?} was declared and cannot be read: {e}"))?;
+        let actual = sha256(&bytes);
+        if let Some(claimed) = a.hash.as_deref().map(str::trim).filter(|h| !h.is_empty()) {
+            if !claimed.eq_ignore_ascii_case(&actual) {
+                return Err(format!(
+                    "artifact {raw:?} was declared with hash {claimed} and hashes to {actual}"
+                ));
+            }
+        }
+        out.push(Artifact {
+            // Forward slashes throughout, so a receipt reads the same on every
+            // platform and a mixed C:/a path does not appear.
+            uri: path.display().to_string().replace(char::from(92), "/"),
+            hash: Some(actual),
+            media_type: a.media_type.clone(),
+            role: a.role.clone(),
+            bytes: Some(bytes.len() as u64),
+        });
+    }
+    Ok(out)
 }
 
 pub const PROTOCOL: u32 = 1;
@@ -584,6 +660,65 @@ mod tests {
     }
 
     #[test]
+    fn a_declared_hash_is_verified_rather_than_trusted() {
+        // A hash a component asserts about its own output is worth nothing if
+        // nobody checks it, and being able to tell later that the file changed
+        // is the entire reason to record one.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("doc.md"), b"hello").unwrap();
+        let real = sha256(b"hello");
+
+        let ok = verify_artifacts(
+            tmp.path(),
+            &[Artifact { uri: "doc.md".into(), hash: Some(real.clone()), ..Default::default() }],
+        )
+        .expect("a correct hash");
+        assert_eq!(ok[0].hash.as_deref(), Some(real.as_str()));
+        assert_eq!(ok[0].bytes, Some(5));
+
+        let e = verify_artifacts(
+            tmp.path(),
+            &[Artifact { uri: "doc.md".into(), hash: Some("0".repeat(64)), ..Default::default() }],
+        )
+        .unwrap_err();
+        assert!(e.contains("hashes to"), "{e}");
+    }
+
+    #[test]
+    fn an_artifact_that_was_declared_and_not_written_is_an_error() {
+        // A run that says it produced a document and did not is a run whose
+        // provenance is a lie.
+        let tmp = tempfile::tempdir().unwrap();
+        let e = verify_artifacts(
+            tmp.path(),
+            &[Artifact { uri: "absent.pdf".into(), ..Default::default() }],
+        )
+        .unwrap_err();
+        assert!(e.contains("cannot be read"), "{e}");
+        // An empty uri is refused BY NAME rather than by happening to fail when
+        // the directory is read as a file - the message is what tells the
+        // author their manifest is wrong rather than their disk.
+        let e = verify_artifacts(tmp.path(), &[Artifact::default()]).unwrap_err();
+        assert!(e.contains("no uri"), "{e}");
+    }
+
+    #[test]
+    fn the_host_computes_a_hash_the_component_did_not_declare() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("m.bin"), b"model").unwrap();
+        let out = verify_artifacts(
+            tmp.path(),
+            &[Artifact { uri: "m.bin".into(), hash: None, ..Default::default() }],
+        )
+        .unwrap();
+        assert_eq!(out[0].hash.as_deref(), Some(sha256(b"model").as_str()));
+        // A relative uri resolves inside the directory the host provided, so a
+        // component cannot name a file outside the run's artifacts by accident.
+        assert!(out[0].uri.ends_with("m.bin"));
+        assert!(out[0].uri.contains(&tmp.path().display().to_string().replace(char::from(92), "/")));
+    }
+
+    #[test]
     fn a_catalog_entry_takes_its_kind_from_the_ports() {
         // The palette groups by kind, and a component with no inputs is a
         // source however its author described it.
@@ -641,6 +776,7 @@ mod tests {
             inputs: BTreeMap::from([("main".into(), "in.parquet".into())]),
             output: "out.parquet".into(),
             reject: "rej.parquet".into(),
+            artifact_dir: "artifacts".into(),
             run_id: "run-1".into(),
         };
         let json = serde_json::to_string(&r).unwrap();

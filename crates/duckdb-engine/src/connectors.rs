@@ -12210,6 +12210,18 @@ impl DuckdbEngine {
 
         let rej_pq = out_path.with_extension("reject.parquet");
         let _ = std::fs::remove_file(&rej_pq);
+        // #307: one directory per run and node, under the workspace, so files a
+        // component produces are findable afterwards and not scattered wherever
+        // the component happened to choose.
+        let artifact_dir = workspace
+            .join("artifacts")
+            .join(match run_id.is_empty() {
+                true => "adhoc",
+                false => run_id,
+            })
+            .join(&spec.node_id);
+        std::fs::create_dir_all(&artifact_dir)
+            .map_err(|e| EngineError::Other(format!("{}: {e}", artifact_dir.display())))?;
         let request = crate::plugin::Request {
             protocol: crate::plugin::PROTOCOL,
             component: spec.component_id.clone(),
@@ -12218,6 +12230,7 @@ impl DuckdbEngine {
             inputs,
             output: out_pq.display().to_string(),
             reject: rej_pq.display().to_string(),
+            artifact_dir: artifact_dir.display().to_string(),
             run_id: run_id.to_string(),
         };
         let body = serde_json::to_vec(&request)
@@ -12228,6 +12241,11 @@ impl DuckdbEngine {
         let reply = crate::plugin::invoke(&installed, &request)
             .map_err(|e| EngineError::Other(format!("{}: {e}", spec.component_id)))?;
         let _ = std::fs::remove_file(&in_pq);
+        // Checked before the output is published: an artifact a component
+        // declared and did not write, or wrote and mis-hashed, means the run
+        // did not produce what it says it did.
+        let artifacts = crate::plugin::verify_artifacts(&artifact_dir, &reply.artifacts)
+            .map_err(|e| EngineError::Other(format!("{}: {e}", spec.component_id)))?;
         if !reply.ok {
             return Err(EngineError::Other(format!(
                 "{}: {}",
@@ -12286,13 +12304,24 @@ impl DuckdbEngine {
         let _ = std::fs::remove_file(&rej_pq);
         let _ = std::fs::remove_file(&out_pq);
         let count = self.count_rows(db, &spec.node_id).unwrap_or(0);
-        Ok(match rejected {
+        // Nothing produced, nothing kept: an empty directory per node per run
+        // would accumulate forever in a workspace where no component makes
+        // files.
+        if artifacts.is_empty() {
+            let _ = std::fs::remove_dir(&artifact_dir);
+        }
+        let mut line = match rejected {
             0 => format!("{}: {} row(s) -> {}", spec.component_id, count, spec.node_id),
             n => format!(
                 "{}: {} row(s) -> {}, {n} rejected",
                 spec.component_id, count, spec.node_id
             ),
-        })
+        };
+        if !artifacts.is_empty() {
+            line.push_str(&format!(", {} artifact(s)", artifacts.len()));
+            self.record_artifacts(&spec.node_id, &artifacts);
+        }
+        Ok(line)
     }
 
     pub(crate) fn run_python(

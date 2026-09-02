@@ -528,6 +528,12 @@ fn run_with(args: Args) -> Result<bool, String> {
     // #259: the run is recorded BEFORE the result is printed, and the id is
     // minted before the work above ran - see where `receipt` is created.
     let run_id = receipt.run_id.clone();
+    // #307: files external components produced, recorded before the receipt is
+    // finalised so a run's provenance names them.
+    let receipt = duckle_duckdb_engine::retry::RunReceipt {
+        artifacts: engine.produced_artifacts(),
+        ..receipt
+    };
     duckle_duckdb_engine::retry::finish(
         &workspace,
         receipt,

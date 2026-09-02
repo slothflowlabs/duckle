@@ -161,6 +161,13 @@ pub struct DuckdbEngine {
     /// variables reach the child only, so a value that has to survive the whole descent
     /// travels here instead.
     pub(crate) inherited_subs: Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
+    /// Files external components produced during this run (#307).
+    ///
+    /// Collected here because the engine runs the stage and the CALLER writes
+    /// the receipt: without somewhere to put them, an artifact would be known
+    /// only to the process that made it. Cleared per run for the same reason
+    /// the run id is - what a previous run produced is that run's provenance.
+    pub(crate) artifacts: Arc<std::sync::Mutex<Vec<ProducedArtifact>>>,
     /// The durable run id this engine is executing under (#259).
     ///
     /// Set by whoever minted it - always the same `retry::begin` that writes
@@ -181,6 +188,15 @@ impl std::fmt::Debug for DuckdbEngine {
 /// Does this SQL read a figure that only exists once an earlier node has finished?
 fn references_node_stat(sql: &str) -> bool {
     sql.contains("_NB_LINE}") || sql.contains("_NB_FILE}") || sql.contains("_DURATION}")
+}
+
+/// One file an external component produced, and which node produced it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProducedArtifact {
+    pub node_id: String,
+    #[serde(flatten)]
+    pub artifact: crate::plugin::Artifact,
 }
 
 /// What binding one node's SQL said (#314).
@@ -303,6 +319,7 @@ impl DuckdbEngine {
             bin,
             inherited_subs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             cancel: Arc::new(AtomicBool::new(false)),
+            artifacts: Arc::new(std::sync::Mutex::new(Vec::new())),
             run_id: None,
         }
     }
@@ -314,6 +331,20 @@ impl DuckdbEngine {
     /// throwaway id that is written into log lines and nowhere else, which is
     /// what made run-scoped logs unaddressable by the id every other surface
     /// uses.
+    /// What external components produced during this run, for the receipt.
+    pub fn produced_artifacts(&self) -> Vec<ProducedArtifact> {
+        self.artifacts.lock().map(|a| a.clone()).unwrap_or_default()
+    }
+
+    pub(crate) fn record_artifacts(&self, node_id: &str, artifacts: &[crate::plugin::Artifact]) {
+        if let Ok(mut held) = self.artifacts.lock() {
+            held.extend(artifacts.iter().cloned().map(|artifact| ProducedArtifact {
+                node_id: node_id.to_string(),
+                artifact,
+            }));
+        }
+    }
+
     pub fn with_run_id(mut self, run_id: impl Into<String>) -> Self {
         let id = run_id.into();
         self.run_id = (!id.trim().is_empty()).then_some(id);
@@ -348,6 +379,7 @@ impl DuckdbEngine {
             // A new run is a new identity; carrying the previous one forward
             // would file this run's log lines under that run.
             run_id: None,
+            artifacts: Arc::new(std::sync::Mutex::new(Vec::new())),
             // A new top-level run inherits nothing: what a previous run handed down
             // belonged to that run's call chain.
             inherited_subs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),

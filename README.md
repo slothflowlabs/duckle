@@ -845,7 +845,7 @@ duckle-runner components conform ext.upper --workspace .
   pass         secret redaction     the request carries property values and paths, no credentials
   pass         cancellation         killed after 60s; the host enforces this bound
   pass         reject output        wrote 2 rejected row(s) the host can read
-  unsupported  artifact lineage     the host has no artifact URI interchange yet
+  pass         artifact lineage     1 artifact(s) exist and hash as declared (29 bytes)
 ```
 
 Real invocations through the same code the engine uses, so "conforming" means
@@ -861,6 +861,29 @@ reports what is wrong and exits 1:
 green tick for a feature nobody built is the most misleading result a
 conformance kit can produce - and it is not a failure either, or every component
 would look broken because the host is incomplete.
+
+**Files are referenced, not streamed.** A document, a model or a report is a
+file: the component writes it into the directory the host provides and names it
+back, and the run's provenance records where it is and what it hashed to.
+
+```python
+open(os.path.join(req["artifactDir"], "summary.md"), "wb").write(body)
+print(json.dumps({"ok": True, "artifacts": [
+    {"uri": "summary.md", "hash": hashlib.sha256(body).hexdigest(),
+     "mediaType": "text/markdown", "role": "report"}]}))
+```
+
+```json
+"artifacts": [ { "nodeId": "r", "uri": ".../artifacts/<run>/r/summary.md",
+                 "hash": "2c678098…", "mediaType": "text/markdown",
+                 "role": "report", "bytes": 29 } ]
+```
+
+**A declared hash is verified, never trusted** - a hash a component asserts about
+its own output is worth nothing if nobody checks it, and being able to tell later
+that the file changed is the whole reason to record one. A component that
+declares a file it did not write, or one whose hash does not match, fails the
+run. Declare no hash and the host computes it.
 
 **Every run records what it ran against.** The receipt carries each external
 component the pipeline names with its manifest and lock hashes:
