@@ -12210,6 +12210,7 @@ impl DuckdbEngine {
         // do it, Parquet otherwise. The extension is a community one, so a
         // machine with no network cannot install it - and failing a run over an
         // interchange preference would be absurd when the fallback is good.
+        let is_sink = installed.manifest.outputs.is_empty();
         let arrow_ok = self.arrow_available();
         let format =
             crate::plugin::choose_interchange(&installed.manifest.runtime.interchange, arrow_ok);
@@ -12330,22 +12331,28 @@ impl DuckdbEngine {
                 reply.error.unwrap_or_else(|| "the component reported a failure".into())
             )));
         }
-        if !out_pq.exists() {
-            return Err(EngineError::Other(format!(
-                "{} said it succeeded but wrote no output at {}",
-                spec.component_id,
-                out_pq.display()
-            )));
+        // A component declaring no outputs is a sink: it delivered the rows
+        // somewhere Duckle does not model - an API, a queue, a file of its own
+        // - and has no relation to hand back. Requiring one failed a sink that
+        // had already done its job, which is the worst moment to fail.
+        if !is_sink {
+            if !out_pq.exists() {
+                return Err(EngineError::Other(format!(
+                    "{} said it succeeded but wrote no output at {}",
+                    spec.component_id,
+                    out_pq.display()
+                )));
+            }
+            self.run(
+                Some(db),
+                &format!(
+                    "{prelude}CREATE OR REPLACE TABLE {} AS SELECT * FROM {};",
+                    plan::quote_ident(&spec.node_id),
+                    reader(&esc(&out_pq))
+                ),
+                false,
+            )?;
         }
-        self.run(
-            Some(db),
-            &format!(
-                "{prelude}CREATE OR REPLACE TABLE {} AS SELECT * FROM {};",
-                plan::quote_ident(&spec.node_id),
-                reader(&esc(&out_pq))
-            ),
-            false,
-        )?;
         // #307: the reject relation, on the same `<node>__reject` contract every
         // built-in uses - so a downstream edge reads it identically whoever
         // wrote the component.
@@ -12368,19 +12375,29 @@ impl DuckdbEngine {
                     plan::quote_ident(from)
                 ),
                 // A source has no upstream to take a shape from, so the reject
-                // relation mirrors what it produced.
-                None => format!(
+                // relation mirrors what it produced. A sink has neither, and
+                // gets none at all rather than one shaped like a table that
+                // does not exist.
+                None if !is_sink => format!(
                     "CREATE OR REPLACE TABLE {} AS SELECT * FROM {} WHERE 1=0;",
                     plan::quote_ident(&reject_view),
                     plan::quote_ident(&spec.node_id)
                 ),
+                None => String::new(),
             },
         };
-        self.run(Some(db), &reject_sql, false)?;
+        if !reject_sql.is_empty() {
+            self.run(Some(db), &reject_sql, false)?;
+        }
         let rejected = self.count_rows(db, &reject_view).unwrap_or(0);
         let _ = std::fs::remove_file(&rej_pq);
         let _ = std::fs::remove_file(&out_pq);
-        let count = self.count_rows(db, &spec.node_id).unwrap_or(0);
+        let count = match is_sink {
+            // A sink's number is what it was GIVEN: it produced no relation to
+            // count, and reporting zero would read as "delivered nothing".
+            true => reply.rows.unwrap_or(0),
+            false => self.count_rows(db, &spec.node_id).unwrap_or(0),
+        };
         // Nothing produced, nothing kept: an empty directory per node per run
         // would accumulate forever in a workspace where no component makes
         // files.
@@ -12388,7 +12405,10 @@ impl DuckdbEngine {
             let _ = std::fs::remove_dir(&artifact_dir);
         }
         let mut line = match rejected {
-            0 => format!("{}: {} row(s) -> {}", spec.component_id, count, spec.node_id),
+            0 => match is_sink {
+                true => format!("{}: {} row(s) delivered", spec.component_id, count),
+                false => format!("{}: {} row(s) -> {}", spec.component_id, count, spec.node_id),
+            },
             n => format!(
                 "{}: {} row(s) -> {}, {n} rejected",
                 spec.component_id, count, spec.node_id

@@ -273,6 +273,13 @@ fn empty_input_case(engine: &DuckdbEngine, duckdb: &Path, installed: &Installed,
             verdict: Verdict::Fail,
             detail: r.error.unwrap_or_else(|| "reported a failure".into()),
         },
+        // A sink delivers rows somewhere Duckle does not model and has no
+        // relation to hand back, so "wrote no output" is correct for one.
+        Ok(_) if is_sink(installed) => Case {
+            name: "empty typed input",
+            verdict: Verdict::Pass,
+            detail: "accepted an empty input without failing".into(),
+        },
         Ok(_) if !output.exists() => Case {
             name: "empty typed input",
             verdict: Verdict::Fail,
@@ -319,6 +326,11 @@ fn large_batch_case(engine: &DuckdbEngine, duckdb: &Path, installed: &Installed,
             verdict: Verdict::Fail,
             detail: r.error.unwrap_or_else(|| "reported a failure".into()),
         },
+        Ok(_) if is_sink(installed) => Case {
+            name: "large batch",
+            verdict: Verdict::Pass,
+            detail: format!("{ROWS} rows delivered in {:.1}s", started.elapsed().as_secs_f64()),
+        },
         Ok(_) => match count(engine, &output) {
             // Row-preserving is not required of every component - a filter is
             // allowed to drop rows - so this checks that it completed and
@@ -336,7 +348,21 @@ fn large_batch_case(engine: &DuckdbEngine, duckdb: &Path, installed: &Installed,
     }
 }
 
+/// A component that hands rows on rather than back.
+fn is_sink(installed: &Installed) -> bool {
+    installed.manifest.outputs.is_empty()
+}
+
 fn crash_cleanup_case(installed: &Installed, dir: &Path) -> Case {
+    if installed.manifest.inputs.is_empty() {
+        // A source reads nothing, so there is no missing input to hand it. The
+        // case was reporting every source as broken for correctly succeeding.
+        return Case {
+            name: "crash cleanup",
+            verdict: Verdict::NotApplicable,
+            detail: "a source has no input that could be missing".into(),
+        };
+    }
     // A component handed an input that does not exist must fail cleanly: a
     // reported error, not a hang and not a silent success.
     let output = dir.join("crash-out.parquet");
@@ -501,6 +527,27 @@ mod tests {
     }
 
     #[test]
+    fn a_sink_is_recognised_by_declaring_no_outputs() {
+        // The whole distinction: a sink hands rows on rather than back, so the
+        // cases that check for an output relation must not apply to it.
+        let mut i = installed(serde_json::json!([]));
+        assert!(!is_sink(&i), "a component with an output is not a sink");
+        i.manifest.outputs.clear();
+        assert!(is_sink(&i));
+    }
+
+    #[test]
+    fn a_source_is_not_failed_for_a_missing_input_it_never_reads() {
+        // The case was reporting every source as broken for correctly
+        // succeeding when handed an input that does not exist.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut i = installed(serde_json::json!([]));
+        i.manifest.inputs.clear();
+        let c = crash_cleanup_case(&i, tmp.path());
+        assert_eq!(c.verdict, Verdict::NotApplicable, "{}", c.detail);
+    }
+
+    #[test]
     fn a_source_is_not_failed_for_having_no_input() {
         let tmp = tempfile::tempdir().unwrap();
         let mut i = installed(serde_json::json!([]));
@@ -628,7 +675,14 @@ fn initialize_case(installed: &Installed, dir: &Path) -> Case {
         Err(e) => Case {
             name: "initialize",
             verdict: Verdict::Fail,
-            detail: format!("did not answer an initialize: {}", first_line(&e)),
+            // Said plainly, because the raw error is usually about a missing
+            // input the phase deliberately does not provide, and the point is
+            // what that costs: `validate` would report this component as broken
+            // when it is only unprepared for being asked.
+            detail: format!(
+                "errored instead of answering, so `validate` would report it broken: {}",
+                first_line(&e)
+            ),
         },
         Ok(r) if !r.ok => Case {
             name: "initialize",

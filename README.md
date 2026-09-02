@@ -810,6 +810,18 @@ What DuckDB writes is the Arrow IPC **stream** format, so a component reaches fo
 not promise the other one. Control messages stay JSON because they are small and
 structured.
 
+**Sources and sinks too, not only transforms.** The ports a component declares
+decide what it is: no inputs is a source, no outputs is a sink.
+
+```text
+  g   ok (5 rows) - ext.gen: 5 row(s) -> g
+  e   ok          - ext.emit: 5 row(s) delivered
+```
+
+A sink has delivered its rows somewhere Duckle does not model - an API, a queue,
+a file of its own - and has no relation to hand back, so it is not asked for one.
+Requiring one failed a sink that had already done its job.
+
 **Rows it cannot handle go to the reject port**, on the same `__reject` contract
 every built-in uses, so a downstream edge reads them identically whoever wrote
 the component:
