@@ -87,6 +87,14 @@ pub struct PartitionRun {
     /// original attempt did rather than regenerating them from a definition
     /// that may since have been edited.
     pub params: std::collections::BTreeMap<String, String>,
+    /// #295: what this slice IS, independent of which backfill asked for it.
+    ///
+    /// pipeline + partition + release, and the schedule occurrence when a
+    /// schedule caused it. Two requests for the same slice of the same release
+    /// carry the same id, which is what lets a restart or a race find that the
+    /// work is already done instead of doing it again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +155,56 @@ impl Backfill {
         }
         n
     }
+}
+
+/// The identity of one slice of work (#295).
+///
+/// Deterministic and order-independent: the same pipeline, partition, release
+/// and schedule occurrence always hash to the same id, on any machine and in
+/// any process. That is the whole point - a value that varied per request could
+/// not answer "has this already been done".
+///
+/// The release is part of it because the same date against different code is
+/// different work; a rebuild that changes a pipeline changes the release, and
+/// the slice becomes newly wanted rather than silently already-done.
+pub fn occurrence_id(
+    pipeline: &str,
+    partition: &str,
+    release: Option<&str>,
+    schedule_occurrence: Option<&str>,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    // Length-prefixed, so ("ab", "c") and ("a", "bc") are different slices
+    // rather than the same one - a joiner character would collide the moment a
+    // partition key contained it.
+    for part in [
+        pipeline,
+        partition,
+        release.unwrap_or(""),
+        schedule_occurrence.unwrap_or(""),
+    ] {
+        h.update(part.len().to_le_bytes());
+        h.update(part.as_bytes());
+    }
+    h.finalize().iter().take(16).map(|b| format!("{b:02x}")).collect()
+}
+
+/// The run that already did this exact slice, if one did.
+///
+/// Searched across every plan in the workspace rather than within one, because
+/// "has this been done" is a question about the work, not about which backfill
+/// happened to ask. A restart that recreates a plan, or two schedules firing
+/// the same occurrence, both land here.
+pub fn already_succeeded(workspace: &Path, occurrence: &str) -> Option<(String, String)> {
+    for b in list(workspace) {
+        for p in &b.partitions {
+            if p.state == State::Succeeded && p.occurrence.as_deref() == Some(occurrence) {
+                return Some((b.id.clone(), p.run_id.clone().unwrap_or_default()));
+            }
+        }
+    }
+    None
 }
 
 pub fn dir(workspace: &Path) -> PathBuf {
@@ -265,9 +323,68 @@ mod tests {
                     error: None,
                     finished_at: None,
                     params: p.params,
+                    occurrence: None,
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn the_same_slice_of_the_same_release_has_the_same_identity() {
+        // The whole point: a value that varied per request could not answer
+        // "has this already been done".
+        let a = occurrence_id("accounts", "2020-01-03", Some("rel-1"), Some("nightly@02:00"));
+        let b = occurrence_id("accounts", "2020-01-03", Some("rel-1"), Some("nightly@02:00"));
+        assert_eq!(a, b);
+
+        // Any part differing is different work.
+        assert_ne!(a, occurrence_id("orders", "2020-01-03", Some("rel-1"), Some("nightly@02:00")));
+        assert_ne!(a, occurrence_id("accounts", "2020-01-04", Some("rel-1"), Some("nightly@02:00")));
+        assert_ne!(a, occurrence_id("accounts", "2020-01-03", Some("rel-2"), Some("nightly@02:00")),
+            "the same date against different code is different work");
+        assert_ne!(a, occurrence_id("accounts", "2020-01-03", Some("rel-1"), Some("nightly@03:00")));
+    }
+
+    #[test]
+    fn parts_cannot_run_together_to_collide() {
+        // Length-prefixed rather than joined: with a separator, a partition key
+        // containing it would silently become a different slice's identity.
+        assert_ne!(
+            occurrence_id("ab", "c", None, None),
+            occurrence_id("a", "bc", None, None)
+        );
+        assert_ne!(
+            occurrence_id("a-b", "c", None, None),
+            occurrence_id("a", "b-c", None, None)
+        );
+    }
+
+    #[test]
+    fn a_slice_already_done_is_found_across_backfills() {
+        // "Has this been done" is a question about the work, not about which
+        // backfill happened to ask - a restart recreates the plan under a new
+        // id, and the answer must still be yes.
+        let tmp = tempfile::tempdir().unwrap();
+        let occ = occurrence_id("accounts", "2020-01-01", Some("rel-1"), None);
+        let mut first = plan(("2020-01-01", "2020-01-02"));
+        first.id = "bf-first".into();
+        first.partitions[0].occurrence = Some(occ.clone());
+        first.partitions[0].state = State::Succeeded;
+        first.partitions[0].run_id = Some("run-a".into());
+        save(tmp.path(), &first).unwrap();
+
+        let found = already_succeeded(tmp.path(), &occ);
+        assert_eq!(found, Some(("bf-first".to_string(), "run-a".to_string())));
+
+        // A slice that only FAILED is not done, and must be retried rather
+        // than skipped.
+        let other = occurrence_id("accounts", "2020-01-02", Some("rel-1"), None);
+        let mut second = plan(("2020-01-01", "2020-01-02"));
+        second.id = "bf-second".into();
+        second.partitions[0].occurrence = Some(other.clone());
+        second.partitions[0].state = State::Failed;
+        save(tmp.path(), &second).unwrap();
+        assert_eq!(already_succeeded(tmp.path(), &other), None);
     }
 
     #[test]

@@ -1769,6 +1769,7 @@ fn api_backfill_action(state: &Arc<State>, req: &Request) -> Reply {
                 body.get("from").and_then(Value::as_str).unwrap_or_default(),
                 body.get("to").and_then(Value::as_str).unwrap_or_default(),
                 body.get("maxConcurrent").and_then(Value::as_u64).unwrap_or(4) as usize,
+                body.get("occurrence").and_then(Value::as_str),
             ) {
                 Ok(p) => p,
                 Err(e) => return respond_err("400 Bad Request", &e),
@@ -1787,8 +1788,9 @@ fn api_backfill_action(state: &Arc<State>, req: &Request) -> Reply {
             }
             let id = plan.id.clone();
             let count = plan.partitions.len();
+            let force = body.get("force").and_then(Value::as_bool).unwrap_or(false);
             std::thread::spawn(move || {
-                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, &|_| {});
+                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, force, &|_| {});
             });
             respond_json(&json!({ "accepted": true, "id": id, "partitions": count }))
         }
@@ -1814,7 +1816,9 @@ fn api_backfill_action(state: &Arc<State>, req: &Request) -> Reply {
             }
             let id = id.to_string();
             std::thread::spawn(move || {
-                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, &|_| {});
+                // A retry is explicit: the operator decided this slice should
+                // run, so it is not skipped as already-done.
+                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, true, &|_| {});
             });
             respond_json(&json!({ "accepted": true, "id": id, "retried": n }))
         }

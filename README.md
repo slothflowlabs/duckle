@@ -1071,6 +1071,20 @@ operator.
 The MCP tool `backfill` takes the same five actions, through the same engine
 functions, so an agent and an operator cannot get different behaviour.
 
+**A slice knows what it is, so it is not done twice.** Its identity is
+pipeline + partition + release + the schedule occurrence that caused it, hashed
+deterministically - so a restart, or the same schedule firing again, finds the
+work already done:
+
+```text
+first firing    2020-01-01  ok
+same occurrence 2020-01-01  already done by bf-accounts-1788359538501
+                receipts: 3, not 6
+```
+
+The release is part of the identity because the same date against different code
+is different work. `--force` runs them anyway, and a retry is always explicit.
+
 **A backfill's own bound is an additional ceiling, not a way around the
 machine's.** Each slice still acquires the pool its pipeline asks for, so
 `--max-concurrent 4` over a pipeline in a pool of one runs one at a time:

@@ -15,6 +15,9 @@ pub struct SliceOutcome {
     pub key: String,
     pub run_id: Option<String>,
     pub error: Option<String>,
+    /// The backfill whose run this slice reused instead of doing the work
+    /// again (#295).
+    pub reused_from: Option<String>,
 }
 
 /// Build a plan from a pipeline and a range, without running it (#295).
@@ -28,6 +31,10 @@ pub fn plan_for(
     from: &str,
     to: &str,
     max_concurrent: usize,
+    // #295: the schedule occurrence that caused this, when one did. Supplied by
+    // the caller rather than invented here - #296/#318 own what an occurrence
+    // is and which zone it is in; this only consumes the identity.
+    schedule_occurrence: Option<&str>,
 ) -> Result<Backfill, String> {
     let text = std::fs::read_to_string(pipeline_path)
         .map_err(|e| format!("{}: {e}", pipeline_path.display()))?;
@@ -47,20 +54,27 @@ pub fn plan_for(
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "pipeline".into());
+    let release = crate::release::active(
+        workspace,
+        &std::env::var("DUCKLE_ENVIRONMENT").unwrap_or_else(|_| "default".into()),
+    );
     Ok(Backfill {
         id: backfill::new_id(&name),
-        pipeline: name,
+        pipeline: name.clone(),
         pipeline_path: pipeline_path.display().to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
-        release_id: crate::release::active(
-            workspace,
-            &std::env::var("DUCKLE_ENVIRONMENT").unwrap_or_else(|_| "default".into()),
-        ),
+        release_id: release.clone(),
         max_concurrent: max_concurrent.max(1),
         pid: Some(std::process::id()),
         partitions: parts
             .into_iter()
             .map(|p| PartitionRun {
+                occurrence: Some(backfill::occurrence_id(
+                    &name,
+                    &p.key,
+                    release.as_deref(),
+                    schedule_occurrence,
+                )),
                 key: p.key,
                 state: State::Requested,
                 run_id: None,
@@ -83,6 +97,9 @@ pub fn execute(
     workspace: &Path,
     duckdb: &Path,
     plan: Backfill,
+    // Run every slice even if an identical one already succeeded. The escape
+    // hatch #295 asks for: sometimes a slice must genuinely be redone.
+    force: bool,
     on_slice: &(dyn Fn(SliceOutcome) + Sync),
 ) -> Backfill {
     let workers = plan
@@ -128,6 +145,36 @@ pub fn execute(
                     (idx, plan.partitions[idx].clone())
                 };
                 let (idx, slice) = claimed;
+                // #295: this exact slice of this exact release may already have
+                // been done - by a restart recreating the plan, or by two
+                // schedules firing the same occurrence. Doing it again is not
+                // just wasted hours; for a sink without idempotent writes it is
+                // duplicated data.
+                let done_already = match force {
+                    true => None,
+                    false => slice
+                        .occurrence
+                        .as_deref()
+                        .and_then(|o| backfill::already_succeeded(&workspace, o)),
+                };
+                if let Some((other, run_id)) = done_already {
+                    let mut plan = shared.lock().unwrap_or_else(|p| p.into_inner());
+                    let p = &mut plan.partitions[idx];
+                    p.state = State::Succeeded;
+                    p.run_id = Some(run_id.clone());
+                    p.finished_at = Some(chrono::Utc::now().to_rfc3339());
+                    p.error = None;
+                    let told = SliceOutcome {
+                        key: slice.key.clone(),
+                        run_id: Some(run_id),
+                        error: None,
+                        reused_from: Some(other),
+                    };
+                    let _ = backfill::save(&workspace, &plan);
+                    drop(plan);
+                    on_slice(told);
+                    continue;
+                }
                 let outcome =
                     run_one(&workspace, &duckdb, &path, &pipeline, &id, &slice, &release, &gates);
                 {
@@ -152,6 +199,7 @@ pub fn execute(
                         key: slice.key.clone(),
                         run_id: p.run_id.clone(),
                         error: p.error.clone(),
+                        reused_from: None,
                     };
                     let _ = backfill::save(&workspace, &plan);
                     drop(plan);

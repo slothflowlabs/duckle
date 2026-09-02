@@ -40,6 +40,8 @@ struct Args {
     to: String,
     max_concurrent: usize,
     partition: Option<String>,
+    occurrence: Option<String>,
+    force: bool,
     dry_run: bool,
     json: bool,
     positional: Vec<String>,
@@ -52,6 +54,8 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
         to: String::new(),
         max_concurrent: 4,
         partition: None,
+        occurrence: None,
+        force: false,
         dry_run: false,
         json: false,
         positional: Vec::new(),
@@ -62,6 +66,8 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             "--from" => a.from = it.next().unwrap_or_default(),
             "--to" => a.to = it.next().unwrap_or_default(),
             "--partition" => a.partition = it.next(),
+            "--occurrence" => a.occurrence = it.next(),
+            "--force" => a.force = true,
             "--max-concurrent" => {
                 a.max_concurrent = it
                     .next()
@@ -150,42 +156,31 @@ fn create(args: &Args) -> ExitCode {
         return ExitCode::from(0);
     }
 
-    let name = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "pipeline".into());
-    let plan = Backfill {
-        id: backfill::new_id(&name),
-        pipeline: name.clone(),
-        pipeline_path: path.display().to_string(),
-        created_at: chrono::Utc::now().to_rfc3339(),
-        release_id: duckle_duckdb_engine::release::active(
-            &args.workspace,
-            &std::env::var("DUCKLE_ENVIRONMENT").unwrap_or_else(|_| "default".into()),
-        ),
-        max_concurrent: args.max_concurrent,
-        pid: Some(std::process::id()),
-        partitions: partitions
-            .into_iter()
-            .map(|p| PartitionRun {
-                key: p.key,
-                state: State::Requested,
-                run_id: None,
-                attempts: 0,
-                error: None,
-                finished_at: None,
-                params: p.params,
-            })
-            .collect(),
+    // The same builder the console and MCP use, so a plan is identical
+    // whoever asked for it - and the occurrence ids come out the same, which
+    // is the whole point of them.
+    let plan = match duckle_duckdb_engine::backfill_exec::plan_for(
+        &args.workspace,
+        &path,
+        &args.from,
+        &args.to,
+        args.max_concurrent,
+        args.occurrence.as_deref(),
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("duckle-runner backfill create: {e}");
+            return ExitCode::from(2);
+        }
     };
     // Written BEFORE anything executes. A backfill that started and was killed
     // before its plan reached disk is one nobody can resume or even name.
-    if let Err(e) = backfill::save(&args.workspace, &plan) {
+    if let Err(e) = duckle_duckdb_engine::backfill::save(&args.workspace, &plan) {
         eprintln!("duckle-runner backfill create: {e}");
         return ExitCode::from(2);
     }
     println!("backfill {}  {} partition(s)", plan.id, plan.partitions.len());
-    execute(&args.workspace, plan, args.json)
+    execute(&args.workspace, plan, args.json, args.force)
 }
 
 fn status(args: &Args) -> ExitCode {
@@ -260,7 +255,7 @@ fn retry(args: &Args) -> ExitCode {
         return ExitCode::from(2);
     }
     println!("retrying {n} partition(s) of {id}");
-    execute(&args.workspace, b, args.json)
+    execute(&args.workspace, b, args.json, true)
 }
 
 fn cancel(args: &Args) -> ExitCode {
@@ -286,7 +281,7 @@ fn cancel(args: &Args) -> ExitCode {
 ///
 /// Printing and an exit code; the orchestration itself lives in the engine so
 /// the console and MCP run slices the same way this does.
-fn execute(workspace: &Path, plan: Backfill, json: bool) -> ExitCode {
+fn execute(workspace: &Path, plan: Backfill, json: bool, force: bool) -> ExitCode {
     let duckdb = match crate::resolve_duckdb(None) {
         Ok(d) => d,
         Err(e) => {
@@ -298,13 +293,15 @@ fn execute(workspace: &Path, plan: Backfill, json: bool) -> ExitCode {
         workspace,
         &duckdb,
         plan,
+        force,
         &|o| {
             eprintln!(
                 "  {:<12} {}",
                 o.key,
-                match &o.error {
-                    None => "ok".to_string(),
-                    Some(e) => format!("FAILED  {e}"),
+                match (&o.error, &o.reused_from) {
+                    (Some(e), _) => format!("FAILED  {e}"),
+                    (None, Some(b)) => format!("already done by {b}"),
+                    (None, None) => "ok".to_string(),
                 }
             );
         },

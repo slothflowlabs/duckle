@@ -126,6 +126,8 @@ pub fn list_tools() -> Value {
                 "dryRun": { "type": "boolean", "description": "create: list the partitions and queue nothing." },
                 "id": { "type": "string", "description": "status/retry/cancel: the backfill id." },
                 "partition": { "type": "string", "description": "retry: only this partition key." },
+                "occurrence": { "type": "string", "description": "create: the schedule occurrence that caused this, so a re-fire does not repeat the work." },
+                "force": { "type": "boolean", "description": "create: run every slice even if an identical one already succeeded." },
                 "duckdb": { "type": "string", "description": "DuckDB CLI path. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb'." }
             }, "required": ["action","workspace"] })),
         tool("complete_node_sql",
@@ -688,6 +690,7 @@ fn t_backfill(args: &Value) -> Result<Value, String> {
                 arg_str(args, "from").unwrap_or_default(),
                 arg_str(args, "to").unwrap_or_default(),
                 args.get("maxConcurrent").and_then(Value::as_u64).unwrap_or(4) as usize,
+                arg_str(args, "occurrence"),
             )?;
             // A dry run writes nothing: "what would this queue" must not be a
             // question that queues anything.
@@ -702,8 +705,9 @@ fn t_backfill(args: &Value) -> Result<Value, String> {
             let Some(duckdb) = resolve_duckdb(arg_str(args, "duckdb")) else {
                 return Err("no DuckDB binary; set DUCKLE_DUCKDB_BIN or pass 'duckdb'".into());
             };
+            let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
             let done =
-                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, &|_| {});
+                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, force, &|_| {});
             Ok(serde_json::to_value(&done).unwrap_or(Value::Null))
         }
         "status" => match arg_str(args, "id") {
@@ -723,8 +727,10 @@ fn t_backfill(args: &Value) -> Result<Value, String> {
             let Some(duckdb) = resolve_duckdb(arg_str(args, "duckdb")) else {
                 return Err("no DuckDB binary; set DUCKLE_DUCKDB_BIN or pass 'duckdb'".into());
             };
+            // A retry is an explicit act: the operator has looked and decided
+            // this slice should run, so it is not skipped as already-done.
             let done =
-                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, &|_| {});
+                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, true, &|_| {});
             Ok(json!({ "retried": n, "backfill": done }))
         }
         "cancel" => {
