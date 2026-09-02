@@ -764,6 +764,43 @@ does.
 monitored. Nothing prunes `runs/`, so a workspace that has ever run thousands of
 pipelines would otherwise emit thousands of label values forever.
 
+### Planning a chunked extract
+
+A single query over a billion-row table holds a snapshot for hours, fails near
+the end and restarts from zero. Declare how it should be split:
+
+```json
+{ "chunking": { "type": "range", "column": "company_id", "chunkSize": 1000000, "concurrency": 4 } }
+```
+
+```bash
+duckle-runner source plan pipelines/big.json --node src --min 1 --max 4200000 --nulls 0
+```
+
+```text
+strategy    range on company_id
+chunks      5          concurrency 4
+snapshot    best effort - each chunk reads when it runs
+fallback    one query, as today, if chunking is removed
+
+note        chunks are separate queries: a row written while the extract runs is in
+            one chunk or none. This source cannot pin a snapshot across them.
+
+  1..1000000       company_id >= 1 AND company_id < 1000001
+  4000001..4200000 company_id >= 4000001 AND company_id <= 4200000
+```
+
+Range, time and hash strategies. **Refusing is the feature**: a connector that
+cannot give stable semantics is told so rather than emulated, a key with NULLs is
+refused with the row count it would silently lose, and a column name that is not
+a plain identifier is refused rather than escaped, because a pipeline file is not
+a trusted source of SQL fragments. Hash bucketing is spelled out per family -
+`hashtext`, `ORA_HASH`, `CHECKSUM`, `CRC32` - because getting it wrong does not
+error, it silently produces overlapping or empty buckets.
+
+**This prints the plan; it does not yet run it.** Chunked reads are not wired
+into the source path, and the command says so on every invocation.
+
 ### Partitioned backfills
 
 Declare how a pipeline is sliced:

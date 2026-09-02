@@ -24,6 +24,7 @@ mod affected_cmd;
 mod migrate_cmd;
 mod oidc;
 mod backfill_cmd;
+mod chunk_cmd;
 mod release_cmd;
 mod runsdiff_cmd;
 mod sql_cmd;
@@ -2071,6 +2072,10 @@ fn main() -> ExitCode {
                 .unwrap_or_default()
         );
         return ExitCode::from(0);
+    }
+    // `source plan` -> what chunked extraction would do (#306).
+    if std::env::args().nth(1).as_deref() == Some("source") {
+        return chunk_cmd::run();
     }
     // `release` -> record, verify and activate an immutable control plane (#297).
     if std::env::args().nth(1).as_deref() == Some("release") {
