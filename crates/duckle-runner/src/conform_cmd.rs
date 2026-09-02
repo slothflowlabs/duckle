@@ -434,7 +434,12 @@ mod tests {
                 inputs: vec![Port { name: "main".into(), description: String::new() }],
                 outputs: vec![Port { name: "main".into(), description: String::new() }],
                 properties: serde_json::json!({ "sections": [{ "fields": fields }] }),
-                runtime: Runtime { command: vec!["python".into()], timeout_secs: 5, lock: None },
+                runtime: Runtime {
+                    command: vec!["python".into()],
+                    timeout_secs: 5,
+                    interchange: vec!["parquet".into()],
+                    lock: None,
+                },
             },
             dir: ".".into(),
             manifest_hash: "h".into(),
