@@ -1279,8 +1279,13 @@ same id, so `runs/receipts/<id>.json`, the Runs tab and
 `logs/<pipeline>/runtime.log` join up:
 
 ```bash
-grep '"run_id":"run-scheduled-nightly-1788203742570"' logs/nightly/runtime.log
+duckle-runner runs logs run-scheduled-nightly-1788203742570
 ```
+
+The pipeline comes from the run's own receipt, so holding an id from an alert or
+an API response is enough - you do not also have to know which pipeline produced
+it. Lines are matched on the `run_id` field rather than anywhere in the text, so
+a run that merely *mentions* another one is not reported as its log.
 
 The engine used to mint its own `run-{pid}-{nanos}` for the log and persist it
 nowhere, so "show me the log for run X" had no answer for any X anyone could

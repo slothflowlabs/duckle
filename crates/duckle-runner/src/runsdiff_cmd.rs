@@ -46,9 +46,20 @@ fn label(area: Area) -> &'static str {
 
 pub fn run() -> ExitCode {
     let mut it = std::env::args().skip(2);
-    if it.next().as_deref() != Some("diff") {
-        eprintln!("usage: duckle-runner runs diff <run_a> <run_b> [--workspace DIR] [--json]");
-        return ExitCode::from(2);
+    match it.next().as_deref() {
+        Some("diff") => {}
+        // #259: the log lines for one historical run, by the durable id its
+        // receipt was written with. The capability arrived when the engine
+        // stopped minting its own log id; this is the command that saves
+        // reaching for grep and knowing which pipeline's file to look in.
+        Some("logs") => return logs(it),
+        _ => {
+            eprintln!(
+                "usage: duckle-runner runs diff <run_a> <run_b> [--workspace DIR] [--json]
+                        duckle-runner runs logs <run_id> [--workspace DIR]"
+            );
+            return ExitCode::from(2);
+        }
     }
     let mut ids: Vec<String> = Vec::new();
     let mut workspace = PathBuf::from(".");
@@ -125,6 +136,27 @@ pub fn run() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #259: one run's lines, and only that run's.
+    #[test]
+    fn logs_are_selected_by_the_run_id_field_not_by_the_text() {
+        // A run id that appears inside another run's message - an error quoting
+        // it, a retry naming its parent - must not be reported as that run's
+        // log, or "show me what this run did" answers with someone else's work.
+        let ours = r#"{"event":"stage_finished","run_id":"run-a-1","rows":3}"#;
+        let theirs = r#"{"event":"error","run_id":"run-b-2","message":"retry of run-a-1"}"#;
+        let pick = |line: &str, want: &str| {
+            serde_json::from_str::<serde_json::Value>(line)
+                .ok()
+                .and_then(|v| v.get("run_id").and_then(|r| r.as_str()).map(|r| r == want))
+                .unwrap_or(false)
+        };
+        assert!(pick(ours, "run-a-1"));
+        assert!(!pick(theirs, "run-a-1"), "matched another run that merely mentioned it");
+        assert!(pick(theirs, "run-b-2"));
+        // A line that is not JSON is not a log line of anyone's.
+        assert!(!pick("starting up", "run-a-1"));
+    }
     use duckle_duckdb_engine::history::append_run_record;
 
     fn workspace() -> PathBuf {
@@ -209,4 +241,76 @@ mod tests {
         let d = rundiff::compare(&a, &b, None, None);
         assert!(d.not_compared.iter().any(|n| n.contains("history record")));
     }
+}
+
+/// `runs logs <run_id>` - what one run wrote, wherever it wrote it.
+///
+/// The pipeline comes from the run's own receipt rather than being asked for:
+/// an operator holding a run id from an alert or an API response should not
+/// also have to know which pipeline produced it to read its log.
+fn logs(mut it: impl Iterator<Item = String>) -> ExitCode {
+    let mut run_id: Option<String> = None;
+    let mut workspace = PathBuf::from(".");
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--workspace" => workspace = it.next().map(Into::into).unwrap_or(workspace),
+            other if other.starts_with('-') => {
+                eprintln!("duckle-runner runs logs: unknown flag {other}");
+                return ExitCode::from(2);
+            }
+            other => run_id = Some(other.to_string()),
+        }
+    }
+    let Some(run_id) = run_id else {
+        eprintln!("usage: duckle-runner runs logs <run_id> [--workspace DIR]");
+        return ExitCode::from(2);
+    };
+    let receipt = duckle_duckdb_engine::retry::load(&workspace, &run_id);
+    let log_dir = std::env::var("DUCKLE_LOG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| workspace.join("logs"));
+    // The receipt names the pipeline, and therefore the file. Without one - a
+    // run from another workspace, a receipt pruned by retention - every log is
+    // searched rather than giving up, because the id is still in the lines.
+    let files: Vec<PathBuf> = match &receipt {
+        Ok(r) => vec![log_dir.join(&r.pipeline_name).join("runtime.log")],
+        Err(_) => std::fs::read_dir(&log_dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| e.path().join("runtime.log"))
+                    .filter(|p| p.exists())
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+    let mut found = 0usize;
+    for file in &files {
+        let Ok(text) = std::fs::read_to_string(file) else { continue };
+        for line in text.lines() {
+            // Matched on the field rather than anywhere in the line, so a run
+            // whose id appears inside someone else's message is not reported as
+            // that run's log.
+            let is_ours = serde_json::from_str::<serde_json::Value>(line)
+                .ok()
+                .and_then(|v| v.get("run_id").and_then(|r| r.as_str()).map(|r| r == run_id))
+                .unwrap_or(false);
+            if is_ours {
+                println!("{line}");
+                found += 1;
+            }
+        }
+    }
+    if found == 0 {
+        eprintln!(
+            "no log lines for {run_id} in {}{}",
+            log_dir.display(),
+            match receipt {
+                Ok(_) => "",
+                Err(_) => " (and no receipt for it, so every pipeline's log was searched)",
+            }
+        );
+        return ExitCode::from(1);
+    }
+    ExitCode::from(0)
 }
