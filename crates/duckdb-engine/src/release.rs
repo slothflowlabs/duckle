@@ -10,13 +10,15 @@
 //! rename, so a reader sees the previous complete release or the new complete
 //! release and never a half-copied workspace.
 //!
-//! ## It records, it does not copy
+//! ## It stores the content, not only its hash
 //!
-//! A release names content by hash rather than holding a copy of it. That keeps
-//! the record small, makes "is what is on disk still the release we activated"
-//! answerable, and means promoting the same release through environments cannot
-//! rebuild anything - which is the property #297 asks for and the reason not to
-//! store a tarball instead.
+//! The first version of this recorded hashes and no content, which made
+//! rollback a lie: the pointer moved back to A while the workspace files still
+//! held B, so the environment was not running A and `releaseId: A` on a run
+//! meant only "A was the pointer when this started". A release now holds an
+//! immutable copy of every control-plane file, content-addressed and shared
+//! between releases, and activation MATERIALISES it. That is what makes
+//! `activate A` / `activate B` / `rollback` actually execute A, B, A.
 //!
 //! ## The hashes are the ones already in use
 //!
@@ -61,6 +63,14 @@ pub struct Body {
     /// refuse before mutating when one is missing; the values are not here.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub connection_refs: BTreeSet<String>,
+    /// Workspace-relative path -> sha256 of the bytes stored for it.
+    ///
+    /// This is what makes a release executable rather than merely descriptive.
+    /// The bytes live in a content-addressed store shared between releases, so
+    /// two releases differing in one pipeline cost one extra object rather than
+    /// a second copy of everything.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub files: BTreeMap<String, String>,
 }
 
 /// An immutable release. `id` is the hash of everything else.
@@ -135,6 +145,13 @@ pub fn build(workspace: &Path) -> Result<Release, String> {
     body.plans_hash = file_hash(&crate::plans::plans_path(workspace));
     body.schedules_hash = file_hash(&crate::schedules::schedules_path(workspace));
     body.git_commit = git_commit(workspace);
+    // The bytes, not only their hashes. Without this, activating a release is
+    // just moving a pointer and rolling back leaves the workspace on whatever
+    // it happened to contain.
+    for (rel, path) in control_plane_files(workspace) {
+        let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        body.files.insert(rel, put_object(workspace, &bytes)?);
+    }
     let id = id_of(&body);
     Ok(Release { id, body })
 }
@@ -154,6 +171,70 @@ fn git_commit(workspace: &Path) -> Option<String> {
 
 pub fn dir(workspace: &Path) -> PathBuf {
     workspace.join(".duckle").join("releases")
+}
+
+/// Where the immutable bytes live, keyed by their own hash.
+///
+/// Shared between releases: two releases differing in one pipeline cost one
+/// extra object, not a second copy of the workspace. An object is never
+/// rewritten, because its name IS its content.
+pub fn objects_dir(workspace: &Path) -> PathBuf {
+    dir(workspace).join("objects")
+}
+
+fn put_object(workspace: &Path, bytes: &[u8]) -> Result<String, String> {
+    let hash = sha256(bytes);
+    let dir = objects_dir(workspace);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(&hash);
+    if path.exists() {
+        return Ok(hash);
+    }
+    // Temp then rename, so a reader never sees a half-written object under a
+    // name that promises those exact bytes.
+    let tmp = dir.join(format!(".{hash}.tmp"));
+    std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    Ok(hash)
+}
+
+pub fn get_object(workspace: &Path, hash: &str) -> Result<Vec<u8>, String> {
+    let path = objects_dir(workspace).join(hash);
+    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // Verified on the way out, not assumed. An object whose bytes no longer
+    // hash to its name is corruption, and materialising it would put content
+    // into the workspace that no release actually describes.
+    let actual = sha256(&bytes);
+    if actual != hash {
+        return Err(format!(
+            "release object {hash} has been altered - its content now hashes to {actual}"
+        ));
+    }
+    Ok(bytes)
+}
+
+/// The control-plane files a release captures.
+///
+/// Every pipeline, plus plans and schedules when they exist. These are what
+/// decide what runs and when; anything else in a workspace is data or working
+/// state and is deliberately not part of the release.
+fn control_plane_files(workspace: &Path) -> Vec<(String, PathBuf)> {
+    let mut out: Vec<(String, PathBuf)> = crate::catalog::document_paths(workspace)
+        .into_iter()
+        .filter_map(|(_, path, _)| {
+            let rel = path.strip_prefix(workspace).ok()?;
+            Some((rel.to_string_lossy().replace('\\', "/"), path.clone()))
+        })
+        .collect();
+    for p in [crate::plans::plans_path(workspace), crate::schedules::schedules_path(workspace)] {
+        if p.exists() {
+            if let Ok(rel) = p.strip_prefix(workspace) {
+                out.push((rel.to_string_lossy().replace('\\', "/"), p.clone()));
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 fn path_for(workspace: &Path, id: &str) -> PathBuf {
@@ -237,6 +318,85 @@ pub fn point_at(workspace: &Path, environment: &str, id: &str) -> Result<(), Str
     let tmp = dir.join("active.tmp");
     std::fs::write(&tmp, id).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, dir.join("active")).map_err(|e| e.to_string())
+}
+
+/// What the workspace holds now that this release does not, and vice versa.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Drift {
+    /// Files whose bytes differ from the release's.
+    pub changed: Vec<String>,
+    /// Control-plane files present in the workspace and not in the release.
+    /// Left in place, they mean the environment is not running this release -
+    /// a schedule could fire a pipeline the release does not contain.
+    pub extra: Vec<String>,
+}
+
+impl Drift {
+    pub fn is_empty(&self) -> bool {
+        self.changed.is_empty() && self.extra.is_empty()
+    }
+}
+
+/// How the workspace differs from a release, without changing anything.
+pub fn drift(workspace: &Path, release: &Release) -> Drift {
+    let mut d = Drift::default();
+    let on_disk: std::collections::BTreeMap<String, PathBuf> =
+        control_plane_files(workspace).into_iter().collect();
+    for (rel, hash) in &release.body.files {
+        match on_disk.get(rel) {
+            None => d.changed.push(rel.clone()),
+            Some(path) => {
+                let same = std::fs::read(path).map(|b| sha256(&b) == *hash).unwrap_or(false);
+                if !same {
+                    d.changed.push(rel.clone());
+                }
+            }
+        }
+    }
+    for rel in on_disk.keys() {
+        if !release.body.files.contains_key(rel) {
+            d.extra.push(rel.clone());
+        }
+    }
+    d
+}
+
+/// Write the release's content into the workspace.
+///
+/// This is what "activate" means. Without it, activation moved a pointer while
+/// the files stayed as they were, so rolling back to A left the workspace
+/// running B and `releaseId: A` on a run meant only that A was the pointer.
+///
+/// Files the release does not contain are REMOVED, because a pipeline left
+/// behind is one a schedule can still fire - the environment would not be
+/// running the release. Everything else in the workspace is untouched: this
+/// moves control-plane files, not data.
+pub fn materialise(workspace: &Path, release: &Release) -> Result<Vec<String>, String> {
+    let mut touched = Vec::new();
+    // Every object is read and verified BEFORE anything is written, so a
+    // corrupt or missing one aborts with the workspace untouched rather than
+    // half-way through.
+    let mut staged: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    for (rel, hash) in &release.body.files {
+        let bytes = get_object(workspace, hash)
+            .map_err(|e| format!("{rel}: {e}"))?;
+        staged.push((workspace.join(rel), bytes));
+    }
+    for (path, bytes) in staged {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let tmp = path.with_extension("release.tmp");
+        std::fs::write(&tmp, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+        touched.push(path.display().to_string());
+    }
+    for rel in drift(workspace, release).extra {
+        let path = workspace.join(&rel);
+        std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        touched.push(format!("removed {rel}"));
+    }
+    Ok(touched)
 }
 
 /// What changed between two releases.
@@ -374,6 +534,100 @@ mod tests {
         r.body.pipelines.insert("smuggled".into(), "deadbeef".into());
         let e = save(tmp.path(), &r).unwrap_err();
         assert!(e.contains("already exists"), "{e}");
+    }
+
+    #[test]
+    fn a_release_stores_the_bytes_and_not_only_their_hashes() {
+        // Without the content, activating is moving a pointer and rolling back
+        // leaves the workspace on whatever it happened to contain.
+        let tmp = ws(&[("one.json", ONE)]);
+        let r = build(tmp.path()).unwrap();
+        assert!(!r.body.files.is_empty(), "a release with no content is not executable");
+        let (rel, hash) = r.body.files.iter().next().unwrap();
+        assert!(rel.ends_with("one.json"), "{rel}");
+        let bytes = get_object(tmp.path(), hash).unwrap();
+        assert_eq!(String::from_utf8_lossy(&bytes), ONE);
+    }
+
+    /// The defect Louis found: activate A, edit to B, activate B, roll back -
+    /// and the workspace must hold A again, not B.
+    #[test]
+    fn rolling_back_restores_the_content_and_not_only_the_pointer() {
+        let tmp = ws(&[("one.json", ONE)]);
+        let a = build(tmp.path()).unwrap();
+        save(tmp.path(), &a).unwrap();
+        materialise(tmp.path(), &a).unwrap();
+        point_at(tmp.path(), "production", &a.id).unwrap();
+
+        let edited = ONE.replace("a.csv", "b.csv");
+        std::fs::write(tmp.path().join("pipelines/one.json"), &edited).unwrap();
+        let b = build(tmp.path()).unwrap();
+        save(tmp.path(), &b).unwrap();
+        materialise(tmp.path(), &b).unwrap();
+        point_at(tmp.path(), "production", &b.id).unwrap();
+        assert!(std::fs::read_to_string(tmp.path().join("pipelines/one.json"))
+            .unwrap()
+            .contains("b.csv"));
+
+        // Roll back.
+        let previous = previous(tmp.path(), "production").unwrap();
+        assert_eq!(previous, a.id);
+        materialise(tmp.path(), &load(tmp.path(), &previous).unwrap()).unwrap();
+        point_at(tmp.path(), "production", &previous).unwrap();
+
+        let on_disk = std::fs::read_to_string(tmp.path().join("pipelines/one.json")).unwrap();
+        assert!(on_disk.contains("a.csv"), "the workspace still holds B: {on_disk}");
+        assert!(!on_disk.contains("b.csv"));
+        assert!(drift(tmp.path(), &a).is_empty(), "the workspace IS release A again");
+    }
+
+    #[test]
+    fn a_pipeline_a_release_does_not_contain_is_removed_when_it_is_activated() {
+        // Left behind, it is one a schedule can still fire - so the environment
+        // would not be running the release.
+        let tmp = ws(&[("one.json", ONE)]);
+        let a = build(tmp.path()).unwrap();
+        save(tmp.path(), &a).unwrap();
+        std::fs::write(tmp.path().join("pipelines/later.json"), ONE.replace("one", "later")).unwrap();
+        let d = drift(tmp.path(), &a);
+        assert_eq!(d.extra, vec!["pipelines/later.json"], "{d:?}");
+        materialise(tmp.path(), &a).unwrap();
+        assert!(!tmp.path().join("pipelines/later.json").exists());
+    }
+
+    #[test]
+    fn a_corrupt_object_aborts_before_the_workspace_is_touched() {
+        // Every object is read and verified before anything is written, so a
+        // failure leaves the workspace as it was rather than half-updated.
+        let tmp = ws(&[("one.json", ONE), ("two.json", &ONE.replace("one", "two"))]);
+        let r = build(tmp.path()).unwrap();
+        save(tmp.path(), &r).unwrap();
+        let before = std::fs::read_to_string(tmp.path().join("pipelines/one.json")).unwrap();
+        std::fs::write(tmp.path().join("pipelines/one.json"), "{}").unwrap();
+        // Corrupt one object.
+        let hash = r.body.files.values().next().unwrap().clone();
+        std::fs::write(objects_dir(tmp.path()).join(&hash), "tampered").unwrap();
+        let e = materialise(tmp.path(), &r).unwrap_err();
+        assert!(e.contains("altered"), "{e}");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("pipelines/one.json")).unwrap(),
+            "{}",
+            "the workspace was written to despite the failure"
+        );
+        let _ = before;
+    }
+
+    #[test]
+    fn objects_are_shared_between_releases() {
+        // Two releases differing in one pipeline should cost one extra object,
+        // not a second copy of the workspace.
+        let tmp = ws(&[("one.json", ONE), ("two.json", &ONE.replace("one", "two"))]);
+        build(tmp.path()).unwrap();
+        let before = std::fs::read_dir(objects_dir(tmp.path())).unwrap().count();
+        std::fs::write(tmp.path().join("pipelines/one.json"), ONE.replace("a.csv", "c.csv")).unwrap();
+        build(tmp.path()).unwrap();
+        let after = std::fs::read_dir(objects_dir(tmp.path())).unwrap().count();
+        assert_eq!(after, before + 1, "unchanged files were stored twice");
     }
 
     #[test]

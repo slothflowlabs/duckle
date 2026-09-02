@@ -904,17 +904,28 @@ production is now running release 15963a9b750d6492...
 production rolled back to release c2cc337f3dd609fb...
 ```
 
-**A release is its own hash.** Pipelines, their parameter contracts, plans,
-schedules, the format version and the git commit, hashed canonically - so
-rebuilding an unchanged workspace produces the same id, and "has anything
-changed?" is a comparison rather than an investigation. It **records** rather
-than copies, so promoting one through environments cannot rebuild anything.
+**A release holds the content, not only its hash.** Every pipeline, plan and
+schedule is stored immutably, content-addressed and shared between releases, and
+`activate` **materialises** it into the workspace. That is what makes
+`activate A` / `activate B` / `rollback` actually execute A, B, A - and what makes
+`releaseId: A` on a run mean the run executed A, rather than that A happened to
+be the pointer when it started.
+
+Two releases differing in one pipeline cost one extra object, not a second copy
+of the workspace. Rebuilding an unchanged workspace produces the same id, so
+"has anything changed?" stays a comparison rather than an investigation.
 
 **Activation refuses before it mutates.** Every check runs and every problem is
-reported: the workspace must still *be* the release, every pipeline must still
-compile, every connection a pipeline names must exist, and policy must load. An
-operator fixing a production activation should not discover the second problem
-after fixing the first.
+reported: the release's stored content must be intact and still compile, every
+connection a pipeline names must exist, and policy must load. An operator fixing
+a production activation should not discover the second problem after fixing the
+first. It does *not* require the workspace to already match the release - that
+requirement is what would make rollback impossible, since rolling back to A is
+exactly the case where the workspace holds B.
+
+**Uncommitted work is named, not discarded.** Activating overwrites the
+control-plane files, so if the workspace differs it lists what would be
+overwritten or removed and refuses without `--force`.
 
 **The pointer swap is one rename.** Never remove-then-rename: `std::fs::rename`
 replaces the destination even while a reader holds it open, so unlinking first

@@ -26,6 +26,7 @@ struct Args {
     workspace: PathBuf,
     environment: String,
     json: bool,
+    force: bool,
     positional: Vec<String>,
 }
 
@@ -34,6 +35,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
         workspace: PathBuf::from("."),
         environment: String::new(),
         json: false,
+        force: false,
         positional: Vec::new(),
     };
     while let Some(arg) = it.next() {
@@ -41,6 +43,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             "--workspace" => a.workspace = it.next().map(Into::into).unwrap_or(a.workspace),
             "--environment" | "--env" => a.environment = it.next().unwrap_or_default(),
             "--json" => a.json = true,
+            "--force" => a.force = true,
             other if other.starts_with('-') => return Err(format!("unknown flag {other}")),
             other => a.positional.push(other.to_string()),
         }
@@ -56,43 +59,40 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
 fn dependency_gate(workspace: &Path, release: &Release) -> Vec<String> {
     let mut problems = Vec::new();
 
-    // 1. The workspace still IS this release. Activating a release built from
-    //    a workspace that has since changed would point production at a
-    //    description of something that is no longer there.
-    match release::build(workspace) {
-        Ok(current) if current.id != release.id => {
-            let d = release::diff(&release.body, &current.body);
-            problems.push(format!(
-                "the workspace no longer matches this release ({} added, {} changed, {} removed{}{})",
-                d.added.len(),
-                d.changed.len(),
-                d.removed.len(),
-                if d.plans_changed { ", plans changed" } else { "" },
-                if d.schedules_changed { ", schedules changed" } else { "" },
-            ));
-        }
-        Ok(_) => {}
-        Err(e) => problems.push(format!("cannot read the workspace: {e}")),
+    // 1. The release's own content is intact and compiles.
+    //
+    //    Deliberately NOT "the workspace already matches this release": that
+    //    requirement made rollback impossible, because rolling back to A is
+    //    exactly the case where the workspace holds B. What matters is that the
+    //    bytes A stored are still there and still run - the workspace is what
+    //    activation is about to overwrite.
+    if release.body.files.is_empty() {
+        problems.push(
+            "this release stored no content, so activating it would move a pointer without              changing what runs. Rebuild it with a newer Duckle."
+                .to_string(),
+        );
     }
-
-    // 2. Every pipeline still compiles. A release that cannot be planned is one
-    //    whose first scheduled run fails at midnight.
-    for (id, _) in release.body.pipelines.iter() {
-        let Some(path) = pipeline_path(workspace, id) else {
-            problems.push(format!("pipeline {id} is named by the release and is not in the workspace"));
-            continue;
+    for (rel, hash) in &release.body.files {
+        let bytes = match duckle_duckdb_engine::release::get_object(workspace, hash) {
+            Ok(b) => b,
+            Err(e) => {
+                problems.push(format!("{rel}: {e}"));
+                continue;
+            }
         };
-        let compiled = std::fs::read_to_string(&path)
-            .map_err(|e| format!("read: {e}"))
-            .and_then(|t| {
-                serde_json::from_str::<duckle_duckdb_engine::PipelineDoc>(&t)
-                    .map_err(|e| format!("parse: {e}"))
-            })
+        // Only pipelines compile; plans and schedules are checked by their own
+        // readers when they are used.
+        if !rel.ends_with(".json") || rel.ends_with("plans.json") || rel.ends_with("schedules.json")
+        {
+            continue;
+        }
+        let compiled = serde_json::from_slice::<duckle_duckdb_engine::PipelineDoc>(&bytes)
+            .map_err(|e| format!("parse: {e}"))
             .and_then(|d| {
                 duckle_duckdb_engine::compile_pipeline_sql(&d).map_err(|e| e.to_string())
             });
         if let Err(e) = compiled {
-            problems.push(format!("pipeline {id} does not compile: {e}"));
+            problems.push(format!("{rel} does not compile: {e}"));
         }
     }
 
@@ -298,6 +298,40 @@ pub fn run() -> ExitCode {
                 }
                 return ExitCode::from(1);
             }
+            // Activating overwrites the workspace's control-plane files with
+            // the release's. Uncommitted edits would be lost, so they are named
+            // and the activation refuses unless the operator says to discard
+            // them.
+            let d = release::drift(&ws, &release);
+            if !d.is_empty() && !args.force {
+                eprintln!(
+                    "duckle-runner release activate: the workspace differs from this release,                      and activating would overwrite it. Nothing was changed."
+                );
+                for f in &d.changed {
+                    eprintln!("  would overwrite  {f}");
+                }
+                for f in &d.extra {
+                    eprintln!("  would remove     {f}  (not part of this release)");
+                }
+                eprintln!("
+Build a release from the workspace first, or pass --force to discard.");
+                return ExitCode::from(1);
+            }
+            // Content first, pointer second. A crash between them leaves the
+            // environment pointing at the release it was running, with the new
+            // content on disk - which `verify` reports as drift rather than
+            // silently accepting.
+            match release::materialise(&ws, &release) {
+                Ok(touched) => {
+                    for t in &touched {
+                        println!("  {t}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("duckle-runner release activate: {e}");
+                    return ExitCode::from(2);
+                }
+            }
             if let Err(e) = release::point_at(&ws, &args.environment, &id) {
                 eprintln!("duckle-runner release activate: {e}");
                 return ExitCode::from(2);
@@ -328,7 +362,27 @@ pub fn run() -> ExitCode {
             // Deliberately NOT gated on the dependency checks. Rollback is what
             // an operator reaches for when the current release is broken, and a
             // rollback that refuses because the workspace is in a bad state is
-            // a rollback that never works when it is needed.
+            // a rollback that never works when it is needed. It DOES restore
+            // the content: a rollback that moved only the pointer would leave
+            // the environment running the release it was rolling back from.
+            let target = match release::load(&ws, &previous) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("duckle-runner release rollback: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            match release::materialise(&ws, &target) {
+                Ok(touched) => {
+                    for t in &touched {
+                        println!("  {t}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("duckle-runner release rollback: {e}");
+                    return ExitCode::from(2);
+                }
+            }
             if let Err(e) = release::point_at(&ws, &args.environment, &previous) {
                 eprintln!("duckle-runner release rollback: {e}");
                 return ExitCode::from(2);
@@ -405,11 +459,16 @@ fn report(args: &Args, id: &str, problems: &[String]) -> ExitCode {
 mod tests {
     use super::*;
 
+    /// A release verifies on its own content, not on the workspace matching it.
+    ///
+    /// This test asserted the opposite until Louis pointed out what that
+    /// implied: requiring `workspace == release` before activation makes
+    /// rollback impossible, because rolling back to A is exactly the case where
+    /// the workspace holds B. A release is now verified by whether the bytes it
+    /// stored are intact and still compile - the workspace is what activation
+    /// overwrites, not a precondition for it.
     #[test]
-    fn a_release_built_from_a_changed_workspace_does_not_verify() {
-        // The check that makes activation mean something: a release describes a
-        // workspace, and pointing production at a description of something that
-        // is no longer there is the failure this exists to prevent.
+    fn a_release_verifies_on_its_own_content_not_on_the_workspace() {
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path();
         std::fs::create_dir_all(ws.join("pipelines")).unwrap();
@@ -422,10 +481,42 @@ mod tests {
         release::save(ws, &r).unwrap();
         assert!(dependency_gate(ws, &r).is_empty(), "{:?}", dependency_gate(ws, &r));
 
+        // The workspace moves on. The release is unaffected: its content is
+        // stored, so it still verifies and can still be activated - which is
+        // what makes rolling back to it possible at all.
         std::fs::write(ws.join("pipelines/one.json"), doc.replace("a.csv", "b.csv")).unwrap();
+        assert!(
+            dependency_gate(ws, &r).is_empty(),
+            "a release must not stop verifying because the workspace changed: {:?}",
+            dependency_gate(ws, &r)
+        );
+        // And the difference is still visible, so activation can refuse to
+        // discard uncommitted work rather than doing it silently.
+        let drift = duckle_duckdb_engine::release::drift(ws, &r);
+        assert_eq!(drift.changed, vec!["pipelines/one.json"], "{drift:?}");
+    }
+
+    #[test]
+    fn a_release_whose_stored_content_will_not_compile_is_refused() {
+        // The check that replaced it: what matters is that the bytes the
+        // release stored still run, because those are what activation puts on
+        // disk.
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(
+            ws.join("pipelines/broken.json"),
+            r#"{"formatVersion":1,"name":"broken","nodes":[
+                {"id":"x","type":"transform","position":{"x":0,"y":0},
+                 "data":{"label":"x","componentId":"xf.filter","properties":{}}}],
+                "edges":[]}"#,
+        )
+        .unwrap();
+        let r = release::build(ws).unwrap();
+        release::save(ws, &r).unwrap();
         let problems = dependency_gate(ws, &r);
         assert!(
-            problems.iter().any(|p| p.contains("no longer matches")),
+            problems.iter().any(|p| p.contains("does not compile")),
             "{problems:?}"
         );
     }
