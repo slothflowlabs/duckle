@@ -1098,6 +1098,18 @@ fn dispatch_cmd(state: &WebState, cmd: &str, body: &[u8]) -> Reply {
                 Err(e) => respond_err("400 Bad Request", &e.to_string()),
             }
         }
+        // #307: the same list the desktop gets, so an external component appears
+        // in the web editor's palette too. Read from manifests; nothing runs.
+        "external_components" => {
+            let (found, problems) = duckle_duckdb_engine::plugin::discover(&state.workspace);
+            respond_json(&json!({
+                "components": found
+                    .iter()
+                    .map(duckle_duckdb_engine::plugin::as_catalog_entry)
+                    .collect::<Vec<_>>(),
+                "problems": problems,
+            }))
+        }
         "pipeline_column_lineage" => {
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
             let mut doc: PipelineDoc = match serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)) {
@@ -4037,6 +4049,7 @@ mod tests {
         save_schedule_at, web_gate, confine_to_workspace, RunGate, State, WebState, HEALTH_PATH, MAX_BODY,
         OIDC_CALLBACK_PATH, OIDC_LOGIN_PATH,
         Gates,
+        route_web,
     };
     use std::sync::Mutex;
     use duckle_duckdb_engine::schedules::{self, ScheduleKind};
@@ -4558,6 +4571,46 @@ mod tests {
         // And the name that did not work finds nothing, which is what makes
         // this test about the name rather than about sessions in general.
         assert!(console.identify(None, Some(&format!("duckle_sid={sid}"))).is_none());
+    }
+
+    /// #307: the web editor gets the same external components the desktop
+    /// does, so a workspace's palette is not different in the two editors.
+    #[test]
+    fn the_web_console_serves_the_external_component_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        let d = ws.join("components").join("upper");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("duckle-component.json"),
+            r#"{"id":"ext.upper","version":"1.0.0","label":"Uppercase",
+                "inputs":[{"name":"main"}],"outputs":[{"name":"main"}],
+                "runtime":{"command":["python","run.py"]}}"#,
+        )
+        .unwrap();
+        // The EDITOR server, which is where the palette lives and where the
+        // /api/cmd/ dispatcher is - the console has its own routes.
+        let ws = ws.canonicalize().unwrap();
+        let state = WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from("duckdb"),
+            dist: ws.clone(),
+            host: "0.0.0.0".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "0.0.0.0", Some("s3cret")).unwrap(),
+        };
+        let mut req = request("POST", "/api/cmd/external_components", Some("Bearer s3cret"));
+        req.body = b"{}".to_vec();
+        let reply = route_web(&req, &state);
+        assert_eq!(reply.code(), 200, "{}", String::from_utf8_lossy(&reply.body));
+        let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        let items = body["components"].as_array().expect("components");
+        assert_eq!(items.len(), 1, "{body}");
+        assert_eq!(items[0]["id"], "ext.upper");
+        assert_eq!(items[0]["kind"], "transform", "derived from its ports");
+        assert_eq!(items[0]["external"], true);
+        // The form travels with it, or the tile cannot be configured.
+        assert!(items[0]["manifest"].get("sections").is_some(), "{}", items[0]);
     }
 
     /// #310: the login routes are public, and a server with no OIDC config

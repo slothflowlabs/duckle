@@ -197,6 +197,7 @@ pub fn run() {
             plans_save,
             plans_delete,
             plans_run,
+            external_components,
             workspace_catalog,
             workspace_catalog_rebuild,
             workspace_catalog_annotate,
@@ -947,6 +948,25 @@ async fn plans_run(workspace_path: String, id: String) -> Result<plans::PlanRun,
 /// Reads the saved graph rather than rebuilding, so opening the screen never
 /// silently costs a full workspace rescan; `stale` says when a rebuild is due
 /// and `workspace_catalog_rebuild` is the deliberate act.
+/// #307: the external components installed in this workspace, catalog-shaped.
+///
+/// Read from their manifests without running anything, so opening a workspace
+/// never executes third-party code just to draw the palette.
+#[tauri::command]
+fn external_components(workspace: String) -> Result<serde_json::Value, String> {
+    let ws = std::path::Path::new(&workspace);
+    let (found, problems) = duckle_duckdb_engine::plugin::discover(ws);
+    Ok(serde_json::json!({
+        "components": found
+            .iter()
+            .map(duckle_duckdb_engine::plugin::as_catalog_entry)
+            .collect::<Vec<_>>(),
+        // Surfaced rather than swallowed: a component missing from the palette
+        // because its manifest is broken is a bug report about the wrong thing.
+        "problems": problems,
+    }))
+}
+
 #[tauri::command]
 fn workspace_catalog(
     workspace: String,

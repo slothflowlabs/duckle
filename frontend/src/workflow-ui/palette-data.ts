@@ -880,6 +880,62 @@ export const PALETTE: Category[] = [
     },
 ];
 
+// #307: external components live here rather than in PALETTE, because they are
+// discovered when a workspace opens rather than compiled in. A tiny store
+// instead of prop-threading: Palette takes no props today, and the alternative
+// is passing this through every component between it and the app root.
+let EXTERNAL: ComponentDef[] = [];
+const listeners = new Set<() => void>();
+
+/** Property forms for external components, keyed by id (#307). */
+const EXTERNAL_MANIFESTS: Record<string, unknown> = {};
+
+export function setExternalManifest(id: string, manifest: unknown): void {
+    EXTERNAL_MANIFESTS[id] = manifest;
+}
+
+export function getExternalManifest(id: string): unknown | undefined {
+    return EXTERNAL_MANIFESTS[id];
+}
+
+export function setExternalComponents(defs: ComponentDef[]): void {
+    // Referentially stable when nothing changed, so useSyncExternalStore does
+    // not re-render the palette on every workspace poll.
+    const same =
+        defs.length === EXTERNAL.length &&
+        defs.every((d, i) => d.id === EXTERNAL[i].id && d.label === EXTERNAL[i].label);
+    if (same) return;
+    EXTERNAL = defs;
+    listeners.forEach(l => l());
+}
+
+export function subscribeExternalComponents(l: () => void): () => void {
+    listeners.add(l);
+    return () => {
+        listeners.delete(l);
+    };
+}
+
+export function getExternalComponents(): ComponentDef[] {
+    return EXTERNAL;
+}
+
+/** The palette, plus an "External" category when the workspace has any. */
+export function paletteWith(external: ComponentDef[]): Category[] {
+    if (external.length === 0) return PALETTE;
+    // Its own category rather than mixed into Sources/Transforms: a component
+    // Duckle did not write should be visibly not one Duckle wrote.
+    const groups: Group[] = [
+        { id: 'ext-sources', label: 'Sources', components: external.filter(c => c.kind === 'source') },
+        { id: 'ext-transforms', label: 'Transforms', components: external.filter(c => c.kind === 'transform') },
+        { id: 'ext-sinks', label: 'Sinks', components: external.filter(c => c.kind === 'sink') },
+    ].filter(g => g.components.length > 0);
+    return [
+        ...PALETTE,
+        { id: 'external', label: 'External', icon: 'code', accent: 'slate', groups },
+    ];
+}
+
 export const ALL_COMPONENTS: ComponentDef[] = PALETTE.flatMap(c => c.groups.flatMap(g => g.components));
 
 export const TOTAL_COMPONENT_COUNT = ALL_COMPONENTS.length;

@@ -40,12 +40,14 @@ pub fn list_tools() -> Value {
             "List Duckle components (sources, transforms, sinks, control, quality, custom code). Optionally filter by kind or a search query.",
             json!({ "type": "object", "properties": {
                 "kind": { "type": "string", "enum": ["source","transform","sink","control","quality","custom"], "description": "Filter to one kind." },
-                "query": { "type": "string", "description": "Case-insensitive substring over id/label/summary." }
+                "query": { "type": "string", "description": "Case-insensitive substring over id/label/summary." },
+                "workspace": { "type": "string", "description": "Workspace directory. Include it to also list the external components installed there (#307)." }
             }})),
         tool("get_component_schema",
             "Get the full property schema (form fields + input/output ports) for one component id, so you know which properties to set.",
             json!({ "type": "object", "properties": {
-                "componentId": { "type": "string", "description": "e.g. src.csv, xf.map, snk.postgres" }
+                "componentId": { "type": "string", "description": "e.g. src.csv, xf.map, snk.postgres" },
+                "workspace": { "type": "string", "description": "Workspace directory, for an external ext.* component installed there (#307)." }
             }, "required": ["componentId"] })),
         tool("create_pipeline",
             "Validate a pipeline and write it. Prefer 'workspace' (writes pipelines/<id>.json and registers it in repository.json so it shows in the GUI immediately); 'directory' writes a loose <name>.json (not GUI-listed). Fails (without writing) if it does not compile, unless validate=false.",
@@ -334,11 +336,43 @@ fn content_err(msg: &str) -> Value {
 // ---------------------------------------------------------------------------
 
 fn t_list_components(args: &Value) -> Result<Value, String> {
-    Ok(catalog::list(arg_str(args, "kind"), arg_str(args, "query")))
+    let mut listed = catalog::list(arg_str(args, "kind"), arg_str(args, "query"));
+    // #307: the workspace's external components too, when one is given. An
+    // agent asking what it can build with should see a component the workspace
+    // installed, not only the ones compiled in.
+    if let Some(ws) = arg_str(args, "workspace") {
+        let kind = arg_str(args, "kind");
+        let query = arg_str(args, "query").map(|q| q.to_lowercase());
+        let extra: Vec<Value> = duckle_duckdb_engine::plugin::catalog_entries(std::path::Path::new(ws))
+            .into_iter()
+            .filter(|c| kind.is_none_or(|want| c.get("kind").and_then(Value::as_str) == Some(want)))
+            .filter(|c| match &query {
+                None => true,
+                Some(q) => ["id", "label", "summary"].iter().any(|k| {
+                    c.get(*k)
+                        .and_then(Value::as_str)
+                        .is_some_and(|v| v.to_lowercase().contains(q.as_str()))
+                }),
+            })
+            .collect();
+        if !extra.is_empty() {
+            if let Some(items) = listed.get_mut("components").and_then(|v| v.as_array_mut()) {
+                items.extend(extra);
+            }
+        }
+    }
+    Ok(listed)
 }
 
 fn t_get_component_schema(args: &Value) -> Result<Value, String> {
     let id = arg_str(args, "componentId").ok_or("missing 'componentId'")?;
+    if let Some(ws) = arg_str(args, "workspace") {
+        if let Some(found) =
+            duckle_duckdb_engine::plugin::find(std::path::Path::new(ws), id)
+        {
+            return Ok(duckle_duckdb_engine::plugin::as_catalog_entry(&found));
+        }
+    }
     catalog::schema(id).ok_or_else(|| format!("unknown componentId: {id}"))
 }
 

@@ -1,3 +1,4 @@
+import type { ComponentDef } from './workflow-ui/palette-data';
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { isTauri } from './tauri-dialog';
 import { isWebBackend } from './web-fs';
@@ -298,6 +299,28 @@ export type CatalogView = {
 /// Errors are propagated, never flattened to an empty catalog: "this workspace
 /// has no assets" and "the catalog could not be read" look identical as an
 /// empty list, and only one of them is good news.
+/**
+ * #307: the external components a workspace installs, for the palette.
+ *
+ * Read from their manifests on the backend; opening a workspace never runs
+ * third-party code just to draw a tile. A workspace with none, or a backend too
+ * old to answer, yields an empty list rather than an error - an editor that
+ * refuses to open because there is no components/ directory would be absurd.
+ */
+export async function externalComponents(
+    workspace: string,
+): Promise<{ components: ComponentDef[]; problems: string[] }> {
+    try {
+        const r = await invoke<{ components?: ComponentDef[]; problems?: string[] }>(
+            'external_components',
+            { workspace },
+        );
+        return { components: r?.components ?? [], problems: r?.problems ?? [] };
+    } catch {
+        return { components: [], problems: [] };
+    }
+}
+
 export async function workspaceCatalog(workspace: string): Promise<CatalogView> {
     return await invoke<CatalogView>('workspace_catalog', { workspace });
 }

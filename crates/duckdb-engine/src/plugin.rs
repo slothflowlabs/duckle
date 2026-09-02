@@ -255,6 +255,53 @@ pub struct Response {
 
 pub const PROTOCOL: u32 = 1;
 
+/// One external component, in the shape the built-in catalog uses.
+///
+/// The same conversion for every consumer - MCP discovery, the palette, the
+/// properties form - so an external component is described identically
+/// everywhere rather than three times with three sets of defaults. `kind` is
+/// derived from the ports because that is what the palette groups by: no
+/// inputs is a source, no outputs is a sink, both is a transform.
+pub fn as_catalog_entry(installed: &Installed) -> serde_json::Value {
+    let m = &installed.manifest;
+    let kind = match (m.inputs.is_empty(), m.outputs.is_empty()) {
+        (true, false) => "source",
+        (false, true) => "sink",
+        _ => "transform",
+    };
+    let label = match m.label.trim().is_empty() {
+        true => m.id.clone(),
+        false => m.label.clone(),
+    };
+    serde_json::json!({
+        "id": m.id,
+        "label": label,
+        "kind": kind,
+        "availability": "available",
+        "summary": m.description,
+        "version": m.version,
+        // Marked, so a surface can say where a component came from rather than
+        // presenting third-party code as though Duckle shipped it.
+        "external": true,
+        "manifestHash": installed.manifest_hash,
+        "lockHash": installed.lock_hash,
+        "manifest": {
+            "id": m.id,
+            "kind": kind,
+            "label": label,
+            "description": m.description,
+            "schemaSource": "upstream",
+            "sections": m.properties.get("sections").cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+        },
+    })
+}
+
+/// Every external component this workspace declares, catalog-shaped.
+pub fn catalog_entries(workspace: &Path) -> Vec<serde_json::Value> {
+    discover(workspace).0.iter().map(as_catalog_entry).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +400,52 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (found, problems) = discover(tmp.path());
         assert!(found.is_empty() && problems.is_empty());
+    }
+
+    #[test]
+    fn a_catalog_entry_takes_its_kind_from_the_ports() {
+        // The palette groups by kind, and a component with no inputs is a
+        // source however its author described it.
+        let mut m = manifest("ext.reader");
+        m.inputs.clear();
+        let e = as_catalog_entry(&Installed {
+            manifest: m.clone(),
+            dir: "d".into(),
+            manifest_hash: "h".into(),
+            lock_hash: None,
+        });
+        assert_eq!(e["kind"], "source");
+        assert_eq!(e["external"], true, "third-party code must not look built-in");
+
+        let mut w = manifest("ext.writer");
+        w.outputs.clear();
+        let e = as_catalog_entry(&Installed {
+            manifest: w,
+            dir: "d".into(),
+            manifest_hash: "h".into(),
+            lock_hash: None,
+        });
+        assert_eq!(e["kind"], "sink");
+        assert_eq!(as_catalog_entry(&Installed {
+            manifest: manifest("ext.both"),
+            dir: "d".into(),
+            manifest_hash: "h".into(),
+            lock_hash: None,
+        })["kind"], "transform");
+    }
+
+    #[test]
+    fn a_component_with_no_label_falls_back_to_its_id() {
+        // An unlabelled tile in the palette is worse than a technical one.
+        let mut m = manifest("ext.unlabelled");
+        m.label = String::new();
+        let e = as_catalog_entry(&Installed {
+            manifest: m,
+            dir: "d".into(),
+            manifest_hash: "h".into(),
+            lock_hash: None,
+        });
+        assert_eq!(e["label"], "ext.unlabelled");
     }
 
     #[test]

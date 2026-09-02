@@ -802,6 +802,18 @@ the manifest, so "what components exist here" never means executing third-party
 code. `duckle-runner components external` lists them with their manifest and lock
 hashes.
 
+**They appear in the palette.** Opening a workspace loads its external
+components into an **External** category - their own, rather than mixed into
+Sources and Transforms, because a component Duckle did not write should be
+visibly not one Duckle wrote. The property form comes from the component's own
+manifest, so a tile you can drop is a tile you can configure. `kind` is derived
+from the declared ports: no inputs is a source, no outputs is a sink.
+
+Both editors get the same list from the same endpoint, and MCP's
+`list_components` includes them when given a `workspace` - so an agent asking
+what it can build with sees what the workspace installed, not only what was
+compiled in.
+
 **A component that hangs is killed** at its declared timeout, and a manifest that
 does not parse is reported rather than silently missing from the list.
 

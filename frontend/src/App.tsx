@@ -51,7 +51,7 @@ import ChatPanel from './workflow-ui/ChatPanel';
 import GitPanel from './workflow-ui/GitPanel';
 import WindowControls from './workflow-ui/WindowControls';
 import WindowResizeHandles from './workflow-ui/WindowResizeHandles';
-import { engineStatus, seedSampleWorkspace, importJobFile } from './tauri-bridge';
+import { engineStatus, seedSampleWorkspace, importJobFile, externalComponents } from './tauri-bridge';
 import ImportReportModal, { type ImportReport } from './workflow-ui/ImportReportModal';
 import HomeLauncher from './workflow-ui/HomeLauncher';
 import { copyText, saveTextFile } from './tauri-io';
@@ -104,6 +104,7 @@ import ContextEditorModal from './workflow-ui/editors/ContextEditorModal';
 import DocumentEditorModal from './workflow-ui/editors/DocumentEditorModal';
 import RoutineEditorModal from './workflow-ui/editors/RoutineEditorModal';
 import type { Column } from './pipeline-types';
+import { setExternalComponents, setExternalManifest } from './workflow-ui/palette-data';
 import type { ComponentDef, NodeKind as PaletteKind } from './workflow-ui/palette-data';
 import type {
     ConnectionPayload,
@@ -615,6 +616,26 @@ export default function App() {
                     if (state.corruptFiles?.length) setCorruptFiles(state.corruptFiles);
                 }
                 setWorkspaceReady(true);
+                // #307: the palette learns what this workspace installs. Not
+                // awaited and never fatal - an editor that would not open
+                // because a components/ manifest is malformed would be absurd,
+                // and the problems are reported where they can be acted on.
+                if (workspacePathState) {
+                    externalComponents(workspacePathState)
+                        .then((r: { components: ComponentDef[]; problems: string[] }) => {
+                            // The form each one declares, before the palette
+                            // offers it: a tile you can drop but not configure
+                            // is not a tile worth having.
+                            for (const c of r.components as Array<
+                                ComponentDef & { manifest?: unknown }
+                            >) {
+                                if (c.manifest) setExternalManifest(c.id, c.manifest);
+                            }
+                            setExternalComponents(r.components);
+                            if (r.problems.length) console.warn('external components:', r.problems);
+                        })
+                        .catch(() => setExternalComponents([]));
+                }
             })
             .catch(err => {
                 if (cancelled) return;

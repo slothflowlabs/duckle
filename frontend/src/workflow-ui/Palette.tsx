@@ -1,4 +1,4 @@
-import { useMemo, useState, type DragEvent } from 'react';
+import { useMemo, useState, useSyncExternalStore, type DragEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     ArrowDownToLine,
@@ -16,6 +16,9 @@ import {
 } from 'lucide-react';
 import {
     PALETTE,
+    paletteWith,
+    subscribeExternalComponents,
+    getExternalComponents,
     TOTAL_COMPONENT_COUNT,
     AVAILABLE_COUNT,
     type ComponentDef,
@@ -100,9 +103,13 @@ export default function Palette() {
 
     const q = query.trim().toLowerCase();
 
+    // #307: external components appear when a workspace declares them.
+    const external = useSyncExternalStore(subscribeExternalComponents, getExternalComponents);
+    const categories = useMemo(() => paletteWith(external), [external]);
+
     const filtered = useMemo(() => {
-        if (!q) return PALETTE;
-        return PALETTE.map(cat => ({
+        if (!q) return categories;
+        return categories.map(cat => ({
             ...cat,
             groups: cat.groups
                 .map(g => ({

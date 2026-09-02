@@ -1,7 +1,7 @@
 import type { ComponentManifest, AutodetectFn } from './types';
 import type { Column } from '../../pipeline-types';
 import { synthesizeManifest, portsForComponent } from './manifest-synth';
-import { PALETTE } from '../palette-data';
+import { getExternalManifest, PALETTE } from '../palette-data';
 import { tauriAutodetect } from '../../tauri-bridge';
 
 const CSV_SAMPLE_SCHEMA: Column[] = [
@@ -1290,6 +1290,15 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
 
 export function getManifest(componentId: string | undefined): ComponentManifest | undefined {
     if (!componentId) return undefined;
+    // #307: an external component's form comes from its own manifest. Checked
+    // before the built-ins rather than after, so a workspace's component is
+    // described by what it declares rather than by a synthesized guess from
+    // its id - and a palette tile with no editable properties is not a tile
+    // worth having.
+    if (componentId.startsWith('ext.')) {
+        const declared = getExternalManifest(componentId) as ComponentManifest | undefined;
+        if (declared) return declared;
+    }
     const m = MANIFESTS[componentId] ?? synthesizeManifest(componentId);
     if (m && !m.ports) {
         for (const cat of PALETTE) {
