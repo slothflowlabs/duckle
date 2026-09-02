@@ -91,6 +91,15 @@ pub fn run() -> ExitCode {
 
     let mut cases = vec![schema_case(&installed)];
     cases.push(initialize_case(&installed, &dir));
+    cases.push(Case {
+        name: "interchange",
+        verdict: Verdict::Pass,
+        detail: format!(
+            "declares {}; this host would use {}",
+            installed.manifest.runtime.interchange.join(", "),
+            plugin::choose_interchange(&installed.manifest.runtime.interchange, arrow_here(&duckdb))
+        ),
+    });
     cases.push(empty_input_case(&engine, &duckdb, &installed, &dir));
     cases.push(large_batch_case(&engine, &duckdb, &installed, &dir));
     cases.push(crash_cleanup_case(&installed, &dir));
@@ -196,6 +205,10 @@ fn request_for(installed: &Installed, input: Option<&Path>, output: &Path) -> Re
     }
     Request {
         phase: plugin::Phase::Execute,
+        // The kit writes Parquet fixtures, so it says Parquet regardless of
+        // what the component would prefer at run time. Which interchange the
+        // host would negotiate is reported by its own case.
+        format: plugin::PARQUET.to_string(),
         protocol: plugin::PROTOCOL,
         component: installed.manifest.id.clone(),
         version: installed.manifest.version.clone(),
@@ -628,4 +641,20 @@ fn initialize_case(installed: &Installed, dir: &Path) -> Case {
             detail: "answered without doing the work".into(),
         },
     }
+}
+
+/// Whether this machine's DuckDB can do Arrow IPC.
+///
+/// The same question the engine asks, asked the same way - the `arrow`
+/// extension is a community one, so the answer is a property of the machine
+/// rather than of the build.
+fn arrow_here(duckdb: &Path) -> bool {
+    let mut cmd = std::process::Command::new(duckdb);
+    cmd.arg("-c").arg("INSTALL arrow FROM community; LOAD arrow; SELECT 1;");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }

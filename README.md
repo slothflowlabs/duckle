@@ -786,8 +786,29 @@ req = json.load(sys.stdin)
 print(json.dumps({"ok": True, "rows": n}))
 ```
 
-**Bulk data is Parquet, never row JSON** - typed, and native at both ends.
-Control messages are JSON because they are small and structured.
+**Bulk data is Arrow IPC or Parquet, never row JSON.** A component says what it
+can handle, best first, and the host picks:
+
+```json
+"runtime": { "command": ["python", "run.py"], "interchange": ["arrow", "parquet"] }
+```
+
+```python
+if req["format"] == "arrow":
+    with open(req["inputs"]["main"], "rb") as f:
+        table = ipc.open_stream(f).read_all()      # the STREAM format, .arrows
+```
+
+Arrow IPC needs DuckDB's `arrow` extension, which is a **community** one -
+`INSTALL arrow` from the core repository 404s - so it may be unavailable on a
+machine with no network. The host probes once and falls back to Parquet rather
+than failing a run over an interchange preference. A component that never
+mentions `interchange` gets Parquet, exactly as before.
+
+What DuckDB writes is the Arrow IPC **stream** format, so a component reaches for
+`open_stream`, not `open_file`; the files are named `.arrows` so the name does
+not promise the other one. Control messages stay JSON because they are small and
+structured.
 
 **Rows it cannot handle go to the reject port**, on the same `__reject` contract
 every built-in uses, so a downstream edge reads them identically whoever wrote
@@ -840,6 +861,7 @@ duckle-runner components conform ext.upper --workspace .
 ```text
   pass         schema validation    id, version and runtime.command are declared; 1 input, 1 output
   pass         initialize           answered without doing the work
+  pass         interchange          declares arrow, parquet; this host would use arrow
   pass         empty typed input    zero rows in, zero rows out, with a readable schema
   pass         large batch          200000 rows in, 200000 out, in 0.9s
   pass         crash cleanup        reported the failure: IO Error: No files found ...

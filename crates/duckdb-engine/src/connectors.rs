@@ -12161,6 +12161,25 @@ impl DuckdbEngine {
     /// defines process(row) -> dict; the engine wraps it in a harness that reads
     /// the upstream rows as JSON, applies process per row (None drops the row),
     /// and writes the result JSON back for materialization. No Python in-engine.
+    /// Can this DuckDB do Arrow IPC (#307)?
+    ///
+    /// The `arrow` extension is a COMMUNITY one - `INSTALL arrow` from the core
+    /// repository 404s - so it needs a network on first use and may simply be
+    /// unavailable. Asked once per process and cached, because the answer
+    /// cannot change under a running host and probing per node would add a
+    /// round trip to every external component.
+    fn arrow_available(&self) -> bool {
+        static ANSWER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ANSWER.get_or_init(|| {
+            self.run(
+                None,
+                "INSTALL arrow FROM community; LOAD arrow; SELECT 1;",
+                true,
+            )
+            .is_ok()
+        })
+    }
+
     /// #307: run an external component out of process.
     ///
     /// Parquet in, Parquet out, JSON control message on stdin. The component
@@ -12187,9 +12206,35 @@ impl DuckdbEngine {
             ))
         })?;
 
+        // #307: Arrow IPC when the component asked for it and this DuckDB can
+        // do it, Parquet otherwise. The extension is a community one, so a
+        // machine with no network cannot install it - and failing a run over an
+        // interchange preference would be absurd when the fallback is good.
+        let arrow_ok = self.arrow_available();
+        let format =
+            crate::plugin::choose_interchange(&installed.manifest.runtime.interchange, arrow_ok);
+        // `.arrows`, not `.arrow`: what DuckDB writes is the Arrow IPC STREAM
+        // format, and `.arrow` conventionally means the file format with a
+        // footer. Measured rather than assumed - pyarrow's `open_file` rejects
+        // it and `open_stream` reads it - and a name that promised the other
+        // one would send every component author to the wrong reader.
+        let ext = match format {
+            crate::plugin::ARROW => "arrows",
+            _ => "parquet",
+        };
+        // `read_arrow` and `FORMAT ARROWS` come from the extension; the reader
+        // and writer must agree, so both are chosen here once.
+        let (prelude, writer, reader): (&str, &str, fn(&str) -> String) = match format {
+            crate::plugin::ARROW => (
+                "LOAD arrow; ",
+                "FORMAT ARROWS",
+                |p: &str| format!("read_arrow('{p}')"),
+            ),
+            _ => ("", "FORMAT PARQUET", |p: &str| format!("read_parquet('{p}')")),
+        };
         let (in_path, out_path, _) = python_temp_paths(db, &spec.node_id);
-        let in_pq = in_path.with_extension("parquet");
-        let out_pq = out_path.with_extension("parquet");
+        let in_pq = in_path.with_extension(ext);
+        let out_pq = out_path.with_extension(ext);
         let esc = |p: &Path| p.to_string_lossy().replace(char::from(92), "/").replace(char::from(39), "''");
         let mut inputs = std::collections::BTreeMap::new();
         if let Some(from) = &spec.from_view {
@@ -12199,7 +12244,7 @@ impl DuckdbEngine {
             self.run(
                 Some(db),
                 &format!(
-                    "COPY (SELECT * FROM {}) TO '{}' (FORMAT PARQUET);",
+                    "{prelude}COPY (SELECT * FROM {}) TO '{}' ({writer});",
                     plan::quote_ident(from),
                     esc(&in_pq)
                 ),
@@ -12208,7 +12253,7 @@ impl DuckdbEngine {
             inputs.insert("main".to_string(), in_pq.display().to_string());
         }
 
-        let rej_pq = out_path.with_extension("reject.parquet");
+        let rej_pq = out_path.with_extension(format!("reject.{ext}"));
         let _ = std::fs::remove_file(&rej_pq);
         // #307: one directory per run and node, under the workspace, so files a
         // component produces are findable afterwards and not scattered wherever
@@ -12231,6 +12276,7 @@ impl DuckdbEngine {
             inputs,
             output: out_pq.display().to_string(),
             reject: rej_pq.display().to_string(),
+            format: format.to_string(),
             artifact_dir: artifact_dir.display().to_string(),
             run_id: run_id.to_string(),
         };
@@ -12294,9 +12340,9 @@ impl DuckdbEngine {
         self.run(
             Some(db),
             &format!(
-                "CREATE OR REPLACE TABLE {} AS SELECT * FROM read_parquet('{}');",
+                "{prelude}CREATE OR REPLACE TABLE {} AS SELECT * FROM {};",
                 plan::quote_ident(&spec.node_id),
-                esc(&out_pq)
+                reader(&esc(&out_pq))
             ),
             false,
         )?;
@@ -12311,9 +12357,9 @@ impl DuckdbEngine {
         let reject_view = format!("{}{}", spec.node_id, plan::REJECT_SUFFIX);
         let reject_sql = match rej_pq.exists() {
             true => format!(
-                "CREATE OR REPLACE TABLE {} AS SELECT * FROM read_parquet('{}');",
+                "{prelude}CREATE OR REPLACE TABLE {} AS SELECT * FROM {};",
                 plan::quote_ident(&reject_view),
-                esc(&rej_pq)
+                reader(&esc(&rej_pq))
             ),
             false => match &spec.from_view {
                 Some(from) => format!(

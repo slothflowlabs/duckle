@@ -58,6 +58,18 @@ pub struct Runtime {
     /// Seconds before the host gives up and kills it.
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
+    /// Which tabular interchange formats the component can handle, best first
+    /// (#307).
+    ///
+    /// `arrow` is the Arrow IPC **stream** format (`.arrows`), which #307
+    /// prefers; `parquet` is the fallback it allows. Stream rather than file
+    /// because that is what DuckDB writes - a component should reach for
+    /// `open_stream`, not `open_file`. Defaults to parquet only, so a component written before this
+    /// existed keeps getting exactly what it got - declaring a format you
+    /// cannot read is the one mistake here that produces an unreadable file
+    /// rather than an error.
+    #[serde(default = "default_interchange")]
+    pub interchange: Vec<String>,
     /// The lock file pinning the component's dependencies, relative to the
     /// component directory. Hashed into the run manifest so a run records what
     /// it actually ran against.
@@ -67,6 +79,34 @@ pub struct Runtime {
 
 fn default_timeout() -> u64 {
     300
+}
+
+fn default_format() -> String {
+    PARQUET.to_string()
+}
+
+fn default_interchange() -> Vec<String> {
+    vec![PARQUET.to_string()]
+}
+
+pub const ARROW: &str = "arrow";
+pub const PARQUET: &str = "parquet";
+
+/// The format the host and the component will use.
+///
+/// The component's preference order decides, and the host's ability vetoes:
+/// Arrow IPC needs a DuckDB extension that may not be installable on a machine
+/// with no network, and failing a run over an interchange preference would be
+/// absurd when a perfectly good fallback exists.
+pub fn choose_interchange(component: &[String], host_has_arrow: bool) -> &'static str {
+    for want in component {
+        match want.trim().to_ascii_lowercase().as_str() {
+            ARROW if host_has_arrow => return ARROW,
+            PARQUET => return PARQUET,
+            _ => continue,
+        }
+    }
+    PARQUET
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -259,7 +299,11 @@ pub struct Request {
     pub version: String,
     /// The node's properties, already substituted.
     pub properties: serde_json::Value,
-    /// Parquet the component should read, by input port name. Absent for a
+    /// `arrow` or `parquet`: what the files named below are, and what the
+    /// component must write. Negotiated from what it said it can handle.
+    #[serde(default = "default_format")]
+    pub format: String,
+    /// The tables the component should read, by input port name. Absent for a
     /// source, which has none.
     #[serde(default)]
     pub inputs: BTreeMap<String, String>,
@@ -335,6 +379,9 @@ pub fn initialize(
 ) -> Result<Response, String> {
     let request = Request {
         phase: Phase::Initialize,
+        // Nothing is exchanged during an initialize, so the format is only
+        // there for a component that echoes the request back.
+        format: PARQUET.to_string(),
         protocol: PROTOCOL,
         component: installed.manifest.id.clone(),
         version: installed.manifest.version.clone(),
@@ -670,6 +717,7 @@ mod tests {
             runtime: Runtime {
                 command: vec!["python".into(), "run.py".into()],
                 timeout_secs: 30,
+                interchange: default_interchange(),
                 lock: None,
             },
         }
@@ -807,6 +855,43 @@ mod tests {
     }
 
     #[test]
+    fn the_component_prefers_and_the_host_vetoes() {
+        // The component's order decides, and the host's ability vetoes:
+        // failing a run over an interchange preference would be absurd when a
+        // perfectly good fallback exists.
+        let both = vec!["arrow".to_string(), "parquet".to_string()];
+        assert_eq!(choose_interchange(&both, true), ARROW);
+        assert_eq!(choose_interchange(&both, false), PARQUET, "no extension, no arrow");
+
+        // Order is the component's preference, not ours.
+        let prefers_parquet = vec!["parquet".to_string(), "arrow".to_string()];
+        assert_eq!(choose_interchange(&prefers_parquet, true), PARQUET);
+    }
+
+    #[test]
+    fn an_arrow_only_component_still_gets_parquet_rather_than_nothing() {
+        // It will probably fail to read it, and that is a clear error from the
+        // component. Handing it no format at all, or failing before it runs,
+        // tells the author less.
+        assert_eq!(choose_interchange(&["arrow".to_string()], false), PARQUET);
+        // And a format nobody knows is ignored rather than passed through.
+        assert_eq!(choose_interchange(&["feather".to_string()], true), PARQUET);
+        assert_eq!(choose_interchange(&[], true), PARQUET, "declaring none means the default");
+    }
+
+    #[test]
+    fn a_component_that_never_mentions_interchange_gets_parquet() {
+        // Every component written before this existed keeps getting exactly
+        // what it got.
+        let m: Manifest = serde_json::from_str(
+            r#"{"id":"ext.old","version":"1","runtime":{"command":["x"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(m.runtime.interchange, vec!["parquet".to_string()]);
+        assert_eq!(choose_interchange(&m.runtime.interchange, true), PARQUET);
+    }
+
+    #[test]
     fn a_component_written_before_progress_existed_still_works() {
         // A bare object carrying `ok` is a result. Every component written
         // against the first version of this protocol emits exactly that, and
@@ -863,6 +948,7 @@ mod tests {
         // Build the request the same way `initialize` does, without spawning.
         let req = Request {
             phase: Phase::Initialize,
+            format: PARQUET.into(),
             protocol: PROTOCOL,
             component: i.manifest.id.clone(),
             version: i.manifest.version.clone(),
@@ -990,6 +1076,7 @@ mod tests {
         // arguments, and a subprocess could log its own stdin.
         let r = Request {
             phase: Phase::Execute,
+            format: PARQUET.into(),
             protocol: PROTOCOL,
             component: "ext.x".into(),
             version: "1".into(),
