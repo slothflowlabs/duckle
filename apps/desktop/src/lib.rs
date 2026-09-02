@@ -184,6 +184,7 @@ pub fn run() {
             watermark_clear,
             cancel_pipeline,
             compile_pipeline,
+            analyze_node_sql,
             describe_node_columns,
             pipeline_column_lineage,
             pipeline_trust_report,
@@ -677,6 +678,23 @@ fn describe_node_columns(
 ) -> Result<Vec<duckle_duckdb_engine::Column>, String> {
     engine()?
         .describe_node_columns(&pipeline, &node_id, &inputs)
+        .map_err(|e| e.to_string())
+}
+
+/// #314: bind a node's SQL and report what DuckDB said about it.
+///
+/// The same side-effect-free bind `describe_node_columns` does, keeping the
+/// diagnostics instead of collapsing them into one error the editor can only
+/// render as "did not resolve". Reads nothing: no file, no credential, no
+/// network.
+#[tauri::command]
+fn analyze_node_sql(
+    pipeline: PipelineDoc,
+    node_id: String,
+    inputs: Vec<(String, Vec<duckle_duckdb_engine::Column>)>,
+) -> Result<duckle_duckdb_engine::NodeAnalysis, String> {
+    engine()?
+        .analyze_node_sql(&pipeline, &node_id, &inputs)
         .map_err(|e| e.to_string())
 }
 

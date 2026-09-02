@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Edge, Node } from '@xyflow/react';
-import { CheckCircle2, ChevronLeft, ChevronRight, MousePointer2, Workflow } from 'lucide-react';
-import { resolveUpstreamSchema, resolveUpstreamSampleRows, resolveOutputSchema, deriveSchemaFromEngine } from '../schema-resolve';
-import { describeNodeColumns } from '../tauri-bridge';
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, MousePointer2, Workflow } from 'lucide-react';
+import { resolveUpstreamSchema, resolveUpstreamSampleRows, resolveOutputSchema, deriveSchemaFromEngine, diagnosticsFor } from '../schema-resolve';
+import { analyzeNodeSql } from '../tauri-bridge';
 import { buildContextVars, builtinVars, substituteDeep } from '../run-resolve';
 import type { Column, DuckleNodeData } from '../pipeline-types';
 import type {
@@ -178,13 +178,22 @@ export default function PropertiesPanel({
     useEffect(() => {
         if (!selected) return;
         let live = true;
-        void deriveSchemaFromEngine(selected.id, allNodes, edges, describeNodeColumns).then(changed => {
+        void deriveSchemaFromEngine(selected.id, allNodes, edges, analyzeNodeSql).then(changed => {
             if (live && changed) setDerivedTick(t => t + 1);
         });
         return () => {
             live = false;
         };
     }, [selected, allNodes, edges]);
+
+    // #314: what DuckDB objected to about this node's SQL, if anything. Read
+    // from the same cache the columns come from, so it lands on the same
+    // re-render rather than a second round trip.
+    const diagnostics = useMemo(
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        () => (selected ? diagnosticsFor(selected.id) : []),
+        [selected, derivedTick],
+    );
 
     const outputSchema = useMemo<Column[]>(
         () => (selected ? resolveOutputSchema(selected.id, allNodes, edges) : []),
@@ -513,6 +522,32 @@ export default function PropertiesPanel({
                                     <Workflow size={14} />
                                     {t('properties.openVisualMapper')}
                                 </button>
+                            ) : null}
+                            {/* #314: what DuckDB said about this node's SQL.
+                                Above the form rather than below it, because it
+                                is about the field the author is editing and a
+                                message under a long form is a message nobody
+                                sees. */}
+                            {diagnostics.length > 0 ? (
+                                <div className="properties-sql-diagnostics" role="status">
+                                    {diagnostics.map((d, i) => (
+                                        <div key={i} className="properties-sql-diagnostic">
+                                            <AlertTriangle size={13} aria-hidden />
+                                            <span>
+                                                {d.line && d.column ? (
+                                                    <code>{`${d.line}:${d.column}`}</code>
+                                                ) : null}{' '}
+                                                {d.message}
+                                                {d.candidates?.length ? (
+                                                    <em>
+                                                        {' '}
+                                                        did you mean {d.candidates.join(', ')}?
+                                                    </em>
+                                                ) : null}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
                             ) : null}
                             {manifest ? (
                                 manifest.sections.map(section => {

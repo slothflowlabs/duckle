@@ -809,6 +809,47 @@ export async function describeNodeColumns(
     });
 }
 
+/** What binding a node's SQL said (#314). */
+export type SqlDiagnostic = {
+    kind: string;
+    message: string;
+    line?: number;
+    column?: number;
+    candidates?: string[];
+};
+
+export type NodeAnalysis = {
+    nodeId: string;
+    component: string;
+    dialect: string;
+    columns?: Column[];
+    diagnostics?: SqlDiagnostic[];
+    validated: boolean;
+    note?: string;
+};
+
+/**
+ * #314: the columns a node produces AND what DuckDB objected to.
+ *
+ * Replaces `describeNodeColumns` for the editor: the engine has always caught a
+ * typo here, and the message, the position and the column it suggests instead
+ * were being thrown away, leaving the editor able to say only that the node did
+ * not resolve.
+ */
+export async function analyzeNodeSql(
+    nodes: Node<DuckleNodeData>[],
+    edges: Edge[],
+    nodeId: string,
+    inputs: Array<[string, Column[]]>,
+): Promise<NodeAnalysis | null> {
+    if (!isTauri() && !isWebBackend()) return null;
+    return await invoke<NodeAnalysis>('analyze_node_sql', {
+        pipeline: { nodes, edges },
+        nodeId,
+        inputs,
+    });
+}
+
 /** A resolved origin column for lineage (#103). */
 export type LineageRoot = { node: string; column: string };
 /** node id -> [output column name, root source columns][]. */

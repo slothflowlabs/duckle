@@ -9422,3 +9422,37 @@ select.modal-select:focus {
 }
 .spin { animation: setup-spin 900ms linear infinite; }
 @keyframes setup-spin { to { transform: rotate(360deg); } }
+
+
+/* #314: what DuckDB objected to about a node's SQL. Amber rather than the
+   error red: the pipeline is not broken, one node's SQL will not bind, and the
+   author is probably mid-edit. */
+.properties-sql-diagnostics {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0 0 10px;
+}
+
+.properties-sql-diagnostic {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    padding: 8px 10px;
+    border: 1px solid var(--duckle-orange, #e08a3c);
+    border-left-width: 3px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--duckle-orange, #e08a3c) 8%, transparent);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.properties-sql-diagnostic code {
+    font-size: 11px;
+    opacity: 0.8;
+}
+
+.properties-sql-diagnostic em {
+    font-style: normal;
+    opacity: 0.85;
+}

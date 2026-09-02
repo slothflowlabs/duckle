@@ -1085,16 +1085,25 @@ fn dispatch_cmd(state: &WebState, cmd: &str, body: &[u8]) -> Reply {
             };
             duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
             let engine = DuckdbEngine::new(state.duckdb.clone());
-            match engine.analyze_pipeline_sql(&doc) {
-                Ok(mut nodes) => {
-                    if let Some(only) = args.get("node").and_then(Value::as_str) {
-                        nodes.retain(|n| n.node_id == only);
-                    }
-                    match serde_json::to_value(&nodes) {
-                        Ok(v) => respond_json(&v),
-                        Err(e) => respond_err("500 Internal Server Error", &e.to_string()),
-                    }
-                }
+            // One node, with the upstream columns the EDITOR resolved - the
+            // same call and the same arguments the desktop command makes.
+            // Deriving them here instead would answer a subtly different
+            // question on the two surfaces, which is the divergence #75 exists
+            // to stop.
+            let node_id = args
+                .get("nodeId")
+                .or_else(|| args.get("node"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let inputs: Vec<(String, Vec<duckle_duckdb_engine::Column>)> =
+                serde_json::from_value(args.get("inputs").cloned().unwrap_or(json!([])))
+                    .unwrap_or_default();
+            match engine.analyze_node_sql(&doc, &node_id, &inputs) {
+                Ok(analysis) => match serde_json::to_value(&analysis) {
+                    Ok(v) => respond_json(&v),
+                    Err(e) => respond_err("500 Internal Server Error", &e.to_string()),
+                },
                 Err(e) => respond_err("400 Bad Request", &e.to_string()),
             }
         }
@@ -4586,6 +4595,46 @@ mod tests {
         // And the name that did not work finds nothing, which is what makes
         // this test about the name rather than about sessions in general.
         assert!(console.identify(None, Some(&format!("duckle_sid={sid}"))).is_none());
+    }
+
+    /// #314: the web editor gets the same analysis shape the desktop does.
+    ///
+    /// One object for one node, using the upstream columns the EDITOR resolved
+    /// - not an array, and not inputs this side derived. The two surfaces
+    /// answering subtly different questions is the divergence #75 exists to
+    /// stop, and it is invisible until someone compares them.
+    #[test]
+    fn the_web_editor_analyses_one_node_the_way_the_desktop_does() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let state = WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from("duckdb"),
+            dist: ws.clone(),
+            host: "0.0.0.0".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "0.0.0.0", Some("s3cret")).unwrap(),
+        };
+        let mut req = request("POST", "/api/cmd/analyze_node_sql", Some("Bearer s3cret"));
+        req.body = serde_json::to_vec(&serde_json::json!({
+            "pipeline": { "nodes": [
+                { "id": "s", "type": "source", "position": {"x":0,"y":0},
+                  "data": { "label": "in", "componentId": "src.postgres",
+                            "properties": { "mode": "sql", "sql": "SELECT 1" } } }
+            ], "edges": [] },
+            "nodeId": "s",
+            "inputs": []
+        }))
+        .unwrap();
+        let reply = route_web(&req, &state);
+        assert_eq!(reply.code(), 200, "{}", String::from_utf8_lossy(&reply.body));
+        let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        assert!(body.is_object(), "one node's analysis, not an array: {body}");
+        assert_eq!(body["nodeId"], "s");
+        // A source's SQL is remote, so it is reported as not validated rather
+        // than checked against DuckDB - the same answer the desktop gives.
+        assert_eq!(body["dialect"], "remote");
+        assert_eq!(body["validated"], false);
     }
 
     /// #307: the web editor gets the same external components the desktop

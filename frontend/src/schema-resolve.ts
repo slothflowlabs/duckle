@@ -1,3 +1,4 @@
+import type { NodeAnalysis, SqlDiagnostic } from './tauri-bridge';
 import type { Edge, Node } from '@xyflow/react';
 import type { Column, DataType, DuckleNodeData } from './pipeline-types';
 import { getManifest } from './workflow-ui/fields/component-manifests';
@@ -41,6 +42,20 @@ function aggOutputType(func: string, sourceCol: Column | undefined): DataType {
  */
 const derived = new Map<string, Column[]>();
 
+/**
+ * #314: what DuckDB objected to, per node.
+ *
+ * Kept beside the columns rather than thrown away. The bind has always caught a
+ * typo; the message, its position and the column DuckDB suggests instead were
+ * being discarded, so the editor could say only that the node did not resolve -
+ * which is the least useful true thing it could say.
+ */
+const problems = new Map<string, SqlDiagnostic[]>();
+
+export function diagnosticsFor(nodeId: string): SqlDiagnostic[] {
+    return problems.get(nodeId) ?? [];
+}
+
 /** What makes one derivation different from another. */
 function derivedKey(nodeId: string, componentId: string, props: unknown, upstream: Column[]): string {
     return JSON.stringify([
@@ -62,12 +77,12 @@ export async function deriveSchemaFromEngine(
     nodeId: string,
     nodes: Node<DuckleNodeData>[],
     edges: Edge[],
-    describe: (
+    analyze: (
         nodes: Node<DuckleNodeData>[],
         edges: Edge[],
         nodeId: string,
         inputs: Array<[string, Column[]]>,
-    ) => Promise<Column[] | null>,
+    ) => Promise<NodeAnalysis | null>,
 ): Promise<boolean> {
     const node = nodes.find(n => n.id === nodeId);
     const componentId = node?.data.componentId;
@@ -83,18 +98,32 @@ export async function deriveSchemaFromEngine(
     if (derived.has(key)) return false;
 
     try {
-        const cols = await describe(
+        const analysis = await analyze(
             nodes,
             edges,
             nodeId,
             inputs.map(([id, cols]) => [id, cols] as [string, Column[]]),
         );
-        if (!Array.isArray(cols) || cols.length === 0) return false;
+        if (!analysis) return false;
+
+        const found = analysis.diagnostics ?? [];
+        const had = problems.get(nodeId) ?? [];
+        // Replaced rather than merged, and CLEARED when the node now binds: a
+        // stale error under a line the author has already fixed is worse than
+        // no error at all.
+        if (found.length > 0) problems.set(nodeId, found);
+        else problems.delete(nodeId);
+        const changed = found.length !== had.length
+            || found.some((d, i) => d.message !== had[i]?.message);
+
+        const cols = analysis.columns ?? [];
+        if (cols.length === 0) return changed;
         derived.set(key, cols);
         return true;
     } catch {
-        // A node that cannot be described - an unfinished configuration, a
-        // missing input - keeps the guess. Nothing is worse than before.
+        // A node that cannot be analysed at all - an unfinished configuration,
+        // no engine - keeps the guess and reports nothing. Nothing is worse
+        // than before, which is the bar for a background refinement.
         return false;
     }
 }

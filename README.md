@@ -677,8 +677,19 @@ BigQuery; binding it against DuckDB would either reject valid SQL or accept
 invalid SQL, and either way the answer would be about the wrong engine. "Not
 checked" and "checked and clean" never read the same.
 
+**The editor shows them.** Selecting a node runs the same bind and puts what
+DuckDB said above the form - the position in your own SQL, and the column it
+suggests instead:
+
+```text
+2:12  Referenced column "amountt" not found in FROM clause!  did you mean amount?
+```
+
+Cleared as soon as the node binds again, because a stale error under a line the
+author has already fixed is worse than no error at all.
+
 Same analysis from `duckle-runner sql check`, the MCP tool `check_node_sql`, and
-the editor - one function, so they cannot come to disagree. SARIF carries a real
+both editors - one function, so they cannot come to disagree. SARIF carries a real
 `region`, so a code-scanning viewer jumps to the token.
 
 ### OpenLineage export
