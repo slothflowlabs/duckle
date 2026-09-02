@@ -114,6 +114,20 @@ pub fn list_tools() -> Value {
                 "node": { "type": "string", "description": "Only this node. Omit for the whole pipeline." },
                 "duckdb": { "type": "string", "description": "DuckDB CLI path. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb' on PATH." }
             }})),
+        tool("backfill",
+            "Create, inspect, retry or cancel a partitioned backfill (#295). action=create runs it (add dryRun to see the partitions without queueing anything); status with no id lists them; retry re-queues failed and interrupted slices, optionally one named partition; cancel stops everything still open. Each slice is an ordinary durable run with its own run id, and acquires its pipeline's resource pool like any other.",
+            json!({ "type": "object", "properties": {
+                "action": { "type": "string", "enum": ["create","status","retry","cancel"] },
+                "workspace": { "type": "string", "description": "Workspace directory." },
+                "path": { "type": "string", "description": "create: the partitioned pipeline .json." },
+                "from": { "type": "string", "description": "create: first date, YYYY-MM-DD." },
+                "to": { "type": "string", "description": "create: last date, inclusive." },
+                "maxConcurrent": { "type": "integer", "description": "create: the backfill's own ceiling (default 4). Resource pools still apply on top." },
+                "dryRun": { "type": "boolean", "description": "create: list the partitions and queue nothing." },
+                "id": { "type": "string", "description": "status/retry/cancel: the backfill id." },
+                "partition": { "type": "string", "description": "retry: only this partition key." },
+                "duckdb": { "type": "string", "description": "DuckDB CLI path. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb'." }
+            }, "required": ["action","workspace"] })),
         tool("complete_node_sql",
             "What could come next at a cursor position in a node's SQL: upstream columns with their types, the relations it can read, the pipeline's declared parameters, DuckDB functions and keywords - ranked, best first. Never executes the SQL and never touches a source; the only thing read is DuckDB's own function list.",
             json!({ "type": "object", "properties": {
@@ -305,6 +319,7 @@ pub fn call_tool(params: Value) -> Result<Value, (i64, String)> {
         "verify_pipeline" => t_verify_pipeline(&args),
         "check_node_sql" => t_check_node_sql(&args),
         "complete_node_sql" => t_complete_node_sql(&args),
+        "backfill" => t_backfill(&args),
         "suggest_contracts" => t_suggest_contracts(&args),
         "pipeline_impact" => t_pipeline_impact(&args),
         "workspace_impact" => t_workspace_impact(&args),
@@ -653,6 +668,75 @@ fn t_complete_node_sql(args: &Value) -> Result<Value, String> {
         .complete_node_sql(&doc, node, &upstream, cursor, limit)
         .map_err(|e| e.to_string())?;
     Ok(json!({ "node": node, "cursor": cursor, "completions": items }))
+}
+
+/// #295: the persisted backfill plan, addressable without a CLI.
+///
+/// Every action goes through the same engine functions the command does, so an
+/// agent and an operator cannot get different behaviour - which is the whole
+/// reason the executor moved out of the CLI.
+fn t_backfill(args: &Value) -> Result<Value, String> {
+    use duckle_duckdb_engine::backfill;
+    let ws = std::path::PathBuf::from(arg_str(args, "workspace").ok_or("missing 'workspace'")?);
+    let action = arg_str(args, "action").ok_or("missing 'action'")?;
+    match action {
+        "create" => {
+            let path = std::path::PathBuf::from(arg_str(args, "path").ok_or("missing 'path'")?);
+            let plan = duckle_duckdb_engine::backfill_exec::plan_for(
+                &ws,
+                &path,
+                arg_str(args, "from").unwrap_or_default(),
+                arg_str(args, "to").unwrap_or_default(),
+                args.get("maxConcurrent").and_then(Value::as_u64).unwrap_or(4) as usize,
+            )?;
+            // A dry run writes nothing: "what would this queue" must not be a
+            // question that queues anything.
+            if args.get("dryRun").and_then(Value::as_bool).unwrap_or(false) {
+                return Ok(json!({
+                    "dryRun": true,
+                    "partitions": plan.partitions.iter().map(|p| &p.key).collect::<Vec<_>>(),
+                    "count": plan.partitions.len(),
+                }));
+            }
+            backfill::save(&ws, &plan)?;
+            let Some(duckdb) = resolve_duckdb(arg_str(args, "duckdb")) else {
+                return Err("no DuckDB binary; set DUCKLE_DUCKDB_BIN or pass 'duckdb'".into());
+            };
+            let done =
+                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, &|_| {});
+            Ok(serde_json::to_value(&done).unwrap_or(Value::Null))
+        }
+        "status" => match arg_str(args, "id") {
+            Some(id) => Ok(serde_json::to_value(backfill::load(&ws, id)?).unwrap_or(Value::Null)),
+            None => Ok(json!({ "backfills": backfill::list(&ws) })),
+        },
+        "retry" => {
+            let id = arg_str(args, "id").ok_or("missing 'id'")?;
+            let mut plan = backfill::load(&ws, id)?;
+            let only = arg_str(args, "partition").map(|k| vec![k.to_string()]);
+            let n = plan.retry_open(only.as_deref());
+            if n == 0 {
+                return Ok(json!({ "retried": 0, "note": "nothing was failed or interrupted" }));
+            }
+            plan.pid = Some(std::process::id());
+            backfill::save(&ws, &plan)?;
+            let Some(duckdb) = resolve_duckdb(arg_str(args, "duckdb")) else {
+                return Err("no DuckDB binary; set DUCKLE_DUCKDB_BIN or pass 'duckdb'".into());
+            };
+            let done =
+                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, &|_| {});
+            Ok(json!({ "retried": n, "backfill": done }))
+        }
+        "cancel" => {
+            let id = arg_str(args, "id").ok_or("missing 'id'")?;
+            let mut plan = backfill::load(&ws, id)?;
+            let n = plan.cancel();
+            plan.pid = None;
+            backfill::save(&ws, &plan)?;
+            Ok(json!({ "cancelled": n, "backfill": plan }))
+        }
+        other => Err(format!("unknown action {other:?}")),
+    }
 }
 
 fn t_verify_pipeline(args: &Value) -> Result<Value, String> {

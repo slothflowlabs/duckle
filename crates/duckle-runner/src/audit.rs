@@ -399,6 +399,13 @@ pub fn requirement(method: &str, path: &str) -> (Role, &'static str) {
         ("POST", "/api/watermarks") => (Role::Operator, "watermark.write"),
         ("DELETE", "/api/watermarks") => (Role::Operator, "watermark.clear"),
 
+        // #295: reading a backfill is a viewer's business; creating, retrying
+        // or cancelling one decides what runs, which is an operator's. Named
+        // here rather than left to the fallback, or every operator gets a 403
+        // and the audit log calls the action "unknown".
+        ("GET", "/api/backfills") => (Role::Viewer, "backfills.read"),
+        ("POST", "/api/backfills") => (Role::Operator, "backfill.write"),
+
         // #300: a scraper is a reader. Named here rather than left to the
         // fallback, which would demand admin - and handing a monitoring agent a
         // credential that can also add users and deploy pipelines is a worse

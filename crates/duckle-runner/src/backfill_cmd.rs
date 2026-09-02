@@ -282,12 +282,10 @@ fn cancel(args: &Args) -> ExitCode {
     ExitCode::from(0)
 }
 
-/// Run every open partition, `max_concurrent` at a time.
+/// The CLI's shell around the shared executor.
 ///
-/// Each slice is an ordinary run: its own receipt, its own release id, its own
-/// log lines. The plan is saved after every state change rather than at the end,
-/// because the whole point is that a kill halfway through leaves a resumable
-/// record rather than an unanswerable question.
+/// Printing and an exit code; the orchestration itself lives in the engine so
+/// the console and MCP run slices the same way this does.
 fn execute(workspace: &Path, plan: Backfill, json: bool) -> ExitCode {
     let duckdb = match crate::resolve_duckdb(None) {
         Ok(d) => d,
@@ -296,208 +294,31 @@ fn execute(workspace: &Path, plan: Backfill, json: bool) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let workers = plan
-        .max_concurrent
-        .min(plan.partitions.iter().filter(|p| p.state.is_claimable()).count())
-        .max(1);
-    // #295: a backfill's own bound is an ADDITIONAL ceiling, not a way around
-    // the machine's. Each slice still acquires the pool its pipeline asks for,
-    // so `--max-concurrent 4` over a pipeline in a pool of 1 runs one at a
-    // time - the protection exists to stop two heavy jobs competing, and a
-    // backfill is the most likely thing to try.
-    let gates = std::sync::Arc::new(duckle_duckdb_engine::pools::Gates::load(workspace));
-    let id = plan.id.clone();
-    let path = PathBuf::from(&plan.pipeline_path);
-    let pipeline = plan.pipeline.clone();
-    let release = plan.release_id.clone();
-    let shared = Arc::new(Mutex::new(plan));
-
-    std::thread::scope(|scope| {
-        for _ in 0..workers {
-            let shared = Arc::clone(&shared);
-            let workspace = workspace.to_path_buf();
-            let duckdb = duckdb.clone();
-            let path = path.clone();
-            let pipeline = pipeline.clone();
-            let release = release.clone();
-            let id = id.clone();
-            let gates = std::sync::Arc::clone(&gates);
-            scope.spawn(move || loop {
-                // Claim one slice under the lock and mark it running on disk
-                // before starting, so a crash leaves it `running` for the next
-                // start to reconcile rather than looking untouched.
-                let claimed = {
-                    let mut plan = shared.lock().unwrap_or_else(|p| p.into_inner());
-                    let Some(idx) = plan.partitions.iter().position(|p| p.state.is_claimable())
-                    else {
-                        return;
-                    };
-                    plan.partitions[idx].state = State::Running;
-                    plan.partitions[idx].attempts += 1;
-                    let _ = backfill::save(&workspace, &plan);
-                    (idx, plan.partitions[idx].clone())
-                };
-                let (idx, slice) = claimed;
-                let outcome =
-                    run_one(&workspace, &duckdb, &path, &pipeline, &id, &slice, &release, &gates);
-                {
-                    let mut plan = shared.lock().unwrap_or_else(|p| p.into_inner());
-                    let p = &mut plan.partitions[idx];
-                    p.finished_at = Some(chrono::Utc::now().to_rfc3339());
-                    match &outcome {
-                        Ok(run_id) => {
-                            p.state = State::Succeeded;
-                            p.run_id = Some(run_id.clone());
-                            p.error = None;
-                        }
-                        Err((run_id, e)) => {
-                            p.state = State::Failed;
-                            p.run_id = run_id.clone();
-                            p.error = Some(e.clone());
-                        }
-                    }
-                    let _ = backfill::save(&workspace, &plan);
-                    eprintln!(
-                        "  {:<12} {}",
-                        slice.key,
-                        match &outcome {
-                            Ok(_) => "ok".to_string(),
-                            Err((_, e)) => format!("FAILED  {e}"),
-                        }
-                    );
+    let plan = duckle_duckdb_engine::backfill_exec::execute(
+        workspace,
+        &duckdb,
+        plan,
+        &|o| {
+            eprintln!(
+                "  {:<12} {}",
+                o.key,
+                match &o.error {
+                    None => "ok".to_string(),
+                    Some(e) => format!("FAILED  {e}"),
                 }
-            });
-        }
-    });
-
-    let mut plan = Arc::try_unwrap(shared)
-        .map(|m| m.into_inner().unwrap_or_else(|p| p.into_inner()))
-        .unwrap_or_else(|arc| arc.lock().unwrap_or_else(|p| p.into_inner()).clone());
-    plan.pid = None;
-    let _ = backfill::save(workspace, &plan);
+            );
+        },
+    );
     let counts = plan.counts();
     if json {
         println!("{}", serde_json::to_string_pretty(&plan).unwrap_or_default());
     } else {
         let summary: Vec<String> = counts.iter().map(|(k, v)| format!("{v} {k}")).collect();
-        println!("\n{}: {}", plan.id, summary.join(", "));
+        println!("
+{}: {}", plan.id, summary.join(", "));
     }
     match counts.get("failed").copied().unwrap_or(0) {
         0 => ExitCode::from(0),
         _ => ExitCode::from(1),
-    }
-}
-
-/// One partition: an ordinary durable run with the slice's parameters bound.
-fn run_one(
-    workspace: &Path,
-    duckdb: &Path,
-    path: &Path,
-    pipeline: &str,
-    backfill_id: &str,
-    slice: &PartitionRun,
-    release: &Option<String>,
-    gates: &duckle_duckdb_engine::pools::Gates,
-) -> Result<String, (Option<String>, String)> {
-    let (_, mut doc) = read_doc(path).map_err(|e| (None, e))?;
-    // Held for the whole slice, like any other run.
-    let (_permit, pool, queued_ms) = gates.acquire(&doc.resource_pool);
-    // #317's boundary, with `partition` as the source - so an operator reading
-    // the receipt can see that a value came from the slice rather than from
-    // them, and a partition value colliding with one they passed is recorded as
-    // an override rather than silently winning.
-    let supplied: Vec<duckle_duckdb_engine::params::Supplied> = slice
-        .params
-        .iter()
-        .map(|(name, value)| duckle_duckdb_engine::params::Supplied {
-            name: name.clone(),
-            value: value.clone(),
-            source: "partition".to_string(),
-        })
-        .collect();
-    let (recorded, sources) =
-        duckle_duckdb_engine::context::apply_params_from(&mut doc, &supplied)
-            .map_err(|e| (None, e))?;
-    duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
-    duckle_duckdb_engine::context::apply_workspace_context(&mut doc, workspace);
-
-    let hash = duckle_duckdb_engine::retry::pipeline_hash(&doc);
-    let run_id = duckle_duckdb_engine::retry::new_run_id(pipeline, "backfill");
-    let receipt = duckle_duckdb_engine::retry::begin(
-        workspace,
-        &run_id,
-        "backfill",
-        pipeline,
-        &path.display().to_string(),
-        &hash,
-        // The backfill is what caused this run, and naming it is what makes
-        // "which slice produced this output" answerable from the receipt alone.
-        Some(backfill_id.to_string()),
-    );
-    let receipt = duckle_duckdb_engine::retry::RunReceipt {
-        parameters: recorded,
-        parameter_sources: sources,
-        partition_key: Some(slice.key.clone()),
-        resource_pool: Some(pool),
-        queue_ms: Some(queued_ms),
-        components: duckle_duckdb_engine::plugin::used_by(
-            workspace,
-            &serde_json::to_value(&doc).unwrap_or_default(),
-        ),
-        release_id: release.clone().or(receipt.release_id.clone()),
-        ..receipt
-    };
-    let _ = duckle_duckdb_engine::retry::write(workspace, &receipt);
-
-    let engine = duckle_duckdb_engine::DuckdbEngine::new(duckdb.to_path_buf())
-        .without_previews()
-        .with_run_id(&run_id);
-    let result = engine.execute_pipeline_named(&doc, pipeline);
-    let status = result.status.clone();
-    let error = result.error.clone();
-    duckle_duckdb_engine::retry::finish(
-        workspace,
-        receipt,
-        &status,
-        duckle_duckdb_engine::retry::nodes_of(&result),
-    );
-    match status == "ok" {
-        true => Ok(run_id),
-        false => Err((Some(run_id), error.unwrap_or_else(|| "the run failed".into()))),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    /// #295: a backfill slice is admitted by the machine's pool, not only by
-    /// the backfill's own bound.
-    ///
-    /// Reads the source, because the failure is an executor that stops
-    /// acquiring: `--max-concurrent 4` over a pipeline in a pool of one must
-    /// still run one at a time, and a backfill is the most likely thing to try
-    /// to get around that.
-    #[test]
-    fn every_partition_run_acquires_a_pool() {
-        let src = include_str!("backfill_cmd.rs");
-        // Built from pieces so the needle does not appear in this file as a
-        // literal and match itself - which it did, and made this test pass
-        // against an executor that had stopped acquiring anything.
-        let needle = format!("gates.{}(&doc.resource_pool)", "acquire");
-        let bound = format!("let (_permit, pool, queued_ms) = gates.{}", "acquire");
-        let call = src
-            .lines()
-            .map(str::trim_start)
-            // A real call site, not a comment and not a string in this test.
-            .filter(|l| l.starts_with("let "))
-            .find(|l| l.contains(&needle));
-        let call = call.unwrap_or_else(|| {
-            panic!("run_one no longer acquires a resource pool, so a backfill can outrun the machine")
-        });
-        // Bound for the life of the slice: a permit dropped at once admits
-        // everything while still looking like it acquired.
-        assert!(
-            call.starts_with(&bound),
-            "the permit is not held for the slice: {call}"
-        );
     }
 }

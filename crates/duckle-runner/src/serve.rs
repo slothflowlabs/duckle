@@ -1741,6 +1741,105 @@ fn metrics_body(state: &State) -> String {
     out
 }
 
+/// #295: create, retry or cancel a backfill over the API.
+///
+/// Create and retry EXECUTE, which can take hours, so they are accepted and run
+/// on a thread while the response returns the plan id immediately - the same
+/// shape as an asynchronous run, for the same reason: an operator should get
+/// something addressable rather than a held-open connection.
+fn api_backfill_action(state: &Arc<State>, req: &Request) -> Reply {
+    use duckle_duckdb_engine::backfill;
+    let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+    let action = body.get("action").and_then(Value::as_str).unwrap_or_default();
+    let ws = state.workspace.clone();
+    let duckdb = state.duckdb.clone();
+
+    match action {
+        "create" => {
+            let Some(file) = body.get("pipeline").and_then(Value::as_str) else {
+                return respond_err("400 Bad Request", "create needs a pipeline path");
+            };
+            let path = match resolve_in_workspace(&ws, file) {
+                Ok(p) => p,
+                Err(e) => return respond_err("400 Bad Request", &e),
+            };
+            let plan = match duckle_duckdb_engine::backfill_exec::plan_for(
+                &ws,
+                &path,
+                body.get("from").and_then(Value::as_str).unwrap_or_default(),
+                body.get("to").and_then(Value::as_str).unwrap_or_default(),
+                body.get("maxConcurrent").and_then(Value::as_u64).unwrap_or(4) as usize,
+            ) {
+                Ok(p) => p,
+                Err(e) => return respond_err("400 Bad Request", &e),
+            };
+            // A dry run writes nothing. "What would this queue" must not be a
+            // question that queues anything.
+            if body.get("dryRun").and_then(Value::as_bool).unwrap_or(false) {
+                return respond_json(&json!({
+                    "dryRun": true,
+                    "count": plan.partitions.len(),
+                    "partitions": plan.partitions.iter().map(|p| &p.key).collect::<Vec<_>>(),
+                }));
+            }
+            if let Err(e) = backfill::save(&ws, &plan) {
+                return respond_err("500 Internal Server Error", &e);
+            }
+            let id = plan.id.clone();
+            let count = plan.partitions.len();
+            std::thread::spawn(move || {
+                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, &|_| {});
+            });
+            respond_json(&json!({ "accepted": true, "id": id, "partitions": count }))
+        }
+        "retry" => {
+            let Some(id) = body.get("id").and_then(Value::as_str) else {
+                return respond_err("400 Bad Request", "retry needs an id");
+            };
+            let mut plan = match backfill::load(&ws, id) {
+                Ok(p) => p,
+                Err(e) => return respond_err("404 Not Found", &e),
+            };
+            let only = body
+                .get("partition")
+                .and_then(Value::as_str)
+                .map(|k| vec![k.to_string()]);
+            let n = plan.retry_open(only.as_deref());
+            if n == 0 {
+                return respond_json(&json!({ "retried": 0, "id": id }));
+            }
+            plan.pid = Some(std::process::id());
+            if let Err(e) = backfill::save(&ws, &plan) {
+                return respond_err("500 Internal Server Error", &e);
+            }
+            let id = id.to_string();
+            std::thread::spawn(move || {
+                duckle_duckdb_engine::backfill_exec::execute(&ws, &duckdb, plan, &|_| {});
+            });
+            respond_json(&json!({ "accepted": true, "id": id, "retried": n }))
+        }
+        // Cancel is immediate: it only marks the open slices, so there is
+        // nothing to wait for and an operator gets the answer rather than an
+        // acceptance.
+        "cancel" => {
+            let Some(id) = body.get("id").and_then(Value::as_str) else {
+                return respond_err("400 Bad Request", "cancel needs an id");
+            };
+            let mut plan = match backfill::load(&ws, id) {
+                Ok(p) => p,
+                Err(e) => return respond_err("404 Not Found", &e),
+            };
+            let n = plan.cancel();
+            plan.pid = None;
+            if let Err(e) = backfill::save(&ws, &plan) {
+                return respond_err("500 Internal Server Error", &e);
+            }
+            respond_json(&json!({ "cancelled": n, "id": id }))
+        }
+        other => respond_err("400 Bad Request", &format!("unknown action {other:?}")),
+    }
+}
+
 fn respond(status: &str, content_type: &str, body: &[u8]) -> Reply {
     Reply {
         status: status.to_string(),
@@ -2096,6 +2195,18 @@ fn dispatch_console(req: &Request, state: &Arc<State>, who: console_auth::Identi
             None => respond_err("400 Bad Request", "missing file"),
         },
         ("GET", "/api/runs") => respond_json(&api_runs(state, req.query.get("id").map(|s| s.as_str()))),
+        // #295: the persisted backfill plan, addressable over the server rather
+        // than only by an in-process CLI invocation.
+        ("GET", "/api/backfills") => match req.query.get("id") {
+            Some(id) => match duckle_duckdb_engine::backfill::load(&state.workspace, id) {
+                Ok(b) => respond_json(&serde_json::to_value(&b).unwrap_or_default()),
+                Err(e) => respond_err("404 Not Found", &e),
+            },
+            None => respond_json(
+                &json!({ "backfills": duckle_duckdb_engine::backfill::list(&state.workspace) }),
+            ),
+        },
+        ("POST", "/api/backfills") => api_backfill_action(state, req),
         ("GET", "/api/log") => respond_json(&api_log(state, &req.query)),
         ("GET", "/api/catalog") => respond_json(&api_catalog(state)),
         ("GET", "/api/batches") => respond_json(&json!({ "batches": duckle_duckdb_engine::batch::statuses(&state.workspace) }),
@@ -4532,6 +4643,58 @@ mod tests {
         // And the name that did not work finds nothing, which is what makes
         // this test about the name rather than about sessions in general.
         assert!(console.identify(None, Some(&format!("duckle_sid={sid}"))).is_none());
+    }
+
+    /// #295: the backfill plan is addressable over the API, and a dry run
+    /// queues nothing.
+    #[test]
+    fn a_backfill_dry_run_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Canonical, because resolve_in_workspace compares canonical paths and
+        // a temp dir is a symlink on some platforms.
+        let ws = &tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(
+            ws.join("pipelines/daily.json"),
+            r#"{"formatVersion":1,"name":"daily",
+                "partition":{"type":"time","cadence":"day","timezone":"UTC"},
+                "nodes":[{"id":"s","type":"source","position":{"x":0,"y":0},
+                  "data":{"label":"In","componentId":"src.csv",
+                          "properties":{"path":"in.csv","hasHeader":true}}}],
+                "edges":[]}"#,
+        )
+        .unwrap();
+        let state = guarded_state(ws);
+        let mut req = request("POST", "/api/backfills", Some("Bearer s3cret"));
+        req.body = serde_json::to_vec(&serde_json::json!({
+            "action": "create", "pipeline": "pipelines/daily.json",
+            "from": "2020-01-01", "to": "2020-01-03", "dryRun": true
+        }))
+        .unwrap();
+        let reply = route_console(&req, &state);
+        assert_eq!(reply.code(), 200, "{}", String::from_utf8_lossy(&reply.body));
+        let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(body["count"], 3);
+        assert_eq!(body["partitions"][0], "2020-01-01");
+        // "What would this queue" must not be a question that queues anything.
+        assert!(
+            duckle_duckdb_engine::backfill::list(ws).is_empty(),
+            "a dry run persisted a plan"
+        );
+    }
+
+    /// Reading a backfill is a viewer's business; changing one is an
+    /// operator's. Left to the catch-all both would need admin, and every
+    /// operator would get a 403 with the action logged as "unknown".
+    #[test]
+    fn backfill_routes_ask_for_the_right_role() {
+        let (read, read_action) = crate::audit::requirement("GET", "/api/backfills");
+        assert_eq!(read_action, "backfills.read");
+        assert!(console_auth::Role::Viewer.allows(read));
+        let (write, write_action) = crate::audit::requirement("POST", "/api/backfills");
+        assert_eq!(write_action, "backfill.write");
+        assert!(console_auth::Role::Operator.allows(write));
+        assert!(!console_auth::Role::Viewer.allows(write), "a viewer must not start a backfill");
     }
 
     /// #314: the web editor gets the same analysis shape the desktop does.

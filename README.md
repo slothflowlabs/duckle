@@ -1055,6 +1055,22 @@ bf-accounts-...: 1 failed, 4 succeeded
 retrying 1 partition(s)          -> 5 succeeded, and one new run, not five
 ```
 
+**Addressable over the server and from MCP**, not only from a CLI:
+
+```bash
+GET  /api/backfills            # every plan, or ?id= for one
+POST /api/backfills            # {"action":"create"|"retry"|"cancel", ...}
+```
+
+Create and retry are accepted and run on a thread, returning the plan id at once
+rather than holding a connection open for hours. `dryRun` lists the partitions
+and queues nothing - "what would this queue" must not be a question that queues
+anything. Reading needs a viewer; creating, retrying or cancelling needs an
+operator.
+
+The MCP tool `backfill` takes the same five actions, through the same engine
+functions, so an agent and an operator cannot get different behaviour.
+
 **A backfill's own bound is an additional ceiling, not a way around the
 machine's.** Each slice still acquires the pool its pipeline asks for, so
 `--max-concurrent 4` over a pipeline in a pool of one runs one at a time:
