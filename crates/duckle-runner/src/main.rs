@@ -25,6 +25,7 @@ mod migrate_cmd;
 mod oidc;
 mod backfill_cmd;
 mod chunk_cmd;
+mod conform_cmd;
 mod release_cmd;
 mod runsdiff_cmd;
 mod sql_cmd;
@@ -2071,6 +2072,11 @@ fn main() -> ExitCode {
         // #307: the external components this workspace installs, so a
         // third-party component is discoverable the same way a built-in is
         // rather than only by opening the pipeline that uses it.
+        // #307: does this component actually behave? Real invocations through
+        // the same protocol the engine uses.
+        if std::env::args().nth(2).as_deref() == Some("conform") {
+            return conform_cmd::run();
+        }
         if std::env::args().nth(2).as_deref() == Some("external") {
             let ws = std::env::args()
                 .skip_while(|a| a != "--workspace")
@@ -2108,7 +2114,8 @@ fn main() -> ExitCode {
         }
         if std::env::args().nth(2).as_deref() != Some("schema") {
             eprintln!("usage: duckle-runner components schema [--json]
-       duckle-runner components external [--workspace DIR] [--json]");
+       duckle-runner components external [--workspace DIR] [--json]
+       duckle-runner components conform <id> [--workspace DIR] [--json]");
             return ExitCode::from(2);
         }
         println!(

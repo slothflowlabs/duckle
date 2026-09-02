@@ -12220,66 +12220,11 @@ impl DuckdbEngine {
         let body = serde_json::to_vec(&request)
             .map_err(|e| EngineError::Other(format!("{}: {e}", spec.component_id)))?;
 
-        let cmd = &installed.manifest.runtime.command;
-        let mut child = std::process::Command::new(&cmd[0]);
-        child
-            .args(&cmd[1..])
-            .current_dir(&installed.dir)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        // No console flash on Windows, like every other spawn here.
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            child.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        }
-        let mut child = child.spawn().map_err(|e| {
-            EngineError::Config(format!(
-                "{}: cannot start {:?}: {e}",
-                spec.component_id, cmd[0]
-            ))
-        })?;
-        {
-            use std::io::Write;
-            let mut stdin = child.stdin.take().expect("piped");
-            stdin.write_all(&body).map_err(|e| EngineError::Other(e.to_string()))?;
-        }
-        // Deterministic cleanup: a component that hangs is killed at its
-        // declared timeout rather than holding the run open forever.
-        let deadline = std::time::Instant::now()
-            + std::time::Duration::from_secs(installed.manifest.runtime.timeout_secs.max(1));
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if std::time::Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = std::fs::remove_file(&in_pq);
-                    return Err(EngineError::Other(format!(
-                        "{} did not finish within {}s",
-                        spec.component_id, installed.manifest.runtime.timeout_secs
-                    )));
-                }
-                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
-                Err(e) => return Err(EngineError::Other(e.to_string())),
-            }
-        }
-        let out = child.wait_with_output().map_err(|e| EngineError::Other(e.to_string()))?;
+        // One protocol implementation, shared with the conformance kit: two
+        // would eventually disagree about what conforming means.
+        let reply = crate::plugin::invoke(&installed, &request)
+            .map_err(|e| EngineError::Other(format!("{}: {e}", spec.component_id)))?;
         let _ = std::fs::remove_file(&in_pq);
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        if !out.status.success() {
-            return Err(EngineError::Other(format!(
-                "{} failed: {}",
-                spec.component_id,
-                if stderr.is_empty() { "no message".into() } else { stderr }
-            )));
-        }
-        let reply: crate::plugin::Response = serde_json::from_slice(&out.stdout).map_err(|e| {
-            EngineError::Other(format!(
-                "{} did not answer with a control message ({e}). stderr: {stderr}",
-                spec.component_id
-            ))
-        })?;
         if !reply.ok {
             return Err(EngineError::Other(format!(
                 "{}: {}",

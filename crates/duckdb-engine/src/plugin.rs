@@ -255,6 +255,68 @@ pub struct Response {
 
 pub const PROTOCOL: u32 = 1;
 
+/// Run a component once and return what it said.
+///
+/// The whole protocol, in one place: argv from the manifest, the request as
+/// JSON on stdin, a JSON reply on stdout, a kill at the declared timeout. The
+/// engine and the conformance kit both call this rather than each implementing
+/// the protocol, because two implementations would eventually disagree about
+/// what conforming means - and the kit exists to answer exactly that.
+pub fn invoke(installed: &Installed, request: &Request) -> Result<Response, String> {
+    let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
+    let cmd = &installed.manifest.runtime.command;
+    let mut c = std::process::Command::new(&cmd[0]);
+    c.args(&cmd[1..])
+        .current_dir(&installed.dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = c
+        .spawn()
+        .map_err(|e| format!("cannot start {:?}: {e}", cmd[0]))?;
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().ok_or("no stdin")?;
+        // A component that never reads its stdin closes the pipe; that is a
+        // broken component, not a host error, so the write failing is reported
+        // rather than panicking.
+        stdin.write_all(&body).map_err(|e| format!("writing the request: {e}"))?;
+    }
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(installed.manifest.runtime.timeout_secs.max(1));
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "did not finish within {}s",
+                    installed.manifest.runtime.timeout_secs
+                ));
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if !out.status.success() {
+        return Err(match stderr.is_empty() {
+            true => "exited non-zero with no message".to_string(),
+            false => stderr,
+        });
+    }
+    serde_json::from_slice(&out.stdout).map_err(|e| {
+        format!("did not answer with a control message ({e}). stderr: {stderr}")
+    })
+}
+
 /// One external component, in the shape the built-in catalog uses.
 ///
 /// The same conversion for every consumer - MCP discovery, the palette, the

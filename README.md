@@ -817,6 +817,37 @@ compiled in.
 **A component that hangs is killed** at its declared timeout, and a manifest that
 does not parse is reported rather than silently missing from the list.
 
+**Does your component behave?**
+
+```bash
+duckle-runner components conform ext.upper --workspace .
+```
+
+```text
+  pass         schema validation    id, version and runtime.command are declared; 1 input, 1 output
+  pass         empty typed input    zero rows in, zero rows out, with a readable schema
+  pass         large batch          200000 rows in, 200000 out, in 0.9s
+  pass         crash cleanup        reported the failure: IO Error: No files found ...
+  pass         secret redaction     the request carries property values and paths, no credentials
+  pass         cancellation         killed after 60s; the host enforces this bound
+  unsupported  reject output        the host has no reject port for external components yet
+  unsupported  artifact lineage     the host has no artifact URI interchange yet
+```
+
+Real invocations through the same code the engine uses, so "conforming" means
+what the engine will actually do. Against a deliberately broken component it
+reports what is wrong and exits 1:
+
+```text
+  FAIL  empty typed input   reported success but wrote no output; zero rows is still a table
+  FAIL  crash cleanup       reported success on an input that does not exist
+```
+
+**A case for something the host cannot do says `unsupported`**, not `pass`. A
+green tick for a feature nobody built is the most misleading result a
+conformance kit can produce - and it is not a failure either, or every component
+would look broken because the host is incomplete.
+
 **Every run records what it ran against.** The receipt carries each external
 component the pipeline names with its manifest and lock hashes:
 
