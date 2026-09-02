@@ -90,6 +90,7 @@ pub fn run() -> ExitCode {
     }
 
     let mut cases = vec![schema_case(&installed)];
+    cases.push(initialize_case(&installed, &dir));
     cases.push(empty_input_case(&engine, &duckdb, &installed, &dir));
     cases.push(large_batch_case(&engine, &duckdb, &installed, &dir));
     cases.push(crash_cleanup_case(&installed, &dir));
@@ -194,6 +195,7 @@ fn request_for(installed: &Installed, input: Option<&Path>, output: &Path) -> Re
         inputs.insert("main".to_string(), p.display().to_string());
     }
     Request {
+        phase: plugin::Phase::Execute,
         protocol: plugin::PROTOCOL,
         component: installed.manifest.id.clone(),
         version: installed.manifest.version.clone(),
@@ -586,5 +588,44 @@ fn artifact_case(duckdb: &Path, installed: &Installed, dir: &Path) -> Case {
                 Err(e) => Case { name: "artifact lineage", verdict: Verdict::Fail, detail: e },
             }
         }
+    }
+}
+
+/// #307: does the component answer an initialize without doing the work?
+///
+/// The phase exists so `validate` can check a configuration without side
+/// effects. A component that writes its output during initialize has done the
+/// work early, which is the one thing this phase must not do - and the kit can
+/// see that by giving it an output path and checking nothing appeared.
+fn initialize_case(installed: &Installed, dir: &Path) -> Case {
+    let sentinel = dir.join("initialize-must-not-write.parquet");
+    let _ = std::fs::remove_file(&sentinel);
+    let mut props = sample_properties(installed);
+    if let Some(o) = props.as_object_mut() {
+        // A component that ignores the phase and treats this as an execute
+        // would write here; the file is the evidence.
+        o.insert("output".into(), serde_json::json!(sentinel.display().to_string()));
+    }
+    match plugin::initialize(installed, &props) {
+        Err(e) => Case {
+            name: "initialize",
+            verdict: Verdict::Fail,
+            detail: format!("did not answer an initialize: {}", first_line(&e)),
+        },
+        Ok(r) if !r.ok => Case {
+            name: "initialize",
+            verdict: Verdict::Fail,
+            detail: r.error.unwrap_or_else(|| "reported a failure".into()),
+        },
+        Ok(_) if sentinel.exists() => Case {
+            name: "initialize",
+            verdict: Verdict::Fail,
+            detail: "wrote output during initialize; the phase is a check, not the work".into(),
+        },
+        Ok(_) => Case {
+            name: "initialize",
+            verdict: Verdict::Pass,
+            detail: "answered without doing the work".into(),
+        },
     }
 }

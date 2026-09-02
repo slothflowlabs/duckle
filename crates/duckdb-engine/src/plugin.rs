@@ -224,9 +224,36 @@ pub fn check_allowed(workspace: Option<&Path>, component_id: &str) -> Result<(),
 /// pipeline JSON or command arguments, and the same reasoning applies to a
 /// message a subprocess could log. A component that needs a credential is given
 /// the name of one to resolve from its own environment.
+/// Which part of the lifecycle this invocation is (#307).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Phase {
+    /// Check the configuration and report readiness. The component must not do
+    /// the work, write the output, or touch anything outside itself: this runs
+    /// during `validate`, where a side effect would be a surprise.
+    Initialize,
+    #[default]
+    Execute,
+}
+
+/// A line a component may emit while it works.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Progress {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u64>,
+    /// 0.0 to 1.0, when the component knows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fraction: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Request {
+    #[serde(default)]
+    pub phase: Phase,
     pub protocol: u32,
     pub component: String,
     pub version: String,
@@ -291,6 +318,39 @@ pub struct Response {
     pub artifacts: Vec<Artifact>,
 }
 
+/// Ask a component whether its configuration is usable, without running it.
+///
+/// The initialize phase: no input, no output path it should write, and the
+/// component is expected to answer and exit. Used by `validate` and by the
+/// conformance kit, so a misconfigured component is caught before a pipeline
+/// depends on it rather than at midnight.
+///
+/// A component that does not implement the phase answers as it would for an
+/// execute and that is accepted: the phase is optional, and refusing every
+/// component written before it existed would be a worse outcome than a check
+/// that some components answer trivially.
+pub fn initialize(
+    installed: &Installed,
+    properties: &serde_json::Value,
+) -> Result<Response, String> {
+    let request = Request {
+        phase: Phase::Initialize,
+        protocol: PROTOCOL,
+        component: installed.manifest.id.clone(),
+        version: installed.manifest.version.clone(),
+        properties: properties.clone(),
+        inputs: Default::default(),
+        // Named but not to be written. A component that writes here during
+        // initialize is doing work it was asked not to do, and the kit checks
+        // exactly that.
+        output: String::new(),
+        reject: String::new(),
+        artifact_dir: String::new(),
+        run_id: String::new(),
+    };
+    invoke(installed, &request)
+}
+
 /// Check what a component said about the files it produced, and fill in what it
 /// did not say.
 ///
@@ -344,6 +404,29 @@ pub const PROTOCOL: u32 = 1;
 /// the protocol, because two implementations would eventually disagree about
 /// what conforming means - and the kit exists to answer exactly that.
 pub fn invoke(installed: &Installed, request: &Request) -> Result<Response, String> {
+    invoke_with(installed, request, &mut |_| {}, &|| false)
+}
+
+/// The same, reporting progress and observing cancellation (#307).
+///
+/// stdout is read as it arrives rather than collected at the end, which is what
+/// makes progress possible at all - and the pipes are drained on their own
+/// threads, because a component that writes more than a pipe buffer while the
+/// host is not reading deadlocks, which this repository has been bitten by
+/// before with DuckDB.
+///
+/// Cancellation is termination. A portable in-band cancel would need every
+/// component to read stdin as a live stream while working, which the simple
+/// case - `json.load(sys.stdin)` - cannot do. So the host kills the process and
+/// cleans up its own files deterministically; what a component cannot do is
+/// clean up in-process, and pretending otherwise would be worse than saying so.
+pub fn invoke_with(
+    installed: &Installed,
+    request: &Request,
+    on_progress: &mut dyn FnMut(Progress),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Response, String> {
+    use std::io::{BufRead, BufReader, Write};
     let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
     let cmd = &installed.manifest.runtime.command;
     let mut c = std::process::Command::new(&cmd[0]);
@@ -357,45 +440,109 @@ pub fn invoke(installed: &Installed, request: &Request) -> Result<Response, Stri
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    let mut child = c
-        .spawn()
-        .map_err(|e| format!("cannot start {:?}: {e}", cmd[0]))?;
+    let mut child = c.spawn().map_err(|e| format!("cannot start {:?}: {e}", cmd[0]))?;
     {
-        use std::io::Write;
+        // Written and then CLOSED: a component doing `json.load(sys.stdin)`
+        // blocks until EOF, so holding the handle open would hang every simple
+        // component ever written against this protocol.
         let mut stdin = child.stdin.take().ok_or("no stdin")?;
-        // A component that never reads its stdin closes the pipe; that is a
-        // broken component, not a host error, so the write failing is reported
-        // rather than panicking.
         stdin.write_all(&body).map_err(|e| format!("writing the request: {e}"))?;
     }
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let out_pipe = child.stdout.take().ok_or("no stdout")?;
+    std::thread::spawn(move || {
+        for line in BufReader::new(out_pipe).lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let err_pipe = child.stderr.take().ok_or("no stderr")?;
+    let errors = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let sink = errors.clone();
+    std::thread::spawn(move || {
+        for line in BufReader::new(err_pipe).lines().map_while(Result::ok) {
+            if let Ok(mut held) = sink.lock() {
+                held.push_str(&line);
+                held.push(char::from(10));
+            }
+        }
+    });
+
     let deadline = std::time::Instant::now()
         + std::time::Duration::from_secs(installed.manifest.runtime.timeout_secs.max(1));
+    let mut result: Option<Response> = None;
+    let stop = |child: &mut std::process::Child| {
+        let _ = child.kill();
+        let _ = child.wait();
+    };
     loop {
+        // Drain whatever has arrived before deciding anything, so a result line
+        // written just before the deadline is not thrown away for being late.
+        while let Ok(line) = rx.try_recv() {
+            match classify(&line) {
+                Some(Line::Progress(p)) => on_progress(p),
+                Some(Line::Result(r)) => result = Some(r),
+                None => {}
+            }
+        }
+        if cancelled() {
+            stop(&mut child);
+            return Err("cancelled".to_string());
+        }
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
+                stop(&mut child);
                 return Err(format!(
                     "did not finish within {}s",
                     installed.manifest.runtime.timeout_secs
                 ));
             }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
             Err(e) => return Err(e.to_string()),
         }
     }
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    if !out.status.success() {
+    // The reader thread may still hold buffered lines after the process exits.
+    while let Ok(line) = rx.recv_timeout(std::time::Duration::from_millis(200)) {
+        match classify(&line) {
+            Some(Line::Progress(p)) => on_progress(p),
+            Some(Line::Result(r)) => result = Some(r),
+            None => {}
+        }
+    }
+    let status = child.wait().map_err(|e| e.to_string())?;
+    let stderr = errors.lock().map(|e| e.trim().to_string()).unwrap_or_default();
+    if !status.success() {
         return Err(match stderr.is_empty() {
             true => "exited non-zero with no message".to_string(),
             false => stderr,
         });
     }
-    serde_json::from_slice(&out.stdout).map_err(|e| {
-        format!("did not answer with a control message ({e}). stderr: {stderr}")
+    result.ok_or_else(|| {
+        format!("did not answer with a control message. stderr: {stderr}")
     })
+}
+
+enum Line {
+    Progress(Progress),
+    Result(Response),
+}
+
+/// What one line of a component's stdout was.
+///
+/// A bare object carrying `ok` is a result, which is what every component
+/// written against the first version of this protocol emits - so they keep
+/// working without knowing progress exists.
+fn classify(line: &str) -> Option<Line> {
+    let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("progress") => serde_json::from_value(v).ok().map(Line::Progress),
+        Some("result") => serde_json::from_value(v).ok().map(Line::Result),
+        _ if v.get("ok").is_some() => serde_json::from_value(v).ok().map(Line::Result),
+        _ => None,
+    }
 }
 
 /// One external component, in the shape the built-in catalog uses.
@@ -660,6 +807,79 @@ mod tests {
     }
 
     #[test]
+    fn a_component_written_before_progress_existed_still_works() {
+        // A bare object carrying `ok` is a result. Every component written
+        // against the first version of this protocol emits exactly that, and
+        // they must keep working without knowing progress exists.
+        assert!(matches!(classify(r#"{"ok":true,"rows":3}"#), Some(Line::Result(_))));
+        let Some(Line::Result(r)) = classify(r#"{"ok":false,"error":"boom"}"#) else {
+            panic!("not a result")
+        };
+        assert!(!r.ok);
+        assert_eq!(r.error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn progress_and_result_lines_are_told_apart() {
+        let Some(Line::Progress(p)) =
+            classify(r#"{"type":"progress","rows":10,"fraction":0.5,"message":"half"}"#)
+        else {
+            panic!("not progress")
+        };
+        assert_eq!(p.rows, Some(10));
+        assert_eq!(p.fraction, Some(0.5));
+        assert_eq!(p.message.as_deref(), Some("half"));
+        assert!(matches!(classify(r#"{"type":"result","ok":true}"#), Some(Line::Result(_))));
+    }
+
+    #[test]
+    fn a_stray_line_does_not_break_the_protocol() {
+        // Components print things. A log line, a warning from a library, a
+        // blank line - none of them are control messages, and treating one as
+        // a malformed result would fail runs that are fine.
+        for noise in [
+            "starting up",
+            "",
+            "   ",
+            "[]",
+            r#"{"unrelated":1}"#,
+            "Traceback (most recent call last):",
+        ] {
+            assert!(classify(noise).is_none(), "{noise:?} was taken for a control message");
+        }
+    }
+
+    #[test]
+    fn an_initialize_asks_for_no_work_to_be_done() {
+        // The phase exists so validate can check a configuration without side
+        // effects, so it names no input and no output to write.
+        let m = manifest("ext.x");
+        let i = Installed {
+            manifest: m,
+            dir: ".".into(),
+            manifest_hash: "h".into(),
+            lock_hash: None,
+        };
+        // Build the request the same way `initialize` does, without spawning.
+        let req = Request {
+            phase: Phase::Initialize,
+            protocol: PROTOCOL,
+            component: i.manifest.id.clone(),
+            version: i.manifest.version.clone(),
+            properties: serde_json::json!({}),
+            inputs: Default::default(),
+            output: String::new(),
+            reject: String::new(),
+            artifact_dir: String::new(),
+            run_id: String::new(),
+        };
+        assert!(req.inputs.is_empty(), "initialize reads nothing");
+        assert!(req.output.is_empty(), "and is given nowhere to write");
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""phase":"initialize""#), "{json}");
+    }
+
+    #[test]
     fn a_declared_hash_is_verified_rather_than_trusted() {
         // A hash a component asserts about its own output is worth nothing if
         // nobody checks it, and being able to tell later that the file changed
@@ -769,6 +989,7 @@ mod tests {
         // #307: raw secrets must not travel in pipeline JSON or command
         // arguments, and a subprocess could log its own stdin.
         let r = Request {
+            phase: Phase::Execute,
             protocol: PROTOCOL,
             component: "ext.x".into(),
             version: "1".into(),

@@ -12223,6 +12223,7 @@ impl DuckdbEngine {
         std::fs::create_dir_all(&artifact_dir)
             .map_err(|e| EngineError::Other(format!("{}: {e}", artifact_dir.display())))?;
         let request = crate::plugin::Request {
+            phase: crate::plugin::Phase::Execute,
             protocol: crate::plugin::PROTOCOL,
             component: spec.component_id.clone(),
             version: installed.manifest.version.clone(),
@@ -12238,9 +12239,39 @@ impl DuckdbEngine {
 
         // One protocol implementation, shared with the conformance kit: two
         // would eventually disagree about what conforming means.
-        let reply = crate::plugin::invoke(&installed, &request)
-            .map_err(|e| EngineError::Other(format!("{}: {e}", spec.component_id)))?;
+        // #307: progress lines reach the run's event stream as they arrive, and
+        // the engine's cancel flag stops the component rather than being
+        // noticed only after it finishes.
+        let node = spec.node_id.clone();
+        let component = spec.component_id.clone();
+        let mut on_progress = |p: crate::plugin::Progress| {
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(r) = p.rows {
+                parts.push(format!("{r} row(s)"));
+            }
+            if let Some(f) = p.fraction {
+                parts.push(format!("{:.0}%", (f.clamp(0.0, 1.0)) * 100.0));
+            }
+            if let Some(m) = &p.message {
+                parts.push(m.clone());
+            }
+            if !parts.is_empty() {
+                eprintln!("  {node} {component}: {}", parts.join(", "));
+            }
+        };
+        let cancelled = self.cancel.clone();
+        let reply = crate::plugin::invoke_with(
+            &installed,
+            &request,
+            &mut on_progress,
+            &|| cancelled.load(std::sync::atomic::Ordering::Relaxed),
+        )
+        .map_err(|e| match e.as_str() {
+            "cancelled" => EngineError::Cancelled,
+            _ => EngineError::Other(format!("{}: {e}", spec.component_id)),
+        })?;
         let _ = std::fs::remove_file(&in_pq);
+        let _ = std::fs::remove_file(&rej_pq.with_extension("tmp"));
         // Checked before the output is published: an artifact a component
         // declared and did not write, or wrote and mis-hashed, means the run
         // did not produce what it says it did.

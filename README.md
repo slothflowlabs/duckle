@@ -839,6 +839,7 @@ duckle-runner components conform ext.upper --workspace .
 
 ```text
   pass         schema validation    id, version and runtime.command are declared; 1 input, 1 output
+  pass         initialize           answered without doing the work
   pass         empty typed input    zero rows in, zero rows out, with a readable schema
   pass         large batch          200000 rows in, 200000 out, in 0.9s
   pass         crash cleanup        reported the failure: IO Error: No files found ...
@@ -861,6 +862,34 @@ reports what is wrong and exits 1:
 green tick for a feature nobody built is the most misleading result a
 conformance kit can produce - and it is not a failure either, or every component
 would look broken because the host is incomplete.
+
+**A lifecycle, not just a call.** A component may answer an `initialize` - a
+configuration check that must not do the work - and may report progress while it
+runs:
+
+```python
+if req.get("phase") == "initialize":
+    emit({"type": "result", "ok": True}); raise SystemExit(0)
+emit({"type": "progress", "rows": n, "fraction": 0.5, "message": "stage 2 of 4"})
+```
+
+```text
+  w ext.slow: 1 row(s), 50%, stage 2 of 4
+  w ext.slow: 2 row(s), 75%, stage 3 of 4
+```
+
+A component written before progress existed emits one `{"ok": true}` and keeps
+working unchanged - a bare object carrying `ok` is still a result. A stray log
+line is ignored rather than treated as a malformed one.
+
+**Cancelling stops the process.** A portable in-band cancel would require every
+component to read stdin as a live stream while working, which the simple case -
+`json.load(sys.stdin)` - cannot do; so the host terminates it and cleans up its
+own files. A component that outlives its declared timeout is killed the same way:
+
+```text
+error: ext.slow: did not finish within 1s
+```
 
 **Files are referenced, not streamed.** A document, a model or a report is a
 file: the component writes it into the directory the host provides and names it
