@@ -57,6 +57,14 @@ export type Field = {
     /** Render a `text` field as a masked secret input (with show/hide). */
     secret?: boolean;
     /**
+     * Render a `select` as a combo box: the options stay, and anything else can
+     * be typed. For values where the common cases are worth offering but the
+     * set is not closed - a CSV delimiter, or a text encoding, where DuckDB
+     * accepts over a thousand names and a dropdown can only carry the ones
+     * people usually want.
+     */
+    allowCustom?: boolean;
+    /**
      * Hide this field unless every condition matches (array = AND). Absent =
      * always visible. Hidden fields keep their stored prop value - the engine
      * ignores inapplicable props, so nothing is cleared on hide.

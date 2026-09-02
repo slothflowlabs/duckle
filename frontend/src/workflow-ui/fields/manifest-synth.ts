@@ -76,16 +76,48 @@ function placeholderAutodetect(format?: string): (
 
 // Field helpers ---------------------------------------------------------
 
+// DuckDB's CSV reader accepts over a thousand encoding names, under ICU
+// spellings that are easy to get wrong - `KOI8_R` not `KOI8-R`, `EUC_KR` not
+// `EUC-KR`, `iso-8859_2-1999` not `ISO-8859-2`, and a wrong spelling is a hard
+// "does not support the encoding" error rather than a fallback. So the list
+// carries the names people actually need, spelled the way DuckDB accepts them,
+// and the field stays typable for the rest. Every value below was checked
+// against DuckDB 1.5.4.
 const encodingField = (): Field => ({
     key: 'encoding',
     label: 'Encoding',
     kind: 'select',
+    allowCustom: true,
+    placeholder: 'utf-8',
     defaultValue: 'utf-8',
+    description:
+        'DuckDB accepts any ICU encoding name; the list is the common ones. A name it does not know is an error, not a fallback.',
     options: [
         { label: 'UTF-8', value: 'utf-8' },
         { label: 'UTF-16', value: 'utf-16' },
-        { label: 'Latin-1', value: 'latin-1' },
-        { label: 'Windows-1252', value: 'windows-1252' },
+        { label: 'Latin-1  (ISO-8859-1)', value: 'latin-1' },
+        { label: 'Windows-1252  Western', value: 'windows-1252' },
+        { label: 'Windows-1250  Central European', value: 'CP1250' },
+        { label: 'Windows-1251  Cyrillic', value: 'CP1251' },
+        { label: 'Windows-1253  Greek', value: 'CP1253' },
+        { label: 'Windows-1254  Turkish', value: 'CP1254' },
+        { label: 'Windows-1255  Hebrew', value: 'CP1255' },
+        { label: 'Windows-1256  Arabic', value: 'CP1256' },
+        { label: 'Windows-1257  Baltic', value: 'CP1257' },
+        { label: 'Windows-1258  Vietnamese', value: 'CP1258' },
+        { label: 'ISO-8859-2  Central European', value: 'iso-8859_2-1999' },
+        { label: 'ISO-8859-5  Cyrillic', value: 'iso-8859_5-1999' },
+        { label: 'ISO-8859-7  Greek', value: 'iso-8859_7-1987' },
+        { label: 'ISO-8859-15  Western with euro', value: 'iso-8859_15-1999' },
+        { label: 'Shift-JIS  Japanese', value: 'SHIFT_JIS' },
+        { label: 'EUC-JP  Japanese', value: 'EUC_JP' },
+        { label: 'EUC-KR  Korean', value: 'EUC_KR' },
+        { label: 'Big5  Traditional Chinese', value: 'BIG5' },
+        { label: 'GB18030  Simplified Chinese', value: 'GB18030' },
+        { label: 'KOI8-R  Cyrillic', value: 'KOI8_R' },
+        { label: 'CP852  DOS Central European', value: 'CP852' },
+        { label: 'CP866  DOS Cyrillic', value: 'CP866' },
+        { label: 'CP437  DOS US', value: 'CP437' },
     ],
 });
 
@@ -1508,6 +1540,11 @@ function fileFormatSection(comp: ComponentDef): FormSection[] {
                         key: 'delimiter',
                         label: 'Delimiter',
                         kind: 'select',
+                        // Typable as well as pickable: a delimiter is whatever
+                        // the system that wrote the file chose, and no list of
+                        // options closes that set.
+                        allowCustom: true,
+                        placeholder: 'pick one, or type the character',
                         defaultValue: id.endsWith('.tsv') ? '\t' : ',',
                         options: [
                             { label: 'Comma  ,', value: ',' },
@@ -1515,7 +1552,14 @@ function fileFormatSection(comp: ComponentDef): FormSection[] {
                             { label: 'Semicolon  ;', value: ';' },
                             { label: 'Pipe  |', value: '|' },
                             { label: 'Space', value: ' ' },
+                            { label: 'Colon  :', value: ':' },
+                            { label: 'Caret  ^', value: '^' },
+                            { label: 'Tilde  ~', value: '~' },
+                            { label: 'Hash  #', value: '#' },
+                            { label: 'Unit separator  0x1F', value: '' },
                         ],
+                        description:
+                            'Leave blank to let DuckDB sniff it. Anything not listed can be typed in.',
                     },
                     {
                         key: 'quoteChar',

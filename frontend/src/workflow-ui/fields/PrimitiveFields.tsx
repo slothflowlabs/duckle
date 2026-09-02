@@ -119,6 +119,31 @@ export function BoolField({ field, value, onChange }: Props<boolean>) {
 }
 
 export function SelectField({ field, value, onChange }: Props<string>) {
+    // A plain select cannot express "one of these, or something else", and some
+    // of these values are not a closed set: a delimiter can be any character a
+    // system chose to write, and DuckDB accepts over a thousand encoding names.
+    // The options stay - they are what people pick most of the time - and the
+    // field is typable for the file that does not fit any of them.
+    if (field.allowCustom) {
+        const listId = `duckle-opts-${field.key}`;
+        return (
+            <>
+                <input
+                    className="field-input"
+                    list={listId}
+                    value={value ?? ''}
+                    placeholder={field.placeholder}
+                    spellCheck={false}
+                    onChange={e => onChange(e.target.value)}
+                />
+                <datalist id={listId}>
+                    {field.options?.map(o => (
+                        <option key={o.value} value={o.value} label={o.label} />
+                    ))}
+                </datalist>
+            </>
+        );
+    }
     return (
         <select
             className="field-input field-select"
