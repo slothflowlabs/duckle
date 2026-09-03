@@ -2598,7 +2598,7 @@ also holds where it is actually exercised:
 | rule | also enforced at |
 |---|---|
 | `network.allowedDomains` | every connection, every redirect hop, and DuckDB itself |
-| `state.allowMutation` | the watermark writers, so `duckle-runner backfill`, the API, MCP and the panel all meet the same refusal |
+| `state.allowMutation` | every component that advances saved state - incremental watermarks, DuckLake CDC snapshots, Kafka offsets, the `src.changed` seen-map, spool and REST positions, tumble windows and stored baselines - so `duckle-runner backfill`, the API, MCP and the panel all meet the same refusal |
 | `extensions.allowUnsigned` | the DuckDB launch, which can withhold `-unsigned` but never grant it |
 
 DuckDB is the reason that last one names two enforcers. Duckle's own HTTP

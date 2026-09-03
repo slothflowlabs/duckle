@@ -251,6 +251,48 @@ pub fn load(workspace: Option<&Path>) -> Result<Policy, EngineError> {
 ///
 /// Reading state is not gated - an operator has to be able to SEE what they
 /// are not allowed to change.
+/// How many places in the engine write durable state.
+///
+/// Recorded so `no_component_writes_state_without_the_policy_knowing` can tell
+/// when a ninth appears. The number is a fact about connectors.rs, not a limit.
+#[cfg(test)]
+const STATE_WRITE_SITES: usize = 8;
+
+/// Every component that advances saved state when it runs.
+///
+/// One list, because there were two: this permission named `xf.incremental` and
+/// `src.ducklake.changes` while eight components write durable state, so
+/// `allow_state_mutation: false` did not stop a Kafka source advancing its
+/// offsets, a `src.changed` listing advancing its seen-map, or a spool, REST,
+/// tumble or baseline node advancing theirs. A permission that does not cover
+/// what its name describes is worse than an absent one, because an operator
+/// reads it as covered.
+///
+/// Each entry corresponds to a `PendingWrite::state(` call in connectors.rs;
+/// a test compares the counts so a ninth cannot be added silently.
+pub fn advances_saved_state(component_id: &str) -> bool {
+    matches!(
+        component_id,
+        // watermark over an ordered column
+        "xf.incremental"
+            // consumed snapshot id
+            | "src.ducklake.changes"
+            // uri -> fingerprint map of what has been seen
+            | "src.changed"
+            // topic/partition resume offsets
+            | "src.kafka"
+            | "src.redpanda"
+            // position in the spooled directory
+            | "src.spool"
+            // pagination / incremental cursor
+            | "src.rest"
+            // open window carried between runs
+            | "xf.tumble"
+            // the stored baseline a later run compares against
+            | "qa.baseline"
+    )
+}
+
 pub fn state_mutation_allowed(workspace: &Path) -> Result<(), EngineError> {
     let policy = load(Some(workspace))?;
     if policy.allow_state_mutation {
@@ -580,7 +622,7 @@ pub fn check(policy: &Policy, doc: &PipelineDoc) -> Vec<Violation> {
         // Clearing a production watermark is a silent full reload, which is why
         // state mutation is its own permission rather than part of the sinks.
         if !policy.allow_state_mutation {
-            let mutates = matches!(component, "xf.incremental" | "src.ducklake.changes")
+            let mutates = advances_saved_state(component)
                 && props
                     .get("trackState")
                     .and_then(|v| v.as_bool())
@@ -820,6 +862,61 @@ mod tests {
         ]));
         let err = enforce(&p, &d).unwrap_err().to_string();
         assert!(err.contains("state mutation"), "{err}");
+    }
+
+    /// Withholding state mutation has to withhold it from EVERY component that
+    /// advances saved state, not from the two that were thought of first.
+    ///
+    /// `allow_state_mutation: false` named `xf.incremental` and
+    /// `src.ducklake.changes` while eight components write durable state, so a
+    /// Kafka source quietly advanced its offsets and a `src.changed` listing
+    /// quietly advanced its seen-map in an environment that had explicitly
+    /// forbidden exactly that. A permission that does not cover what its own
+    /// name describes is worse than an absent one, because it reads as covered.
+    #[test]
+    fn withholding_state_mutation_covers_every_component_that_advances_state() {
+        let p = policy_from("state:\n  allowRead: true\n  allowMutation: false\n");
+        for (id, props) in [
+            ("xf.incremental", serde_json::json!({ "column": "updated_at" })),
+            ("src.ducklake.changes", serde_json::json!({ "path": "l.ducklake", "table": "t" })),
+            ("src.changed", serde_json::json!({ "uri": "s3://b/p", "listing": true })),
+            ("src.kafka", serde_json::json!({ "brokers": "b:9092", "topic": "t" })),
+            ("src.redpanda", serde_json::json!({ "brokers": "b:9092", "topic": "t" })),
+            ("src.spool", serde_json::json!({ "uri": "sftp://h/d" })),
+            ("src.rest", serde_json::json!({ "url": "https://example.invalid/x" })),
+            ("xf.tumble", serde_json::json!({ "column": "ts", "every": "1 hour" })),
+            ("qa.baseline", serde_json::json!({ "name": "b" })),
+        ] {
+            let d = doc_of(serde_json::json!([node("n", id, props)]));
+            let err = enforce(&p, &d)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| String::from("<allowed>"));
+            assert!(
+                err.contains("state mutation"),
+                "{id} advances saved state and the policy let it through: {err}"
+            );
+        }
+    }
+
+    /// And the drift guard, because the list above is a list.
+    ///
+    /// Every component that advances state does it through one
+    /// `PendingWrite::state(` call in connectors.rs. If a ninth appears while
+    /// the policy still knows eight, the new one is uncovered and silent -
+    /// which is exactly how six of the eight came to be uncovered. The needle
+    /// is built from pieces so it cannot match itself.
+    #[test]
+    fn no_component_writes_state_without_the_policy_knowing() {
+        let src = include_str!("connectors.rs");
+        let needle = format!("PendingWrite::{}(", "state");
+        let sites = src.matches(needle.as_str()).count();
+        assert_eq!(
+            sites, STATE_WRITE_SITES,
+            "connectors.rs now has {sites} durable-state writes and the policy was written \
+             against {STATE_WRITE_SITES}. Map the new one to its component id and add it to \
+             `advances_saved_state`, or `allow_state_mutation: false` silently stops covering it."
+        );
     }
 
     /// Report mode says what it found and allows it, for rolling a policy out
