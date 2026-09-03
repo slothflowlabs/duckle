@@ -293,3 +293,63 @@ mod tests {
         assert!(!derive(&c2).credentials);
     }
 }
+
+#[cfg(test)]
+mod readme_counts {
+    use super::*;
+
+    /// The README is a second list, so it must not be an independent one.
+    ///
+    /// #313's premise, checked rather than argued: "hand-maintained
+    /// README/roadmap lists can drift from the code". They had. The README
+    /// claimed 113 sources, 130 transforms and 73 sinks against a catalog with
+    /// 119, 144 and 72 - two counts stale upward and one stale DOWNWARD, so it
+    /// was not simply lagging behind additions, it was unmaintained.
+    ///
+    /// The prose and the groupings stay hand-written, because they are
+    /// editorial. Only the numbers are derived, because only the numbers have a
+    /// right answer.
+    const README: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"));
+
+    fn available(kind: &str) -> usize {
+        let all: Value = serde_json::from_str(CATALOG_JSON).expect("catalog parses");
+        all["components"]
+            .as_array()
+            .expect("catalog has a components array")
+            .iter()
+            .filter(|c| {
+                c.get("kind").and_then(Value::as_str) == Some(kind)
+                    && c.get("availability").and_then(Value::as_str) == Some("available")
+            })
+            .count()
+    }
+
+    /// `**113 sources available today.**` -> 113
+    fn claimed(noun: &str) -> usize {
+        let needle = format!(" {noun} available today");
+        let line = README
+            .lines()
+            .find(|l| l.contains(&needle))
+            .unwrap_or_else(|| panic!("the README no longer states how many {noun} are available"));
+        line.chars()
+            .skip_while(|c| !c.is_ascii_digit())
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse()
+            .unwrap_or_else(|_| panic!("no number in {line:?}"))
+    }
+
+    #[test]
+    fn the_readme_counts_match_the_catalog() {
+        for (noun, kind) in [("sources", "source"), ("transforms", "transform"), ("sinks", "sink")] {
+            assert_eq!(
+                claimed(noun),
+                available(kind),
+                "the README says {} {noun} are available and the catalog has {}. Update the \
+                 README, in the same change as whatever added or removed the component.",
+                claimed(noun),
+                available(kind)
+            );
+        }
+    }
+}

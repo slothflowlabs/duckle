@@ -49,6 +49,19 @@ jobs:
             echo "::error::and commit the result in the same change as the manifest edit."
             exit 1
           }
+      # The site's llms.txt / llms-full.txt are generated FROM that catalog and
+      # are what an agent reads to answer "does Duckle support X". They had
+      # drifted too - 385 components against an actual 409 - so they are
+      # regenerated and diffed for the same reason.
+      - name: Site component index is in sync with the catalog
+        run: |
+          node website/scripts/build-llms.mjs
+          git diff --exit-code -- website/llms.txt website/llms-full.txt || {
+            echo "::error::website/llms.txt is stale. Run:"
+            echo "::error::  node website/scripts/build-llms.mjs"
+            echo "::error::and commit the result."
+            exit 1
+          }
 
   rust:
     strategy:

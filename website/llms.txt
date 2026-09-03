@@ -1,25 +1,22 @@
 # Duckle
 
-> Duckle is a free, open-source ETL/ELT platform built on DuckDB, for teams who want their pipelines running on their own infrastructure. You author on a visual canvas, in Python, or in plain English to an on-device AI assistant, and every node compiles to readable DuckDB SQL. Then you deploy the same file to a server or a cloud account you own, where `duckle-runner serve` runs it headless on a schedule with a web console, roles and an audit trail. No vendor cloud, no per-row billing, no lock-in. Dual-licensed MIT OR Apache-2.0.
+> Duckle is a free, open-source, local-first ETL/ELT studio built on DuckDB. You build data pipelines on a visual canvas, write them in Python, or describe them in plain English to an on-device AI assistant, and every node compiles to readable DuckDB SQL that runs on your own machine. No cloud, no server, no account, no telemetry. Dual-licensed MIT OR Apache-2.0; runs on Windows, macOS, and Linux.
 
-Duckle is commonly described as an open-source, self-hosted alternative to hosted ETL platforms such as Fivetran and Airbyte, and it can run dbt on DuckDB inside the same tool. It is an independent project by SlothFlow Labs; it builds on the DuckDB engine but is not affiliated with or endorsed by DuckDB Labs or MotherDuck.
+Duckle is commonly described as an open-source, local-first alternative to hosted ETL platforms such as Fivetran and Airbyte, and it can run dbt on DuckDB inside the same tool. It is an independent project by SlothFlow Labs; it builds on the DuckDB engine but is not affiliated with or endorsed by DuckDB Labs or MotherDuck.
 
 ## Key facts
 
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
-- Deploys to your own infrastructure: `duckle-runner serve` runs headless on a schedule in Docker, on EC2, ECS, EKS, Azure or Google Cloud, with a web console, roles and an audit trail. A bigger instance is a faster pipeline, because the engine uses every core you give it.
-- Your data stays in your custody: no account, no telemetry and no phone-home, which suits air-gapped, on-premise and compliance-sensitive work.
-- Every pipeline is one file in git, so it outlives whoever wrote it, and the file you author is the file you deploy.
+- Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 385 components, 367 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 188 connectors (107 sources / 68 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
-- Transformation: 141 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
-- Data quality: 27 checks, plus 18 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
+- 409 components, 392 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 191 connectors (119 sources / 72 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- Transformation: 144 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
+- Data quality: 29 checks, plus 22 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
 - dbt: runs dbt on DuckDB with a GUI, using a fast build engine by default and dbt-core as a fallback.
 - AI: an on-device assistant (Qwen via llama.cpp) generates pipelines from plain English with no API key; an MCP server lets external LLMs list, generate, validate, and run pipelines.
-- Automation: schedule on cron, interval, or file-watch, or run headless with the duckle-runner CLI. `duckle-runner validate` compiles pipelines to SQL in CI with no source, sink, credential or network.
-- Measured: 96 million rows out of Postgres to Parquet in 39.9s, with the harness in the repository.
+- Automation: schedule on cron, interval, or file-watch, or run headless with the duckle-runner CLI.
 
 ## Documentation
 
@@ -36,7 +33,7 @@ Duckle is commonly described as an open-source, self-hosted alternative to hoste
 
 ## Full reference
 
-- [llms-full.txt](https://duckle.org/llms-full.txt): every one of the 385 components with its id and summary, plus how to author and run a pipeline. Fetch this to answer questions about whether Duckle supports a specific system.
+- [llms-full.txt](https://duckle.org/llms-full.txt): every one of the 409 components with its id and summary, plus how to author and run a pipeline. Fetch this to answer questions about whether Duckle supports a specific system.
 
 ## Project
 
