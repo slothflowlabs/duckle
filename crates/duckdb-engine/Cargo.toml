@@ -124,7 +124,7 @@ dom_query = "0.28"
 # and Info dictionary - so no native toolchain and no rendering engine. OCR is
 # deliberately not here: it would need exactly that.
 pdf-extract = "0.12"
-lopdf = "0.42"
+lopdf = "0.44"
 # Streaming gzip decoder for src.xml, so a .gz (or .xml.gz) XML file is
 # decompressed on the fly and never lands in RAM whole (issue #186). Pure Rust.
 flate2 = "1"
@@ -170,7 +170,7 @@ wasmi = "1.1"
 # fs. The user supplies a transform(row) -> object function and the
 # engine calls it per row, marshalling JSON in / out via the boa
 # JsValue<->serde_json bridge.
-boa_engine = "0.21"
+boa_engine = "0.22"
 # Pure-Rust jq for xf.jq (GitHub #173). jaq is a jq clone with no C libjq and
 # no subprocess: the user's jq filter is parsed and interpreted in-process, then
 # applied per row to a JSON column. This is exactly the "no subprocess overhead"
