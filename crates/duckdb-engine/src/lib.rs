@@ -1166,7 +1166,11 @@ impl DuckdbEngine {
             "excel" => p.push_str("LOAD excel; "),
             "iceberg" => p.push_str("LOAD iceberg; "),
             "delta" => p.push_str("LOAD delta; "),
-            "spatial" => p.push_str("INSTALL spatial; LOAD spatial; "),
+            // #327: `gdb` too. The RUN path loads spatial for src.gdb
+            // (attach_prelude), so a pipeline ran; autodetect built the same
+            // `ST_Read(...)` with no prelude and failed with "st_read is not in
+            // the catalog", which reads as the component being broken.
+            "spatial" | "gdb" => p.push_str("INSTALL spatial; LOAD spatial; "),
             _ => {}
         }
         if format == "duckdb" {
@@ -7955,5 +7959,63 @@ mod autodetect_probe_tests {
             "deferred state is persisted without checking for a probe, so autodetecting a CDC \
              source would advance its snapshot: {line}"
         );
+    }
+}
+
+#[cfg(test)]
+mod inspect_prelude_tests {
+    use super::*;
+
+    /// Every format autodetect can inspect, so the guard covers a format added
+    /// later rather than only the ones that were wrong.
+    const INSPECTABLE: &[&str] = &[
+        "csv", "tsv", "parquet", "json", "jsonl", "ndjson", "sqlite", "duckdb", "excel", "avro",
+        "inline", "filelist", "iceberg", "delta", "spatial", "gdb", "huggingface", "fixedwidth",
+        "ducklake", "ducklake_snapshots", "s3", "gcs", "azureblob", "http", "https", "minio",
+        "r2", "b2",
+    ];
+
+    /// #327: autodetect must load whatever its OWN generated SQL needs.
+    ///
+    /// `src.gdb` failed with "Table Function with name st_read is not in the
+    /// catalog" while running the pipeline worked, because the run path loads
+    /// spatial for src.gdb and the inspect path had an arm for `spatial` and
+    /// none for `gdb`. Two hand-maintained lists of which formats need an
+    /// extension will disagree again, so this asks the SQL: if what inspect is
+    /// about to run mentions an `ST_` function, its prelude has to load spatial.
+    #[test]
+    fn an_inspect_prelude_loads_the_extension_its_own_sql_needs() {
+        // Enough properties that every builder produces something; a builder
+        // that wants none of them ignores the rest.
+        let props = serde_json::json!({
+            "path": "sample.gdb",
+            "database": "sample.duckdb",
+            "tableName": "orders",
+            "table": "orders",
+            "layer": "roads",
+            "url": "https://example.invalid/x.csv",
+            "dataset": "org/ds",
+            "repo": "org/ds",
+            "rows": [{ "a": 1 }],
+            "columns": [{ "name": "a", "type": "int64" }],
+        });
+        let engine = DuckdbEngine::new(PathBuf::from("duckdb"));
+        let mut checked = 0;
+        for format in INSPECTABLE {
+            let Some(sql) = plan::source_select_for_format(format, &props) else { continue };
+            if !plan::references_spatial(&sql) {
+                continue;
+            }
+            checked += 1;
+            let prelude = engine.source_prelude(format, &props);
+            assert!(
+                prelude.contains("LOAD spatial"),
+                "autodetect of {format:?} runs {sql:?}, which needs the spatial extension, and \
+                 its prelude does not load it: {prelude:?}"
+            );
+        }
+        // If this ever hits zero the test has stopped testing anything - a
+        // renamed builder, or props no longer good enough to produce SQL.
+        assert!(checked >= 2, "only {checked} spatial format(s) were exercised");
     }
 }

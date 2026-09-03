@@ -5430,7 +5430,7 @@ fn parse_extension_names(v: Option<&JsonValue>) -> Vec<String> {
     out
 }
 
-fn references_spatial(sql: &str) -> bool {
+pub(crate) fn references_spatial(sql: &str) -> bool {
     let lower = sql.to_ascii_lowercase();
     let bytes = lower.as_bytes();
     let mut i = 0;

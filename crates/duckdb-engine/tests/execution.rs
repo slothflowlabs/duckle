@@ -21480,3 +21480,38 @@ fn a_chunked_extract_reads_every_row_exactly_once_and_resumes() {
     ));
     assert_eq!(stats, "100/100", "the resumed extract is not the same extract");
 }
+
+/// #327: autodetect of an ESRI FileGDB source must not fail with
+/// "st_read is not in the catalog".
+///
+/// The reporter's pipeline RAN - the run path force-loads spatial for src.gdb -
+/// and only autodetect failed, which reads as the component being broken.
+///
+/// The probe deliberately points at a path that does not exist, because that is
+/// what separates the two failures: with the spatial extension loaded DuckDB
+/// resolves `ST_Read` and then cannot open the dataset, and without it DuckDB
+/// never gets that far and says the function is not in the catalog. So the
+/// assertion is on WHICH error comes back, and no FileGDB fixture is needed.
+#[test]
+fn autodetecting_a_filegdb_loads_spatial_rather_than_failing_on_st_read() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = out_path(tmp.path(), "no-such.gdb");
+
+    let err = match engine.inspect("gdb", json!({ "path": missing })) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("a .gdb that does not exist somehow inspected"),
+    };
+    assert!(
+        !err.to_ascii_lowercase().contains("not in the catalog"),
+        "autodetect did not load the spatial extension: {err}"
+    );
+    // And the positive half: it failed for the reason it should have, so the
+    // test cannot pass on some unrelated error that happens not to mention the
+    // catalog.
+    let lower = err.to_ascii_lowercase();
+    assert!(
+        lower.contains("gdal") || lower.contains("could not open") || lower.contains("io error"),
+        "expected a could-not-open-the-dataset failure, got: {err}"
+    );
+}
