@@ -1509,7 +1509,13 @@ function synthFileSink(comp: ComponentDef): ComponentManifest {
                         ],
                     },
                     writeModeField(),
-                    encodingField(),
+                    // No encoding here. DuckDB refuses it on the way out -
+                    // "Option ENCODING is not supported for writing - only for
+                    // reading" - and no sink builder has ever read the property,
+                    // so the dropdown silently wrote UTF-8 whatever was picked.
+                    // A control that cannot do what it offers is worse than a
+                    // missing one, and widening it to the full encoding list
+                    // would only have made the promise bigger.
                     compressionField(),
                     ...(comp.id === 'snk.parquet' ? [directWriteField()] : []),
                 ],
