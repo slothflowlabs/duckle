@@ -786,10 +786,18 @@ function renderCatalog(){
     const fresh = a.freshness
       ? `<div class="col-k">written ${relTime(a.freshness.lastWrittenAt)} by ${esc(a.freshness.pipelineId)}</div>`
       : '<div class="col-k muted">never written here</div>';
+    // #304: WHEN it was written answers "when", not "is that acceptable". Only
+    // an asset with a declared limit gets a verdict; the rest show nothing
+    // rather than a reassuring "fresh" nobody has justified.
+    const sla = { stale: ['p-err', 'STALE'], recovered: ['p-ok', 'recovered'], fresh: ['p-ok', 'fresh'] }[a.slaState];
+    const slaBadge = sla
+      ? `<span class="pill ${sla[0]}" title="limit ${esc(a.maximumAge || '')}">${sla[1]}</span>`
+      : '';
     return `<tr>
-      <td><code style="font-size:12px">${esc(a.id)}</code>
+      <td><code style="font-size:12px">${esc(a.id)}</code> ${slaBadge}
         ${a.description ? `<div class="col-k">${esc(a.description)}</div>` : ''}
-        ${fresh}</td>
+        ${fresh}
+        ${a.slaState === 'stale' && a.maximumAge ? `<div class="col-k" style="color:var(--red)">past its ${esc(a.maximumAge)} limit</div>` : ''}</td>
       <td><span class="sched">${esc(a.kind)}</span> ${tags}
         ${(a.columns || []).length ? `<div class="col-k">${a.columns.length} column(s)</div>` : ''}</td>
       <td>${a.owner ? esc(a.owner) : '<span class="muted">unowned</span>'}</td>

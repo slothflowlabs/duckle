@@ -1724,6 +1724,14 @@ fine" are different answers and only one of them is reassuring. An asset a rule
 names but which has never been written is `stale` rather than missing: the SLA
 says it should have been there by now.
 
+**Every surface reads the same verdict.** The catalog carries it, so
+`/api/catalog` and the console's Catalog view show a **STALE** badge and the
+limit it was measured against; the MCP tool `asset_freshness` answers which
+assets are stale, why, and when each was last successfully materialized, in one
+record rather than three tools that could disagree. Asking is read-only: an
+agent's question must not move the stale/recovered state the alerting depends
+on.
+
 **The server checks it on a clock**, once a minute, on its own cadence rather
 than the scheduler's - an asset's age does not change between two scheduler
 ticks and evaluating reads run history for every asset. It runs off the

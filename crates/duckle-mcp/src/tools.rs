@@ -43,6 +43,13 @@ pub fn list_tools() -> Value {
                 "query": { "type": "string", "description": "Case-insensitive substring over id/label/summary." },
                 "workspace": { "type": "string", "description": "Workspace directory. Include it to also list the external components installed there (#307)." }
             }})),
+        tool("asset_freshness",
+            "Which assets are stale, why, and when each was last successfully materialized. Judged against declared freshness limits rather than guessed from run history, so an asset nobody declared a limit for reports `unknown` instead of a reassuring `fresh`. Use it to answer 'is the data I am about to read current'.",
+            json!({ "type": "object", "properties": {
+                "workspace": { "type": "string", "description": "Workspace directory. Required." },
+                "asset": { "type": "string", "description": "One asset id, for its full verdict." },
+                "staleOnly": { "type": "boolean", "description": "Return only assets past their limit." }
+            }, "required": ["workspace"] })),
         tool("component_capabilities",
             "Answer capability questions about components without guessing from their names: which sources support custom SQL, incremental reads, pushdown or chunked extraction; which sinks offer which write modes; which components emit rejects, take a saved connection, or need a DuckDB extension. Derived from the same manifests the editor and the engine use.",
             json!({ "type": "object", "properties": {
@@ -319,6 +326,7 @@ pub fn call_tool(params: Value) -> Result<Value, (i64, String)> {
 
     let result = match name {
         "list_components" => t_list_components(&args),
+        "asset_freshness" => t_asset_freshness(&args),
         "component_capabilities" => t_component_capabilities(&args),
         "get_component_schema" => t_get_component_schema(&args),
         "create_pipeline" => t_create_pipeline(&args),
@@ -371,6 +379,35 @@ fn content_err(msg: &str) -> Value {
 // ---------------------------------------------------------------------------
 // Tool implementations
 // ---------------------------------------------------------------------------
+
+/// #304: freshness, for an operating agent.
+///
+/// The three questions the issue names - which assets are stale, why, and when
+/// each was last materialized - are all one verdict, so this returns the whole
+/// record rather than three tools that could disagree. Read-only: it evaluates
+/// and does not record, because an agent asking a question must not move the
+/// stale/recovered state machine the alerting depends on.
+fn t_asset_freshness(args: &Value) -> Result<Value, String> {
+    let ws = arg_str(args, "workspace").ok_or("missing 'workspace'")?;
+    let assets =
+        duckle_duckdb_engine::sla::evaluate_now(std::path::Path::new(ws));
+    if let Some(id) = arg_str(args, "asset") {
+        return match assets.into_iter().find(|a| a.asset == id) {
+            Some(a) => Ok(serde_json::to_value(a).unwrap_or(Value::Null)),
+            None => Err(format!("no asset {id:?} in this workspace")),
+        };
+    }
+    let stale_only = args.get("staleOnly").and_then(Value::as_bool).unwrap_or(false);
+    let out: Vec<_> = assets
+        .into_iter()
+        .filter(|a| !stale_only || a.state == duckle_duckdb_engine::sla::State::Stale)
+        .collect();
+    Ok(json!({
+        "count": out.len(),
+        "stale": out.iter().filter(|a| a.state == duckle_duckdb_engine::sla::State::Stale).count(),
+        "assets": out,
+    }))
+}
 
 /// #313: the capability registry, for an agent.
 ///
@@ -2397,5 +2434,88 @@ mod capability_tool {
         assert_eq!(r["component"].as_str(), Some("src.postgres"));
         assert_eq!(r["dialect"].as_str(), Some("postgres"));
         assert!(t_component_capabilities(&json!({ "component": "src.nope" })).is_err());
+    }
+}
+
+#[cfg(test)]
+mod freshness_tool {
+    use super::*;
+
+    fn workspace_with(hours_ago: i64, limit: &str) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("runs")).unwrap();
+        let at = format!("2020-01-01T00:00:0{}Z", hours_ago % 10);
+        std::fs::write(
+            tmp.path().join("runs").join("daily.json"),
+            format!(
+                r#"[{{"at":"{at}","status":"ok","duration_ms":1,"rows":1,"node_count":1,
+                      "trigger":"scheduled",
+                      "assets":[{{"id":"/lake/orders","direction":"write","rows":1}}]}}]"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("owners.json"),
+            format!(r#"{{"assets":[{{"match":"/lake/orders","owner":"data-eng","maximumAge":"{limit}"}}]}}"#),
+        )
+        .unwrap();
+        tmp
+    }
+
+    /// #304's three questions, which are one verdict: which assets are stale,
+    /// why, and when each was last successfully materialized.
+    #[test]
+    fn an_agent_can_ask_which_assets_are_stale_and_why() {
+        // Written in 2020 against a 36h limit, so it is long past.
+        let ws = workspace_with(1, "36h");
+        let r = t_asset_freshness(&json!({ "workspace": ws.path().to_str().unwrap() }))
+            .expect("the tool answers");
+        assert!(r["stale"].as_u64().unwrap_or(0) >= 1, "{r}");
+
+        let a = r["assets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["asset"] == "/lake/orders")
+            .expect("the asset");
+        // Why, and when - not just that it is stale.
+        assert_eq!(a["state"], "stale");
+        assert_eq!(a["maximumAge"], "36h");
+        assert!(a["lastWrittenAt"].is_string(), "no last-materialized time: {a}");
+        assert!(a["ageSeconds"].as_i64().unwrap_or(0) > 0);
+        assert_eq!(a["owner"], "data-eng", "a stale asset needs someone to tell");
+    }
+
+    /// An asset nobody declared a limit for is `unknown`, never a reassuring
+    /// `fresh` - the distinction the whole module exists to keep.
+    #[test]
+    fn an_undeclared_asset_is_unknown_not_fresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("runs")).unwrap();
+        std::fs::write(
+            tmp.path().join("runs").join("daily.json"),
+            r#"[{"at":"2020-01-01T00:00:00Z","status":"ok","duration_ms":1,"rows":1,"node_count":1,
+                 "trigger":"manual","assets":[{"id":"/lake/x","direction":"write","rows":1}]}]"#,
+        )
+        .unwrap();
+        let r = t_asset_freshness(&json!({ "workspace": tmp.path().to_str().unwrap() })).unwrap();
+        let a = &r["assets"].as_array().unwrap()[0];
+        assert_eq!(a["state"], "unknown");
+        assert_eq!(r["stale"].as_u64(), Some(0));
+    }
+
+    /// And it does not move the state machine the alerting depends on: asking
+    /// twice must not turn a stale asset into a recovery.
+    #[test]
+    fn asking_does_not_change_anything() {
+        let ws = workspace_with(1, "36h");
+        let first = t_asset_freshness(&json!({ "workspace": ws.path().to_str().unwrap() })).unwrap();
+        let again = t_asset_freshness(&json!({ "workspace": ws.path().to_str().unwrap() })).unwrap();
+        assert_eq!(first["stale"], again["stale"]);
+        assert!(
+            !ws.path().join(".duckle").join("freshness.json").exists(),
+            "reading freshness recorded a verdict, which would make an agent's question \
+             change what the next alert says"
+        );
     }
 }

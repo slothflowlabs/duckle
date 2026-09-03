@@ -173,6 +173,15 @@ fn schedule_deadline_passed(
     Some(now > due + chrono::Duration::seconds(grace))
 }
 
+/// [`evaluate`] against the clock.
+///
+/// `evaluate` takes `now` so it can be tested without waiting; every caller
+/// that just means "now" goes through here rather than reaching for a clock of
+/// its own, which also keeps chrono out of the crates that only want the answer.
+pub fn evaluate_now(workspace: &Path) -> Vec<AssetFreshness> {
+    evaluate(workspace, chrono::Utc::now())
+}
+
 /// Judge every asset that declares a maximum age.
 ///
 /// `now` is a parameter so the evaluation is testable without waiting.
