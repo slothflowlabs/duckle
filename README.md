@@ -1809,6 +1809,16 @@ is worse than an error.
 can target a known Duckle version instead of interrogating a binary it may not
 have. It is covered by `SHA256SUMS.txt` like every other asset.
 
+**Execution side effects, from the code that enforces them.** The registry
+reports whether a component advances durable state and whether it runs a process
+outside DuckDB, read from the same functions the policy uses - so the table
+cannot say a component is inert in an environment whose policy refuses to run
+it. Two axes rather than seven: for network and filesystem access the engine's
+authority is per NODE, decided from a configured property value, so there is no
+honest per-component answer and none is invented. Under-reporting a safety
+characteristic is the dangerous direction, so a component whose side effect
+depends on how it is configured reports nothing rather than "no".
+
 **And the matrices are generated from it.** `--markdown` renders the source,
 sink, authentication and runtime-dependency matrices into
 [`docs/capability-matrix.md`](docs/capability-matrix.md), regenerated and diffed

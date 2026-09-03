@@ -222,5 +222,26 @@ fn matrices(caps: &[Capabilities]) -> String {
     for c in ext {
         out.push_str(&format!("| `{}` | {} |\n", c.component, list(&c.extensions)));
     }
+
+    out.push_str(
+        "\n## Execution side effects\n\nWhat running a component does beyond producing rows. \
+         Each is read from the engine function that already decides it, so this table cannot \
+         disagree with what the policy enforces. Only components with a side effect are \
+         listed; the rest have none.\n\n",
+    );
+    out.push_str("| Component | Advances durable state | Runs a process |\n|---|---|---|\n");
+    let mut effects: Vec<&Capabilities> = caps
+        .iter()
+        .filter(|c| c.availability == "available" && (c.advances_state || c.executes_process))
+        .collect();
+    effects.sort_by(|a, b| a.component.cmp(&b.component));
+    for c in effects {
+        out.push_str(&format!(
+            "| `{}` | {} | {} |\n",
+            c.component,
+            yes(c.advances_state),
+            yes(c.executes_process)
+        ));
+    }
     out
 }

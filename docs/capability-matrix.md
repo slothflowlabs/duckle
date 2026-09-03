@@ -382,3 +382,29 @@ DuckDB extensions a component's prelude loads. These are what an offline bundle 
 | `xf.geo.setcrs` | spatial |
 | `xf.ip.parse` | inet |
 | `xf.join.spatial` | spatial |
+
+## Execution side effects
+
+What running a component does beyond producing rows. Each is read from the engine function that already decides it, so this table cannot disagree with what the policy enforces. Only components with a side effect are listed; the rest have none.
+
+| Component | Advances durable state | Runs a process |
+|---|---|---|
+| `code.python` | - | yes |
+| `code.shell` | - | yes |
+| `qa.baseline` | yes | - |
+| `snk.lancedb` | - | yes |
+| `snk.pixeltable` | - | yes |
+| `snk.vortex` | - | yes |
+| `src.changed` | yes | - |
+| `src.ducklake.changes` | yes | - |
+| `src.git` | - | yes |
+| `src.kafka` | yes | - |
+| `src.lancedb` | - | yes |
+| `src.pixeltable` | - | yes |
+| `src.redpanda` | yes | - |
+| `src.rest` | yes | - |
+| `src.spool` | yes | - |
+| `src.vortex` | - | yes |
+| `xf.dbt` | - | yes |
+| `xf.incremental` | yes | - |
+| `xf.tumble` | yes | - |

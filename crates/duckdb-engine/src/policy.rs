@@ -293,6 +293,51 @@ pub fn advances_saved_state(component_id: &str) -> bool {
     )
 }
 
+/// Whether running this component spawns a process outside DuckDB.
+///
+/// #313 asks the capability registry to report execution side effects, and this
+/// is the one the engine had no answer for: the knowledge was eleven scattered
+/// `Command::new` sites and four separate binary resolvers, none keyed by a
+/// component id. So this is a new authority rather than an exposed one - the
+/// same shape as [`advances_saved_state`], named once and guarded.
+///
+/// **`code.*` is NOT the rule**, which is exactly why a guess from the id would
+/// have been wrong: `code.javascript` evaluates in-process on boa_engine and
+/// `code.sql` is SQL. Only the four that actually spawn are named.
+///
+/// Deliberately NOT included, because no component id carries them: the DuckDB
+/// CLI itself, which every run spawns; a `${VAULT:NAME}` reference, which can
+/// spawn the vault command from ANY component's properties; and a child
+/// pipeline reached through `ctl.*`, which may contain any of these. A flag
+/// about a component cannot describe work its properties or its children do.
+pub fn executes_process(component_id: &str) -> bool {
+    // Every external component runs a command it declared - that IS what an
+    // external component is - so the prefix answers it exactly, with no list
+    // to maintain.
+    if component_id.starts_with("ext.") {
+        return true;
+    }
+    matches!(
+        component_id,
+        // a shell, by construction
+        "code.shell"
+            // the workspace's Python interpreter
+            | "code.python"
+            // dbt, spawned and waited on
+            | "xf.dbt"
+            // the duckle-lance sidecar
+            | "src.lancedb"
+            | "snk.lancedb"
+            | "src.vortex"
+            | "snk.vortex"
+            // git, for a repository source
+            | "src.git"
+            // pixeltable, through Python
+            | "src.pixeltable"
+            | "snk.pixeltable"
+    )
+}
+
 pub fn state_mutation_allowed(workspace: &Path) -> Result<(), EngineError> {
     let policy = load(Some(workspace))?;
     if policy.allow_state_mutation {

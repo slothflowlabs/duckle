@@ -72,6 +72,15 @@ pub struct Capabilities {
     /// than one that stayed silent: an agent would be told a component is inert
     /// in an environment that refuses to run it.
     pub advances_state: bool,
+    /// #313: running this component spawns a process outside DuckDB.
+    ///
+    /// A safety characteristic, so it is deliberately conservative: it reports
+    /// what a component ALWAYS does, and says nothing about work its properties
+    /// or its children might do. A `${VAULT:NAME}` reference can spawn the
+    /// vault command from any component, and a `ctl.*` node runs a child
+    /// pipeline that may contain anything - neither is a fact about the
+    /// component, and claiming otherwise would make the flag mean less.
+    pub executes_process: bool,
     /// Every declared property key, so an agent can check a name without
     /// guessing at it.
     pub properties: Vec<String>,
@@ -156,6 +165,7 @@ pub fn derive(c: &Value) -> Capabilities {
         format!("{:?}", crate::chunking::dialect_of(id)).to_ascii_lowercase()
     });
     let advances_state = crate::policy::advances_saved_state(id);
+    let executes_process = crate::policy::executes_process(id);
     let extensions = crate::extensions_for_component(
         id,
         c.get("manifest").unwrap_or(&Value::Null),
@@ -179,6 +189,7 @@ pub fn derive(c: &Value) -> Capabilities {
         dialect,
         extensions,
         advances_state,
+        executes_process,
         properties: keys,
     }
 }
@@ -364,6 +375,68 @@ mod side_effects {
             assert_eq!(
                 c.advances_state,
                 crate::policy::advances_saved_state(&c.component),
+                "{} is reported differently by the registry and the policy",
+                c.component
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod process_axis {
+    use super::*;
+
+    fn spawns(id: &str) -> Option<bool> {
+        all().into_iter().find(|c| c.component == id).map(|c| c.executes_process)
+    }
+
+    /// The components that genuinely spawn something.
+    #[test]
+    fn the_components_that_run_a_process_say_so() {
+        for id in [
+            "code.shell",
+            "code.python",
+            "xf.dbt",
+            "src.lancedb",
+            "snk.lancedb",
+            "src.vortex",
+            "snk.vortex",
+            "src.git",
+        ] {
+            assert_eq!(spawns(id), Some(true), "{id} spawns a process and the registry denies it");
+        }
+    }
+
+    /// The negative control that makes the flag worth having.
+    ///
+    /// `code.*` is NOT the rule, and guessing from the id would have got this
+    /// wrong: code.javascript evaluates in-process on boa_engine and code.sql
+    /// is SQL. A flag that called every `code.` component a process spawner
+    /// would be a flag nobody could act on.
+    #[test]
+    fn a_code_component_that_runs_in_process_does_not_claim_to_spawn() {
+        assert_eq!(spawns("code.javascript"), Some(false), "boa_engine runs in this process");
+        assert_eq!(spawns("code.sql"), Some(false), "code.sql is SQL");
+        // And an ordinary reader certainly does not.
+        assert_eq!(spawns("src.csv"), Some(false));
+    }
+
+    /// An external component runs a command it declared - that is what one IS -
+    /// so the prefix answers it exactly, with no list to maintain.
+    #[test]
+    fn every_external_component_spawns_by_definition() {
+        assert!(crate::policy::executes_process("ext.anything"));
+        assert!(crate::policy::executes_process("ext.acme.enrich"));
+    }
+
+    /// Same property as the state axis: the registry asks the authority rather
+    /// than keeping a second copy of the answer.
+    #[test]
+    fn the_registry_and_the_authority_cannot_disagree() {
+        for c in all() {
+            assert_eq!(
+                c.executes_process,
+                crate::policy::executes_process(&c.component),
                 "{} is reported differently by the registry and the policy",
                 c.component
             );
