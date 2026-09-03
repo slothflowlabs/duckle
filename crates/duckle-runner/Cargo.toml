@@ -33,7 +33,7 @@ aes-gcm = "0.11"
 sha2 = "0.11"
 # Console account tokens. A token can be chosen by a person, so it is hashed
 # as a password rather than as key material. Already in the workspace lock.
-argon2 = "0.5"
+argon2 = "0.6"
 # Console accounts, sessions and API keys. SQLite rather than a JSON file: the
 # stores are read on every request and written concurrently by `serve` and
 # `web`, which is what a transactional store is for. rusqlite (bundled) is
