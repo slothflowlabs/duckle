@@ -21577,3 +21577,51 @@ fn a_chunked_extract_asks_the_source_for_its_own_bounds() {
     .expect_err("a nullable key was accepted, so the extract would come out short");
     assert!(refused.contains("NULL"), "{refused}");
 }
+
+/// #328: a Shapefile written without a declared encoding mangles non-Latin
+/// attributes.
+///
+/// The `.dbf` has no encoding of its own, so GDAL writes the platform default
+/// and a reader has nothing to go on: Arabic place names came back as `?????`.
+/// Declaring it makes GDAL write the bytes as asked AND drop a `.cpg` sidecar
+/// naming the encoding, which is what makes the file self-describing for QGIS
+/// and ArcGIS rather than merely correct on this machine.
+#[test]
+fn a_shapefile_keeps_non_latin_attributes_when_an_encoding_is_declared() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "places.shp");
+    // The reporter's own values.
+    let csv = write_file(tmp.path(), "places.csv", "name,lon,lat\nدهب,34.5,28.5\nالغردقة,33.8,27.2\n");
+
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "g",
+                "xf.geo.create",
+                json!({ "source": "xy", "xColumn": "lon", "yColumn": "lat", "outputColumn": "geom" }),
+            ),
+            node(
+                "k",
+                "snk.spatial",
+                json!({ "path": out, "driver": "ESRI Shapefile", "encoding": "UTF-8" })
+            ),
+        ]),
+        json!([main_edge("e1", "s", "g"), main_edge("e2", "g", "k")]),
+    );
+    let r = engine.execute_pipeline(&d);
+    assert_eq!(r.status, "ok", "run failed: {:?}", r.error);
+
+    let back = scalar_string(&format!(
+        "INSTALL spatial; LOAD spatial; SELECT name FROM ST_Read('{out}') ORDER BY name LIMIT 1"
+    ));
+    assert!(
+        !back.contains('?') && !back.is_empty(),
+        "the attribute came back mangled: {back:?}"
+    );
+    // And the sidecar, so the file says what it is rather than depending on the
+    // reader guessing right.
+    let cpg = std::path::Path::new(&out).with_extension("cpg");
+    assert!(cpg.exists(), "no .cpg sidecar was written beside the shapefile");
+}

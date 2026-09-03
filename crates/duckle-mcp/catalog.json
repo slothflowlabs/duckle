@@ -33339,6 +33339,52 @@
                     "value": "GeoParquet"
                   }
                 ]
+              },
+              {
+                "key": "encoding",
+                "label": "Attribute encoding",
+                "kind": "select",
+                "allowCustom": true,
+                "defaultValue": "UTF-8",
+                "visibleWhen": {
+                  "key": "driver",
+                  "equals": "ESRI Shapefile"
+                },
+                "description": "How attribute text is written to the .dbf, and what the .cpg sidecar will say. UTF-8 unless a consumer needs the legacy code page.",
+                "options": [
+                  {
+                    "label": "UTF-8",
+                    "value": "UTF-8"
+                  },
+                  {
+                    "label": "ISO-8859-1 (Latin-1)",
+                    "value": "ISO-8859-1"
+                  },
+                  {
+                    "label": "Windows-1252  Western",
+                    "value": "CP1252"
+                  },
+                  {
+                    "label": "Windows-1256  Arabic",
+                    "value": "CP1256"
+                  },
+                  {
+                    "label": "Windows-1251  Cyrillic",
+                    "value": "CP1251"
+                  },
+                  {
+                    "label": "Windows-1254  Turkish",
+                    "value": "CP1254"
+                  },
+                  {
+                    "label": "Shift-JIS  Japanese",
+                    "value": "SHIFT_JIS"
+                  },
+                  {
+                    "label": "GBK  Simplified Chinese",
+                    "value": "GBK"
+                  }
+                ]
               }
             ]
           }

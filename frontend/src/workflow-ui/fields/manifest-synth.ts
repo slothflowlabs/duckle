@@ -1487,6 +1487,37 @@ function synthFileSink(comp: ComponentDef): ComponentManifest {
                             { label: 'GeoParquet', value: 'GeoParquet' },
                         ],
                     },
+                    {
+                        // #328. A Shapefile's .dbf carries no encoding of its
+                        // own, so non-Latin attributes came back as `?????` -
+                        // GDAL wrote the platform default and the reader had
+                        // nothing to go on. Setting this also makes GDAL write
+                        // the `.cpg` sidecar, which is what makes the file
+                        // self-describing in QGIS and ArcGIS rather than merely
+                        // correct on the machine that wrote it.
+                        //
+                        // Only for Shapefile: GeoJSON, GeoPackage and KML are
+                        // UTF-8 by definition, and offering a choice there
+                        // would imply one exists.
+                        key: 'encoding',
+                        label: 'Attribute encoding',
+                        kind: 'select',
+                        allowCustom: true,
+                        defaultValue: 'UTF-8',
+                        visibleWhen: { key: 'driver', equals: 'ESRI Shapefile' },
+                        description:
+                            'How attribute text is written to the .dbf, and what the .cpg sidecar will say. UTF-8 unless a consumer needs the legacy code page.',
+                        options: [
+                            { label: 'UTF-8', value: 'UTF-8' },
+                            { label: 'ISO-8859-1 (Latin-1)', value: 'ISO-8859-1' },
+                            { label: 'Windows-1252  Western', value: 'CP1252' },
+                            { label: 'Windows-1256  Arabic', value: 'CP1256' },
+                            { label: 'Windows-1251  Cyrillic', value: 'CP1251' },
+                            { label: 'Windows-1254  Turkish', value: 'CP1254' },
+                            { label: 'Shift-JIS  Japanese', value: 'SHIFT_JIS' },
+                            { label: 'GBK  Simplified Chinese', value: 'GBK' },
+                        ],
+                    },
                 ],
             },
         ], 'upstream');

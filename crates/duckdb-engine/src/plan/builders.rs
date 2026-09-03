@@ -6444,11 +6444,26 @@ pub(crate) fn build_spatial_sink(props: &JsonValue, from_view: &str) -> String {
             sql_escape(&path)
         );
     }
+    // #328: a Shapefile's .dbf carries no encoding of its own, so GDAL writes
+    // the platform default and a reader has nothing to go on - Arabic place
+    // names came back as `?????`. Declaring it makes GDAL write the bytes as
+    // asked AND drop a `.cpg` sidecar naming the encoding, which is what makes
+    // the file self-describing rather than merely correct on the machine that
+    // wrote it.
+    //
+    // Passed as a layer-creation option because that is where a GDAL driver
+    // takes it; a plain `ENCODING` on the COPY is not an option DuckDB knows.
+    let encoding = string_prop(props, "encoding").filter(|s| !s.trim().is_empty());
+    let layer_options = match &encoding {
+        Some(e) => format!(", LAYER_CREATION_OPTIONS 'ENCODING={}'", sql_escape(e)),
+        None => String::new(),
+    };
     format!(
-        "COPY (SELECT * FROM {}) TO '{}' (FORMAT GDAL, DRIVER '{}')",
+        "COPY (SELECT * FROM {}) TO '{}' (FORMAT GDAL, DRIVER '{}'{})",
         quote_ident(from_view),
         sql_escape(&path),
-        sql_escape(&driver)
+        sql_escape(&driver),
+        layer_options
     )
 }
 
