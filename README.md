@@ -1692,6 +1692,22 @@ fine" are different answers and only one of them is reassuring. An asset a rule
 names but which has never been written is `stale` rather than missing: the SLA
 says it should have been there by now.
 
+**The server checks it on a clock**, once a minute, on its own cadence rather
+than the scheduler's - an asset's age does not change between two scheduler
+ticks and evaluating reads run history for every asset. It runs off the
+scheduler's thread so a slow evaluation delays no schedule, and two evaluations
+can never overlap. An SLA that only holds while somebody remembers to run a
+command is not one.
+
+**`fresh -> stale` alerts, and `stale -> fresh` sends the all-clear.** Both go
+through the same alert rules, cooldowns and channels a failing pipeline uses,
+with the asset path in the slot the pipeline name takes - so an `alerts.json`
+pattern matches an asset the same way. The all-clear is never held back by a
+cooldown, because suppressing it leaves people believing an outage is still
+running. `stale_since` is carried across evaluations, so "how long has this been
+broken" does not reset every minute, and `recovered` is reported once rather
+than on every evaluation after the recovery.
+
 ### The connector matrix, generated (`capabilities`)
 
 A hand-maintained feature table drifts from the code the week after it is

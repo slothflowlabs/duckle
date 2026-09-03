@@ -41,6 +41,11 @@ pub enum State {
     Unknown,
     Fresh,
     Stale,
+    /// Fresh, and stale at the previous evaluation. A transition rather than a
+    /// resting place: the next evaluation reports it as `fresh`. It exists
+    /// because "it is fine" and "it is fine AGAIN" are different things to tell
+    /// someone who was paged about it (#304).
+    Recovered,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -58,6 +63,10 @@ pub struct AssetFreshness {
     /// The declared limit, as authored (e.g. "36h").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maximum_age: Option<String>,
+    /// When this asset first went stale, carried across evaluations so the
+    /// answer to "how long has this been broken" does not reset every tick.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stale_since: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub producer: Option<String>,
 }
@@ -131,10 +140,159 @@ pub fn evaluate(workspace: &Path, now: chrono::DateTime<chrono::Utc>) -> Vec<Ass
             last_written_at: f.map(|f| f.last_written_at.clone()),
             age_seconds: age,
             maximum_age,
+            stale_since: None,
             producer: f.map(|f| f.pipeline_id.clone()),
         });
     }
     out
+}
+
+/// What the previous evaluation concluded, per asset.
+///
+/// #304 asks for `recovered` and for "stale since", and neither can be answered
+/// by a function that only looks at now. This is the smallest thing that makes
+/// them answerable: the prior verdict, and when it started.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Memory {
+    #[serde(default)]
+    assets: BTreeMap<String, Remembered>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Remembered {
+    state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    since: Option<String>,
+}
+
+fn memory_path(workspace: &Path) -> std::path::PathBuf {
+    workspace.join(".duckle").join("freshness.json")
+}
+
+fn load_memory(workspace: &Path) -> Memory {
+    std::fs::read_to_string(memory_path(workspace))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn save_memory(workspace: &Path, m: &Memory) {
+    let path = memory_path(workspace);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    // Temp then rename, like every other durable file here: a reader must see
+    // the previous complete memory or the new one, never a half-written map.
+    let tmp = path.with_extension("json.tmp");
+    if serde_json::to_string_pretty(m)
+        .ok()
+        .and_then(|body| std::fs::write(&tmp, body).ok())
+        .is_some()
+    {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+/// Judge every asset, remember the verdict, and say what CHANGED.
+///
+/// The difference between this and [`evaluate`] is memory. `evaluate` answers
+/// "is this stale now", which cannot distinguish an asset that has been broken
+/// for a week from one that broke a minute ago, and cannot report an all-clear
+/// at all. This carries the previous verdict forward, so `fresh -> stale` and
+/// `stale -> fresh` are visible and `stale_since` survives across evaluations.
+///
+/// Returns the full picture, not only the changes: a caller showing a freshness
+/// panel wants every asset, and a caller raising alerts filters.
+pub fn check(workspace: &Path, now: chrono::DateTime<chrono::Utc>) -> Vec<AssetFreshness> {
+    let mut memory = load_memory(workspace);
+    let mut out = evaluate(workspace, now);
+    let stamp = now.to_rfc3339();
+    for a in out.iter_mut() {
+        let prior = memory.assets.get(&a.asset);
+        let was_stale = prior.map(|p| p.state == "stale").unwrap_or(false);
+        match a.state {
+            State::Stale => {
+                // The clock starts when it first went stale, not when it was
+                // last looked at.
+                a.stale_since = prior
+                    .and_then(|p| p.since.clone())
+                    .filter(|_| was_stale)
+                    .or(Some(stamp.clone()));
+            }
+            State::Fresh if was_stale => {
+                a.state = State::Recovered;
+                // Kept on the record for this one evaluation, so the all-clear
+                // can say how long it was out.
+                a.stale_since = prior.and_then(|p| p.since.clone());
+            }
+            _ => {}
+        }
+        // `recovered` is remembered as `fresh`: it describes a transition, and
+        // remembering it would make the NEXT evaluation report a recovery from
+        // a state that was already fine.
+        let remembered = match a.state {
+            State::Stale => "stale",
+            State::Fresh | State::Recovered => "fresh",
+            State::Unknown => "unknown",
+        };
+        memory.assets.insert(
+            a.asset.clone(),
+            Remembered {
+                state: remembered.to_string(),
+                since: match a.state {
+                    State::Stale => a.stale_since.clone(),
+                    _ => None,
+                },
+            },
+        );
+    }
+    save_memory(workspace, &memory);
+    out
+}
+
+/// Evaluate, remember, and tell whoever asked to be told.
+///
+/// Returns how many alerts were sent. Alerting never fails the check: a broken
+/// webhook must not stop freshness being evaluated, for the same reason it must
+/// not change the outcome of a run.
+pub fn check_and_alert(workspace: &Path, now: chrono::DateTime<chrono::Utc>) -> (Vec<AssetFreshness>, usize) {
+    let assets = check(workspace, now);
+    let mut sent = 0usize;
+    for a in &assets {
+        let (event, text) = match a.state {
+            // Raised on every evaluation while stale, not only on the
+            // transition: the rule's own cooldown is what makes that "once,
+            // then not again for a while", which is the same contract a
+            // failing pipeline's alerts have.
+            State::Stale => (
+                crate::alerts::Event::Stale,
+                format!(
+                    "Duckle: {} is STALE{}{}",
+                    a.asset,
+                    a.maximum_age.as_deref().map(|m| format!(" (limit {m})")).unwrap_or_default(),
+                    match (&a.last_written_at, a.age_seconds) {
+                        (Some(w), Some(age)) => {
+                            format!(", last written {w} ({:.1}h ago)", age as f64 / 3600.0)
+                        }
+                        _ => ", and has never been written".to_string(),
+                    }
+                ),
+            ),
+            State::Recovered => (
+                crate::alerts::Event::Refreshed,
+                format!(
+                    "Duckle: {} was written again{}",
+                    a.asset,
+                    a.stale_since.as_deref().map(|s| format!(", stale since {s}")).unwrap_or_default()
+                ),
+            ),
+            _ => continue,
+        };
+        sent += crate::alerts::notify_subject(workspace, &a.asset, event, &text);
+    }
+    (assets, sent)
 }
 
 #[cfg(test)]
@@ -254,4 +412,66 @@ mod tests {
         assert_eq!(parse_duration(""), None);
         assert_eq!(parse_duration("-1h"), None, "a negative age is not a limit");
     }
+
+    fn write_records(ws: &std::path::Path, hours_ago: i64) {
+        let records = format!(
+            r#"[{{"at":"{}","status":"ok","duration_ms":1,"rows":10,"node_count":1,
+                  "trigger":"manual",
+                  "assets":[{{"id":"/lake/orders","direction":"write","rows":10}}]}}]"#,
+            (chrono::Utc::now() - chrono::Duration::hours(hours_ago)).to_rfc3339()
+        );
+        std::fs::write(ws.join("runs").join("daily.json"), records).unwrap();
+    }
+
+    /// #304's four states, walked in order, because three of them only exist
+    /// relative to the evaluation before.
+    #[test]
+    fn an_asset_goes_stale_then_recovers_then_settles() {
+        let owners =
+            r#"{"assets":[{"match":"/lake/orders","owner":"data-eng","maximumAge":"12h"}]}"#;
+        let ws = workspace_with("[]", owners);
+        let of = |v: &Vec<AssetFreshness>| {
+            v.iter().find(|a| a.asset == "/lake/orders").expect("the asset").clone()
+        };
+
+        // Written 40 hours ago against a 12h limit.
+        write_records(ws.path(), 40);
+        let first = of(&check(ws.path(), chrono::Utc::now()));
+        assert_eq!(first.state, State::Stale);
+        let since = first.stale_since.clone().expect("stale since is recorded");
+
+        // Still stale at the next evaluation, and the clock did NOT restart -
+        // "how long has this been broken" must not reset every tick.
+        let again = of(&check(ws.path(), chrono::Utc::now()));
+        assert_eq!(again.state, State::Stale);
+        assert_eq!(again.stale_since.as_deref(), Some(since.as_str()), "the clock restarted");
+
+        // Written again: recovered, not merely fresh, and it still says how
+        // long it was out.
+        write_records(ws.path(), 0);
+        let back = of(&check(ws.path(), chrono::Utc::now()));
+        assert_eq!(back.state, State::Recovered, "an all-clear is not the same as 'it is fine'");
+        assert_eq!(back.stale_since.as_deref(), Some(since.as_str()));
+
+        // And it settles: recovered describes a transition, so the evaluation
+        // after it is plain fresh rather than a second all-clear.
+        let settled = of(&check(ws.path(), chrono::Utc::now()));
+        assert_eq!(settled.state, State::Fresh, "recovery was reported twice");
+        assert_eq!(settled.stale_since, None);
+    }
+
+    /// An asset nobody declared a limit for stays Unknown across evaluations
+    /// and never produces a transition, so memory cannot invent an alert.
+    #[test]
+    fn an_undeclared_asset_never_transitions() {
+        let ws = workspace_with("[]", r#"{"assets":[]}"#);
+        write_records(ws.path(), 100);
+        for _ in 0..3 {
+            let r = check(ws.path(), chrono::Utc::now());
+            let a = r.iter().find(|a| a.asset == "/lake/orders").expect("the asset");
+            assert_eq!(a.state, State::Unknown, "no limit means no verdict");
+            assert_eq!(a.stale_since, None);
+        }
+    }
+
 }

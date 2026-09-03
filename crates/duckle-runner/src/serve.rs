@@ -3929,14 +3929,59 @@ fn fire_plan(state: &State, plan_id: &str) {
     );
 }
 
+/// How often freshness is judged (#304).
+///
+/// Its own cadence rather than the scheduler's: an asset's age does not change
+/// meaningfully between two scheduler ticks, and evaluating reads run history
+/// for every asset, so doing it every tick would spend real work to learn
+/// nothing. A minute is far finer than any freshness limit anyone declares -
+/// they are written in hours - and coarse enough to be free.
+const FRESHNESS_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
 fn spawn_scheduler(state: Arc<State>) {
     std::thread::spawn(move || {
         let mut last_fired: HashMap<String, Instant> = HashMap::new();
         // The armed occurrence AND the expression it came from. See cron_decision.
         let mut cron_next: HashMap<String, (String, chrono::DateTime<chrono::Local>)> =
             HashMap::new();
+        // #304: checked on a clock, because the failures freshness exists for
+        // produce no run at all - a schedule switched off, a server that was
+        // down, a source that stopped publishing. Nothing here can be reached
+        // from the end of a run.
+        let mut last_freshness: Option<Instant> = None;
+        let freshness_running = Arc::new(std::sync::atomic::AtomicBool::new(false));
         loop {
             std::thread::sleep(state.tick_interval);
+            if last_freshness.is_none_or(|t| t.elapsed() >= FRESHNESS_EVERY) {
+                last_freshness = Some(Instant::now());
+                // Off the scheduler's thread, so a slow evaluation delays no
+                // schedule, and guarded so two can never overlap on a workspace
+                // where it takes longer than the interval.
+                let busy = Arc::clone(&freshness_running);
+                if !busy.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    let ws = state.workspace.clone();
+                    std::thread::spawn(move || {
+                        let (assets, sent) = duckle_duckdb_engine::sla::check_and_alert(
+                            &ws,
+                            chrono::Utc::now(),
+                        );
+                        let stale: Vec<&str> = assets
+                            .iter()
+                            .filter(|a| a.state == duckle_duckdb_engine::sla::State::Stale)
+                            .map(|a| a.asset.as_str())
+                            .collect();
+                        if !stale.is_empty() {
+                            eprintln!(
+                                "duckle: {} asset(s) past their freshness limit ({} alert(s) sent): {}",
+                                stale.len(),
+                                sent,
+                                stale.join(", ")
+                            );
+                        }
+                        busy.store(false, std::sync::atomic::Ordering::SeqCst);
+                    });
+                }
+            }
             let scheds = match load_schedules(&state) {
                 Ok(v) => v,
                 // Already reported to stderr by load_schedules. Firing nothing
@@ -5706,4 +5751,42 @@ mod tests {
         );
     }
 
+}
+
+#[cfg(test)]
+mod freshness_tick {
+    /// #304 asks for freshness to be evaluated "periodically in the
+    /// server/scheduler, not only at the end of a run", and the module that
+    /// does the evaluating had exactly one caller in the whole repo: a CLI
+    /// subcommand. So the feature existed as a computation nobody performed -
+    /// an SLA that only holds while an operator remembers to ask about it is
+    /// not one.
+    ///
+    /// Read from the source because the symptom is silence: nothing fails, no
+    /// alert arrives, and the asset that went stale looks exactly like the ones
+    /// that did not. Needles are built from pieces so they cannot match
+    /// themselves in this file.
+    #[test]
+    fn the_server_judges_freshness_on_a_clock() {
+        let src = include_str!("serve.rs");
+        let call = format!("sla::{}(", "check_and_alert");
+        assert!(
+            src.contains(&call),
+            "the server never evaluates freshness, so a declared SLA is only checked when \
+             someone runs the CLI by hand"
+        );
+        // And on its own cadence rather than every scheduler tick, which would
+        // read run history for every asset several times a minute to learn
+        // nothing.
+        assert!(
+            src.contains("FRESHNESS_EVERY"),
+            "freshness is evaluated without a cadence of its own"
+        );
+        // Alerting is what makes it visible; evaluating and discarding would be
+        // the same silence with more CPU.
+        assert!(
+            src.contains("past their freshness limit"),
+            "a stale asset is found and then not reported anywhere"
+        );
+    }
 }

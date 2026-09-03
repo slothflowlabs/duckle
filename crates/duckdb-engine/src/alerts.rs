@@ -49,6 +49,13 @@ pub enum Event {
     Recovery,
     /// The run succeeded. Rarely wanted; off unless asked for.
     Success,
+    /// #304: an asset passed its declared freshness limit. Not about a run at
+    /// all - nothing failed, which is exactly why failure alerting cannot see
+    /// it: a schedule switched off, a server down, a source that stopped
+    /// publishing.
+    Stale,
+    /// That asset was written again. The all-clear for `stale`.
+    Refreshed,
 }
 
 impl Event {
@@ -57,7 +64,17 @@ impl Event {
             Event::Failure => "failure",
             Event::Recovery => "recovery",
             Event::Success => "success",
+            Event::Stale => "stale",
+            Event::Refreshed => "refreshed",
         }
+    }
+
+    /// Whether this event ends an outage rather than starting one.
+    ///
+    /// An all-clear is never held back by a cooldown: suppressing it leaves
+    /// people believing an outage is still running long after it ended.
+    fn is_all_clear(self) -> bool {
+        matches!(self, Event::Recovery | Event::Refreshed)
     }
 }
 
@@ -310,6 +327,12 @@ fn build_message(event: Event, pipeline: &str, result: &RunResult) -> Message {
             format!("Duckle: {pipeline} recovered, succeeded in {seconds:.1}s")
         }
         Event::Success => format!("Duckle: {pipeline} succeeded in {seconds:.1}s"),
+        // Not reachable through this function - a freshness alert has no run to
+        // describe and builds its own message - but spelled out rather than
+        // wildcarded, so adding a third non-run event is a compile error here
+        // instead of a sentence about a run that did not happen.
+        Event::Stale => format!("Duckle: {pipeline} is stale"),
+        Event::Refreshed => format!("Duckle: {pipeline} was written again"),
     };
     Message {
         event: event.as_str().to_string(),
@@ -333,6 +356,86 @@ fn classify(result: &RunResult, previous: Option<&str>) -> Event {
         Some(prev) if prev != "ok" => Event::Recovery,
         _ => Event::Success,
     }
+}
+
+/// Raise an alert about something that is not a run.
+///
+/// #304: an asset going stale has no run to classify - that is the whole point,
+/// nothing failed. So the event is supplied rather than derived, and everything
+/// downstream is the code a run's alert takes: the same rule matching, the same
+/// per-rule cooldown key, the same all-clear exemption, the same channels and
+/// the same redacted transport error. A second delivery path would be a second
+/// place for a webhook url to leak out of.
+///
+/// `subject` takes the slot a pipeline id takes, so an `alerts.json` pattern
+/// matches an asset path the same way it matches a pipeline name.
+pub fn notify_subject(workspace: &Path, subject: &str, event: Event, text: &str) -> usize {
+    let rules = match load(workspace) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("duckle: {e}");
+            return 0;
+        }
+    };
+    if rules.is_empty() {
+        return 0;
+    }
+    let state = load_state(workspace);
+    let now = Utc::now();
+    let mut sent = 0usize;
+    let mut delivered: Vec<String> = Vec::new();
+    for rule in &rules.rules {
+        if !glob::Pattern::new(&rule.pattern).map(|p| p.matches(subject)).unwrap_or(false) {
+            continue;
+        }
+        if !rule.on.contains(&event) {
+            continue;
+        }
+        let key = format!(
+            "{subject}|{}|{}|{}",
+            event.as_str(),
+            rule.pattern,
+            channel_id(&rule.channel)
+        );
+        if !event.is_all_clear() {
+            if let Some(last) = state.last_sent.get(&key) {
+                if now.signed_duration_since(*last)
+                    < chrono::Duration::minutes(rule.cooldown_minutes as i64)
+                {
+                    continue;
+                }
+            }
+        }
+        let message = Message {
+            event: event.as_str().to_string(),
+            pipeline: subject.to_string(),
+            status: event.as_str().to_string(),
+            // There is no run behind this, so there is no duration and no
+            // error. Zero rather than a made-up number, and None rather than a
+            // sentence, so a consumer reading the JSON is not told about a run
+            // that did not happen.
+            duration_ms: 0,
+            error: None,
+            category: None,
+            text: text.to_string(),
+        };
+        match deliver(&rule.channel, &message) {
+            Ok(()) => {
+                delivered.push(key);
+                sent += 1;
+            }
+            Err(e) => eprintln!(
+                "duckle: alert for {subject} could not be sent: {}",
+                redact_secrets(&e, &rule.channel)
+            ),
+        }
+    }
+    update_state(workspace, move |s| {
+        for key in delivered {
+            s.last_sent.insert(key, now);
+        }
+    });
+    sent
 }
 
 /// Tell whoever asked to be told about this run.
@@ -378,7 +481,7 @@ pub fn notify(workspace: &Path, pipeline_id: &str, result: &RunResult) -> usize 
         let key = format!("{pipeline_id}|{}|{}|{}", event.as_str(), rule.pattern, channel_id(&rule.channel));
         // An all-clear always goes out. Suppressing it would leave people
         // believing an outage is still running long after it ended.
-        if event != Event::Recovery {
+        if !event.is_all_clear() {
             if let Some(last) = state.last_sent.get(&key) {
                 let elapsed = now.signed_duration_since(*last);
                 if elapsed < chrono::Duration::minutes(rule.cooldown_minutes as i64) {
