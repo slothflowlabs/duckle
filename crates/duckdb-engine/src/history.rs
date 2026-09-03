@@ -167,12 +167,34 @@ pub fn append_run_record(
         std::fs::create_dir_all(parent)?;
     }
     let mut records = load_run_history(workspace, pipeline_id);
+    // #325: a successful publication is an event, recorded HERE rather than at
+    // each of the four places that append a record. Four call sites is four
+    // chances to forget, and the standing evidence that they do is that only
+    // three of them raise alerts.
+    //
+    // After the history write below would be tidier and is wrong: the record is
+    // the source of truth an event is rebuilt FROM, so it has to be durable
+    // first. Ordered this way, a crash between the two costs an index entry
+    // that `materialize::reconcile` can rebuild, not a publication.
+    let publication = record.clone();
     records.push(record);
     let start = records.len().saturating_sub(MAX_RECORDS);
     let trimmed = &records[start..];
     let json = serde_json::to_string_pretty(trimmed)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     std::fs::write(&path, json)?;
+    // The record is durable now, so the event can be indexed from it. Reported
+    // rather than swallowed: a lost alert loses a notification, a lost
+    // publication event loses downstream WORK, and the producer will not
+    // publish again until its next cycle. It is not fatal, because the record
+    // it is derived from is already on disk and `materialize::reconcile`
+    // rebuilds what the log is missing - the failure costs latency, not the
+    // event.
+    if let Err(e) = crate::materialize::append(workspace, pipeline_id, &publication) {
+        eprintln!(
+            "duckle: {pipeline_id} published but its materialization event was not recorded              ({e}). Downstream triggers will not see it until the log is reconciled."
+        );
+    }
     // Refresh the OpenMetrics textfile alongside the history. Best-effort:
     // monitoring must never fail a run.
     let _ = write_metrics_textfile(workspace);
