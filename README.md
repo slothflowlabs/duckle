@@ -1024,8 +1024,8 @@ the end and restarts from zero. Declare how it should be split:
 ```
 
 ```bash
-duckle-runner source plan    pipelines/big.json --node src --min 1 --max 4200000 --nulls 0
-duckle-runner source extract pipelines/big.json --node src --min 1 --max 4200000 --nulls 0
+duckle-runner source plan    pipelines/big.json --node src
+duckle-runner source extract pipelines/big.json --node src
 ```
 
 ```text
@@ -1048,6 +1048,13 @@ a plain identifier is refused rather than escaped, because a pipeline file is no
 a trusted source of SQL fragments. Hash bucketing is spelled out per family -
 `hashtext`, `ORA_HASH`, `CHECKSUM`, `CRC32` - because getting it wrong does not
 error, it silently produces overlapping or empty buckets.
+
+**The extent of the key is asked of the source**, through the same engine the
+extract will use, so the probe reaches the source the way the extract does
+rather than by a second path that could succeed where the extract then fails.
+`--min` / `--max` / `--nulls` override it, and are what to reach for when this
+machine cannot see the database. Numbers typed in once are right once: a table
+grows, and nothing notices.
 
 **A chunk is a slice, so it is the same ledger.** `source extract` writes one
 entry per chunk into the ledger a partitioned backfill uses, and everything

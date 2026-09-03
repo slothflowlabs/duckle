@@ -157,14 +157,36 @@ pub fn plain_column(name: &str) -> Result<String, String> {
 /// chunk: `id < 100 OR id >= 100` excludes every NULL, and the extract simply
 /// comes out short with nothing to show for it.
 pub fn probe_sql(strategy: &Strategy, table: &str) -> Result<String, String> {
+    probe_sql_over(strategy, table)
+}
+
+/// The same probe over any FROM expression, not only a bare table name.
+///
+/// A chunkable node is not always a table: it may carry the author's own SQL,
+/// and then the extent of the key has to be asked of THAT relation rather than
+/// of a table name nobody supplied. `from` is interpolated as written, so it is
+/// either a validated table name or a parenthesised read this crate built.
+///
+/// Temporal bounds come back as `YYYY-MM-DD` text rather than as a date,
+/// because that is what [`Bounds::Time`] holds and what the partition generator
+/// parses. Letting each caller format a date is how two of them would come to
+/// disagree about which day a timestamp belongs to.
+pub fn probe_sql_over(strategy: &Strategy, from: &str) -> Result<String, String> {
     let column = plain_column(strategy.column())?;
     Ok(match strategy {
-        Strategy::Hash { .. } => format!(
-            "SELECT COUNT(*) AS nulls FROM {table} WHERE {column} IS NULL"
+        // Hash needs no extent - the buckets are the plan - but a nullable key
+        // is still fatal, so it is still asked about. Counted the same way as
+        // the others so one reading of "nulls" serves every strategy.
+        Strategy::Hash { .. } => {
+            format!("SELECT COUNT(*) - COUNT({column}) AS nulls FROM {from}")
+        }
+        Strategy::Time { .. } => format!(
+            "SELECT CAST(MIN({column}) AS DATE) AS lo, CAST(MAX({column}) AS DATE) AS hi, \
+             COUNT(*) - COUNT({column}) AS nulls FROM {from}"
         ),
-        _ => format!(
+        Strategy::Range { .. } => format!(
             "SELECT MIN({column}) AS lo, MAX({column}) AS hi, \
-             COUNT(*) - COUNT({column}) AS nulls FROM {table}"
+             COUNT(*) - COUNT({column}) AS nulls FROM {from}"
         ),
     })
 }
@@ -345,17 +367,24 @@ pub fn dialect_of(component_id: &str) -> Dialect {
     }
 }
 
-/// What this connector can honestly promise across the chunks.
+/// What this connector can honestly promise ACROSS THE CHUNKS.
 ///
-/// Only Oracle can pin one today, through the SCN path the parallel reader
-/// already uses. Everything else says best-effort rather than implying a
-/// consistency it cannot provide - which is the distinction #306 asks for, and
-/// the reason it is a value rather than a line of documentation.
-pub fn snapshot_of(component_id: &str) -> Snapshot {
-    match component_id {
-        "src.oracle" => Snapshot::Pinned { id: "SCN, pinned at read time".into() },
-        _ => Snapshot::BestEffort,
-    }
+/// Nothing pins one today, and that includes Oracle. The SCN gate in the Oracle
+/// parallel reader pins one READ - it takes a system change number on one
+/// connection and hands it to the bands of that single query, which is why that
+/// reader declines to parallelise when it cannot get one. Chunked extraction is
+/// N independent runs on N connections, so each would take its own SCN at its
+/// own moment, and calling that "one consistent state" would be the exact thing
+/// #306 asks not to do: implying a consistent snapshot across independent
+/// queries when the source cannot guarantee it.
+///
+/// Making it true is a real feature and a small one: probe the SCN once while
+/// planning, put it in the ledger, and have every chunk read `AS OF SCN <n>`.
+/// It is not claimed here until it is done, because a pin that nothing reads as
+/// of is a sentence in the output rather than a guarantee - which is what
+/// `a_plan_that_claims_one_snapshot_must_actually_pin_it` checks.
+pub fn snapshot_of(_component_id: &str) -> Snapshot {
+    Snapshot::BestEffort
 }
 
 /// Whether this component may be asked for this strategy, with the reason when
@@ -513,4 +542,43 @@ mod tests {
         // And it refuses the same column names planning does.
         assert!(probe_sql(&Strategy::Range { column: "a; DROP".into(), chunk_size: 1 }, "t").is_err());
     }
+
+    /// #306, acceptance criterion 4: never imply a consistent snapshot across
+    /// independent queries when the source cannot guarantee one.
+    ///
+    /// Stated as a property rather than as a list of connectors: a plan may
+    /// only SAY it describes one state if the chunks it generates actually read
+    /// as of that state. A pin nothing reads is not a pin, it is a sentence in
+    /// the output, and the whole point of printing snapshot behaviour instead
+    /// of documenting it is that the sentence is true.
+    #[test]
+    fn a_plan_that_claims_one_snapshot_must_actually_pin_it() {
+        for component in
+            ["src.oracle", "src.postgres", "src.mssql", "src.mysql", "src.duckdb", "src.ducklake"]
+        {
+            let p = plan(
+                &range(10),
+                &Bounds::Range { min: 1, max: 30 },
+                0,
+                1,
+                snapshot_of(component),
+                dialect_of(component),
+            )
+            .unwrap_or_else(|e| panic!("{component}: {e}"));
+            let Snapshot::Pinned { id } = &p.snapshot else {
+                // Best-effort must SAY so, in the plan, not only in the type.
+                assert!(
+                    p.notes.iter().any(|n| n.contains("separate queries")),
+                    "{component} is best-effort and the plan does not say so: {:?}",
+                    p.notes
+                );
+                continue;
+            };
+            assert!(
+                p.chunks.iter().all(|c| c.predicate.contains(id.as_str())),
+                "{component} promises one consistent state ({id}) but no chunk reads as of it,                  so N independent queries are being described as one snapshot"
+            );
+        }
+    }
+
 }

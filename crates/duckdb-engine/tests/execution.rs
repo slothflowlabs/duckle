@@ -21515,3 +21515,65 @@ fn autodetecting_a_filegdb_loads_spatial_rather_than_failing_on_st_read() {
         "expected a could-not-open-the-dataset failure, got: {err}"
     );
 }
+
+/// #306: the extent of the key is asked of the source, not typed in by hand.
+///
+/// Covers the two answers that matter. The bounds have to match what a hand-run
+/// probe would have said, or every chunk boundary is wrong; and a NULLable key
+/// has to be REFUSED, because every chunk predicate excludes NULL and the
+/// extract would come out short by exactly that many rows with nothing saying
+/// so - which is the failure that made the probe count nulls in the first place.
+#[test]
+fn a_chunked_extract_asks_the_source_for_its_own_bounds() {
+    let _ = engine_or_skip!();
+    let duckdb = std::path::PathBuf::from(std::env::var("DUCKLE_DUCKDB_BIN").unwrap());
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let srcdb = out_path(ws, "probe.duckdb");
+    duckdb_exec(
+        &srcdb,
+        "CREATE TABLE clean AS SELECT i AS id FROM range(7, 58) t(i); \
+         CREATE TABLE dirty AS SELECT * FROM (VALUES (1),(2),(NULL),(4)) t(id)",
+    );
+
+    let write = |table: &str, file: &str| {
+        let doc = json!({
+            "nodes": [ node("db", "src.duckdb", json!({
+                "database": srcdb,
+                "tableName": table,
+                "chunking": { "type": "range", "column": "id", "chunkSize": 20 }
+            })) ],
+            "edges": []
+        });
+        let p = ws.join(file);
+        std::fs::write(&p, serde_json::to_string(&doc).unwrap()).unwrap();
+        p
+    };
+
+    // The clean table: bounds come back exactly as the table's own extent.
+    let (bounds, nulls) =
+        duckle_duckdb_engine::chunk_exec::probe(ws, &duckdb, &write("clean", "clean.json"), "db")
+            .expect("probing a clean key");
+    assert_eq!(nulls, 0);
+    match bounds {
+        duckle_duckdb_engine::chunking::Bounds::Range { min, max } => {
+            assert_eq!((min, max), (7, 57), "the probe did not find the table's extent");
+        }
+        other => panic!("expected range bounds, got {other:?}"),
+    }
+
+    // The nullable key: the probe reports the NULLs and planning refuses.
+    let (bounds, nulls) =
+        duckle_duckdb_engine::chunk_exec::probe(ws, &duckdb, &write("dirty", "dirty.json"), "db")
+            .expect("probing a nullable key");
+    assert_eq!(nulls, 1, "the probe did not count the NULL");
+    let refused = duckle_duckdb_engine::chunk_exec::plan_for(
+        ws,
+        &write("dirty", "dirty.json"),
+        "db",
+        &bounds,
+        nulls,
+    )
+    .expect_err("a nullable key was accepted, so the extract would come out short");
+    assert!(refused.contains("NULL"), "{refused}");
+}

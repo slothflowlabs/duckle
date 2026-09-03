@@ -366,6 +366,7 @@ fn run_one(
     let doc: crate::PipelineDoc = serde_json::from_str(&text)
         .map_err(|e| (None, format!("{}: {e}", path.display())))?;
     run_doc(workspace, duckdb, doc, path, pipeline, backfill_id, slice, release, gates, "partition")
+        .map(|(run_id, _rows)| run_id)
 }
 
 /// The one place a slice's run happens, whatever produced the document.
@@ -391,7 +392,10 @@ pub(crate) fn run_doc(
     // Where the slice's values came from, for #317's provenance: `partition`
     // or `chunk`.
     source: &str,
-) -> Result<String, (Option<String>, String)> {
+    // #306's ledger asks a slice to record rows as well as bytes, and the run
+    // already counted them - returning them here beats a second pass over the
+    // part to ask a question the run just answered.
+) -> Result<(String, Option<u64>), (Option<String>, String)> {
     // Held for the whole slice, like any other run.
     let (_permit, pool, queued_ms) = gates.acquire(&doc.resource_pool);
     // #317's boundary, with `partition` as the source - so an operator reading
@@ -454,7 +458,10 @@ pub(crate) fn run_doc(
         crate::retry::nodes_of(&result),
     );
     match status == "ok" {
-        true => Ok(run_id),
+        // The largest count any node reported: for a chunk that is the part
+        // that was written, and for a document with one relation there is only
+        // one number to choose from anyway.
+        true => Ok((run_id, result.nodes.values().filter_map(|n| n.rows).max())),
         false => Err((Some(run_id), error.unwrap_or_else(|| "the run failed".into()))),
     }
 }

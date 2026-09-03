@@ -155,6 +155,138 @@ pub fn plan_for(
     })
 }
 
+/// Ask the source how far the key runs, and whether it is nullable.
+///
+/// #306 lists the probe as part of the chunk layer, and it was the one part
+/// still being done by hand: `source plan` printed the SQL and the operator ran
+/// it and typed the numbers back. That is fine once and wrong every time after,
+/// because the numbers go stale the moment the table grows and nothing notices.
+///
+/// It runs the same way a chunk does - one synthetic pipeline through the
+/// ordinary engine - so it inherits the node's prelude, its secrets, its
+/// resource pool and its connection exactly as the extract will. A probe that
+/// reached the source by some other path could succeed where the extract then
+/// fails, which is the least useful way to be right.
+pub fn probe(
+    workspace: &Path,
+    duckdb: &Path,
+    pipeline_path: &Path,
+    node_id: &str,
+) -> Result<(Bounds, u64), String> {
+    let text = std::fs::read_to_string(pipeline_path)
+        .map_err(|e| format!("{}: {e}", pipeline_path.display()))?;
+    let doc: JsonValue =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", pipeline_path.display()))?;
+    let t = target_of(&doc, node_id)?;
+    let node = node_of(&doc, node_id)?;
+    let props = node
+        .get("data")
+        .and_then(|d| d.get("properties"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    // The node's own read, as the engine builds it, wrapped so MIN/MAX apply to
+    // whatever it produces - a table, or the author's SQL.
+    let mut probe_props = constrain(&t.component, &props, "TRUE")?;
+    let base = probe_props
+        .get("sql")
+        .and_then(|v| v.as_str())
+        .ok_or("the probe could not build a read for this node")?
+        .to_string();
+    let sql = chunking::probe_sql_over(&t.strategy, &format!("({base}) AS duckle_probe"))?;
+    if let Some(o) = probe_props.as_object_mut() {
+        o.insert("sql".into(), json!(sql));
+    }
+
+    let out = std::env::temp_dir().join(format!(
+        "duckle_probe_{}_{}.parquet",
+        std::process::id(),
+        node_id.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>()
+    ));
+    let _ = std::fs::remove_file(&out);
+    let mut probe_doc = doc.clone();
+    let mut probe_node = node.clone();
+    probe_node["data"]["properties"] = probe_props;
+    probe_doc["nodes"] = json!([
+        probe_node,
+        {
+            "id": "duckle_probe_out",
+            "type": "sink",
+            "position": { "x": 320, "y": 0 },
+            "data": {
+                "label": "probe",
+                "componentId": "snk.parquet",
+                "properties": { "path": forward_slashes(&out) }
+            }
+        }
+    ]);
+    probe_doc["edges"] =
+        json!([{ "id": "duckle_probe_edge", "source": node_id, "target": "duckle_probe_out" }]);
+    let probe_doc: crate::PipelineDoc = serde_json::from_value(probe_doc)
+        .map_err(|e| format!("building the probe's document: {e}"))?;
+
+    let engine = crate::DuckdbEngine::new(duckdb.to_path_buf()).without_previews();
+    let result = engine.execute_pipeline_named(&probe_doc, "probe");
+    if result.status != "ok" {
+        let _ = std::fs::remove_file(&out);
+        return Err(format!(
+            "probing {node_id} failed: {}",
+            result.error.unwrap_or_else(|| "the probe run failed".into())
+        ));
+    }
+    let rows = engine
+        .run_rows(None, &format!("SELECT * FROM read_parquet('{}')", forward_slashes(&out)))
+        .map_err(|e| format!("reading the probe result: {e}"))?;
+    let _ = std::fs::remove_file(&out);
+    let row = rows.first().ok_or("the probe returned no rows")?;
+
+    let nulls = row.get("nulls").and_then(num).unwrap_or(0.0).max(0.0) as u64;
+    let bounds = match &t.strategy {
+        Strategy::Hash { .. } => Bounds::None,
+        Strategy::Range { .. } => {
+            let (Some(lo), Some(hi)) = (row.get("lo").and_then(num), row.get("hi").and_then(num))
+            else {
+                // Distinguished from a bad answer: an empty table is a fact
+                // about the table, not a failure of the probe.
+                return Err(format!(
+                    "{} has no non-null values in {}, so there is nothing to chunk",
+                    node_id,
+                    t.strategy.column()
+                ));
+            };
+            Bounds::Range { min: lo as i64, max: hi as i64 }
+        }
+        Strategy::Time { .. } => {
+            let day = |v: Option<&JsonValue>| {
+                v.and_then(|v| v.as_str())
+                    .map(|s| s.chars().take(10).collect::<String>())
+                    .filter(|s| s.len() == 10)
+            };
+            let (Some(from), Some(to)) = (day(row.get("lo")), day(row.get("hi"))) else {
+                return Err(format!(
+                    "{} has no non-null values in {}, so there is nothing to chunk",
+                    node_id,
+                    t.strategy.column()
+                ));
+            };
+            Bounds::Time { from, to }
+        }
+    };
+    Ok((bounds, nulls))
+}
+
+/// A number out of a probe row, whichever way DuckDB spelled it.
+fn num(v: &JsonValue) -> Option<f64> {
+    v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+}
+
+fn node_of<'a>(doc: &'a JsonValue, node_id: &str) -> Result<&'a JsonValue, String> {
+    doc.get("nodes")
+        .and_then(|v| v.as_array())
+        .and_then(|ns| ns.iter().find(|n| n.get("id").and_then(|v| v.as_str()) == Some(node_id)))
+        .ok_or_else(|| format!("no node {node_id:?} in this pipeline"))
+}
+
 /// Restrict a source node to one chunk.
 ///
 /// Rewrites the node's READ rather than filtering after it: a filter applied on
@@ -318,7 +450,7 @@ impl SliceWork for ChunkWork {
 
         let doc =
             extract_doc(&self.original, &self.node_id, predicate, &tmp).map_err(|e| (None, e))?;
-        let run_id = crate::backfill_exec::run_doc(
+        let (run_id, rows) = crate::backfill_exec::run_doc(
             &self.workspace,
             &self.duckdb,
             doc,
@@ -330,7 +462,7 @@ impl SliceWork for ChunkWork {
             &self.gates,
             "chunk",
         )?;
-        let artifact = backfill::commit(&tmp, &final_path, None)
+        let artifact = backfill::commit(&tmp, &final_path, rows)
             .map_err(|e| (Some(run_id.clone()), format!("the read finished but {e}")))?;
         Ok(Done { run_id, artifact: Some(artifact) })
     }

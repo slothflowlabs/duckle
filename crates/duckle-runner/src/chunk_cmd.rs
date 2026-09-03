@@ -13,12 +13,15 @@ fn usage() -> ExitCode {
     eprintln!(
         "usage: duckle-runner source plan|extract <pipeline.json> --node ID [--json]\n\
          \n\
-         \x20 --min N --max N        bounds of a range key, from your own probe\n\
+         \x20 --min N --max N        bounds of a range key, overriding the probe\n\
          \x20 --from D --to D        bounds of a time key (YYYY-MM-DD)\n\
-         \x20 --nulls N              NULLs in the key, as counted by the probe\n\
+         \x20 --nulls N              NULLs in the key, overriding the probe\n\
          \x20 --force                run every chunk, even one already done\n\
+         \x20 --workspace DIR        where the ledger and the staged parts live\n\
          \n\
-         plan     prints what would run, and the probe SQL when no bounds are given\n\
+         The extent of the key is asked of the source unless you supply it.\n\
+         \n\
+         plan     prints what would run, and changes nothing\n\
          extract  runs it, one ledger entry per chunk. Resume with `backfill retry`."
     );
     ExitCode::from(2)
@@ -114,19 +117,38 @@ pub fn run() -> ExitCode {
         (_, Some(lo), Some(hi), _, _) => Bounds::Range { min: lo, max: hi },
         (_, _, _, Some(f), Some(t)) => Bounds::Time { from: f.clone(), to: t.clone() },
         _ => {
-            // The bounds come from the source, and this command deliberately
-            // does not connect to it. Printing the probe is more useful than
-            // guessing, and it is the same SQL the executor will run.
-            match chunking::probe_sql(&strategy, table) {
-                Ok(sql) => {
-                    println!("run this against the source and pass the result back:\n\n  {sql}\n");
-                    println!("  duckle-runner source plan {} --node {node} \\", path.display());
-                    println!("      --min <lo> --max <hi> --nulls <nulls>");
-                    return ExitCode::from(0);
+            // #306: ask the source ourselves. This used to print the SQL and
+            // stop, which is fine once and wrong every time after - the numbers
+            // go stale the moment the table grows and nothing notices. The
+            // probe runs through the same engine the extract will, so it
+            // reaches the source the same way rather than by a second path that
+            // could succeed where the extract then fails.
+            let probed = crate::resolve_duckdb(None).map_err(|e| e.to_string()).and_then(|d| {
+                duckle_duckdb_engine::chunk_exec::probe(&workspace, &d, &path, &node)
+            });
+            match probed {
+                Ok((b, n)) => {
+                    nulls = n;
+                    eprintln!("probed {node}: {}", describe_bounds(&b));
+                    b
                 }
+                // Still useful when there is no DuckDB here, or the source is
+                // unreachable from this machine: hand back the SQL so the
+                // numbers can be supplied by whoever can reach it.
                 Err(e) => {
-                    eprintln!("duckle-runner source plan: {e}");
-                    return ExitCode::from(2);
+                    eprintln!("duckle-runner source {verb}: could not probe: {e}\n");
+                    match chunking::probe_sql(&strategy, table) {
+                        Ok(sql) => {
+                            println!("run this against the source and pass the result back:\n\n  {sql}\n");
+                            println!("  duckle-runner source {verb} {} --node {node} \\", path.display());
+                            println!("      --min <lo> --max <hi> --nulls <nulls>");
+                            return ExitCode::from(1);
+                        }
+                        Err(e) => {
+                            eprintln!("duckle-runner source {verb}: {e}");
+                            return ExitCode::from(2);
+                        }
+                    }
                 }
             }
         }
@@ -186,10 +208,19 @@ pub fn run() -> ExitCode {
         println!("  ... and {} more", plan.chunks.len() - 6);
     }
     println!(
-        "\nto run it:  duckle-runner source extract {} --node {node} <the same bounds>",
+        "\nto run it:  duckle-runner source extract {} --node {node}",
         path.display()
     );
     ExitCode::from(0)
+}
+
+/// What the probe found, in words.
+fn describe_bounds(b: &Bounds) -> String {
+    match b {
+        Bounds::Range { min, max } => format!("{min}..{max}"),
+        Bounds::Time { from, to } => format!("{from}..{to}"),
+        Bounds::None => "no bounds needed for hash buckets".to_string(),
+    }
 }
 
 /// Run the chunks.
