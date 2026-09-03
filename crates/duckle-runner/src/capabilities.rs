@@ -49,6 +49,21 @@ pub struct Capabilities {
     pub write_modes: Vec<String>,
     /// Opt-in output caching (#252).
     pub cacheable: bool,
+    /// Chunked extraction strategies this connector may be asked for (#306).
+    ///
+    /// From the engine's own allowlist rather than inferred from the manifest:
+    /// chunking is refused for anything not on it, so a guess from a field name
+    /// would advertise something the executor declines.
+    pub chunking: Vec<String>,
+    /// The SQL family predicates are written for, and ONLY when this connector
+    /// can be chunked. The engine's `dialect_of` answers Postgres for anything
+    /// it does not recognise, which is a sensible default inside the chunk
+    /// planner and would be a false claim here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dialect: Option<String>,
+    /// DuckDB extensions the run-time prelude loads for this component, which
+    /// is also what a self-contained bundle has to embed.
+    pub extensions: Vec<String>,
     /// Every declared property key, so an agent can check a name without
     /// guessing at it.
     pub properties: Vec<String>,
@@ -121,6 +136,21 @@ pub fn derive(c: &Value) -> Capabilities {
     } else {
         Vec::new()
     };
+    // The engine's answers, asked of the engine. These are the axes #313 wants
+    // that a manifest cannot supply, and each is a lookup against code that
+    // already decides the question at run time.
+    let id = c["id"].as_str().unwrap_or_default();
+    let chunking: Vec<String> = duckle_duckdb_engine::chunking::capabilities(id)
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    let dialect = (!chunking.is_empty()).then(|| {
+        format!("{:?}", duckle_duckdb_engine::chunking::dialect_of(id)).to_ascii_lowercase()
+    });
+    let extensions = duckle_duckdb_engine::extensions_for_component(
+        id,
+        c.get("manifest").unwrap_or(&Value::Null),
+    );
     Capabilities {
         component: c["id"].as_str().unwrap_or_default().to_string(),
         kind: c["kind"].as_str().unwrap_or_default().to_string(),
@@ -136,6 +166,9 @@ pub fn derive(c: &Value) -> Capabilities {
         pushdown: has("pushdown"),
         write_modes,
         cacheable: has("cacheOutput"),
+        chunking,
+        dialect,
+        extensions,
         properties: keys,
     }
 }
@@ -351,5 +384,43 @@ mod readme_counts {
                 available(kind)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod engine_facts {
+    use super::*;
+
+    fn of(id: &str) -> Capabilities {
+        all().into_iter().find(|c| c.component == id).unwrap_or_else(|| panic!("{id} in catalog"))
+    }
+
+    /// #313's own example record asks for `"chunking": ["range", "time"]`, and
+    /// that answer exists in the engine. Reporting it from the manifest would
+    /// have been a guess; the engine REFUSES chunking for anything not on its
+    /// allowlist, so a guess would advertise what the executor declines.
+    #[test]
+    fn chunking_and_dialect_come_from_the_engine_not_from_a_field_name() {
+        let pg = of("src.postgres");
+        assert!(pg.chunking.contains(&"range".to_string()), "{:?}", pg.chunking);
+        assert_eq!(pg.dialect.as_deref(), Some("postgres"));
+
+        let ora = of("src.oracle");
+        assert_eq!(ora.dialect.as_deref(), Some("oracle"), "the family is per connector");
+
+        // A connector the engine will not chunk claims nothing, and carries no
+        // dialect at all - `dialect_of` answers Postgres for anything it does
+        // not know, which would be a false claim here.
+        let csv = of("src.csv");
+        assert!(csv.chunking.is_empty(), "{:?}", csv.chunking);
+        assert_eq!(csv.dialect, None, "src.csv is not a SQL family");
+    }
+
+    /// The extensions a bundle must embed, on the record an agent reads.
+    #[test]
+    fn required_extensions_are_reported() {
+        assert_eq!(of("src.gdb").extensions, vec!["spatial".to_string()]);
+        assert_eq!(of("src.avro").extensions, vec!["avro".to_string()]);
+        assert!(of("src.csv").extensions.is_empty());
     }
 }

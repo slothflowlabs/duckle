@@ -8171,3 +8171,50 @@ mod inspect_prelude_tests {
         }
     }
 }
+
+/// The DuckDB extensions a component's run-time prelude loads.
+///
+/// Derived from `attach_prelude` - the very statements a run emits - rather
+/// than written down a second time. `duckle build` decides what to embed in a
+/// self-contained bundle, and it kept its own list, which had drifted: the
+/// engine force-loads spatial for `src.gdb`, the geometry checks and five geo
+/// transforms, and none of them were on it. A bundle containing one shipped
+/// without spatial and failed at run time with "st_read is not in the catalog",
+/// offline, where INSTALL cannot rescue it.
+///
+/// Only what the prelude LOADs. A component whose extension arrives some other
+/// way - the json and parquet readers are built in, the relational families
+/// come through their ATTACH - is not reported here, so the caller unions this
+/// with whatever else it knows rather than replacing its own knowledge.
+pub fn extensions_for_component(component_id: &str, props: &JsonValue) -> Vec<String> {
+    let prelude = plan::attach_prelude(component_id, props);
+    let mut out: Vec<String> = Vec::new();
+    for (i, _) in prelude.match_indices("LOAD ") {
+        let rest = &prelude[i + "LOAD ".len()..];
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() && !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod component_extension_tests {
+    use super::*;
+
+    /// The engine is the authority on what a component loads, so this asks it
+    /// the same way the bundler will.
+    #[test]
+    fn a_components_extensions_come_from_the_prelude_it_actually_emits() {
+        let none = serde_json::json!({ "path": "x" });
+        assert_eq!(extensions_for_component("src.gdb", &none), vec!["spatial".to_string()]);
+        assert_eq!(extensions_for_component("src.avro", &none), vec!["avro".to_string()]);
+        assert_eq!(extensions_for_component("qa.geomvalidate", &none), vec!["spatial".to_string()]);
+        // A component with no prelude reports nothing rather than guessing.
+        assert!(extensions_for_component("src.csv", &none).is_empty());
+    }
+}

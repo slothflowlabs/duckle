@@ -863,6 +863,23 @@ fn needed_extensions(doc: &PipelineDoc) -> std::collections::BTreeSet<String> {
         for e in ext {
             set.insert((*e).to_string());
         }
+        // And whatever the ENGINE's own prelude loads for this component, which
+        // is the authority: this match and `attach_prelude` are two answers to
+        // one question and they had drifted - src.gdb, the geometry checks and
+        // five geo transforms all load spatial at run time and none were listed
+        // above, so a bundle containing one shipped without it and failed
+        // offline, where INSTALL cannot rescue it.
+        //
+        // Unioned rather than substituted: the list above also knows things the
+        // prelude does not say out loud, like httpfs for the cloud sources.
+        let props = node
+            .get("data")
+            .and_then(|d| d.get("properties"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        for e in duckle_duckdb_engine::extensions_for_component(cid, &props) {
+            set.insert(e);
+        }
     }
     set
 }
@@ -1177,5 +1194,66 @@ mod duckdb_default_tests {
             .join(if cfg!(windows) { "duckdb.exe" } else { "duckdb" });
         assert_eq!(got, want);
         assert_ne!(duckdb_under(Path::new("/one")), duckdb_under(Path::new("/two")));
+    }
+}
+
+#[cfg(test)]
+mod bundle_extensions {
+    use super::*;
+
+    fn doc_with(component: &str) -> PipelineDoc {
+        serde_json::from_value(serde_json::json!({
+            "nodes": [{
+                "id": "n",
+                "position": { "x": 0, "y": 0 },
+                "data": { "label": "n", "componentId": component, "properties": { "path": "x" } }
+            }],
+            "edges": []
+        }))
+        .expect("a one-node document")
+    }
+
+    /// A bundle must embed every extension the engine will try to LOAD.
+    ///
+    /// This list and the engine's run-time prelude are two answers to one
+    /// question, and they had diverged: the engine force-loads spatial for
+    /// `src.gdb`, the geometry DQ checks and five geo transforms, and none of
+    /// them were here. A bundle containing one shipped WITHOUT spatial and
+    /// failed at run time with "st_read is not in the catalog" - the same
+    /// failure as #327, except offline, where INSTALL cannot rescue it.
+    ///
+    /// So the question is asked of the engine rather than answered twice.
+    #[test]
+    fn a_bundle_embeds_every_extension_the_engine_loads() {
+        for component in [
+            "src.gdb",
+            "src.spatial",
+            "snk.spatial",
+            "xf.geo.clip",
+            "xf.geo.erase",
+            "xf.geo.reproject",
+            "xf.geo.setcrs",
+            "xf.geo.create",
+            "qa.geomvalidate",
+            "qa.geomrepair",
+            "qa.geomempty",
+        ] {
+            let embedded = needed_extensions(&doc_with(component));
+            assert!(
+                embedded.contains("spatial"),
+                "a bundle containing {component} would ship without the spatial extension, and \
+                 an offline bundle cannot INSTALL one: {embedded:?}"
+            );
+        }
+    }
+
+    /// And the ones that were already right stay right, so the fix cannot be a
+    /// blanket "embed everything".
+    #[test]
+    fn a_plain_file_pipeline_still_embeds_nothing() {
+        assert!(
+            needed_extensions(&doc_with("src.csv")).is_empty(),
+            "a CSV pipeline should need no extension at all"
+        );
     }
 }
