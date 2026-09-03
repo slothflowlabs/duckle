@@ -63,6 +63,25 @@ jobs:
             exit 1
           }
 
+  # #313: the capability matrix is generated FROM the registry, so it cannot
+  # disagree with the code - but only if nobody has to remember to regenerate
+  # it. One Linux leg is enough; the document does not vary by platform.
+  capability-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Capability matrix is in sync with the registry
+        run: |
+          cargo run -q -p duckle-runner -- capabilities --markdown > docs/capability-matrix.md
+          git diff --exit-code -- docs/capability-matrix.md || {
+            echo "::error::docs/capability-matrix.md is stale. Run:"
+            echo "::error::  cargo run -p duckle-runner -- capabilities --markdown > docs/capability-matrix.md"
+            echo "::error::and commit it in the same change as the component edit."
+            exit 1
+          }
+
   rust:
     strategy:
       fail-fast: false

@@ -1749,6 +1749,14 @@ is worse than an error.
 can target a known Duckle version instead of interrogating a binary it may not
 have. It is covered by `SHA256SUMS.txt` like every other asset.
 
+**And the matrices are generated from it.** `--markdown` renders the source,
+sink, authentication and runtime-dependency matrices into
+[`docs/capability-matrix.md`](docs/capability-matrix.md), regenerated and diffed
+in CI. That is the whole of "do not maintain a second independent list": the
+document is a projection of the registry, so it cannot state something the
+registry does not know, and a component change that is not exported fails the
+build rather than quietly making the table wrong.
+
 **External components count.** Given a workspace, the registry includes what is
 installed there - a component the engine will run and the palette will show is a
 component, and a registry that only knew what was compiled in would answer the
