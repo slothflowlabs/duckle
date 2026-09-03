@@ -2377,7 +2377,7 @@ function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
                       placeholder: 'https://host/feed.zip  or  s3://bucket/key  or  sftp://user@host/deltas',
                       description: 'One object to watch, or - with listing on - a directory or prefix to watch. https:// is probed with a HEAD, s3:// with a HEAD against the object, sftp:// with a stat. None of them download the object, which is the point.' },
                     { key: 'listing', label: 'Watch a directory of files', kind: 'bool', defaultValue: false,
-                      description: 'Off: watch one object and emit a row when its fingerprint moves. On: list the directory and emit the files that are new or changed since the last successful run. sftp:// only for now; HTTP has no standard listing.' },
+                      description: 'Off: watch one object and emit a row when its fingerprint moves. On: list the directory or prefix and emit the files that are new or changed since the last successful run. s3:// and sftp://; HTTP has no standard listing and is refused rather than guessed at.' },
                     { key: 'suffix', label: 'Only names ending with', kind: 'text', placeholder: '.zip',
                       description: 'Listing mode. Skips anything else in the directory.' },
                     { key: 'maxEntries', label: 'Max files per run', kind: 'number', defaultValue: 1000,
