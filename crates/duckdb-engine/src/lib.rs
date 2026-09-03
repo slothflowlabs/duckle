@@ -42,6 +42,7 @@ pub mod backfill;
 pub mod backfill_exec;
 pub mod capabilities;
 pub mod materialize;
+pub mod subscribe;
 pub mod chunk_exec;
 pub mod chunking;
 pub mod partition;

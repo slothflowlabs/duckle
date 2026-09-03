@@ -1328,7 +1328,7 @@ pub fn asset_of(component_id: &str, props: &Value) -> Result<Asset, String> {
 
 /// Lower-case the drive letter and use forward slashes, so `C:\data\x.csv` and
 /// `c:/data/x.csv` are recognised as the same file.
-fn normalise_path(path: &str) -> String {
+pub(crate) fn normalise_path(path: &str) -> String {
     let unified = path.replace('\\', "/");
     let mut chars = unified.chars();
     match (chars.next(), chars.next()) {

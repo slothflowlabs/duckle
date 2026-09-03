@@ -3581,6 +3581,85 @@ fn run_scheduled(state: &State, id: &str, file: &str) {
     }
 }
 
+/// #325: run what a publication triggered.
+///
+/// The pump, deliberately separate from the clock scheduler: a subscription is
+/// not a clock, and the scheduler reads a flattened projection that cannot
+/// express one. What it creates is an ORDINARY run through `execute_one`, so
+/// the resource pool, the policy, the receipt and the logs are the same ones a
+/// scheduled run gets - the trigger is new, the execution is not.
+///
+/// Every outcome is recorded against the delivery, including "could not start",
+/// which is the state that otherwise looks identical to "never triggered".
+fn pump_deliveries(state: &State) {
+    use duckle_duckdb_engine::subscribe::{self, DeliveryState};
+    let now = chrono::Utc::now().to_rfc3339();
+    let pending = subscribe::pending(&state.workspace, &now);
+    if pending.is_empty() {
+        return;
+    }
+    let pipes: HashMap<String, PathBuf> =
+        discover_pipelines(&state.workspace).into_iter().map(|(p, id, _)| (id, p)).collect();
+    for mut delivery in pending {
+        delivery.attempts += 1;
+        let Some(file) = pipes.get(&delivery.pipeline_id).map(|p| p.display().to_string()) else {
+            // Recorded rather than skipped: a subscription naming a pipeline
+            // that no longer exists is a broken subscription, and silence would
+            // make it look like nothing was ever published.
+            delivery.state = DeliveryState::Failed;
+            delivery.last_error =
+                Some(format!("no pipeline {:?} in this workspace", delivery.pipeline_id));
+            let _ = subscribe::record(&state.workspace, delivery);
+            continue;
+        };
+        // The same on-disk lock a scheduled run takes. Two runs of one pipeline
+        // race on its sink and on its watermark, and a publication arriving
+        // while the consumer is already running is exactly when that happens.
+        let _lock = match duckle_duckdb_engine::runlock::try_acquire(
+            &state.workspace,
+            &delivery.pipeline_id,
+        ) {
+            Some(l) => l,
+            None => {
+                // Left PENDING on purpose, not failed: it was not delivered and
+                // the next tick will offer it again. Recording a failure here
+                // would need a human to retry something that only needed a
+                // minute.
+                continue;
+            }
+        };
+        match execute_one(state, &file, "materialization", &HashMap::new()) {
+            Ok(v) => {
+                let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("?");
+                delivery.run_id =
+                    v.get("runId").and_then(|r| r.as_str()).map(str::to_string);
+                // Delivered means the consumer RAN. A consumer that ran and
+                // failed is a failed run, reachable by its run id - a different
+                // problem from the delivery never arriving, which is the whole
+                // reason these are separate states.
+                delivery.state = DeliveryState::Delivered;
+                delivery.last_error = match status {
+                    "ok" => None,
+                    other => Some(format!("the consumer run finished {other}")),
+                };
+                eprintln!(
+                    "duckle-runner: {} triggered by {} -> {}",
+                    delivery.pipeline_id, delivery.event_id, status
+                );
+            }
+            Err(e) => {
+                delivery.state = DeliveryState::Failed;
+                delivery.last_error = Some(e.clone());
+                eprintln!(
+                    "duckle-runner: {} could not be triggered by {}: {e}",
+                    delivery.pipeline_id, delivery.event_id
+                );
+            }
+        }
+        let _ = subscribe::record(&state.workspace, delivery);
+    }
+}
+
 /// Write a scheduled run's outcome back to the shared schedule store.
 ///
 /// Only the desktop app used to do this, and once both products moved to one
@@ -3788,7 +3867,7 @@ fn execute_one_with(
     let mut record = RunRecord::from_result_in(&state.workspace, &id, &result, trigger);
     // #259: stamp the id the caller was handed, so a finished async run is
     // still answerable once it has left memory.
-    record.run_id = Some(owned_id);
+    record.run_id = Some(owned_id.clone());
     let _ = append_run_record(&state.workspace, &id, record);
     // After the run is recorded, so an unreachable channel can never cost a
     // run its history entry, and never changes the outcome reported below.
@@ -3796,6 +3875,12 @@ fn execute_one_with(
 
     Ok(json!({
         "id": id,
+        // #325: the run this WAS, not only the pipeline it was of. It is minted
+        // here and was kept here, so a caller could not say which run it had
+        // just started - which is the same "which run was that?" the comment
+        // above says was unanswerable, and what a delivery needs to point at
+        // when the consumer it triggered fails.
+        "runId": owned_id,
         "status": result.status,
         "durationMs": result.duration_ms,
         "error": result.error,
@@ -3952,6 +4037,12 @@ fn spawn_scheduler(state: Arc<State>) {
         let freshness_running = Arc::new(std::sync::atomic::AtomicBool::new(false));
         loop {
             std::thread::sleep(state.tick_interval);
+            // #325: publications are checked every tick. Unlike freshness this
+            // is cheap - the log is append-only and the delivery ledger is a
+            // map - and unlike freshness it is latency that matters: the point
+            // of a data trigger is that the consumer runs when the data lands,
+            // not up to a minute later.
+            pump_deliveries(&state);
             if last_freshness.is_none_or(|t| t.elapsed() >= FRESHNESS_EVERY) {
                 last_freshness = Some(Instant::now());
                 // Off the scheduler's thread, so a slow evaluation delays no

@@ -1660,6 +1660,38 @@ in front of a reviewer; leaving the pipeline out entirely would hide it from the
 blast radius. Naming it at its own tier is the only honest option, and it does
 not fail the gate.
 
+### Run a pipeline when its input is published (`subscriptions.json`)
+
+A consumer that says "after the producer" through a clock is guessing: too early
+and it reads yesterday's data, too late and it wastes the gap, and when the
+producer is delayed it does both. Every successful publication is recorded, and
+a subscription runs a pipeline when one it cares about arrives:
+
+```json
+[{ "id": "gold-after-raw", "pipelineId": "build-gold",
+   "assets": ["/lake/raw/orders.parquet", "/lake/raw/customers.*"] }]
+```
+
+**One event per successful run, not per asset.** A run committing four tables is
+one publication, so a subscriber is triggered once rather than four times and
+there is no debounce window to tune. A failed run publishes nothing, and neither
+does one that stopped at a ceiling - its rows are correct and are not all of
+them.
+
+**Three states, not one silence.** The publication, the delivery and the
+consumer's run are recorded separately, so "the downstream never ran" and "it
+ran and failed" are different answers rather than the same absence. Each
+delivery names the run it started, so a failure is one hop away.
+
+**A publication delivered to a subscriber once stays delivered**, however often
+the pump looks - and because deliveries are derived rather than queued at
+publish time, a subscription added today receives the publications that already
+happened. A pipeline cannot subscribe to its own output, which would publish
+again and run forever.
+
+The run it creates is an ordinary run: same resource pool, same policy, same
+receipt, same logs. Only the trigger is new.
+
 ### Freshness that does not wait for a failure (`freshness`)
 
 A dataset goes stale in ways that produce no failed run at all: a schedule
