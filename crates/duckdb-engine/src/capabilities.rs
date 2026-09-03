@@ -63,6 +63,15 @@ pub struct Capabilities {
     /// DuckDB extensions the run-time prelude loads for this component, which
     /// is also what a self-contained bundle has to embed.
     pub extensions: Vec<String>,
+    /// #313: running this component advances durable state - a watermark, a
+    /// resume offset, a consumed snapshot, a seen-map.
+    ///
+    /// From the policy's own table rather than inferred from a field name,
+    /// because that table is what `state.allowMutation: false` enforces
+    /// against. A registry that disagreed with the enforcement would be worse
+    /// than one that stayed silent: an agent would be told a component is inert
+    /// in an environment that refuses to run it.
+    pub advances_state: bool,
     /// Every declared property key, so an agent can check a name without
     /// guessing at it.
     pub properties: Vec<String>,
@@ -146,6 +155,7 @@ pub fn derive(c: &Value) -> Capabilities {
     let dialect = (!chunking.is_empty()).then(|| {
         format!("{:?}", crate::chunking::dialect_of(id)).to_ascii_lowercase()
     });
+    let advances_state = crate::policy::advances_saved_state(id);
     let extensions = crate::extensions_for_component(
         id,
         c.get("manifest").unwrap_or(&Value::Null),
@@ -168,6 +178,7 @@ pub fn derive(c: &Value) -> Capabilities {
         chunking,
         dialect,
         extensions,
+        advances_state,
         properties: keys,
     }
 }
@@ -316,5 +327,46 @@ mod engine_facts {
         assert_eq!(of("src.gdb").extensions, vec!["spatial".to_string()]);
         assert_eq!(of("src.avro").extensions, vec!["avro".to_string()]);
         assert!(of("src.csv").extensions.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod side_effects {
+    use super::*;
+
+    /// #313: an execution side effect, reported from the table that ENFORCES
+    /// it rather than guessed from a field name.
+    ///
+    /// The registry and `state.allowMutation` must agree by construction. If
+    /// they were two lists, the registry would eventually tell an agent that a
+    /// component is inert in an environment whose policy refuses to run it -
+    /// and the agent would have no way to find out which was right.
+    #[test]
+    fn advancing_durable_state_is_reported_from_the_policy_table() {
+        let advances = |id: &str| {
+            all().into_iter().find(|c| c.component == id).map(|c| c.advances_state)
+        };
+        // A watermark, a consumed snapshot, a resume offset, a seen-map.
+        for id in ["xf.incremental", "src.ducklake.changes", "src.kafka", "src.changed"] {
+            assert_eq!(advances(id), Some(true), "{id} advances state and the registry denies it");
+        }
+        // And a plain reader does not, so the flag is not simply true.
+        for id in ["src.csv", "src.parquet"] {
+            assert_eq!(advances(id), Some(false), "{id} does not advance state");
+        }
+    }
+
+    /// The property that matters more than the values: the registry cannot
+    /// drift from the enforcement, because it asks it.
+    #[test]
+    fn the_registry_and_the_policy_cannot_disagree() {
+        for c in all() {
+            assert_eq!(
+                c.advances_state,
+                crate::policy::advances_saved_state(&c.component),
+                "{} is reported differently by the registry and the policy",
+                c.component
+            );
+        }
     }
 }
