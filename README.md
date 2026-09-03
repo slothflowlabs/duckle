@@ -1699,10 +1699,30 @@ scheduler's thread so a slow evaluation delays no schedule, and two evaluations
 can never overlap. An SLA that only holds while somebody remembers to run a
 command is not one.
 
+**Or relative to the schedule that produces it.** An absolute `maximumAge` has
+to be picked loose enough for the longest gap between runs, which makes it slow
+to notice a miss on a frequent schedule:
+
+```json
+{ "match": "/lake/raw/*", "owner": "data-eng", "expectedAfterSchedule": "4h" }
+```
+
+meaning "written within 4h of when it was due". A schedule that is **disabled or
+missing makes the asset stale**, because that is one of the failure modes this
+exists for and a deadline taken from a schedule nobody is running would excuse
+exactly the outage it should catch. An interval or file-watch schedule has no
+civil-time occurrence to be late against, so it falls back to `maximumAge`
+rather than inventing a deadline.
+
 **`fresh -> stale` alerts, and `stale -> fresh` sends the all-clear.** Both go
 through the same alert rules, cooldowns and channels a failing pipeline uses,
 with the asset path in the slot the pipeline name takes - so an `alerts.json`
-pattern matches an asset the same way. The all-clear is never held back by a
+pattern matches an asset the same way. A rule can also route on **who owns** the
+asset and **which tags** it carries, because assets are named by path and owned
+by team and the two do not line up: one team's datasets live under three
+prefixes and one prefix holds two teams'. Tags match on ANY of those listed, a
+routing list being the set of things a channel cares about rather than a
+condition to satisfy; owner and tags together both apply. The all-clear is never held back by a
 cooldown, because suppressing it leaves people believing an outage is still
 running. `stale_since` is carried across evaluations, so "how long has this been
 broken" does not reset every minute, and `recovered` is reported once rather

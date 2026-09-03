@@ -137,8 +137,50 @@ pub struct AlertRule {
     /// Recovery ignores this: an all-clear that arrives late is useless.
     #[serde(default = "default_cooldown")]
     pub cooldown_minutes: u64,
+    /// #304: route by who owns the subject, not only by what it is called.
+    ///
+    /// Assets are named by path and owned by team, and the two do not line up -
+    /// one team's datasets live under three prefixes and one prefix holds two
+    /// teams' datasets. A glob cannot express that; the ownership rule already
+    /// knows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// Route by tag. ANY of them matches, not all: a routing list is the set of
+    /// things this channel cares about, not a condition to satisfy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     #[serde(flatten)]
     pub channel: Channel,
+}
+
+/// What is known about an alert's subject beyond its name, for routing.
+///
+/// Empty for a pipeline, which has no owner of its own; an asset carries the
+/// ownership rule's answer.
+#[derive(Debug, Default, Clone)]
+pub struct Routing {
+    pub owner: Option<String>,
+    pub tags: Vec<String>,
+}
+
+impl AlertRule {
+    /// Whether this rule wants this subject. Name, then owner, then tags - each
+    /// one only narrows, so a rule that names none of them still matches
+    /// everything its glob does.
+    fn routes(&self, subject: &str, r: &Routing) -> bool {
+        if !glob::Pattern::new(&self.pattern).map(|p| p.matches(subject)).unwrap_or(false) {
+            return false;
+        }
+        if let Some(want) = &self.owner {
+            if r.owner.as_deref() != Some(want.as_str()) {
+                return false;
+            }
+        }
+        if !self.tags.is_empty() && !self.tags.iter().any(|t| r.tags.contains(t)) {
+            return false;
+        }
+        true
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -369,7 +411,13 @@ fn classify(result: &RunResult, previous: Option<&str>) -> Event {
 ///
 /// `subject` takes the slot a pipeline id takes, so an `alerts.json` pattern
 /// matches an asset path the same way it matches a pipeline name.
-pub fn notify_subject(workspace: &Path, subject: &str, event: Event, text: &str) -> usize {
+pub fn notify_subject(
+    workspace: &Path,
+    subject: &str,
+    event: Event,
+    text: &str,
+    routing: &Routing,
+) -> usize {
     let rules = match load(workspace) {
         Ok(a) => a,
         Err(e) => {
@@ -385,7 +433,7 @@ pub fn notify_subject(workspace: &Path, subject: &str, event: Event, text: &str)
     let mut sent = 0usize;
     let mut delivered: Vec<String> = Vec::new();
     for rule in &rules.rules {
-        if !glob::Pattern::new(&rule.pattern).map(|p| p.matches(subject)).unwrap_or(false) {
+        if !rule.routes(subject, routing) {
             continue;
         }
         if !rule.on.contains(&event) {
@@ -963,5 +1011,74 @@ mod tests {
             0,
             "the alert state was observably absent during a write"
         );
+    }
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+
+    fn rule(pattern: &str, owner: Option<&str>, tags: &[&str]) -> AlertRule {
+        AlertRule {
+            pattern: pattern.into(),
+            on: default_events(),
+            cooldown_minutes: default_cooldown(),
+            owner: owner.map(str::to_string),
+            tags: tags.iter().map(|t| (*t).to_string()).collect(),
+            // Routing is decided before any channel is touched, so which one
+            // this is does not matter to these tests.
+            channel: Channel::Webhook {
+                url: "https://example.invalid/hook".into(),
+                headers: Default::default(),
+            },
+        }
+    }
+
+    fn subject(owner: Option<&str>, tags: &[&str]) -> Routing {
+        Routing {
+            owner: owner.map(str::to_string),
+            tags: tags.iter().map(|t| (*t).to_string()).collect(),
+        }
+    }
+
+    /// #304: assets are named by path and owned by team, and the two do not
+    /// line up. One team's datasets live under several prefixes; one prefix
+    /// holds several teams'. A glob cannot express that.
+    #[test]
+    fn a_rule_can_route_on_who_owns_the_subject() {
+        let r = rule("*", Some("data-eng"), &[]);
+        assert!(r.routes("/lake/orders", &subject(Some("data-eng"), &[])));
+        assert!(!r.routes("/lake/orders", &subject(Some("platform"), &[])), "wrong team was paged");
+        assert!(!r.routes("/lake/orders", &subject(None, &[])), "an unowned asset matched an owner rule");
+    }
+
+    /// ANY tag, not all: a routing list is the set of things a channel cares
+    /// about, not a condition to satisfy.
+    #[test]
+    fn tags_route_on_any_not_all() {
+        let r = rule("*", None, &["pii", "finance"]);
+        assert!(r.routes("/lake/a", &subject(None, &["pii"])));
+        assert!(r.routes("/lake/a", &subject(None, &["finance", "daily"])));
+        assert!(!r.routes("/lake/a", &subject(None, &["daily"])));
+    }
+
+    /// Each filter only NARROWS, so a rule that names neither still matches
+    /// everything its glob does - existing alerts.json files keep working.
+    #[test]
+    fn a_rule_without_owner_or_tags_is_unchanged() {
+        let r = rule("/lake/*", None, &[]);
+        assert!(r.routes("/lake/orders", &Routing::default()));
+        assert!(r.routes("/lake/orders", &subject(Some("anyone"), &["any"])));
+        assert!(!r.routes("/other/orders", &Routing::default()), "the glob stopped applying");
+    }
+
+    /// And they compose: owner AND tag both have to be satisfied when both are
+    /// named, because two filters on one rule are two conditions on one route.
+    #[test]
+    fn owner_and_tags_both_apply_when_both_are_named() {
+        let r = rule("*", Some("data-eng"), &["pii"]);
+        assert!(r.routes("/lake/a", &subject(Some("data-eng"), &["pii"])));
+        assert!(!r.routes("/lake/a", &subject(Some("data-eng"), &["daily"])));
+        assert!(!r.routes("/lake/a", &subject(Some("platform"), &["pii"])));
     }
 }

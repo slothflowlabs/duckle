@@ -374,6 +374,18 @@ pub struct AssetView {
     pub tags: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub freshness: Option<Freshness>,
+    /// #304: where this asset stands against its declared freshness limit.
+    ///
+    /// Beside `freshness`, which is only WHEN it was last written - a timestamp
+    /// answers "when", not "is that acceptable", and only the rule knows the
+    /// difference. Absent when no rule declares a limit, which reads as
+    /// `unknown` rather than as fine.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sla_state: Option<crate::sla::State>,
+    /// The declared limit, as authored, so a screen can say what it is measured
+    /// against rather than only that it failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximum_age: Option<String>,
 }
 
 /// Build the whole view: graph, ownership, annotations and freshness.
@@ -403,6 +415,7 @@ pub fn view(workspace: &Path) -> Result<CatalogView, String> {
 pub fn view_of(workspace: &Path, catalog: &Catalog) -> CatalogView {
     let owners = load_owners(workspace).unwrap_or_default();
     let fresh = freshness(workspace);
+    let now = chrono::Utc::now();
     let assets = catalog
         .assets
         .iter()
@@ -419,6 +432,19 @@ pub fn view_of(workspace: &Path, catalog: &Catalog) -> CatalogView {
                 description: rule.and_then(|r| r.description.clone()),
                 tags: rule.map(|r| r.tags.clone()).unwrap_or_default(),
                 freshness: fresh.get(&a.id).cloned(),
+                // Computed from what is already loaded rather than by calling
+                // the SLA evaluator, which would re-read run history a second
+                // time on every poll of a catalog screen. The RULE is shared,
+                // so the two cannot disagree about what stale means.
+                sla_state: rule.and_then(|r| r.maximum_age.as_deref()).map(|limit| {
+                    let age = fresh.get(&a.id).and_then(|f| {
+                        chrono::DateTime::parse_from_rfc3339(&f.last_written_at)
+                            .ok()
+                            .map(|t| (now - t.with_timezone(&chrono::Utc)).num_seconds())
+                    });
+                    crate::sla::verdict(Some(limit), age)
+                }),
+                maximum_age: rule.and_then(|r| r.maximum_age.clone()),
             }
         })
         .collect();
@@ -481,6 +507,7 @@ pub fn annotate(
             0,
             OwnerRule {
                 maximum_age: None,
+                expected_after_schedule: None,
                 pattern: name.to_string(),
                 // An annotation with no owner still needs the field; the empty
                 // string reads as "not stated" everywhere it is shown.
@@ -617,6 +644,23 @@ pub struct OwnerRule {
     /// this one. A stale asset also needs an owner to tell, which is here.
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "maximumAge")]
     pub maximum_age: Option<String>,
+    /// #304: the grace period after the producing schedule should have fired.
+    ///
+    /// An absolute `maximumAge` has to be picked loose enough for the longest
+    /// gap between runs, which makes it slow to notice a miss on a frequent
+    /// schedule. This says "within 4h of when it was due" instead, so the
+    /// deadline moves with the schedule rather than being guessed from it.
+    ///
+    /// A schedule that is disabled or missing makes the asset STALE rather than
+    /// unknown, because that is one of the failure modes this exists for: a
+    /// deadline derived from a schedule nobody is running would excuse exactly
+    /// the outage it is meant to catch.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "expectedAfterSchedule"
+    )]
+    pub expected_after_schedule: Option<String>,
 }
 
 /// Who owns what, as authored by a human.
@@ -2253,6 +2297,7 @@ mod tests {
         let owners = Owners {
             assets: vec![
                 OwnerRule {
+                    expected_after_schedule: None,
                     maximum_age: None,
                     pattern: "/lake/raw/pii_*".into(),
                     owner: "Privacy".into(),
@@ -2261,6 +2306,7 @@ mod tests {
                     tags: Vec::new(),
                 },
                 OwnerRule {
+                    expected_after_schedule: None,
                     maximum_age: None,
                     pattern: "/lake/raw/*".into(),
                     owner: "Data Platform".into(),
@@ -2270,6 +2316,7 @@ mod tests {
                 },
             ],
             pipelines: vec![OwnerRule {
+                expected_after_schedule: None,
                 maximum_age: None,
                 pattern: "*-ingest-*".into(),
                 owner: "Ingest".into(),
@@ -2292,6 +2339,7 @@ mod tests {
         // ownership were complete.
         let owners = Owners {
             assets: vec![OwnerRule {
+                expected_after_schedule: None,
                 maximum_age: None,
                 pattern: "[unclosed".into(),
                 owner: "Nobody".into(),
@@ -2386,5 +2434,60 @@ mod tests {
         let loaded = load(ws).unwrap().expect("saved catalog");
         assert_eq!(loaded.assets, built.assets);
         assert_eq!(loaded.touches, built.touches);
+    }
+}
+
+#[cfg(test)]
+mod sla_on_the_view {
+    use super::*;
+
+    /// #304, the surfacing half: a screen or an agent reading the catalog has
+    /// to be able to SEE that an asset is past its limit.
+    ///
+    /// It carried `freshness` - a timestamp - which answers "when was this
+    /// written" and not "is that acceptable". Only the rule knows the
+    /// difference, so the console could not show staleness and an agent could
+    /// not ask about it, even though the evaluator existed.
+    #[test]
+    fn an_asset_past_its_limit_says_so_on_the_catalog_view() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("runs")).unwrap();
+        let long_ago = (chrono::Utc::now() - chrono::Duration::hours(50)).to_rfc3339();
+        std::fs::write(
+            tmp.path().join("runs").join("daily.json"),
+            format!(
+                r#"[{{"at":"{long_ago}","status":"ok","duration_ms":1,"rows":10,"node_count":1,
+                      "trigger":"manual",
+                      "assets":[{{"id":"/lake/orders","direction":"write","rows":10}}]}}]"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("owners.json"),
+            r#"{"assets":[{"match":"/lake/orders","owner":"data-eng","maximumAge":"36h"}]}"#,
+        )
+        .unwrap();
+
+        let catalog = Catalog {
+            assets: vec![Asset {
+                id: "/lake/orders".into(),
+                kind: "file".into(),
+                columns: vec![],
+            }],
+            ..Default::default()
+        };
+        let view = view_of(tmp.path(), &catalog);
+        let a = view.assets.iter().find(|a| a.id == "/lake/orders").expect("the asset");
+        assert_eq!(a.sla_state, Some(crate::sla::State::Stale), "the view does not show staleness");
+        assert_eq!(a.maximum_age.as_deref(), Some("36h"), "and it does not say what the limit was");
+
+        // An asset nobody declared a limit for carries no verdict at all, which
+        // reads as unknown rather than as fine.
+        let catalog = Catalog {
+            assets: vec![Asset { id: "/lake/other".into(), kind: "file".into(), columns: vec![] }],
+            ..Default::default()
+        };
+        let view = view_of(tmp.path(), &catalog);
+        assert_eq!(view.assets[0].sla_state, None, "an undeclared asset was given a verdict");
     }
 }

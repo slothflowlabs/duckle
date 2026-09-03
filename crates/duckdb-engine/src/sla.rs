@@ -55,6 +55,9 @@ pub struct AssetFreshness {
     pub state: State,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+    /// The ownership rule's tags, carried so an alert rule can route on them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     /// RFC3339 of the newest complete successful write.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_written_at: Option<String>,
@@ -96,6 +99,80 @@ pub fn parse_duration(s: &str) -> Option<i64> {
     Some(n * mult)
 }
 
+/// Where one asset stands, given its declared limit and how old it is.
+///
+/// The single definition of "stale". The clock check and the catalog view both
+/// need the answer and they must not each work it out: a screen that called an
+/// asset fresh while the alerting called it stale would be the worst of both,
+/// and the disagreement would be invisible until someone compared them.
+///
+/// `age_seconds` is None when the asset has never been successfully written.
+pub fn verdict(maximum_age: Option<&str>, age_seconds: Option<i64>) -> State {
+    match (maximum_age.and_then(parse_duration), age_seconds) {
+        (Some(limit), Some(a)) if a > limit => State::Stale,
+        (Some(_), Some(_)) => State::Fresh,
+        // Declared but never written is stale, not unknown: the SLA says it
+        // should exist by now and it does not.
+        (Some(_), None) => State::Stale,
+        _ => State::Unknown,
+    }
+}
+
+/// Whether a schedule-relative deadline has passed (#304).
+///
+/// `expectedAfterSchedule: 4h` means "written within 4h of when it was due",
+/// which is a moving deadline rather than a guess at the longest gap between
+/// runs - the thing an absolute `maximumAge` forces you to pick.
+///
+/// Stated forward rather than backward, because it needs no "previous
+/// occurrence" primitive and reads the same way the failure does:
+///
+/// ```text
+/// last successful write W
+///   -> F = the first time the schedule fires after W
+///   -> if now is past F + grace, a run was due and did not deliver
+/// ```
+///
+/// Returns None when the question cannot be asked at all - no producer, no
+/// schedule for it, a schedule that is not a cron, or an unparseable
+/// expression - so the caller falls back rather than inventing a verdict.
+/// A schedule that exists and is DISABLED returns Some(true): that is one of
+/// the failure modes this exists for, and a deadline taken from a schedule
+/// nobody is running would excuse exactly the outage it should catch.
+fn schedule_deadline_passed(
+    workspace: &Path,
+    producer: Option<&str>,
+    grace: &str,
+    last_written_at: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<bool> {
+    let grace = parse_duration(grace)?;
+    let producer = producer?;
+    let schedules = crate::schedules::load(workspace).ok()?;
+    let sched = schedules.iter().find(|s| s.pipeline_id == producer)?;
+    if !sched.enabled {
+        return Some(true);
+    }
+    let expr = match &sched.kind {
+        crate::schedules::ScheduleKind::Cron { expr } => expr.clone(),
+        // An interval or a file watch has no civil-time occurrence to be late
+        // against. Answering None sends the caller to `maximumAge`, which is
+        // the honest fallback rather than a deadline invented here.
+        _ => return None,
+    };
+    let zone = crate::cronzone::resolve_zone(sched.timezone.as_deref()).ok()?;
+    // Anchored at the last successful write. With none, anchor at the grace
+    // window before now, so a never-written asset is late as soon as one
+    // occurrence has been missed rather than immediately.
+    let anchor = last_written_at
+        .and_then(|w| chrono::DateTime::parse_from_rfc3339(w).ok())
+        .map(|t| t.with_timezone(&chrono::Utc))
+        .unwrap_or(now - chrono::Duration::seconds(grace));
+    let (occurrence, _) = crate::cronzone::next_after(&expr, &zone, anchor).ok()?;
+    let due = occurrence?.at;
+    Some(now > due + chrono::Duration::seconds(grace))
+}
+
 /// Judge every asset that declares a maximum age.
 ///
 /// `now` is a parameter so the evaluation is testable without waiting.
@@ -125,18 +202,30 @@ pub fn evaluate(workspace: &Path, now: chrono::DateTime<chrono::Utc>) -> Vec<Ass
                 .ok()
                 .map(|t| (now - t.with_timezone(&chrono::Utc)).num_seconds())
         });
-        let state = match (maximum_age.as_deref().and_then(parse_duration), age) {
-            (Some(limit), Some(a)) if a > limit => State::Stale,
-            (Some(_), Some(_)) => State::Fresh,
-            // Declared but never written is stale, not unknown: the SLA says it
-            // should exist by now and it does not.
-            (Some(_), None) => State::Stale,
-            _ => State::Unknown,
+        // A schedule-relative deadline wins when one is declared and can be
+        // answered: it is the more specific statement, and it is the one that
+        // moves with the schedule. Where it cannot be answered - no producer,
+        // an interval schedule, an unparseable expression - it falls back to
+        // the absolute limit rather than inventing a verdict.
+        let by_schedule = rule.and_then(|r| r.expected_after_schedule.as_deref()).and_then(|g| {
+            schedule_deadline_passed(
+                workspace,
+                f.map(|f| f.pipeline_id.as_str()),
+                g,
+                f.map(|f| f.last_written_at.as_str()),
+                now,
+            )
+        });
+        let state = match by_schedule {
+            Some(true) => State::Stale,
+            Some(false) => State::Fresh,
+            None => verdict(maximum_age.as_deref(), age),
         };
         out.push(AssetFreshness {
             asset: asset.clone(),
             state,
             owner: rule.map(|r| r.owner.clone()),
+            tags: rule.map(|r| r.tags.clone()).unwrap_or_default(),
             last_written_at: f.map(|f| f.last_written_at.clone()),
             age_seconds: age,
             maximum_age,
@@ -290,7 +379,12 @@ pub fn check_and_alert(workspace: &Path, now: chrono::DateTime<chrono::Utc>) -> 
             ),
             _ => continue,
         };
-        sent += crate::alerts::notify_subject(workspace, &a.asset, event, &text);
+        // Routed by who owns it and how it is tagged, not only by its path:
+        // one team's datasets live under several prefixes and one prefix holds
+        // several teams', which a glob cannot express and the ownership rule
+        // already knows.
+        let routing = crate::alerts::Routing { owner: a.owner.clone(), tags: a.tags.clone() };
+        sent += crate::alerts::notify_subject(workspace, &a.asset, event, &text, &routing);
     }
     (assets, sent)
 }
@@ -474,4 +568,90 @@ mod tests {
         }
     }
 
+}
+
+#[cfg(test)]
+mod schedule_relative {
+    use super::*;
+
+    fn ws_with(owners: &str, schedules: &str, written_hours_ago: Option<i64>) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("runs")).unwrap();
+        let records = match written_hours_ago {
+            Some(h) => format!(
+                r#"[{{"at":"{}","status":"ok","duration_ms":1,"rows":1,"node_count":1,
+                      "trigger":"schedule",
+                      "assets":[{{"id":"/lake/orders","direction":"write","rows":1}}]}}]"#,
+                (chrono::Utc::now() - chrono::Duration::hours(h)).to_rfc3339()
+            ),
+            None => "[]".to_string(),
+        };
+        std::fs::write(tmp.path().join("runs").join("daily.json"), records).unwrap();
+        std::fs::write(tmp.path().join("owners.json"), owners).unwrap();
+        std::fs::write(tmp.path().join("schedules.json"), schedules).unwrap();
+        tmp
+    }
+
+    const HOURLY: &str = r#"[{"id":"s1","pipeline_id":"daily","name":"hourly","enabled":true,
+                              "kind":{"type":"cron","expr":"0 * * * *"}}]"#;
+
+    fn state_of(ws: &std::path::Path) -> State {
+        evaluate(ws, chrono::Utc::now())
+            .into_iter()
+            .find(|a| a.asset == "/lake/orders")
+            .expect("the asset")
+            .state
+    }
+
+    /// #304: "written within 4h of when it was due" rather than a guess at the
+    /// longest acceptable gap. On an hourly schedule, a write 10 hours old has
+    /// missed several occurrences.
+    #[test]
+    fn an_asset_that_missed_its_schedule_is_stale() {
+        let owners = r#"{"assets":[{"match":"/lake/orders","owner":"o","expectedAfterSchedule":"4h"}]}"#;
+        let ws = ws_with(owners, HOURLY, Some(10));
+        assert_eq!(state_of(ws.path()), State::Stale);
+    }
+
+    /// And one written a moment ago is fresh, on the same rule - so the test
+    /// above is not passing because everything is stale.
+    #[test]
+    fn an_asset_written_on_time_is_fresh() {
+        let owners = r#"{"assets":[{"match":"/lake/orders","owner":"o","expectedAfterSchedule":"4h"}]}"#;
+        let ws = ws_with(owners, HOURLY, Some(0));
+        assert_eq!(state_of(ws.path()), State::Fresh);
+    }
+
+    /// The failure mode the issue names first. A deadline taken from a schedule
+    /// nobody is running would excuse exactly the outage it should catch, so a
+    /// disabled schedule is stale however recently the asset was written.
+    #[test]
+    fn a_disabled_schedule_makes_its_asset_stale() {
+        let owners = r#"{"assets":[{"match":"/lake/orders","owner":"o","expectedAfterSchedule":"4h"}]}"#;
+        let off = r#"[{"id":"s1","pipeline_id":"daily","name":"hourly","enabled":false,
+                       "kind":{"type":"cron","expr":"0 * * * *"}}]"#;
+        let ws = ws_with(owners, off, Some(0));
+        assert_eq!(
+            state_of(ws.path()),
+            State::Stale,
+            "a switched-off schedule excused its own asset"
+        );
+    }
+
+    /// An interval schedule has no civil-time occurrence to be late against, so
+    /// the question falls back to the absolute limit rather than being answered
+    /// with a deadline invented here.
+    #[test]
+    fn an_interval_schedule_falls_back_to_the_absolute_limit() {
+        let owners = r#"{"assets":[{"match":"/lake/orders","owner":"o",
+                                    "expectedAfterSchedule":"1h","maximumAge":"100h"}]}"#;
+        let interval = r#"[{"id":"s1","pipeline_id":"daily","name":"every","enabled":true,
+                            "kind":{"type":"interval","seconds":600}}]"#;
+        let ws = ws_with(owners, interval, Some(10));
+        assert_eq!(
+            state_of(ws.path()),
+            State::Fresh,
+            "10h old against a 100h absolute limit is fresh; the schedule rule should not apply"
+        );
+    }
 }

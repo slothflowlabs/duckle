@@ -66,6 +66,10 @@ fn main() {
         pattern: "nightly-*".into(),
         on: vec![duckle_duckdb_engine::alerts::Event::Failure],
         cooldown_minutes: 15,
+        // Unset, so the rule routes purely on its glob - which is what every
+        // alerts.json written before owner/tag routing existed means.
+        owner: None,
+        tags: Vec::new(),
         channel: duckle_duckdb_engine::alerts::Channel::Email {
             smtp_host: "smtp.example.com".into(),
             smtp_port: 587,
