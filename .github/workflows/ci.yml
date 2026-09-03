@@ -35,6 +35,20 @@ jobs:
         run: npm --prefix frontend ci
       - name: Type-check + build
         run: npm --prefix frontend run build
+      # #313: the MCP server include_str!s crates/duckle-mcp/catalog.json, so a
+      # manifest change that is not exported leaves agents reading a component
+      # schema that no longer exists. That happened: removing a dead Encoding
+      # control from the file sinks left the catalog advertising it. The export
+      # is deterministic, so regenerating and diffing is the whole check.
+      - name: Catalog is in sync with the manifests
+        run: |
+          npm --prefix frontend run export-catalog
+          git diff --exit-code -- crates/duckle-mcp/catalog.json || {
+            echo "::error::crates/duckle-mcp/catalog.json is stale. Run:"
+            echo "::error::  npm --prefix frontend run export-catalog"
+            echo "::error::and commit the result in the same change as the manifest edit."
+            exit 1
+          }
 
   rust:
     strategy:

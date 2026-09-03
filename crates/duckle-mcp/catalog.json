@@ -226,7 +226,10 @@
                 "key": "encoding",
                 "label": "Encoding",
                 "kind": "select",
+                "allowCustom": true,
+                "placeholder": "utf-8",
                 "defaultValue": "utf-8",
+                "description": "DuckDB accepts any ICU encoding name; the list is the common ones. A name it does not know is an error, not a fallback.",
                 "options": [
                   {
                     "label": "UTF-8",
@@ -237,12 +240,96 @@
                     "value": "utf-16"
                   },
                   {
-                    "label": "Latin-1",
+                    "label": "Latin-1  (ISO-8859-1)",
                     "value": "latin-1"
                   },
                   {
-                    "label": "Windows-1252",
+                    "label": "Windows-1252  Western",
                     "value": "windows-1252"
+                  },
+                  {
+                    "label": "Windows-1250  Central European",
+                    "value": "CP1250"
+                  },
+                  {
+                    "label": "Windows-1251  Cyrillic",
+                    "value": "CP1251"
+                  },
+                  {
+                    "label": "Windows-1253  Greek",
+                    "value": "CP1253"
+                  },
+                  {
+                    "label": "Windows-1254  Turkish",
+                    "value": "CP1254"
+                  },
+                  {
+                    "label": "Windows-1255  Hebrew",
+                    "value": "CP1255"
+                  },
+                  {
+                    "label": "Windows-1256  Arabic",
+                    "value": "CP1256"
+                  },
+                  {
+                    "label": "Windows-1257  Baltic",
+                    "value": "CP1257"
+                  },
+                  {
+                    "label": "Windows-1258  Vietnamese",
+                    "value": "CP1258"
+                  },
+                  {
+                    "label": "ISO-8859-2  Central European",
+                    "value": "iso-8859_2-1999"
+                  },
+                  {
+                    "label": "ISO-8859-5  Cyrillic",
+                    "value": "iso-8859_5-1999"
+                  },
+                  {
+                    "label": "ISO-8859-7  Greek",
+                    "value": "iso-8859_7-1987"
+                  },
+                  {
+                    "label": "ISO-8859-15  Western with euro",
+                    "value": "iso-8859_15-1999"
+                  },
+                  {
+                    "label": "Shift-JIS  Japanese",
+                    "value": "SHIFT_JIS"
+                  },
+                  {
+                    "label": "EUC-JP  Japanese",
+                    "value": "EUC_JP"
+                  },
+                  {
+                    "label": "EUC-KR  Korean",
+                    "value": "EUC_KR"
+                  },
+                  {
+                    "label": "Big5  Traditional Chinese",
+                    "value": "BIG5"
+                  },
+                  {
+                    "label": "GB18030  Simplified Chinese",
+                    "value": "GB18030"
+                  },
+                  {
+                    "label": "KOI8-R  Cyrillic",
+                    "value": "KOI8_R"
+                  },
+                  {
+                    "label": "CP852  DOS Central European",
+                    "value": "CP852"
+                  },
+                  {
+                    "label": "CP866  DOS Cyrillic",
+                    "value": "CP866"
+                  },
+                  {
+                    "label": "CP437  DOS US",
+                    "value": "CP437"
                   }
                 ]
               },
@@ -268,6 +355,8 @@
                 "key": "delimiter",
                 "label": "Delimiter",
                 "kind": "select",
+                "allowCustom": true,
+                "placeholder": "pick one, or type the character",
                 "defaultValue": "\t",
                 "options": [
                   {
@@ -289,8 +378,29 @@
                   {
                     "label": "Space",
                     "value": " "
+                  },
+                  {
+                    "label": "Colon  :",
+                    "value": ":"
+                  },
+                  {
+                    "label": "Caret  ^",
+                    "value": "^"
+                  },
+                  {
+                    "label": "Tilde  ~",
+                    "value": "~"
+                  },
+                  {
+                    "label": "Hash  #",
+                    "value": "#"
+                  },
+                  {
+                    "label": "Unit separator  0x1F",
+                    "value": "\u001f"
                   }
-                ]
+                ],
+                "description": "Leave blank to let DuckDB sniff it. Anything not listed can be typed in."
               },
               {
                 "key": "quoteChar",
@@ -574,7 +684,10 @@
                 "key": "encoding",
                 "label": "Encoding",
                 "kind": "select",
+                "allowCustom": true,
+                "placeholder": "utf-8",
                 "defaultValue": "utf-8",
+                "description": "DuckDB accepts any ICU encoding name; the list is the common ones. A name it does not know is an error, not a fallback.",
                 "options": [
                   {
                     "label": "UTF-8",
@@ -585,12 +698,96 @@
                     "value": "utf-16"
                   },
                   {
-                    "label": "Latin-1",
+                    "label": "Latin-1  (ISO-8859-1)",
                     "value": "latin-1"
                   },
                   {
-                    "label": "Windows-1252",
+                    "label": "Windows-1252  Western",
                     "value": "windows-1252"
+                  },
+                  {
+                    "label": "Windows-1250  Central European",
+                    "value": "CP1250"
+                  },
+                  {
+                    "label": "Windows-1251  Cyrillic",
+                    "value": "CP1251"
+                  },
+                  {
+                    "label": "Windows-1253  Greek",
+                    "value": "CP1253"
+                  },
+                  {
+                    "label": "Windows-1254  Turkish",
+                    "value": "CP1254"
+                  },
+                  {
+                    "label": "Windows-1255  Hebrew",
+                    "value": "CP1255"
+                  },
+                  {
+                    "label": "Windows-1256  Arabic",
+                    "value": "CP1256"
+                  },
+                  {
+                    "label": "Windows-1257  Baltic",
+                    "value": "CP1257"
+                  },
+                  {
+                    "label": "Windows-1258  Vietnamese",
+                    "value": "CP1258"
+                  },
+                  {
+                    "label": "ISO-8859-2  Central European",
+                    "value": "iso-8859_2-1999"
+                  },
+                  {
+                    "label": "ISO-8859-5  Cyrillic",
+                    "value": "iso-8859_5-1999"
+                  },
+                  {
+                    "label": "ISO-8859-7  Greek",
+                    "value": "iso-8859_7-1987"
+                  },
+                  {
+                    "label": "ISO-8859-15  Western with euro",
+                    "value": "iso-8859_15-1999"
+                  },
+                  {
+                    "label": "Shift-JIS  Japanese",
+                    "value": "SHIFT_JIS"
+                  },
+                  {
+                    "label": "EUC-JP  Japanese",
+                    "value": "EUC_JP"
+                  },
+                  {
+                    "label": "EUC-KR  Korean",
+                    "value": "EUC_KR"
+                  },
+                  {
+                    "label": "Big5  Traditional Chinese",
+                    "value": "BIG5"
+                  },
+                  {
+                    "label": "GB18030  Simplified Chinese",
+                    "value": "GB18030"
+                  },
+                  {
+                    "label": "KOI8-R  Cyrillic",
+                    "value": "KOI8_R"
+                  },
+                  {
+                    "label": "CP852  DOS Central European",
+                    "value": "CP852"
+                  },
+                  {
+                    "label": "CP866  DOS Cyrillic",
+                    "value": "CP866"
+                  },
+                  {
+                    "label": "CP437  DOS US",
+                    "value": "CP437"
                   }
                 ]
               },
@@ -684,7 +881,7 @@
       "label": "Changed? (remote poll)",
       "kind": "source",
       "availability": "available",
-      "summary": "Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an sftp:// directory of immutable files and emits the new and changed ones for a ForEach downstream. Emits uri / name / size / modified_at / etag / fingerprint / status. When nothing changed the node reports `unchanged` rather than a bare success, so a working poll and a broken one are told apart. Fingerprints are conservative: a missing or unreadable signal counts as CHANGED, because re-reading costs compute and skipping loses data. Position advances only when the run succeeds.",
+      "summary": "Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForEach downstream. Emits uri / name / size / modified_at / etag / fingerprint / status. When nothing changed the node reports `unchanged` rather than a bare success, so a working poll and a broken one are told apart. Fingerprints are conservative: a missing or unreadable signal counts as CHANGED, because re-reading costs compute and skipping loses data. Position advances only when the run succeeds.",
       "ports": {
         "inputs": [],
         "outputs": [
@@ -705,7 +902,7 @@
         "id": "src.changed",
         "kind": "source",
         "label": "Changed? (remote poll)",
-        "description": "Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an sftp:// directory of immutable files and emits the new and changed ones for a ForEach downstream. Emits uri / name / size / modified_at / etag / fingerprint / status. When nothing changed the node reports `unchanged` rather than a bare success, so a working poll and a broken one are told apart. Fingerprints are conservative: a missing or unreadable signal counts as CHANGED, because re-reading costs compute and skipping loses data. Position advances only when the run succeeds.",
+        "description": "Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForEach downstream. Emits uri / name / size / modified_at / etag / fingerprint / status. When nothing changed the node reports `unchanged` rather than a bare success, so a working poll and a broken one are told apart. Fingerprints are conservative: a missing or unreadable signal counts as CHANGED, because re-reading costs compute and skipping loses data. Position advances only when the run succeeds.",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -724,7 +921,7 @@
                 "label": "Watch a directory of files",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Off: watch one object and emit a row when its fingerprint moves. On: list the directory and emit the files that are new or changed since the last successful run. sftp:// only for now; HTTP has no standard listing."
+                "description": "Off: watch one object and emit a row when its fingerprint moves. On: list the directory or prefix and emit the files that are new or changed since the last successful run. s3:// and sftp://; HTTP has no standard listing and is refused rather than guessed at."
               },
               {
                 "key": "suffix",
@@ -1931,7 +2128,10 @@
                 "key": "encoding",
                 "label": "Encoding",
                 "kind": "select",
+                "allowCustom": true,
+                "placeholder": "utf-8",
                 "defaultValue": "utf-8",
+                "description": "DuckDB accepts any ICU encoding name; the list is the common ones. A name it does not know is an error, not a fallback.",
                 "options": [
                   {
                     "label": "UTF-8",
@@ -1942,12 +2142,96 @@
                     "value": "utf-16"
                   },
                   {
-                    "label": "Latin-1",
+                    "label": "Latin-1  (ISO-8859-1)",
                     "value": "latin-1"
                   },
                   {
-                    "label": "Windows-1252",
+                    "label": "Windows-1252  Western",
                     "value": "windows-1252"
+                  },
+                  {
+                    "label": "Windows-1250  Central European",
+                    "value": "CP1250"
+                  },
+                  {
+                    "label": "Windows-1251  Cyrillic",
+                    "value": "CP1251"
+                  },
+                  {
+                    "label": "Windows-1253  Greek",
+                    "value": "CP1253"
+                  },
+                  {
+                    "label": "Windows-1254  Turkish",
+                    "value": "CP1254"
+                  },
+                  {
+                    "label": "Windows-1255  Hebrew",
+                    "value": "CP1255"
+                  },
+                  {
+                    "label": "Windows-1256  Arabic",
+                    "value": "CP1256"
+                  },
+                  {
+                    "label": "Windows-1257  Baltic",
+                    "value": "CP1257"
+                  },
+                  {
+                    "label": "Windows-1258  Vietnamese",
+                    "value": "CP1258"
+                  },
+                  {
+                    "label": "ISO-8859-2  Central European",
+                    "value": "iso-8859_2-1999"
+                  },
+                  {
+                    "label": "ISO-8859-5  Cyrillic",
+                    "value": "iso-8859_5-1999"
+                  },
+                  {
+                    "label": "ISO-8859-7  Greek",
+                    "value": "iso-8859_7-1987"
+                  },
+                  {
+                    "label": "ISO-8859-15  Western with euro",
+                    "value": "iso-8859_15-1999"
+                  },
+                  {
+                    "label": "Shift-JIS  Japanese",
+                    "value": "SHIFT_JIS"
+                  },
+                  {
+                    "label": "EUC-JP  Japanese",
+                    "value": "EUC_JP"
+                  },
+                  {
+                    "label": "EUC-KR  Korean",
+                    "value": "EUC_KR"
+                  },
+                  {
+                    "label": "Big5  Traditional Chinese",
+                    "value": "BIG5"
+                  },
+                  {
+                    "label": "GB18030  Simplified Chinese",
+                    "value": "GB18030"
+                  },
+                  {
+                    "label": "KOI8-R  Cyrillic",
+                    "value": "KOI8_R"
+                  },
+                  {
+                    "label": "CP852  DOS Central European",
+                    "value": "CP852"
+                  },
+                  {
+                    "label": "CP866  DOS Cyrillic",
+                    "value": "CP866"
+                  },
+                  {
+                    "label": "CP437  DOS US",
+                    "value": "CP437"
                   }
                 ]
               },
@@ -2290,7 +2574,10 @@
                 "key": "encoding",
                 "label": "Encoding",
                 "kind": "select",
+                "allowCustom": true,
+                "placeholder": "utf-8",
                 "defaultValue": "utf-8",
+                "description": "DuckDB accepts any ICU encoding name; the list is the common ones. A name it does not know is an error, not a fallback.",
                 "options": [
                   {
                     "label": "UTF-8",
@@ -2301,12 +2588,96 @@
                     "value": "utf-16"
                   },
                   {
-                    "label": "Latin-1",
+                    "label": "Latin-1  (ISO-8859-1)",
                     "value": "latin-1"
                   },
                   {
-                    "label": "Windows-1252",
+                    "label": "Windows-1252  Western",
                     "value": "windows-1252"
+                  },
+                  {
+                    "label": "Windows-1250  Central European",
+                    "value": "CP1250"
+                  },
+                  {
+                    "label": "Windows-1251  Cyrillic",
+                    "value": "CP1251"
+                  },
+                  {
+                    "label": "Windows-1253  Greek",
+                    "value": "CP1253"
+                  },
+                  {
+                    "label": "Windows-1254  Turkish",
+                    "value": "CP1254"
+                  },
+                  {
+                    "label": "Windows-1255  Hebrew",
+                    "value": "CP1255"
+                  },
+                  {
+                    "label": "Windows-1256  Arabic",
+                    "value": "CP1256"
+                  },
+                  {
+                    "label": "Windows-1257  Baltic",
+                    "value": "CP1257"
+                  },
+                  {
+                    "label": "Windows-1258  Vietnamese",
+                    "value": "CP1258"
+                  },
+                  {
+                    "label": "ISO-8859-2  Central European",
+                    "value": "iso-8859_2-1999"
+                  },
+                  {
+                    "label": "ISO-8859-5  Cyrillic",
+                    "value": "iso-8859_5-1999"
+                  },
+                  {
+                    "label": "ISO-8859-7  Greek",
+                    "value": "iso-8859_7-1987"
+                  },
+                  {
+                    "label": "ISO-8859-15  Western with euro",
+                    "value": "iso-8859_15-1999"
+                  },
+                  {
+                    "label": "Shift-JIS  Japanese",
+                    "value": "SHIFT_JIS"
+                  },
+                  {
+                    "label": "EUC-JP  Japanese",
+                    "value": "EUC_JP"
+                  },
+                  {
+                    "label": "EUC-KR  Korean",
+                    "value": "EUC_KR"
+                  },
+                  {
+                    "label": "Big5  Traditional Chinese",
+                    "value": "BIG5"
+                  },
+                  {
+                    "label": "GB18030  Simplified Chinese",
+                    "value": "GB18030"
+                  },
+                  {
+                    "label": "KOI8-R  Cyrillic",
+                    "value": "KOI8_R"
+                  },
+                  {
+                    "label": "CP852  DOS Central European",
+                    "value": "CP852"
+                  },
+                  {
+                    "label": "CP866  DOS Cyrillic",
+                    "value": "CP866"
+                  },
+                  {
+                    "label": "CP437  DOS US",
+                    "value": "CP437"
                   }
                 ]
               },
@@ -2411,7 +2782,10 @@
                 "key": "encoding",
                 "label": "Encoding",
                 "kind": "select",
+                "allowCustom": true,
+                "placeholder": "utf-8",
                 "defaultValue": "utf-8",
+                "description": "DuckDB accepts any ICU encoding name; the list is the common ones. A name it does not know is an error, not a fallback.",
                 "options": [
                   {
                     "label": "UTF-8",
@@ -2422,12 +2796,96 @@
                     "value": "utf-16"
                   },
                   {
-                    "label": "Latin-1",
+                    "label": "Latin-1  (ISO-8859-1)",
                     "value": "latin-1"
                   },
                   {
-                    "label": "Windows-1252",
+                    "label": "Windows-1252  Western",
                     "value": "windows-1252"
+                  },
+                  {
+                    "label": "Windows-1250  Central European",
+                    "value": "CP1250"
+                  },
+                  {
+                    "label": "Windows-1251  Cyrillic",
+                    "value": "CP1251"
+                  },
+                  {
+                    "label": "Windows-1253  Greek",
+                    "value": "CP1253"
+                  },
+                  {
+                    "label": "Windows-1254  Turkish",
+                    "value": "CP1254"
+                  },
+                  {
+                    "label": "Windows-1255  Hebrew",
+                    "value": "CP1255"
+                  },
+                  {
+                    "label": "Windows-1256  Arabic",
+                    "value": "CP1256"
+                  },
+                  {
+                    "label": "Windows-1257  Baltic",
+                    "value": "CP1257"
+                  },
+                  {
+                    "label": "Windows-1258  Vietnamese",
+                    "value": "CP1258"
+                  },
+                  {
+                    "label": "ISO-8859-2  Central European",
+                    "value": "iso-8859_2-1999"
+                  },
+                  {
+                    "label": "ISO-8859-5  Cyrillic",
+                    "value": "iso-8859_5-1999"
+                  },
+                  {
+                    "label": "ISO-8859-7  Greek",
+                    "value": "iso-8859_7-1987"
+                  },
+                  {
+                    "label": "ISO-8859-15  Western with euro",
+                    "value": "iso-8859_15-1999"
+                  },
+                  {
+                    "label": "Shift-JIS  Japanese",
+                    "value": "SHIFT_JIS"
+                  },
+                  {
+                    "label": "EUC-JP  Japanese",
+                    "value": "EUC_JP"
+                  },
+                  {
+                    "label": "EUC-KR  Korean",
+                    "value": "EUC_KR"
+                  },
+                  {
+                    "label": "Big5  Traditional Chinese",
+                    "value": "BIG5"
+                  },
+                  {
+                    "label": "GB18030  Simplified Chinese",
+                    "value": "GB18030"
+                  },
+                  {
+                    "label": "KOI8-R  Cyrillic",
+                    "value": "KOI8_R"
+                  },
+                  {
+                    "label": "CP852  DOS Central European",
+                    "value": "CP852"
+                  },
+                  {
+                    "label": "CP866  DOS Cyrillic",
+                    "value": "CP866"
+                  },
+                  {
+                    "label": "CP437  DOS US",
+                    "value": "CP437"
                   }
                 ]
               },
@@ -2515,7 +2973,10 @@
                 "key": "encoding",
                 "label": "Encoding",
                 "kind": "select",
+                "allowCustom": true,
+                "placeholder": "utf-8",
                 "defaultValue": "utf-8",
+                "description": "DuckDB accepts any ICU encoding name; the list is the common ones. A name it does not know is an error, not a fallback.",
                 "options": [
                   {
                     "label": "UTF-8",
@@ -2526,12 +2987,96 @@
                     "value": "utf-16"
                   },
                   {
-                    "label": "Latin-1",
+                    "label": "Latin-1  (ISO-8859-1)",
                     "value": "latin-1"
                   },
                   {
-                    "label": "Windows-1252",
+                    "label": "Windows-1252  Western",
                     "value": "windows-1252"
+                  },
+                  {
+                    "label": "Windows-1250  Central European",
+                    "value": "CP1250"
+                  },
+                  {
+                    "label": "Windows-1251  Cyrillic",
+                    "value": "CP1251"
+                  },
+                  {
+                    "label": "Windows-1253  Greek",
+                    "value": "CP1253"
+                  },
+                  {
+                    "label": "Windows-1254  Turkish",
+                    "value": "CP1254"
+                  },
+                  {
+                    "label": "Windows-1255  Hebrew",
+                    "value": "CP1255"
+                  },
+                  {
+                    "label": "Windows-1256  Arabic",
+                    "value": "CP1256"
+                  },
+                  {
+                    "label": "Windows-1257  Baltic",
+                    "value": "CP1257"
+                  },
+                  {
+                    "label": "Windows-1258  Vietnamese",
+                    "value": "CP1258"
+                  },
+                  {
+                    "label": "ISO-8859-2  Central European",
+                    "value": "iso-8859_2-1999"
+                  },
+                  {
+                    "label": "ISO-8859-5  Cyrillic",
+                    "value": "iso-8859_5-1999"
+                  },
+                  {
+                    "label": "ISO-8859-7  Greek",
+                    "value": "iso-8859_7-1987"
+                  },
+                  {
+                    "label": "ISO-8859-15  Western with euro",
+                    "value": "iso-8859_15-1999"
+                  },
+                  {
+                    "label": "Shift-JIS  Japanese",
+                    "value": "SHIFT_JIS"
+                  },
+                  {
+                    "label": "EUC-JP  Japanese",
+                    "value": "EUC_JP"
+                  },
+                  {
+                    "label": "EUC-KR  Korean",
+                    "value": "EUC_KR"
+                  },
+                  {
+                    "label": "Big5  Traditional Chinese",
+                    "value": "BIG5"
+                  },
+                  {
+                    "label": "GB18030  Simplified Chinese",
+                    "value": "GB18030"
+                  },
+                  {
+                    "label": "KOI8-R  Cyrillic",
+                    "value": "KOI8_R"
+                  },
+                  {
+                    "label": "CP852  DOS Central European",
+                    "value": "CP852"
+                  },
+                  {
+                    "label": "CP866  DOS Cyrillic",
+                    "value": "CP866"
+                  },
+                  {
+                    "label": "CP437  DOS US",
+                    "value": "CP437"
                   }
                 ]
               },
@@ -2779,7 +3324,10 @@
                 "key": "encoding",
                 "label": "Encoding",
                 "kind": "select",
+                "allowCustom": true,
+                "placeholder": "utf-8",
                 "defaultValue": "utf-8",
+                "description": "DuckDB accepts any ICU encoding name; the list is the common ones. A name it does not know is an error, not a fallback.",
                 "options": [
                   {
                     "label": "UTF-8",
@@ -2790,12 +3338,96 @@
                     "value": "utf-16"
                   },
                   {
-                    "label": "Latin-1",
+                    "label": "Latin-1  (ISO-8859-1)",
                     "value": "latin-1"
                   },
                   {
-                    "label": "Windows-1252",
+                    "label": "Windows-1252  Western",
                     "value": "windows-1252"
+                  },
+                  {
+                    "label": "Windows-1250  Central European",
+                    "value": "CP1250"
+                  },
+                  {
+                    "label": "Windows-1251  Cyrillic",
+                    "value": "CP1251"
+                  },
+                  {
+                    "label": "Windows-1253  Greek",
+                    "value": "CP1253"
+                  },
+                  {
+                    "label": "Windows-1254  Turkish",
+                    "value": "CP1254"
+                  },
+                  {
+                    "label": "Windows-1255  Hebrew",
+                    "value": "CP1255"
+                  },
+                  {
+                    "label": "Windows-1256  Arabic",
+                    "value": "CP1256"
+                  },
+                  {
+                    "label": "Windows-1257  Baltic",
+                    "value": "CP1257"
+                  },
+                  {
+                    "label": "Windows-1258  Vietnamese",
+                    "value": "CP1258"
+                  },
+                  {
+                    "label": "ISO-8859-2  Central European",
+                    "value": "iso-8859_2-1999"
+                  },
+                  {
+                    "label": "ISO-8859-5  Cyrillic",
+                    "value": "iso-8859_5-1999"
+                  },
+                  {
+                    "label": "ISO-8859-7  Greek",
+                    "value": "iso-8859_7-1987"
+                  },
+                  {
+                    "label": "ISO-8859-15  Western with euro",
+                    "value": "iso-8859_15-1999"
+                  },
+                  {
+                    "label": "Shift-JIS  Japanese",
+                    "value": "SHIFT_JIS"
+                  },
+                  {
+                    "label": "EUC-JP  Japanese",
+                    "value": "EUC_JP"
+                  },
+                  {
+                    "label": "EUC-KR  Korean",
+                    "value": "EUC_KR"
+                  },
+                  {
+                    "label": "Big5  Traditional Chinese",
+                    "value": "BIG5"
+                  },
+                  {
+                    "label": "GB18030  Simplified Chinese",
+                    "value": "GB18030"
+                  },
+                  {
+                    "label": "KOI8-R  Cyrillic",
+                    "value": "KOI8_R"
+                  },
+                  {
+                    "label": "CP852  DOS Central European",
+                    "value": "CP852"
+                  },
+                  {
+                    "label": "CP866  DOS Cyrillic",
+                    "value": "CP866"
+                  },
+                  {
+                    "label": "CP437  DOS US",
+                    "value": "CP437"
                   }
                 ]
               },
@@ -2883,7 +3515,10 @@
                 "key": "encoding",
                 "label": "Encoding",
                 "kind": "select",
+                "allowCustom": true,
+                "placeholder": "utf-8",
                 "defaultValue": "utf-8",
+                "description": "DuckDB accepts any ICU encoding name; the list is the common ones. A name it does not know is an error, not a fallback.",
                 "options": [
                   {
                     "label": "UTF-8",
@@ -2894,12 +3529,96 @@
                     "value": "utf-16"
                   },
                   {
-                    "label": "Latin-1",
+                    "label": "Latin-1  (ISO-8859-1)",
                     "value": "latin-1"
                   },
                   {
-                    "label": "Windows-1252",
+                    "label": "Windows-1252  Western",
                     "value": "windows-1252"
+                  },
+                  {
+                    "label": "Windows-1250  Central European",
+                    "value": "CP1250"
+                  },
+                  {
+                    "label": "Windows-1251  Cyrillic",
+                    "value": "CP1251"
+                  },
+                  {
+                    "label": "Windows-1253  Greek",
+                    "value": "CP1253"
+                  },
+                  {
+                    "label": "Windows-1254  Turkish",
+                    "value": "CP1254"
+                  },
+                  {
+                    "label": "Windows-1255  Hebrew",
+                    "value": "CP1255"
+                  },
+                  {
+                    "label": "Windows-1256  Arabic",
+                    "value": "CP1256"
+                  },
+                  {
+                    "label": "Windows-1257  Baltic",
+                    "value": "CP1257"
+                  },
+                  {
+                    "label": "Windows-1258  Vietnamese",
+                    "value": "CP1258"
+                  },
+                  {
+                    "label": "ISO-8859-2  Central European",
+                    "value": "iso-8859_2-1999"
+                  },
+                  {
+                    "label": "ISO-8859-5  Cyrillic",
+                    "value": "iso-8859_5-1999"
+                  },
+                  {
+                    "label": "ISO-8859-7  Greek",
+                    "value": "iso-8859_7-1987"
+                  },
+                  {
+                    "label": "ISO-8859-15  Western with euro",
+                    "value": "iso-8859_15-1999"
+                  },
+                  {
+                    "label": "Shift-JIS  Japanese",
+                    "value": "SHIFT_JIS"
+                  },
+                  {
+                    "label": "EUC-JP  Japanese",
+                    "value": "EUC_JP"
+                  },
+                  {
+                    "label": "EUC-KR  Korean",
+                    "value": "EUC_KR"
+                  },
+                  {
+                    "label": "Big5  Traditional Chinese",
+                    "value": "BIG5"
+                  },
+                  {
+                    "label": "GB18030  Simplified Chinese",
+                    "value": "GB18030"
+                  },
+                  {
+                    "label": "KOI8-R  Cyrillic",
+                    "value": "KOI8_R"
+                  },
+                  {
+                    "label": "CP852  DOS Central European",
+                    "value": "CP852"
+                  },
+                  {
+                    "label": "CP866  DOS Cyrillic",
+                    "value": "CP866"
+                  },
+                  {
+                    "label": "CP437  DOS US",
+                    "value": "CP437"
                   }
                 ]
               },
@@ -3006,7 +3725,10 @@
                 "key": "encoding",
                 "label": "Encoding",
                 "kind": "select",
+                "allowCustom": true,
+                "placeholder": "utf-8",
                 "defaultValue": "utf-8",
+                "description": "DuckDB accepts any ICU encoding name; the list is the common ones. A name it does not know is an error, not a fallback.",
                 "options": [
                   {
                     "label": "UTF-8",
@@ -3017,12 +3739,96 @@
                     "value": "utf-16"
                   },
                   {
-                    "label": "Latin-1",
+                    "label": "Latin-1  (ISO-8859-1)",
                     "value": "latin-1"
                   },
                   {
-                    "label": "Windows-1252",
+                    "label": "Windows-1252  Western",
                     "value": "windows-1252"
+                  },
+                  {
+                    "label": "Windows-1250  Central European",
+                    "value": "CP1250"
+                  },
+                  {
+                    "label": "Windows-1251  Cyrillic",
+                    "value": "CP1251"
+                  },
+                  {
+                    "label": "Windows-1253  Greek",
+                    "value": "CP1253"
+                  },
+                  {
+                    "label": "Windows-1254  Turkish",
+                    "value": "CP1254"
+                  },
+                  {
+                    "label": "Windows-1255  Hebrew",
+                    "value": "CP1255"
+                  },
+                  {
+                    "label": "Windows-1256  Arabic",
+                    "value": "CP1256"
+                  },
+                  {
+                    "label": "Windows-1257  Baltic",
+                    "value": "CP1257"
+                  },
+                  {
+                    "label": "Windows-1258  Vietnamese",
+                    "value": "CP1258"
+                  },
+                  {
+                    "label": "ISO-8859-2  Central European",
+                    "value": "iso-8859_2-1999"
+                  },
+                  {
+                    "label": "ISO-8859-5  Cyrillic",
+                    "value": "iso-8859_5-1999"
+                  },
+                  {
+                    "label": "ISO-8859-7  Greek",
+                    "value": "iso-8859_7-1987"
+                  },
+                  {
+                    "label": "ISO-8859-15  Western with euro",
+                    "value": "iso-8859_15-1999"
+                  },
+                  {
+                    "label": "Shift-JIS  Japanese",
+                    "value": "SHIFT_JIS"
+                  },
+                  {
+                    "label": "EUC-JP  Japanese",
+                    "value": "EUC_JP"
+                  },
+                  {
+                    "label": "EUC-KR  Korean",
+                    "value": "EUC_KR"
+                  },
+                  {
+                    "label": "Big5  Traditional Chinese",
+                    "value": "BIG5"
+                  },
+                  {
+                    "label": "GB18030  Simplified Chinese",
+                    "value": "GB18030"
+                  },
+                  {
+                    "label": "KOI8-R  Cyrillic",
+                    "value": "KOI8_R"
+                  },
+                  {
+                    "label": "CP852  DOS Central European",
+                    "value": "CP852"
+                  },
+                  {
+                    "label": "CP866  DOS Cyrillic",
+                    "value": "CP866"
+                  },
+                  {
+                    "label": "CP437  DOS US",
+                    "value": "CP437"
                   }
                 ]
               },
@@ -3110,7 +3916,10 @@
                 "key": "encoding",
                 "label": "Encoding",
                 "kind": "select",
+                "allowCustom": true,
+                "placeholder": "utf-8",
                 "defaultValue": "utf-8",
+                "description": "DuckDB accepts any ICU encoding name; the list is the common ones. A name it does not know is an error, not a fallback.",
                 "options": [
                   {
                     "label": "UTF-8",
@@ -3121,12 +3930,96 @@
                     "value": "utf-16"
                   },
                   {
-                    "label": "Latin-1",
+                    "label": "Latin-1  (ISO-8859-1)",
                     "value": "latin-1"
                   },
                   {
-                    "label": "Windows-1252",
+                    "label": "Windows-1252  Western",
                     "value": "windows-1252"
+                  },
+                  {
+                    "label": "Windows-1250  Central European",
+                    "value": "CP1250"
+                  },
+                  {
+                    "label": "Windows-1251  Cyrillic",
+                    "value": "CP1251"
+                  },
+                  {
+                    "label": "Windows-1253  Greek",
+                    "value": "CP1253"
+                  },
+                  {
+                    "label": "Windows-1254  Turkish",
+                    "value": "CP1254"
+                  },
+                  {
+                    "label": "Windows-1255  Hebrew",
+                    "value": "CP1255"
+                  },
+                  {
+                    "label": "Windows-1256  Arabic",
+                    "value": "CP1256"
+                  },
+                  {
+                    "label": "Windows-1257  Baltic",
+                    "value": "CP1257"
+                  },
+                  {
+                    "label": "Windows-1258  Vietnamese",
+                    "value": "CP1258"
+                  },
+                  {
+                    "label": "ISO-8859-2  Central European",
+                    "value": "iso-8859_2-1999"
+                  },
+                  {
+                    "label": "ISO-8859-5  Cyrillic",
+                    "value": "iso-8859_5-1999"
+                  },
+                  {
+                    "label": "ISO-8859-7  Greek",
+                    "value": "iso-8859_7-1987"
+                  },
+                  {
+                    "label": "ISO-8859-15  Western with euro",
+                    "value": "iso-8859_15-1999"
+                  },
+                  {
+                    "label": "Shift-JIS  Japanese",
+                    "value": "SHIFT_JIS"
+                  },
+                  {
+                    "label": "EUC-JP  Japanese",
+                    "value": "EUC_JP"
+                  },
+                  {
+                    "label": "EUC-KR  Korean",
+                    "value": "EUC_KR"
+                  },
+                  {
+                    "label": "Big5  Traditional Chinese",
+                    "value": "BIG5"
+                  },
+                  {
+                    "label": "GB18030  Simplified Chinese",
+                    "value": "GB18030"
+                  },
+                  {
+                    "label": "KOI8-R  Cyrillic",
+                    "value": "KOI8_R"
+                  },
+                  {
+                    "label": "CP852  DOS Central European",
+                    "value": "CP852"
+                  },
+                  {
+                    "label": "CP866  DOS Cyrillic",
+                    "value": "CP866"
+                  },
+                  {
+                    "label": "CP437  DOS US",
+                    "value": "CP437"
                   }
                 ]
               },
@@ -3222,7 +4115,10 @@
                 "key": "encoding",
                 "label": "Encoding",
                 "kind": "select",
+                "allowCustom": true,
+                "placeholder": "utf-8",
                 "defaultValue": "utf-8",
+                "description": "DuckDB accepts any ICU encoding name; the list is the common ones. A name it does not know is an error, not a fallback.",
                 "options": [
                   {
                     "label": "UTF-8",
@@ -3233,12 +4129,96 @@
                     "value": "utf-16"
                   },
                   {
-                    "label": "Latin-1",
+                    "label": "Latin-1  (ISO-8859-1)",
                     "value": "latin-1"
                   },
                   {
-                    "label": "Windows-1252",
+                    "label": "Windows-1252  Western",
                     "value": "windows-1252"
+                  },
+                  {
+                    "label": "Windows-1250  Central European",
+                    "value": "CP1250"
+                  },
+                  {
+                    "label": "Windows-1251  Cyrillic",
+                    "value": "CP1251"
+                  },
+                  {
+                    "label": "Windows-1253  Greek",
+                    "value": "CP1253"
+                  },
+                  {
+                    "label": "Windows-1254  Turkish",
+                    "value": "CP1254"
+                  },
+                  {
+                    "label": "Windows-1255  Hebrew",
+                    "value": "CP1255"
+                  },
+                  {
+                    "label": "Windows-1256  Arabic",
+                    "value": "CP1256"
+                  },
+                  {
+                    "label": "Windows-1257  Baltic",
+                    "value": "CP1257"
+                  },
+                  {
+                    "label": "Windows-1258  Vietnamese",
+                    "value": "CP1258"
+                  },
+                  {
+                    "label": "ISO-8859-2  Central European",
+                    "value": "iso-8859_2-1999"
+                  },
+                  {
+                    "label": "ISO-8859-5  Cyrillic",
+                    "value": "iso-8859_5-1999"
+                  },
+                  {
+                    "label": "ISO-8859-7  Greek",
+                    "value": "iso-8859_7-1987"
+                  },
+                  {
+                    "label": "ISO-8859-15  Western with euro",
+                    "value": "iso-8859_15-1999"
+                  },
+                  {
+                    "label": "Shift-JIS  Japanese",
+                    "value": "SHIFT_JIS"
+                  },
+                  {
+                    "label": "EUC-JP  Japanese",
+                    "value": "EUC_JP"
+                  },
+                  {
+                    "label": "EUC-KR  Korean",
+                    "value": "EUC_KR"
+                  },
+                  {
+                    "label": "Big5  Traditional Chinese",
+                    "value": "BIG5"
+                  },
+                  {
+                    "label": "GB18030  Simplified Chinese",
+                    "value": "GB18030"
+                  },
+                  {
+                    "label": "KOI8-R  Cyrillic",
+                    "value": "KOI8_R"
+                  },
+                  {
+                    "label": "CP852  DOS Central European",
+                    "value": "CP852"
+                  },
+                  {
+                    "label": "CP866  DOS Cyrillic",
+                    "value": "CP866"
+                  },
+                  {
+                    "label": "CP437  DOS US",
+                    "value": "CP437"
                   }
                 ]
               },
@@ -30810,30 +31790,6 @@
                 ]
               },
               {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "defaultValue": "utf-8",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252",
-                    "value": "windows-1252"
-                  }
-                ]
-              },
-              {
                 "key": "compression",
                 "label": "Compression",
                 "kind": "select",
@@ -30872,6 +31828,8 @@
                 "key": "delimiter",
                 "label": "Delimiter",
                 "kind": "select",
+                "allowCustom": true,
+                "placeholder": "pick one, or type the character",
                 "defaultValue": "\t",
                 "options": [
                   {
@@ -30893,8 +31851,29 @@
                   {
                     "label": "Space",
                     "value": " "
+                  },
+                  {
+                    "label": "Colon  :",
+                    "value": ":"
+                  },
+                  {
+                    "label": "Caret  ^",
+                    "value": "^"
+                  },
+                  {
+                    "label": "Tilde  ~",
+                    "value": "~"
+                  },
+                  {
+                    "label": "Hash  #",
+                    "value": "#"
+                  },
+                  {
+                    "label": "Unit separator  0x1F",
+                    "value": "\u001f"
                   }
-                ]
+                ],
+                "description": "Leave blank to let DuckDB sniff it. Anything not listed can be typed in."
               },
               {
                 "key": "quoteChar",
@@ -31007,30 +31986,6 @@
                   {
                     "label": "Error if exists",
                     "value": "error"
-                  }
-                ]
-              },
-              {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "defaultValue": "utf-8",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252",
-                    "value": "windows-1252"
                   }
                 ]
               },
@@ -31193,30 +32148,6 @@
                 ]
               },
               {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "defaultValue": "utf-8",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252",
-                    "value": "windows-1252"
-                  }
-                ]
-              },
-              {
                 "key": "compression",
                 "label": "Compression",
                 "kind": "select",
@@ -31375,30 +32306,6 @@
                 ]
               },
               {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "defaultValue": "utf-8",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252",
-                    "value": "windows-1252"
-                  }
-                ]
-              },
-              {
                 "key": "compression",
                 "label": "Compression",
                 "kind": "select",
@@ -31513,30 +32420,6 @@
                   {
                     "label": "Error if exists",
                     "value": "error"
-                  }
-                ]
-              },
-              {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "defaultValue": "utf-8",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252",
-                    "value": "windows-1252"
                   }
                 ]
               },
@@ -31877,30 +32760,6 @@
                 ]
               },
               {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "defaultValue": "utf-8",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252",
-                    "value": "windows-1252"
-                  }
-                ]
-              },
-              {
                 "key": "compression",
                 "label": "Compression",
                 "kind": "select",
@@ -32002,30 +32861,6 @@
                 ]
               },
               {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "defaultValue": "utf-8",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252",
-                    "value": "windows-1252"
-                  }
-                ]
-              },
-              {
                 "key": "compression",
                 "label": "Compression",
                 "kind": "select",
@@ -32123,30 +32958,6 @@
                   {
                     "label": "Error if exists",
                     "value": "error"
-                  }
-                ]
-              },
-              {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "defaultValue": "utf-8",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252",
-                    "value": "windows-1252"
                   }
                 ]
               },
@@ -32308,30 +33119,6 @@
                 ]
               },
               {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "defaultValue": "utf-8",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252",
-                    "value": "windows-1252"
-                  }
-                ]
-              },
-              {
                 "key": "compression",
                 "label": "Compression",
                 "kind": "select",
@@ -32429,30 +33216,6 @@
                   {
                     "label": "Error if exists",
                     "value": "error"
-                  }
-                ]
-              },
-              {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "defaultValue": "utf-8",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252",
-                    "value": "windows-1252"
                   }
                 ]
               },
