@@ -1151,27 +1151,29 @@ impl DuckdbEngine {
     /// the azure extension, or ATTACH for a DuckDB file.
     fn source_prelude(&self, format: &str, options: &JsonValue) -> String {
         let mut p = String::new();
-        if let Some(secret) = secret_statement(format, "duckle_inspect", options) {
+        if let Some(secret) = secret_statement(secret_family(format), "duckle_inspect", options) {
             p.push_str(&secret);
             p.push(' ');
         }
         if format == "azureblob" {
             p.push_str("INSTALL azure; LOAD azure; ");
         }
-        // Extension-backed file formats need the same LOAD the run path emits
-        // (attach_prelude, builders.rs), or the inspect DESCRIBE / sample fails
-        // on a cold CLI that has not autoloaded the reader.
-        match format {
-            "avro" => p.push_str("LOAD avro; "),
-            "excel" => p.push_str("LOAD excel; "),
-            "iceberg" => p.push_str("LOAD iceberg; "),
-            "delta" => p.push_str("LOAD delta; "),
-            // #327: `gdb` too. The RUN path loads spatial for src.gdb
-            // (attach_prelude), so a pipeline ran; autodetect built the same
-            // `ST_Read(...)` with no prelude and failed with "st_read is not in
-            // the catalog", which reads as the component being broken.
-            "spatial" | "gdb" => p.push_str("INSTALL spatial; LOAD spatial; "),
-            _ => {}
+        // What the RUN path loads for this component, asked OF the run path
+        // rather than kept as a second list here.
+        //
+        // A second list is how `gdb` came to be missing (#327: autodetect said
+        // "st_read is not in the catalog" on a node that ran fine) and how a
+        // Hugging Face token secret was missing after it. attach_prelude
+        // already knows every extension load and connector secret, so this
+        // asks it instead of restating it.
+        //
+        // Excluded: the formats whose ATTACH this function issues below with
+        // its own read-only variant. Attaching `duckle_src` twice is an error,
+        // not a no-op.
+        let attaches_here = matches!(format, "duckdb" | "ducklake" | "ducklake_snapshots")
+            || plan::is_attach_relational_format(format);
+        if !attaches_here {
+            p.push_str(&plan::attach_prelude(&format!("src.{format}"), options));
         }
         if format == "duckdb" {
             if let Some(db) = options.get("database").and_then(JsonValue::as_str) {
@@ -6242,6 +6244,24 @@ fn build_native_upsert_sql(
     }
 }
 
+/// The credential family a source or sink belongs to, given its format string
+/// (the component id minus the `src.` / `snk.` prefix).
+///
+/// MinIO, Cloudflare R2 and Backblaze B2 are S3-compatible: they are read
+/// through the `s3://` scheme and share the `TYPE S3` secret, which is also the
+/// only way the ENDPOINT and URL_STYLE their forms collect ever reach DuckDB.
+/// Three places already aliased them - the run's secret collection, the view
+/// SQL, and schema drift - and the inspect prelude was the fourth that did not,
+/// so Autodetect on a MinIO bucket signed against real AWS with no credentials
+/// and failed on a node that ran perfectly well. One function now, so a fifth
+/// caller cannot disagree.
+pub(crate) fn secret_family(format: &str) -> &str {
+    match format {
+        "minio" | "r2" | "b2" => "s3",
+        other => other,
+    }
+}
+
 pub(crate) fn secret_statement(
     format: &str,
     secret_name: &str,
@@ -6352,15 +6372,13 @@ pub(crate) fn collect_pipeline_secrets(doc: &PipelineDoc) -> Vec<String> {
             Some(s) => s,
             None => continue,
         };
-        let format = match id {
-            // S3-compatible (plain S3 + MinIO / R2 / B2) all use the same
-            // CREATE SECRET (TYPE S3) machinery; the MinIO / R2 / B2
-            // variants add ENDPOINT + URL_STYLE in the form.
-            "src.s3" | "snk.s3"
-            | "src.minio" | "src.r2" | "src.b2"
-            | "snk.minio" | "snk.r2" | "snk.b2" => "s3",
-            "src.gcs" | "snk.gcs" => "gcs",
-            "src.azureblob" | "snk.azureblob" => "azureblob",
+        // S3-compatible (plain S3 + MinIO / R2 / B2) all use the same
+        // CREATE SECRET (TYPE S3) machinery; the MinIO / R2 / B2 variants add
+        // ENDPOINT + URL_STYLE in the form. The alias is `secret_family` so this
+        // and the inspect prelude cannot drift apart again.
+        let bare = id.split_once('.').map(|(_, f)| f).unwrap_or(id);
+        let format = match secret_family(bare) {
+            f @ ("s3" | "gcs" | "azureblob") => f,
             _ => continue,
         };
         if let Some(props) = node.data.properties.as_ref() {
@@ -8017,5 +8035,139 @@ mod inspect_prelude_tests {
         // If this ever hits zero the test has stopped testing anything - a
         // renamed builder, or props no longer good enough to produce SQL.
         assert!(checked >= 2, "only {checked} spatial format(s) were exercised");
+    }
+
+    /// And the credential half of the same rule.
+    ///
+    /// MinIO, R2 and B2 are read through the `s3://` scheme and share the
+    /// `TYPE S3` secret, which is the only way the ENDPOINT their forms collect
+    /// reaches DuckDB. Inspect passed the un-aliased format to
+    /// `secret_statement`, which matches only `s3`/`gcs`/`azureblob`, so it
+    /// created nothing and Autodetect signed against real AWS with no key -
+    /// on a node that ran perfectly well.
+    ///
+    /// Stated as the parity property rather than as a list: if the credentials
+    /// on this node would produce a secret for its family, the inspect prelude
+    /// has to contain one.
+    #[test]
+    fn an_inspect_prelude_creates_the_secret_its_own_credentials_imply() {
+        let props = serde_json::json!({
+            "bucket": "b",
+            "key": "data.parquet",
+            "path": "b/data.parquet",
+            "accessKey": "AKIAEXAMPLE",
+            "secretKey": "s3cret",
+            "region": "us-east-1",
+            "endpoint": "localhost:9000",
+            "urlStyle": "path",
+            "useSsl": false,
+        });
+        let engine = DuckdbEngine::new(PathBuf::from("duckdb"));
+        let mut checked = 0;
+        for format in INSPECTABLE {
+            // What the RUN path would make for this node, by family.
+            if secret_statement(secret_family(format), "duckle_run", &props).is_none() {
+                continue;
+            }
+            // Only formats autodetect actually builds a SELECT for; anything
+            // else goes to inspect_driver_source and gets the run path itself.
+            if plan::source_select_for_format(format, &props).is_none() {
+                continue;
+            }
+            checked += 1;
+            let prelude = engine.source_prelude(format, &props);
+            assert!(
+                prelude.contains("SECRET"),
+                "autodetect of {format:?} reads a cloud URL with credentials set and creates no                  secret, so it authenticates as nobody: {prelude:?}"
+            );
+        }
+        assert!(
+            checked >= 4,
+            "only {checked} credentialled format(s) were exercised - the props are no longer              enough to make a secret, so this test proves nothing"
+        );
+    }
+
+    /// The general form, which the two above are instances of.
+    ///
+    /// Autodetect runs the same read a pipeline does, so whatever the run path
+    /// loads before that read, inspect has to load too. Stated once, over every
+    /// format, so the next connector to need an extension or a connector secret
+    /// is covered without anyone adding it to a list - which is exactly what
+    /// went wrong for `gdb` (#327), for the Hugging Face token, and for the
+    /// S3-compatible endpoints.
+    #[test]
+    fn an_inspect_prelude_contains_everything_the_run_path_loads() {
+        let props = serde_json::json!({
+            "path": "sample.gdb",
+            "repo": "org/private-ds",
+            "token": "hf_example",
+            "bucket": "b",
+            "key": "data.parquet",
+            "accessKey": "AKIAEXAMPLE",
+            "secretKey": "s3cret",
+            "endpoint": "localhost:9000",
+            "layer": "roads",
+        });
+        let engine = DuckdbEngine::new(PathBuf::from("duckdb"));
+        let mut checked = 0;
+        for format in INSPECTABLE {
+            // These issue their own read-only ATTACH in source_prelude;
+            // attaching duckle_src twice is an error, not a no-op.
+            if matches!(*format, "duckdb" | "ducklake" | "ducklake_snapshots")
+                || plan::is_attach_relational_format(format)
+            {
+                continue;
+            }
+            let run = plan::attach_prelude(&format!("src.{format}"), &props);
+            if run.trim().is_empty() {
+                continue;
+            }
+            checked += 1;
+            let inspect = engine.source_prelude(format, &props);
+            assert!(
+                inspect.contains(&run),
+                "autodetect of {format:?} omits what the run path loads.
+  run wants: {run:?}
+                   inspect has: {inspect:?}"
+            );
+        }
+        assert!(checked >= 3, "only {checked} format(s) had a run-path prelude to compare");
+    }
+
+    /// The three cases named in the commit, spelled out, so a reader can see
+    /// what the general rule buys without re-deriving it.
+    #[test]
+    fn the_three_known_gaps_are_closed() {
+        let engine = DuckdbEngine::new(PathBuf::from("duckdb"));
+
+        // #327: ESRI FileGDB.
+        let gdb = engine.source_prelude("gdb", &serde_json::json!({ "path": "x.gdb" }));
+        assert!(gdb.contains("LOAD spatial"), "gdb: {gdb:?}");
+
+        // A private Hugging Face dataset: httpfs, and the token secret.
+        let hf = engine.source_prelude(
+            "huggingface",
+            &serde_json::json!({ "repo": "org/private", "token": "hf_example" }),
+        );
+        assert!(hf.contains("LOAD httpfs"), "huggingface: {hf:?}");
+        assert!(hf.contains("TYPE HUGGINGFACE"), "huggingface token secret missing: {hf:?}");
+
+        // MinIO / R2 / B2: the TYPE S3 secret, which is the only way the
+        // endpoint the form collects ever reaches DuckDB.
+        for format in ["minio", "r2", "b2"] {
+            let p = engine.source_prelude(
+                format,
+                &serde_json::json!({
+                    "bucket": "b", "key": "k.parquet",
+                    "accessKey": "AK", "secretKey": "SK",
+                    "endpoint": "localhost:9000"
+                }),
+            );
+            assert!(p.contains("TYPE S3"), "{format} has no S3 secret: {p:?}");
+            assert!(
+                p.contains("localhost:9000"),
+                "{format} loses the endpoint, so autodetect aims at real AWS: {p:?}"
+            );
+        }
     }
 }

@@ -15,10 +15,7 @@ use serde_json::{json, Value};
 /// prefix, with the S3-compatible aliases routed through the `s3` reader.
 fn source_format(component_id: &str) -> String {
     let s = component_id.strip_prefix("src.").unwrap_or(component_id);
-    match s {
-        "minio" | "r2" | "b2" => "s3".to_string(),
-        other => other.to_string(),
-    }
+    crate::secret_family(s).to_string()
 }
 
 /// Compare a node's declared columns against its live columns. Returns
