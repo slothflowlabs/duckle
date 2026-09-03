@@ -6923,7 +6923,11 @@ mod builders;
 // #306: the chunk layer constrains a source by rewriting its read, and it must
 // use the SAME two functions the compiler does. A second opinion about what a
 // source reads is a second opinion about what the extract contains.
-pub(crate) use builders::{build_view_sql, references_spatial, relational_pushdown_on};
+pub(crate) use builders::{build_view_sql, relational_pushdown_on};
+// Only the #327 guard asks this, and only in a test: the inspect prelude is
+// derived from attach_prelude now, so nothing in a release build needs it.
+#[cfg(test)]
+pub(crate) use builders::references_spatial;
 pub(crate) use graph::NodeInputs;
 pub(crate) use builders::*;
 

@@ -85,6 +85,40 @@ jobs:
           gh release upload "$REL_TAG" \
             apps/desktop/bin/duckle-runner-linux-x64 --clobber
 
+  # #313 criterion 3: publish the capability registry with the release, so a
+  # tool or an agent can target a KNOWN Duckle version rather than asking a
+  # binary it may not have. Runs before `checksums`, like the runner asset, so
+  # SHA256SUMS covers it.
+  capability-registry:
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Generate the registry
+        env:
+          REL_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
+        run: |
+          set -e
+          cargo run --release -p duckle-runner -- capabilities --json > capabilities.json
+          # Stamp the release it describes. The command itself cannot know the
+          # tag - it is a property of the publication, not of the build.
+          python3 - "$REL_TAG" <<'PY'
+          import json, sys
+          d = json.load(open("capabilities.json"))
+          d["duckleVersion"] = sys.argv[1]
+          json.dump(d, open("capabilities.json", "w"), indent=2)
+          print(f"stamped {d['count']} components as {sys.argv[1]}")
+          PY
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          REL_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
+        run: gh release upload "$REL_TAG" capabilities.json --clobber
+
   # Compute the build matrix so a workflow_dispatch can re-roll a single OS
   # family (os_filter=linux) without rebuilding/clobbering the other assets. A
   # normal tag push leaves os_filter unset and builds every binary.
@@ -320,7 +354,9 @@ jobs:
   # job, so checksums must be a separate job that pulls the finished assets back.
   checksums:
     name: Publish SHA256SUMS
-    needs: build
+    # capability-registry is named explicitly rather than relied on to finish
+    # first: it uploads an asset (#313) and SHA256SUMS must cover it.
+    needs: [build, capability-registry]
     # Run even when a build leg failed (issue #156). The successful legs still
     # re-upload their binaries via --clobber, so if this job is skipped the
     # published SHA256SUMS.txt keeps stale checksums for the changed binaries and

@@ -1736,6 +1736,23 @@ capability is inferred from the declared surface, so where the two disagree the
 manifest is wrong - which is what the property-contract test exists to catch.
 This registry inherits that accuracy rather than adding to it.
 
+
+**An agent can ask it too.** The MCP tool `component_capabilities` answers the
+questions that were otherwise guesses from a component name - which sources do
+chunked extraction, which sinks offer which write modes, which components need a
+DuckDB extension - from the same records the command prints. Several
+capabilities narrow rather than widen, and a misspelled one matches nothing
+rather than returning the whole catalog, because a typo that reads as an answer
+is worse than an error.
+
+**Every release publishes `capabilities.json`**, stamped with its tag, so a tool
+can target a known Duckle version instead of interrogating a binary it may not
+have. It is covered by `SHA256SUMS.txt` like every other asset.
+
+**External components count.** Given a workspace, the registry includes what is
+installed there - a component the engine will run and the palette will show is a
+component, and a registry that only knew what was compiled in would answer the
+question wrongly for exactly the estates that installed something.
 ### Bounding what a workspace accumulates (`retention`)
 
 A long-running server grows run history, run logs, receipts and a stage cache,

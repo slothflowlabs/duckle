@@ -43,6 +43,14 @@ pub fn list_tools() -> Value {
                 "query": { "type": "string", "description": "Case-insensitive substring over id/label/summary." },
                 "workspace": { "type": "string", "description": "Workspace directory. Include it to also list the external components installed there (#307)." }
             }})),
+        tool("component_capabilities",
+            "Answer capability questions about components without guessing from their names: which sources support custom SQL, incremental reads, pushdown or chunked extraction; which sinks offer which write modes; which components emit rejects, take a saved connection, or need a DuckDB extension. Derived from the same manifests the editor and the engine use.",
+            json!({ "type": "object", "properties": {
+                "kind": { "type": "string", "enum": ["source","transform","sink","control","quality","custom"], "description": "Filter to one kind." },
+                "component": { "type": "string", "description": "One component id, for its full record." },
+                "supports": { "type": "array", "items": { "type": "string", "enum": ["customSql","incremental","pushdown","chunking","rejectOutput","artifactIo","connectionRef","credentials","cacheable","writeModes","extensions"] }, "description": "Keep only components that have ALL of these." },
+                "workspace": { "type": "string", "description": "Workspace directory, to include the external components installed there." }
+            }})),
         tool("get_component_schema",
             "Get the full property schema (form fields + input/output ports) for one component id, so you know which properties to set.",
             json!({ "type": "object", "properties": {
@@ -311,6 +319,7 @@ pub fn call_tool(params: Value) -> Result<Value, (i64, String)> {
 
     let result = match name {
         "list_components" => t_list_components(&args),
+        "component_capabilities" => t_component_capabilities(&args),
         "get_component_schema" => t_get_component_schema(&args),
         "create_pipeline" => t_create_pipeline(&args),
         "update_pipeline" => t_update_pipeline(&args),
@@ -362,6 +371,57 @@ fn content_err(msg: &str) -> Value {
 // ---------------------------------------------------------------------------
 // Tool implementations
 // ---------------------------------------------------------------------------
+
+/// #313: the capability registry, for an agent.
+///
+/// The issue's own examples - "find sources that support S3-compatible
+/// storage", "find sinks with upsert", "find components that perform external
+/// network I/O" - are all questions an agent otherwise answers by guessing from
+/// a component name. The registry is derived in the engine, so this returns the
+/// same records `duckle-runner capabilities` prints rather than a second
+/// opinion about what a component supports.
+fn t_component_capabilities(args: &Value) -> Result<Value, String> {
+    use duckle_duckdb_engine::capabilities;
+    let all = match arg_str(args, "workspace") {
+        Some(ws) => capabilities::all_in(std::path::Path::new(ws)),
+        None => capabilities::all(),
+    };
+    if let Some(id) = arg_str(args, "component") {
+        let found = all.into_iter().find(|c| c.component == id);
+        return match found {
+            Some(c) => Ok(serde_json::to_value(c).unwrap_or(Value::Null)),
+            None => Err(format!("no component {id:?}")),
+        };
+    }
+    let kind = arg_str(args, "kind");
+    let wanted: Vec<String> = args
+        .get("supports")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    let has = |c: &capabilities::Capabilities, what: &str| match what {
+        "customSql" => c.custom_sql,
+        "incremental" => c.incremental,
+        "pushdown" => c.pushdown,
+        "chunking" => !c.chunking.is_empty(),
+        "rejectOutput" => c.reject_output,
+        "artifactIo" => c.artifact_io,
+        "connectionRef" => c.connection_ref,
+        "credentials" => c.credentials,
+        "cacheable" => c.cacheable,
+        "writeModes" => !c.write_modes.is_empty(),
+        "extensions" => !c.extensions.is_empty(),
+        // An unknown capability name matches nothing rather than everything: a
+        // typo that quietly returned the whole catalog would read as an answer.
+        _ => false,
+    };
+    let out: Vec<capabilities::Capabilities> = all
+        .into_iter()
+        .filter(|c| kind.is_none_or(|k| c.kind == k))
+        .filter(|c| wanted.iter().all(|w| has(c, w)))
+        .collect();
+    Ok(json!({ "count": out.len(), "components": out }))
+}
 
 fn t_list_components(args: &Value) -> Result<Value, String> {
     let mut listed = catalog::list(arg_str(args, "kind"), arg_str(args, "query"));
@@ -2284,4 +2344,58 @@ mod verify_tests {
         let _ = std::fs::remove_dir_all(&ws);
     }
 
+}
+
+#[cfg(test)]
+mod capability_tool {
+    use super::*;
+
+    /// #313 criterion 4: CLI *and* MCP can query capabilities. The CLI could;
+    /// an agent could not, and the issue's whole "Agent use" section is about
+    /// not guessing from component names.
+    #[test]
+    fn an_agent_can_ask_which_sources_do_chunked_extraction() {
+        let r = t_component_capabilities(&json!({ "kind": "source", "supports": ["chunking"] }))
+            .expect("the tool answers");
+        let ids: Vec<&str> = r["components"]
+            .as_array()
+            .expect("components")
+            .iter()
+            .filter_map(|c| c["component"].as_str())
+            .collect();
+        assert!(ids.contains(&"src.postgres"), "{ids:?}");
+        assert!(ids.contains(&"src.oracle"), "{ids:?}");
+        // And it is a filter, not the whole catalog: a CSV source cannot be
+        // chunked and must not be in the answer.
+        assert!(!ids.contains(&"src.csv"), "an unchunkable source was returned: {ids:?}");
+        assert!(r["count"].as_u64().unwrap_or(0) > 0);
+    }
+
+    /// Two capabilities means BOTH, not either - an agent asking for a source
+    /// that does incremental *and* pushdown is narrowing, not widening.
+    #[test]
+    fn several_capabilities_are_required_together() {
+        let one = t_component_capabilities(&json!({ "supports": ["incremental"] })).unwrap();
+        let two = t_component_capabilities(&json!({ "supports": ["incremental", "pushdown"] }))
+            .unwrap();
+        assert!(
+            two["count"].as_u64().unwrap() <= one["count"].as_u64().unwrap(),
+            "asking for more capabilities returned more components"
+        );
+    }
+
+    /// A typo must not read as an answer.
+    #[test]
+    fn an_unknown_capability_matches_nothing() {
+        let r = t_component_capabilities(&json!({ "supports": ["nosuchthing"] })).unwrap();
+        assert_eq!(r["count"].as_u64(), Some(0), "a misspelled capability returned components");
+    }
+
+    #[test]
+    fn one_component_returns_its_whole_record() {
+        let r = t_component_capabilities(&json!({ "component": "src.postgres" })).unwrap();
+        assert_eq!(r["component"].as_str(), Some("src.postgres"));
+        assert_eq!(r["dialect"].as_str(), Some("postgres"));
+        assert!(t_component_capabilities(&json!({ "component": "src.nope" })).is_err());
+    }
 }
