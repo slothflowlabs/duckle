@@ -2846,6 +2846,7 @@ Open `http://localhost:8080`. The panel has eight views:
 - **Plans** - several pipelines in the order you chose. See [Plans](#plans-several-pipelines-in-an-order-you-chose).
 - **Catalog** - everything the workspace reads and writes, who owns it, and what is written but never read. See [Workspace catalog](#workspace-catalog-what-reads-and-writes-what).
 - **Batches** - work queued for workers: progress, what is running now, what failed, and a retry for the failures.
+- **Backfills** - re-run a partitioned pipeline over a range of dates, slice by slice: preview what would queue before queueing it, then watch the slices, retry the ones that failed, and cancel the ones that have not started. A chunked extract appears here too, because it is the same ledger.
 - **People** - the accounts that may sign in and the keys machines use, with the role each one has. Admin only.
 - **Audit** - who signed in, what they changed and who was turned away. Admin only, and shown only to admins.
 

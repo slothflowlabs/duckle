@@ -156,6 +156,7 @@
     <button data-tab="plans"><span class="ico">⛓</span> Plans</button>
     <button data-tab="catalog"><span class="ico">◈</span> Catalog</button>
     <button data-tab="batches"><span class="ico">▤</span> Batches</button>
+    <button data-tab="backfills"><span class="ico">▥</span> Backfills</button>
     <button data-tab="people" id="nav-people" class="hidden"><span class="ico">◍</span> People</button>
     <button data-tab="audit" id="nav-audit" class="hidden"><span class="ico">⛉</span> Audit</button>
   </nav>
@@ -274,6 +275,41 @@
       </div>
       <div id="batch-empty" class="empty hidden"><div class="big">▤</div>No batches queued.</div>
       <div id="batch-detail" style="margin-top:16px"></div>
+    </section>
+
+    <section id="tab-backfills" class="hidden">
+      <div class="sub" style="margin-bottom:14px">
+        One run per slice of a partitioned pipeline, with a durable record of which slices are
+        done. A backfill of a thousand days that fails on four costs four runs to finish, not a
+        thousand.
+      </div>
+      <div class="card" style="padding:14px;margin-bottom:14px">
+        <b>New backfill</b>
+        <div class="sub" style="margin:6px 0 10px">
+          Preview first: it queues nothing and tells you exactly which slices would run.
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <label style="flex:2 1 260px">Pipeline
+            <select id="bf-pipeline" class="inp"></select></label>
+          <label style="flex:1 1 130px">From
+            <input id="bf-from" class="inp" type="date"></label>
+          <label style="flex:1 1 130px">To
+            <input id="bf-to" class="inp" type="date"></label>
+          <label style="flex:0 1 110px">At once
+            <input id="bf-conc" class="inp" type="number" min="1" value="4"></label>
+          <button class="btn" onclick="previewBackfill(this)">Preview</button>
+          <button class="btn primary" id="bf-run" onclick="createBackfill(this)">Run backfill</button>
+        </div>
+        <div id="bf-preview" class="sub" style="margin-top:10px"></div>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <table>
+          <thead><tr><th>Backfill</th><th>Pipeline</th><th>Progress</th><th>Running</th><th>Failed</th><th>Created</th><th></th></tr></thead>
+          <tbody id="bf-body"></tbody>
+        </table>
+      </div>
+      <div id="bf-empty" class="empty hidden"><div class="big">▥</div>No backfills yet.</div>
+      <div id="bf-detail" style="margin-top:16px"></div>
     </section>
 
     <section id="tab-plans" class="hidden">
@@ -472,17 +508,19 @@ const TITLES={overview:['Overview','Pipelines grouped by job, with their latest 
   schedules:['Schedules','Run a pipeline on an interval. The console runs schedules itself while it is open.'],
   catalog:['Catalog','What this workspace reads and writes, and who owns it.'],
   batches:['Batches','Queued work, and how far the workers have got.'],
+  backfills:['Backfills','Re-run a partitioned pipeline over a range of dates, slice by slice.'],
   plans:['Plans','Several pipelines, in an order you chose.'],
   people:['People','Who may use this console, and which machines may.'],
   audit:['Audit','Who did what through this console, and who was turned away.']};
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
   const tab=b.dataset.tab;
-  for(const t of ['overview','runs','schedules','plans','catalog','batches','people','audit']) $('tab-'+t).classList.toggle('hidden', t!==tab);
+  for(const t of ['overview','runs','schedules','plans','catalog','batches','backfills','people','audit']) $('tab-'+t).classList.toggle('hidden', t!==tab);
   $('page-title').textContent=TITLES[tab][0]; $('page-sub').textContent=TITLES[tab][1];
   if(tab==='runs') renderRuns(); if(tab==='schedules') renderSchedules();
   if(tab==='catalog') loadCatalog();
   if(tab==='batches') loadBatches();
+  if(tab==='backfills') loadBackfills();
   if(tab==='plans') loadPlans();
   if(tab==='people') loadPeople();
   if(tab==='audit') loadAudit();
@@ -815,6 +853,147 @@ async function redriveBatch(id, btn){
   if(r.error) toast(r.error, 'err');
   else toast(`${r.cleared || 0} failed item(s) will be tried again`);
   await loadBatches();
+}
+
+// ── Backfills (#295) ──
+// Loaded on demand and never on the poll: the list carries every slice of every
+// plan, so a thousand-day backfill is a large response and asking for it four
+// times a minute would be rude to a console nobody is looking at.
+let BF_PIPELINES = [];
+
+function bfCounts(b){
+  const c = { requested:0, running:0, succeeded:0, failed:0, interrupted:0, cancelled:0 };
+  for(const p of (b.partitions || [])) if(p.state in c) c[p.state]++;
+  c.total = (b.partitions || []).length;
+  c.open = c.requested + c.failed + c.interrupted;
+  return c;
+}
+
+async function loadBackfills(){
+  // The pipeline list is only needed for the create form, and only once.
+  if(!BF_PIPELINES.length){
+    const p = await api('/api/pipelines') || {};
+    BF_PIPELINES = p.pipelines || [];
+    $('bf-pipeline').innerHTML = BF_PIPELINES.map(x =>
+      `<option value="${esc(x.file)}">${esc(x.name || x.id || x.file)}</option>`).join('')
+      || '<option value="">no pipelines in this workspace</option>';
+  }
+  const r = await api('/api/backfills') || {};
+  if(r.error) toast(r.error, 'err');
+  const rows = r.backfills || [];
+  $('bf-empty').classList.toggle('hidden', rows.length > 0);
+  $('bf-body').innerHTML = rows.map(b => {
+    const c = bfCounts(b);
+    const pct = c.total ? Math.round(c.succeeded / c.total * 100) : 0;
+    const stuck = c.failed + c.interrupted;
+    return `<tr>
+      <td><code style="font-size:12px">${esc(b.id)}</code>${b.kind === 'chunk'
+        ? '<div class="col-k">chunked extract</div>' : ''}</td>
+      <td class="col-v">${esc(b.pipeline || '')}</td>
+      <td><b>${c.succeeded}</b> / ${c.total}<div class="rate"><i style="width:${pct}%"></i></div></td>
+      <td>${c.running ? `<span class="pill p-run">${c.running}</span>` : '<span class="muted">-</span>'}</td>
+      <td>${stuck ? `<span class="pill p-err">${stuck}</span>` : '<span class="muted">0</span>'}</td>
+      <td class="col-v">${b.createdAt ? relTime(b.createdAt) : '<span class="muted">-</span>'}</td>
+      <td style="text-align:right">
+        <button class="btn" onclick="openBackfill('${esc(b.id)}')">Details</button>
+        ${stuck && canOperate() ? `<button class="btn" onclick="retryBackfill('${esc(b.id)}',null,this)">Retry failed</button>` : ''}
+        ${c.open && canOperate() ? `<button class="btn" onclick="cancelBackfill('${esc(b.id)}',this)">Cancel</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function openBackfill(id){
+  const b = await api('/api/backfills?id=' + encodeURIComponent(id)) || {};
+  if(b.error){ toast(b.error, 'err'); return; }
+  const c = bfCounts(b);
+  // Trouble first: an operator opening a backfill is looking for what did not
+  // finish, not for the six hundred slices that did.
+  const order = { failed:0, interrupted:1, running:2, requested:3, cancelled:4, succeeded:5 };
+  const parts = (b.partitions || []).slice().sort((x,y) =>
+    (order[x.state] ?? 9) - (order[y.state] ?? 9) || String(x.key).localeCompare(String(y.key)));
+  const cls = { succeeded:'p-ok', failed:'p-err', interrupted:'p-err', running:'p-run' };
+  $('bf-detail').innerHTML = `<div class="card" style="padding:14px">
+    <b>${esc(id)}</b>
+    <div class="sub" style="margin:6px 0 10px">
+      ${esc(b.pipeline || '')} &middot; ${c.total} slice(s) &middot;
+      ${c.succeeded} succeeded, ${c.failed} failed, ${c.interrupted} interrupted,
+      ${c.running} running, ${c.requested} waiting${b.releaseId ? ' &middot; release ' + esc(b.releaseId) : ''}
+    </div>
+    <table><thead><tr><th>Slice</th><th>State</th><th>Attempts</th><th>Run</th><th>Finished</th><th>Error</th><th></th></tr></thead><tbody>
+    ${parts.map(p => `<tr>
+      <td><code style="font-size:12px">${esc(p.key)}</code></td>
+      <td><span class="pill ${cls[p.state] || ''}">${esc(p.state)}</span></td>
+      <td class="col-v">${p.attempts || 0}</td>
+      <td class="col-v">${p.runId ? `<code style="font-size:11px">${esc(p.runId)}</code>` : '<span class="muted">-</span>'}</td>
+      <td class="col-v">${p.finishedAt ? relTime(p.finishedAt) : '<span class="muted">-</span>'}</td>
+      <td class="col-v" style="max-width:320px">${p.error ? esc(p.error) : ''}</td>
+      <td style="text-align:right">${(p.state === 'failed' || p.state === 'interrupted') && canOperate()
+        ? `<button class="btn" onclick="retryBackfill('${esc(id)}','${esc(p.key)}',this)">Retry</button>` : ''}</td>
+    </tr>`).join('')}
+    </tbody></table>
+  </div>`;
+}
+
+function bfForm(){
+  return {
+    pipeline: $('bf-pipeline').value,
+    from: $('bf-from').value,
+    to: $('bf-to').value,
+    maxConcurrent: Number($('bf-conc').value) || 4,
+  };
+}
+
+async function previewBackfill(btn){
+  const f = bfForm();
+  if(!f.pipeline || !f.from || !f.to){ toast('Pick a pipeline and a date range', 'err'); return; }
+  btn.disabled = true;
+  // dryRun writes nothing: "what would this queue" must not queue anything.
+  const r = await api('/api/backfills', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ action:'create', dryRun:true, ...f }) }) || {};
+  btn.disabled = false;
+  if(r.error){ $('bf-preview').innerHTML = `<span style="color:var(--red)">${esc(r.error)}</span>`; return; }
+  const keys = r.partitions || [];
+  $('bf-preview').innerHTML = `<b>${r.count || 0}</b> slice(s) would run` +
+    (keys.length ? ` &middot; ${keys.slice(0,8).map(k => `<code>${esc(k)}</code>`).join(' ')}` +
+      (keys.length > 8 ? ` and ${keys.length - 8} more` : '') : '');
+}
+
+async function createBackfill(btn){
+  const f = bfForm();
+  if(!f.pipeline || !f.from || !f.to){ toast('Pick a pipeline and a date range', 'err'); return; }
+  btn.disabled = true; btn.textContent = 'Starting...';
+  const r = await api('/api/backfills', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ action:'create', ...f }) }) || {};
+  btn.disabled = false; btn.textContent = 'Run backfill';
+  if(r.error){ toast(r.error, 'err'); return; }
+  // Accepted, not finished: it runs on a thread and the ledger is the record.
+  toast(`${r.partitions || 0} slice(s) queued as ${r.id}`);
+  $('bf-preview').innerHTML = '';
+  await loadBackfills();
+}
+
+async function retryBackfill(id, partition, btn){
+  btn.disabled = true; btn.textContent = 'Retrying...';
+  const body = partition ? { action:'retry', id, partition } : { action:'retry', id };
+  const r = await api('/api/backfills', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body) }) || {};
+  btn.disabled = false; btn.textContent = 'Retry';
+  if(r.error){ toast(r.error, 'err'); return; }
+  toast(r.retried ? `${r.retried} slice(s) will run again` : 'Nothing was failed or interrupted');
+  await loadBackfills();
+  if($('bf-detail').innerHTML) await openBackfill(id);
+}
+
+async function cancelBackfill(id, btn){
+  btn.disabled = true; btn.textContent = 'Cancelling...';
+  const r = await api('/api/backfills', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ action:'cancel', id }) }) || {};
+  btn.disabled = false; btn.textContent = 'Cancel';
+  if(r.error){ toast(r.error, 'err'); return; }
+  // Cancel marks the slices that had not started; one already running finishes.
+  toast(`${r.cancelled || 0} slice(s) cancelled`);
+  await loadBackfills();
 }
 
 // ── Audit ──

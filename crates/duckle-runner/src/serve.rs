@@ -293,6 +293,20 @@ pub fn run() -> Result<(), String> {
             reclaimed.join(", ")
         );
     }
+    // #295: and the same for a backfill's slices, which had the reconciler but
+    // no caller. A slice left `running` by a killed process is not claimable
+    // (only `requested` is) and `retry` only moves `failed` and `interrupted`,
+    // so nothing could ever pick it up again and the backfill was stuck for
+    // good. This is the one call that makes it recoverable.
+    let slices =
+        duckle_duckdb_engine::backfill::reconcile(&workspace, &|pid| pid == std::process::id());
+    if !slices.is_empty() {
+        eprintln!(
+            "duckle: {} backfill(s) had slices still marked running and are now interrupted: {}",
+            slices.len(),
+            slices.join(", ")
+        );
+    }
 
     // Decide who may use this console before binding anything. An exposed bind
     // with no credential does not refuse to start any more - it comes up
@@ -474,6 +488,20 @@ pub fn run_web() -> Result<(), String> {
             "duckle: {} run(s) were still marked running and are now interrupted: {}",
             reclaimed.len(),
             reclaimed.join(", ")
+        );
+    }
+    // #295: and the same for a backfill's slices, which had the reconciler but
+    // no caller. A slice left `running` by a killed process is not claimable
+    // (only `requested` is) and `retry` only moves `failed` and `interrupted`,
+    // so nothing could ever pick it up again and the backfill was stuck for
+    // good. This is the one call that makes it recoverable.
+    let slices =
+        duckle_duckdb_engine::backfill::reconcile(&workspace, &|pid| pid == std::process::id());
+    if !slices.is_empty() {
+        eprintln!(
+            "duckle: {} backfill(s) had slices still marked running and are now interrupted: {}",
+            slices.len(),
+            slices.join(", ")
         );
     }
     // The editor writes files, edits connections and runs pipelines, so it is
@@ -5645,4 +5673,37 @@ mod tests {
         );
         sender.join().unwrap();
     }
+
+    /// #295: a killed process must not strand a backfill forever.
+    ///
+    /// A slice left `running` is not claimable - only `requested` is - and
+    /// `retry` moves only `failed` and `interrupted`, so nothing could ever
+    /// pick it up and the backfill was stuck for good. `backfill::reconcile`
+    /// existed for exactly this and had NO production caller anywhere in the
+    /// repo; its twin for run receipts was called here twice.
+    ///
+    /// Read from the source because the symptom is invisible until someone
+    /// kills a backfill and tries to resume it days later. The needle is built
+    /// from pieces so it cannot match itself in this file.
+    #[test]
+    fn a_killed_backfill_is_reconciled_when_the_server_starts() {
+        let src = include_str!("serve.rs");
+        let needle = format!("backfill::{}(&workspace", "reconcile");
+        let calls = src
+            .lines()
+            .map(str::trim_start)
+            .filter(|l| l.contains(&needle))
+            .count();
+        assert!(
+            calls >= 2,
+            "backfill slices are reconciled at {calls} of the two server start paths, so a              backfill killed mid-run stays stuck in `running` and can never be retried"
+        );
+        // And the run-receipt twin is still there, so this test cannot pass by
+        // one having replaced the other.
+        assert!(
+            src.contains(&format!("retry::{}(&workspace", "reconcile")),
+            "run receipts are no longer reconciled at startup"
+        );
+    }
+
 }
