@@ -22,7 +22,18 @@ export type FieldKind =
     | 'connection-ref'
     | 'routine-ref'
     | 'pipeline-ref'
-    | 'ducklake-snapshot';
+    | 'ducklake-snapshot'
+    | 'sort-keys';
+
+// Multi-column sort. The engine's build_sort reads `orderBy` as an ordered
+// array of these, and prefers it over the single `sortColumn` it falls back to.
+// `nullsLast` is optional and tri-state: absent emits no NULLS clause, which is
+// what every pipeline already using `orderBy` does today.
+export type SortKey = {
+    column: string;
+    direction?: 'asc' | 'desc';
+    nullsLast?: boolean;
+};
 
 export type SelectOption = { label: string; value: string };
 

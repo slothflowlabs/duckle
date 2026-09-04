@@ -1,5 +1,5 @@
 import { Component, useContext } from 'react';
-import type { Field, Aggregation, Cast } from './types';
+import type { Field, Aggregation, Cast, SortKey } from './types';
 import {
     BoolField,
     IntegerField,
@@ -14,6 +14,7 @@ import { ExpressionField } from './ExpressionField';
 import { ColumnField, ColumnsField } from './ColumnField';
 import { AggregationsField } from './AggregationsField';
 import { CastsField } from './CastsField';
+import { SortKeysField } from './SortKeysField';
 import { KeyValueField } from './KeyValueField';
 import { RenameColumnsField } from './RenameColumnsField';
 import { FilterBuilderField } from './FilterBuilderField';
@@ -327,5 +328,20 @@ function renderInput(field: Field, value: unknown, onChange: (v: unknown) => voi
                     onChange={onChange}
                 />
             );
+        case 'sort-keys':
+            return <SortKeysField value={value as SortKey[] | undefined} onChange={onChange} />;
+        default: {
+            // The switch had no default and returns React.ReactNode, which
+            // includes undefined - so adding a kind to the union and forgetting
+            // the case compiled clean, exported into the catalog, and rendered
+            // a labelled blank in both editors. This turns that into a compile
+            // error, and into something visible if one ever ships anyway.
+            const unhandled: never = field.kind;
+            return (
+                <div className="field-input field-warning">
+                    Unsupported field kind: {String(unhandled)}
+                </div>
+            );
+        }
     }
 }

@@ -19331,32 +19331,10 @@
             "label": "Sort",
             "fields": [
               {
-                "key": "sortColumn",
-                "label": "Column",
-                "kind": "column",
-                "required": true
-              },
-              {
-                "key": "direction",
-                "label": "Direction",
-                "kind": "select",
-                "defaultValue": "asc",
-                "options": [
-                  {
-                    "label": "Ascending",
-                    "value": "asc"
-                  },
-                  {
-                    "label": "Descending",
-                    "value": "desc"
-                  }
-                ]
-              },
-              {
-                "key": "nullsLast",
-                "label": "NULLs last",
-                "kind": "bool",
-                "defaultValue": true
+                "key": "orderBy",
+                "label": "Sort keys",
+                "kind": "sort-keys",
+                "description": "Keys apply left to right: the first orders the rows, the next breaks its ties. NULLs \"Default\" leaves placement to the database, which is what a sort with no explicit setting does today."
               }
             ]
           }

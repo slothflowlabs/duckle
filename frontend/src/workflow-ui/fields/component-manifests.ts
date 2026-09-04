@@ -896,29 +896,28 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
         schemaSource: 'upstream',
         sections: [
             {
+                // One ordered list, replacing the single Column + Direction +
+                // NULLs trio. build_sort has always preferred `orderBy` and
+                // fallen back to `sortColumn`, so multi-column sort worked in a
+                // hand-written pipeline and in the Python API and could not be
+                // expressed here - recorded as a KNOWN GAP in prop_contract.rs.
+                //
+                // The old keys are deliberately NOT declared as fields and NOT
+                // aliased. They stay readable by the engine and accepted by the
+                // property check (props.rs ACCEPTED), because an alias is a
+                // pure key rename and this is a shape change: renaming
+                // sortColumn to orderBy would hand build_sort a bare string
+                // where it wants an array and drop the ORDER BY in silence.
+                // The editor seeds the list from them instead, so an existing
+                // node opens showing the sort it already has.
                 label: 'Sort',
                 fields: [
                     {
-                        key: 'sortColumn',
-                        label: 'Column',
-                        kind: 'column',
-                        required: true,
-                    },
-                    {
-                        key: 'direction',
-                        label: 'Direction',
-                        kind: 'select',
-                        defaultValue: 'asc',
-                        options: [
-                            { label: 'Ascending', value: 'asc' },
-                            { label: 'Descending', value: 'desc' },
-                        ],
-                    },
-                    {
-                        key: 'nullsLast',
-                        label: 'NULLs last',
-                        kind: 'bool',
-                        defaultValue: true,
+                        key: 'orderBy',
+                        label: 'Sort keys',
+                        kind: 'sort-keys',
+                        description:
+                            'Keys apply left to right: the first orders the rows, the next breaks its ties. NULLs "Default" leaves placement to the database, which is what a sort with no explicit setting does today.',
                     },
                 ],
             },

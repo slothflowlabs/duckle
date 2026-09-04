@@ -78,9 +78,19 @@ const UNIVERSAL: [&str; 10] = [
 /// the check for the whole component would hide everything else. They are
 /// listed here with the line that reads them so the list can be worked off
 /// rather than grown.
-const ACCEPTED: [(&str, &str, &str); 2] = [
+const ACCEPTED: [(&str, &str, &str); 5] = [
     ("xf.groupby", "materialize", "read at plan/mod.rs:6440 for every component"),
     ("code.sql", "materialize", "read at plan/mod.rs:6440 for every component"),
+    // The single-key sort form. The editor now writes `orderBy` and no longer
+    // draws these, but build_sort still reads them (builders.rs, the
+    // sort_keys.is_empty() fallback) for every pipeline saved before that, for
+    // the desktop assistant's prompt, and for the Talend importer. Not an
+    // ALIASES entry: an alias is a pure key rename, and sortColumn -> orderBy
+    // is a shape change - it would hand build_sort a bare string where the old
+    // value was a column name, and the ORDER BY would vanish without an error.
+    ("xf.sort", "sortColumn", "legacy single-key form, read by build_sort"),
+    ("xf.sort", "direction", "beside sortColumn"),
+    ("xf.sort", "nullsLast", "beside sortColumn"),
 ];
 
 /// One property problem, in the shape #298 asked for.
@@ -651,6 +661,34 @@ mod tests {
             }
         }
         assert!(gaps.is_empty(), "these delegate to the local readers and hide it: {gaps:#?}");
+    }
+
+    /// Both sort shapes have to validate, because both are written today.
+    ///
+    /// The Python API writes `orderBy` (packaging/pypi/duckle/api.py) and the
+    /// editor used to declare only `sortColumn` - and mark it required - so a
+    /// Python-authored pipeline opened in the editor with a blocking
+    /// "'Column' is required" while the engine ran it perfectly. The editor now
+    /// writes `orderBy` too, which puts the old keys on the other side of the
+    /// same fence: they are read by build_sort's fallback and drawn nowhere.
+    #[test]
+    fn both_shapes_of_sort_validate() {
+        let sdk = check(&doc(
+            "xf.sort",
+            serde_json::json!({
+                "orderBy": [
+                    { "column": "amount", "direction": "desc", "nullsLast": true },
+                    { "column": "name" }
+                ]
+            }),
+        ));
+        assert!(sdk.is_empty(), "the shape the Python API writes was refused: {sdk:?}");
+
+        let legacy = check(&doc(
+            "xf.sort",
+            serde_json::json!({ "sortColumn": "amount", "direction": "desc", "nullsLast": true }),
+        ));
+        assert!(legacy.is_empty(), "a pipeline saved before the change was refused: {legacy:?}");
     }
 
     #[test]

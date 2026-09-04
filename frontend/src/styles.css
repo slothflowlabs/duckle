@@ -3494,6 +3494,37 @@ html[dir='rtl'] .topbar-lang {
     border-bottom: none;
 }
 
+/* Sort keys apply left to right, so their order is part of the value and the
+   rows have to be reorderable rather than just add/remove. */
+.field-sort-move {
+    display: flex;
+    gap: 2px;
+}
+
+.field-sort-move button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--bg-elevated);
+    color: var(--text-2);
+    cursor: pointer;
+}
+
+.field-sort-move button:hover:not(:disabled) {
+    color: var(--text-1);
+    border-color: var(--accent);
+}
+
+.field-sort-move button:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
 .field-agg-header {
     font-size: 0.7692rem;
     text-transform: uppercase;

@@ -79,14 +79,18 @@ fn allowed(component: &str, key: &str) -> Option<&'static str> {
         ("xf.cast", "targetType") => Some("element key inside the declared casts value"),
         ("xf.addcol", "columns") => Some("legacy array form; the form declares the element keys"),
         ("xf.coalesce", "columns") => Some("legacy array form; the form declares the element keys"),
-        // KNOWN GAP, not a false positive. build_sort prefers an `orderBy`
-        // array (multi-column, with per-column direction) and falls back to the
-        // declared single sortColumn. So multi-column sort works in a
-        // hand-written pipeline and cannot be expressed in the editor. Listed
-        // here rather than silently allowed: fixing it needs a new field kind,
-        // and declaring `orderBy` with the existing `columns` kind would drop
-        // per-column direction and sit confusingly beside sortColumn.
-        ("xf.sort", "orderBy") => Some("KNOWN GAP: multi-column sort is unreachable from the editor"),
+        // The `orderBy` KNOWN GAP was here. It is closed: xf.sort declares
+        // orderBy with the `sort-keys` kind and the editor writes the ordered
+        // array. What is listed now is the single-key form orderBy replaced -
+        // still read by build_sort's fallback for every pipeline saved before
+        // the change, for the desktop assistant's prompt and for the Talend
+        // importer, and deliberately not drawn beside the list that supersedes
+        // it. Not an ALIASES entry either: an alias is a pure key rename, and
+        // sortColumn -> orderBy is a shape change that would leave build_sort a
+        // bare string and drop the ORDER BY in silence.
+        ("xf.sort", "sortColumn") => Some("legacy single-key form; the form declares orderBy"),
+        ("xf.sort", "direction") => Some("legacy single-key form; the form declares orderBy"),
+        ("xf.sort", "nullsLast") => Some("legacy single-key form; the form declares orderBy"),
         ("xf.text.tocolumns", "columns") => Some("output names derived, not configured"),
         ("xf.pyexpr", "columns") => Some("element key inside the declared expression value"),
         ("xf.agg", "aggregations") => Some("legacy id of xf.groupby"),
