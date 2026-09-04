@@ -150,6 +150,31 @@
                 "description": "Strings that should be interpreted as NULL."
               }
             ]
+          },
+          {
+            "label": "Malformed rows",
+            "fields": [
+              {
+                "key": "nullPadding",
+                "label": "Pad short rows with NULL",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "A row with fewer columns than the header is padded with NULLs instead of failing the read. This is the one for \"Expected Number of Columns: 5 Found: 4\" when the row is real data with a trailing field missing. Maps to read_csv null_padding=true."
+              },
+              {
+                "key": "ignoreErrors",
+                "label": "Skip rows that will not parse",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Drop any row DuckDB cannot read - bad encoding, wrong column count, a trailing blank line - instead of failing the whole file. It does not report which rows went, so prefer padding when the data is worth keeping. Maps to read_csv ignore_errors=true."
+              },
+              {
+                "key": "readOptions",
+                "label": "Extra read options",
+                "kind": "key-value",
+                "description": "Any other DuckDB read_csv option, passed through as key=value (e.g. strict_mode=false, union_by_name=true, sample_size=-1). For a file that is ragged in a way the boxes above do not cover."
+              }
+            ]
           }
         ],
         "ports": {
