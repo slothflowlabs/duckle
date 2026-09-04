@@ -3183,7 +3183,7 @@ fn build_stage(
         gizmosql_sink = Some(GizmoSqlSinkSpec {
             from_view: from_view.to_string(),
             host,
-            port: string_prop(&props, "port").and_then(|s| s.parse().ok()).unwrap_or(31337),
+            port: port_prop(&props, "port").unwrap_or(31337),
             username: string_prop(&props, "username").unwrap_or_default(),
             password: string_prop(&props, "password").unwrap_or_default(),
             tls: props.get("tls").and_then(|v| v.as_bool()).unwrap_or(false),
@@ -4863,7 +4863,7 @@ fn build_stage(
         gizmosql_source = Some(GizmoSqlSourceSpec {
             node_id: node.id.clone(),
             host,
-            port: string_prop(&props, "port").and_then(|s| s.parse().ok()).unwrap_or(31337),
+            port: port_prop(&props, "port").unwrap_or(31337),
             username: string_prop(&props, "username").unwrap_or_default(),
             password: string_prop(&props, "password").unwrap_or_default(),
             tls: props.get("tls").and_then(|v| v.as_bool()).unwrap_or(false),

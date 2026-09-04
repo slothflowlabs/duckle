@@ -5794,3 +5794,28 @@
         crate::plan::drop_stages(&mut stages, &["out".to_string()].into_iter().collect());
         assert!(stages.iter().any(|x| x.node_id == "out"), "the write must still happen");
     }
+
+    /// A port the GUI wrote as a NUMBER must reach the connection.
+    ///
+    /// The integer field writes a JSON number and the port was read with
+    /// `string_prop`, which is `as_str()` only - so every port typed into the
+    /// panel parsed to None and fell through to the 31337 default. The user
+    /// set 5000, Duckle dialled 31337, and nothing said why.
+    #[test]
+    fn a_port_typed_in_the_panel_is_not_discarded() {
+        use crate::plan::builders::port_prop;
+        // What the GUI actually stores.
+        let gui = serde_json::json!({ "port": 5000 });
+        assert_eq!(port_prop(&gui, "port"), Some(5000), "a JSON number is what the panel writes");
+
+        // What a hand-written pipeline file and older saves spell.
+        let text = serde_json::json!({ "port": "5000" });
+        assert_eq!(port_prop(&text, "port"), Some(5000), "text must keep working");
+        assert_eq!(port_prop(&serde_json::json!({ "port": " 5000 " }), "port"), Some(5000));
+
+        // Absent and nonsense both fall through to the caller's default.
+        assert_eq!(port_prop(&serde_json::json!({}), "port"), None);
+        assert_eq!(port_prop(&serde_json::json!({ "port": "abc" }), "port"), None);
+        // Out of range is not a port, and must not wrap to one.
+        assert_eq!(port_prop(&serde_json::json!({ "port": 70000 }), "port"), None);
+    }

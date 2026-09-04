@@ -9322,6 +9322,24 @@ pub(crate) fn columns_from_props(props: &JsonValue, key: &str) -> Option<Vec<Str
         })
 }
 
+/// A port a person typed, whether the GUI stored it as a number or as text.
+///
+/// The GUI's integer field writes a JSON NUMBER (`PrimitiveFields.tsx`
+/// `IntegerField` calls `onChange(n)`), and `string_prop` is `as_str()` only -
+/// so reading a port with `string_prop(..).parse()` got `None` for every value
+/// the panel produced and fell through to the default. A GizmoSQL port typed
+/// into the panel was silently discarded and the connection went to 31337.
+///
+/// Text is still accepted, because a hand-written pipeline file and an older
+/// saved one both spell it that way.
+pub(crate) fn port_prop(props: &JsonValue, key: &str) -> Option<u16> {
+    let v = props.get(key)?;
+    if let Some(n) = v.as_u64() {
+        return u16::try_from(n).ok();
+    }
+    v.as_str()?.trim().parse().ok()
+}
+
 pub(crate) fn string_prop(props: &JsonValue, key: &str) -> Option<String> {
     props
         .get(key)
