@@ -1,6 +1,6 @@
 import type { ComponentManifest, AutodetectFn } from './types';
 import type { Column } from '../../pipeline-types';
-import { synthesizeManifest, portsForComponent } from './manifest-synth';
+import { synthesizeManifest, portsForComponent, deadLetterFields } from './manifest-synth';
 import { getExternalManifest, PALETTE } from '../palette-data';
 import { tauriAutodetect } from '../../tauri-bridge';
 
@@ -1438,6 +1438,38 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
     },
 };
 
+// Sinks the planner runs `dead_letter_prelude` on, from the two match arms at
+// builders.rs:9006-9019. It reads validateBeforeInsert / deadLetterPath /
+// deadLetterFormat for every one of them, whatever form happens to draw it, so
+// the section is added once here instead of in fourteen separate branches -
+// nine of which did not have it. snk.sqlite and snk.duckdb are the sharpest
+// case: `synthDbSink` carries a branch offering these three for exactly those
+// two ids, and it never runs, because a component listed in MANIFESTS never
+// reaches the synthesizer.
+const DEAD_LETTER_SINKS = new Set([
+    'snk.sqlite',
+    'snk.duckdb',
+    'snk.postgres',
+    'snk.cockroach',
+    'snk.mysql',
+    'snk.mariadb',
+    'snk.motherduck',
+    'snk.ducklake',
+    'snk.pgvector',
+    'snk.redshift',
+    'snk.bigquery',
+    'snk.quack',
+    'snk.sqlserver',
+    'snk.synapse',
+]);
+
+function withDeadLetter(id: string, m: ComponentManifest): ComponentManifest {
+    if (!DEAD_LETTER_SINKS.has(id)) return m;
+    // A branch that already draws them keeps its own wording and placement.
+    if (m.sections.some(s => s.fields.some(f => f.key === 'validateBeforeInsert'))) return m;
+    return { ...m, sections: [...m.sections, { label: 'Bad rows', fields: deadLetterFields() }] };
+}
+
 export function getManifest(componentId: string | undefined): ComponentManifest | undefined {
     if (!componentId) return undefined;
     // #307: an external component's form comes from its own manifest. Checked
@@ -1449,7 +1481,8 @@ export function getManifest(componentId: string | undefined): ComponentManifest 
         const declared = getExternalManifest(componentId) as ComponentManifest | undefined;
         if (declared) return declared;
     }
-    const m = MANIFESTS[componentId] ?? synthesizeManifest(componentId);
+    const built = MANIFESTS[componentId] ?? synthesizeManifest(componentId);
+    const m = built ? withDeadLetter(componentId, built) : built;
     if (m && !m.ports) {
         for (const cat of PALETTE) {
             for (const grp of cat.groups) {

@@ -541,6 +541,75 @@ mod tests {
         assert!(f.is_empty(), "the cloud sink's delegated write options were refused: {f:?}");
     }
 
+    /// Every sink the planner runs `dead_letter_prelude` on has to offer the
+    /// three keys that prelude reads, or the feature exists and is unreachable.
+    ///
+    /// snk.sqlite and snk.duckdb were the gap. `synthDbSink` has a branch
+    /// written for exactly those two ids that offers them, and it never runs:
+    /// a component listed in MANIFESTS never reaches the synthesizer, so the
+    /// hand-written form won and the fields were drawn nowhere.
+    #[test]
+    fn every_dead_letter_sink_offers_the_whole_dead_letter() {
+        // builders.rs:9006-9019, the two match arms that call it.
+        const SINKS: [&str; 14] = [
+            "snk.sqlite",
+            "snk.duckdb",
+            "snk.postgres",
+            "snk.cockroach",
+            "snk.mysql",
+            "snk.mariadb",
+            "snk.motherduck",
+            "snk.ducklake",
+            "snk.pgvector",
+            "snk.redshift",
+            "snk.bigquery",
+            "snk.quack",
+            "snk.sqlserver",
+            "snk.synapse",
+        ];
+        const KEYS: [&str; 3] = ["validateBeforeInsert", "deadLetterPath", "deadLetterFormat"];
+        // Every offender at once: fixing them one failure at a time is how a
+        // second gap stays hidden behind the first.
+        let mut gaps: Vec<String> = Vec::new();
+        for id in SINKS {
+            let keys = declared().get(id).unwrap_or_else(|| panic!("{id} is not in the catalog"));
+            let missing: Vec<&str> = KEYS.iter().copied().filter(|k| !keys.contains(*k)).collect();
+            if !missing.is_empty() {
+                gaps.push(format!("{id} does not offer {missing:?}"));
+            }
+        }
+        assert!(gaps.is_empty(), "these run dead_letter_prelude and hide it: {gaps:#?}");
+    }
+
+    /// Azure Synapse rides the SQL Server TDS wire. The engine says so
+    /// (specs.rs:1476/1507 give it host / port / user / trustCert / encrypt,
+    /// and builders.rs:9016 routes it through the mssql arm) and the palette
+    /// entry says so in its own description. The palette also files it under
+    /// Cloud Warehouses, and the synthesizer dispatches on that group, so both
+    /// its forms were drawn by the Snowflake branch: account, warehouse, role,
+    /// and no field anywhere for a host. The branch written for it in
+    /// synthDbSource / synthDbSink was unreachable.
+    #[test]
+    fn synapse_offers_the_connection_the_engine_actually_makes() {
+        for (mssql, synapse) in
+            [("src.sqlserver", "src.synapse"), ("snk.sqlserver", "snk.synapse")]
+        {
+            let a = &declared()[mssql];
+            let b = &declared()[synapse];
+            let missing: Vec<&String> = a.difference(b).collect();
+            assert!(
+                missing.is_empty(),
+                "{synapse} speaks the same wire as {mssql} and does not offer {missing:?}"
+            );
+            for wrong in ["account", "warehouse", "role"] {
+                assert!(
+                    !b.contains(wrong),
+                    "{synapse} still offers Snowflake's `{wrong}`, which it cannot use"
+                );
+            }
+        }
+    }
+
     #[test]
     fn universal_matches_the_properties_panel() {
         // The drift that caused it: the panel grew universal fields and nothing

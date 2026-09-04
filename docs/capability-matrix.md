@@ -54,7 +54,7 @@ What a source can be asked to do.
 | `src.bigquery` | yes | - | - | - | - | yes |
 | `src.redshift` | yes | - | yes | - | - | yes |
 | `src.databricks` | yes | - | - | - | - | yes |
-| `src.synapse` | yes | yes | - | - | - | yes |
+| `src.synapse` | yes | - | - | - | - | yes |
 | `src.motherduck` | yes | - | - | - | - | yes |
 | `src.quack` | yes | - | - | - | - | yes |
 | `src.gizmosql` | yes | - | - | - | - | yes |
@@ -174,7 +174,7 @@ How a sink writes, and what it does with rows it cannot.
 | `snk.bigquery` | overwrite, append, truncate | - | - |
 | `snk.redshift` | overwrite, append, truncate, upsert | - | - |
 | `snk.databricks` | overwrite, append, truncate, upsert | - | - |
-| `snk.synapse` | overwrite, append, upsert, truncate | - | - |
+| `snk.synapse` | overwrite, append, truncate, upsert | - | - |
 | `snk.salesforce` | - | - | - |
 | `snk.salesforce.bulk` | - | - | - |
 | `snk.s3` | - | - | - |
@@ -253,7 +253,7 @@ Components that take credentials. A saved connection keeps them out of the pipel
 | `snk.salesforce.bulk` | sink | yes | yes |
 | `snk.scylla` | sink | - | yes |
 | `snk.snowflake` | sink | - | yes |
-| `snk.sqlserver` | sink | - | yes |
+| `snk.sqlserver` | sink | yes | yes |
 | `snk.synapse` | sink | yes | yes |
 | `snk.teradata` | sink | - | yes |
 | `snk.turso` | sink | - | yes |
@@ -329,7 +329,7 @@ Components that take credentials. A saved connection keeps them out of the pipel
 | `src.slack` | source | yes | yes |
 | `src.snowflake` | source | - | yes |
 | `src.soap` | source | yes | yes |
-| `src.sqlserver` | source | - | yes |
+| `src.sqlserver` | source | yes | yes |
 | `src.stripe` | source | yes | yes |
 | `src.synapse` | source | yes | yes |
 | `src.telegram` | source | yes | yes |

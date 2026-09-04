@@ -5564,6 +5564,15 @@
             "label": "SQL Server connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "sqlserver"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -7516,24 +7525,41 @@
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Account",
+            "label": "Azure Synapse connection",
             "fields": [
               {
-                "key": "account",
-                "label": "Account identifier",
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "sqlserver"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
+                "key": "host",
+                "label": "Host",
                 "kind": "text",
                 "required": true,
-                "placeholder": "xy12345.us-east-1"
+                "placeholder": "mssql.example.com"
               },
               {
-                "key": "warehouse",
-                "label": "Warehouse",
-                "kind": "text"
+                "key": "port",
+                "label": "Port",
+                "kind": "integer",
+                "defaultValue": 1433
               },
               {
-                "key": "role",
-                "label": "Role",
-                "kind": "text"
+                "key": "user",
+                "label": "User",
+                "kind": "text",
+                "required": true
+              },
+              {
+                "key": "password",
+                "label": "Password",
+                "kind": "text",
+                "placeholder": "••••••••"
               },
               {
                 "key": "database",
@@ -7542,29 +7568,17 @@
                 "required": true
               },
               {
-                "key": "schema",
-                "label": "Schema",
-                "kind": "text"
+                "key": "trustCert",
+                "label": "Trust TLS cert (dev / self-signed)",
+                "kind": "bool",
+                "defaultValue": false
               },
               {
-                "key": "connectionRef",
-                "label": "Saved connection",
-                "kind": "connection-ref",
-                "accepts": [
-                  "snowflake"
-                ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
-              },
-              {
-                "key": "username",
-                "label": "Username",
-                "kind": "text"
-              },
-              {
-                "key": "password",
-                "label": "Password",
-                "kind": "text",
-                "placeholder": "••••••••"
+                "key": "encrypt",
+                "label": "Encrypt connection",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "On by default. Uncheck for legacy servers (SQL Server 2014 and older) that only speak old TLS and fail the handshake; the connection then runs unencrypted."
               }
             ]
           },
@@ -7572,56 +7586,23 @@
             "label": "Query",
             "fields": [
               {
-                "key": "mode",
-                "label": "Read mode",
-                "kind": "select",
-                "defaultValue": "table",
-                "options": [
-                  {
-                    "label": "Whole table",
-                    "value": "table"
-                  },
-                  {
-                    "label": "Custom SQL",
-                    "value": "sql"
-                  },
-                  {
-                    "label": "Incremental (by column)",
-                    "value": "incremental"
-                  }
-                ]
-              },
-              {
-                "key": "schemaName",
+                "key": "schema",
                 "label": "Schema",
                 "kind": "text",
-                "placeholder": "public"
+                "defaultValue": "dbo"
               },
               {
                 "key": "tableName",
-                "label": "Table",
+                "label": "Table (for SELECT *)",
                 "kind": "text",
                 "placeholder": "orders"
               },
               {
-                "key": "sql",
-                "label": "SQL query",
+                "key": "query",
+                "label": "Or custom SQL",
                 "kind": "expression",
-                "rows": 5,
-                "placeholder": "SELECT * FROM orders WHERE status = $1"
-              },
-              {
-                "key": "incrementalColumn",
-                "label": "Incremental column",
-                "kind": "text",
-                "placeholder": "updated_at"
-              },
-              {
-                "key": "fetchSize",
-                "label": "Fetch size",
-                "kind": "integer",
-                "defaultValue": 1000,
-                "description": "Rows fetched per round-trip."
+                "rows": 4,
+                "placeholder": "SELECT * FROM ..."
               }
             ]
           }
@@ -33864,6 +33845,45 @@
                 "description": "Key columns to match on for Upsert. Required when Write mode is Upsert."
               }
             ]
+          },
+          {
+            "label": "Bad rows",
+            "fields": [
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
+              }
+            ]
           }
         ],
         "ports": {
@@ -34777,6 +34797,15 @@
             "label": "SQL Server connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "sqlserver"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -34895,6 +34924,45 @@
                 "kind": "text",
                 "defaultValue": "delete",
                 "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+              }
+            ]
+          },
+          {
+            "label": "Bad rows",
+            "fields": [
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
               }
             ]
           }
@@ -35398,6 +35466,45 @@
                 "description": "The value in the Delete flag column that marks a row for deletion."
               }
             ]
+          },
+          {
+            "label": "Bad rows",
+            "fields": [
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
+              }
+            ]
           }
         ],
         "ports": {
@@ -35597,6 +35704,45 @@
                 "kind": "text",
                 "defaultValue": "delete",
                 "description": "The value in the Delete flag column that marks a row for deletion."
+              }
+            ]
+          },
+          {
+            "label": "Bad rows",
+            "fields": [
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
               }
             ]
           }
@@ -36093,6 +36239,45 @@
                 "description": "Key columns to match on for Upsert. Required when Write mode is Upsert."
               }
             ]
+          },
+          {
+            "label": "Bad rows",
+            "fields": [
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
+              }
+            ]
           }
         ],
         "ports": {
@@ -36189,6 +36374,45 @@
                   {
                     "label": "Truncate + insert",
                     "value": "truncate"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Bad rows",
+            "fields": [
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
                   }
                 ]
               }
@@ -36573,6 +36797,45 @@
                 "description": "When empty the engine relies on the standard GCP credential discovery."
               }
             ]
+          },
+          {
+            "label": "Bad rows",
+            "fields": [
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
+              }
+            ]
           }
         ],
         "ports": {
@@ -36783,6 +37046,45 @@
                 "kind": "columns"
               }
             ]
+          },
+          {
+            "label": "Bad rows",
+            "fields": [
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
+              }
+            ]
           }
         ],
         "ports": {
@@ -36966,23 +37268,41 @@
         "schemaSource": "upstream",
         "sections": [
           {
-            "label": "Account",
+            "label": "Azure Synapse connection",
             "fields": [
               {
-                "key": "account",
-                "label": "Account identifier",
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "sqlserver"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
+                "key": "host",
+                "label": "Host",
+                "kind": "text",
+                "required": true,
+                "placeholder": "mssql.example.com"
+              },
+              {
+                "key": "port",
+                "label": "Port",
+                "kind": "integer",
+                "defaultValue": 1433
+              },
+              {
+                "key": "user",
+                "label": "User",
                 "kind": "text",
                 "required": true
               },
               {
-                "key": "warehouse",
-                "label": "Warehouse",
-                "kind": "text"
-              },
-              {
-                "key": "role",
-                "label": "Role",
-                "kind": "text"
+                "key": "password",
+                "label": "Password",
+                "kind": "text",
+                "placeholder": "••••••••"
               },
               {
                 "key": "database",
@@ -36991,29 +37311,24 @@
                 "required": true
               },
               {
-                "key": "schema",
-                "label": "Schema",
-                "kind": "text"
+                "key": "trustCert",
+                "label": "Trust TLS cert (dev / self-signed)",
+                "kind": "bool",
+                "defaultValue": false
               },
               {
-                "key": "connectionRef",
-                "label": "Saved connection",
-                "kind": "connection-ref",
-                "accepts": [
-                  "snowflake"
-                ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "key": "encrypt",
+                "label": "Encrypt connection",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "On by default. Uncheck for legacy servers (SQL Server 2014 and older) that only speak old TLS and fail the handshake; the connection then runs unencrypted."
               },
               {
-                "key": "username",
-                "label": "Username",
-                "kind": "text"
-              },
-              {
-                "key": "password",
-                "label": "Password",
-                "kind": "text",
-                "placeholder": "••••••••"
+                "key": "bulk",
+                "label": "Bulk write (fast)",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "Fast bulk load via the DuckDB mssql extension (TDS COPY, ~1.2M rows/s). Turn off to use the row-by-row driver (works fully offline; no extension fetch)."
               }
             ]
           },
@@ -37021,10 +37336,10 @@
             "label": "Destination",
             "fields": [
               {
-                "key": "schemaName",
+                "key": "schema",
                 "label": "Schema",
                 "kind": "text",
-                "placeholder": "public"
+                "defaultValue": "dbo"
               },
               {
                 "key": "tableName",
@@ -37034,13 +37349,19 @@
                 "placeholder": "orders"
               },
               {
+                "key": "batchSize",
+                "label": "Insert batch size",
+                "kind": "integer",
+                "defaultValue": 1000
+              },
+              {
                 "key": "mode",
                 "label": "Write mode",
                 "kind": "select",
                 "defaultValue": "overwrite",
                 "options": [
                   {
-                    "label": "Create or replace",
+                    "label": "Overwrite (create / append)",
                     "value": "overwrite"
                   },
                   {
@@ -37048,20 +37369,21 @@
                     "value": "append"
                   },
                   {
-                    "label": "Upsert (insert on conflict / on duplicate key)",
-                    "value": "upsert"
-                  },
-                  {
                     "label": "Truncate + insert",
                     "value": "truncate"
+                  },
+                  {
+                    "label": "Upsert (MERGE on key)",
+                    "value": "upsert"
                   }
-                ]
+                ],
+                "description": "Upsert runs a MERGE: update rows that match the conflict columns, insert the rest."
               },
               {
                 "key": "conflictColumns",
-                "label": "Conflict columns",
+                "label": "Conflict columns (upsert key)",
                 "kind": "columns",
-                "description": "Used in upsert mode: Postgres / Cockroach use these as ON CONFLICT keys; MySQL / MariaDB rely on the target table's existing UNIQUE / PRIMARY KEY index; DuckDB / SQLite match on these for a set-based delete + re-insert."
+                "description": "Key columns to match on for Upsert / MERGE. Required when Write mode is Upsert."
               },
               {
                 "key": "deleteColumn",
@@ -37076,7 +37398,12 @@
                 "kind": "text",
                 "defaultValue": "delete",
                 "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
-              },
+              }
+            ]
+          },
+          {
+            "label": "Bad rows",
+            "fields": [
               {
                 "key": "validateBeforeInsert",
                 "label": "Validate before insert (dead-letter bad rows)",
@@ -41346,6 +41673,45 @@
                 "label": "Conflict columns (for upsert)",
                 "kind": "columns",
                 "description": "Required when mode is upsert."
+              }
+            ]
+          },
+          {
+            "label": "Bad rows",
+            "fields": [
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
               }
             ]
           }

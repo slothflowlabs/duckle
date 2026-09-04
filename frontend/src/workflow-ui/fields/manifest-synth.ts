@@ -135,7 +135,7 @@ const writeModeField = (): Field => ({
 // Validate-before-insert / dead-letter for DB sinks (#101): split rows that
 // cannot be cast to the declared column types off to a file instead of failing
 // the whole load. Needs a declared schema on the node.
-const deadLetterFields = (): Field[] => [
+export const deadLetterFields = (): Field[] => [
     {
         key: 'validateBeforeInsert',
         label: 'Validate before insert (dead-letter bad rows)',
@@ -254,6 +254,8 @@ const CONNECTION_KIND_FOR: Record<string, string> = {
     'src.mysql': 'mysql', 'snk.mysql': 'mysql',
     'src.mariadb': 'mariadb', 'snk.mariadb': 'mariadb',
     'src.sqlserver': 'sqlserver', 'snk.sqlserver': 'sqlserver',
+    // Synapse is the same TDS connection under another name.
+    'src.synapse': 'sqlserver', 'snk.synapse': 'sqlserver',
     'src.oracle': 'oracle', 'snk.oracle': 'oracle',
     'src.clickhouse': 'clickhouse', 'snk.clickhouse': 'clickhouse',
     'src.mongodb': 'mongodb', 'snk.mongodb': 'mongodb',
@@ -2711,6 +2713,11 @@ function synthDbSource(comp: ComponentDef): ComponentManifest {
             {
                 label: `${vendor} connection`,
                 fields: [
+                    // resolve_connection_ref_props (duckle-secrets:313) expands a
+                    // saved connection on ANY node, and both hand-rolled TDS
+                    // blocks left the picker out that dbConnectionFields puts
+                    // first, so these were the only databases you had to retype.
+                    connectionRefField(connectionKindFor(comp.id)),
                     { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'mssql.example.com' },
                     { key: 'port', label: 'Port', kind: 'integer', defaultValue: 1433 },
                     { key: 'user', label: 'User', kind: 'text', required: true },
@@ -2906,6 +2913,11 @@ function synthDbSink(comp: ComponentDef): ComponentManifest {
             {
                 label: `${vendor} connection`,
                 fields: [
+                    // resolve_connection_ref_props (duckle-secrets:313) expands a
+                    // saved connection on ANY node, and both hand-rolled TDS
+                    // blocks left the picker out that dbConnectionFields puts
+                    // first, so these were the only databases you had to retype.
+                    connectionRefField(connectionKindFor(comp.id)),
                     { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'mssql.example.com' },
                     { key: 'port', label: 'Port', kind: 'integer', defaultValue: 1433 },
                     { key: 'user', label: 'User', kind: 'text', required: true },
@@ -8322,6 +8334,9 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
     if (groupId === 'src.lakehouse') return synthLakehouseSource(comp);
     if (groupId === 'snk.lakehouse') return synthLakehouseSink(comp);
     if (groupId === 'src.databases') return synthDbSource(comp);
+    // Synapse is a TDS database wearing a warehouse label; see the note by
+    // the snk.synapse route below. Ahead of the src.warehouses group check.
+    if (comp.id === 'src.synapse') return synthDbSource(comp);
     if (groupId === 'src.warehouses') return synthWarehouseSource(comp);
     if (groupId === 'src.storage') return synthStorageSource(comp);
     if (groupId === 'src.streaming') return synthStreamingSource(comp);
@@ -8338,6 +8353,13 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
     // synthWarehouseSink. Route by id so a new group member never falls through
     // to the generic "Notes" panel.
     if (comp.id === 'snk.salesforce' || comp.id === 'snk.salesforce.bulk') return synthWarehouseSink(comp);
+    // Azure Synapse rides the SQL Server TDS wire (specs.rs:1476/1507: host,
+    // port, user, trustCert, encrypt), and synthDbSource / synthDbSink each
+    // carry a `sqlserver || synapse` branch written for it. Both were dead
+    // code: Synapse sits in the *.warehouses palette group, so it was drawn
+    // with the Snowflake form instead - account / warehouse / role, and no
+    // field for a host. Routed by id for the same reason snk.salesforce is.
+    if (comp.id === 'snk.synapse') return synthDbSink(comp);
     if (groupId === 'snk.databases') return synthDbSink(comp);
     if (groupId === 'snk.warehouses') return synthWarehouseSink(comp);
     if (groupId === 'snk.storage') return synthStorageSink(comp);
