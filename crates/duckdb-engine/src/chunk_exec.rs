@@ -126,6 +126,7 @@ pub fn plan_for(
         kind: Kind::Chunk,
         chunk_node: Some(node_id.to_string()),
         staging: Some(staging.display().to_string()),
+        epoch: None,
         partitions: plan
             .chunks
             .iter()
@@ -149,6 +150,8 @@ pub fn plan_for(
                 params: Default::default(),
                 predicate: Some(c.predicate.clone()),
                 artifact: None,
+                requires: None,
+                source_uri: None,
             })
             .collect(),
         id,
@@ -575,6 +578,8 @@ mod tests {
             params: Default::default(),
             occurrence: None,
             predicate: Some("id >= 0".into()),
+            requires: None,
+            source_uri: None,
             artifact: part.map(|u| SliceArtifact {
                 uri: u.into(),
                 hash: "abc".into(),
@@ -596,6 +601,7 @@ mod tests {
             kind: Kind::Chunk,
             chunk_node: Some("pg".into()),
             staging: None,
+            epoch: None,
             partitions: parts,
         }
     }

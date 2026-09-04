@@ -105,6 +105,7 @@ pub fn plan_for(
         kind: backfill::Kind::Partition,
         chunk_node: None,
         staging: None,
+        epoch: None,
         partitions: parts
             .into_iter()
             .map(|p| PartitionRun {
@@ -123,6 +124,8 @@ pub fn plan_for(
                 params: p.params,
                 predicate: None,
                 artifact: None,
+                requires: None,
+                source_uri: None,
             })
             .collect(),
     })
@@ -179,6 +182,11 @@ pub fn execute_ledger(
         backfill::Kind::Chunk => {
             crate::chunk_exec::execute(workspace, duckdb, plan, force, on_slice)
         }
+        // #326: a link of an ordered chain is a run of the pipeline with the
+        // object bound, which is the partition path - a slice binding params.
+        // What makes it ordered is the claim predicate, not the executor, which
+        // is the whole point of not adding a second one.
+        backfill::Kind::Sequence => Ok(execute(workspace, duckdb, plan, force, on_slice)),
     }
 }
 
@@ -224,7 +232,7 @@ pub fn execute_with(
 ) -> Backfill {
     let workers = plan
         .max_concurrent
-        .min(plan.partitions.iter().filter(|p| p.state.is_claimable()).count())
+        .min(plan.claimable_count())
         .max(1);
     let requires_artifact = work.requires_artifact();
     let shared = Arc::new(Mutex::new(plan));
@@ -239,8 +247,10 @@ pub fn execute_with(
                 // start to reconcile rather than looking untouched.
                 let claimed = {
                     let mut plan = shared.lock().unwrap_or_else(|p| p.into_inner());
-                    let Some(idx) = plan.partitions.iter().position(|p| p.state.is_claimable())
-                    else {
+                    // #326: an ordered chain adds a predecessor requirement
+                    // to the same claim, so a link whose predecessor has not
+                    // landed is passed over rather than run out of order.
+                    let Some(idx) = (0..plan.partitions.len()).find(|i| plan.claimable(*i)) else {
                         return;
                     };
                     plan.partitions[idx].state = State::Running;
@@ -484,6 +494,7 @@ mod tests {
             kind: Kind::Chunk,
             chunk_node: Some("pg".into()),
             staging: None,
+            epoch: None,
             partitions: keys
                 .iter()
                 .map(|k| PartitionRun {
@@ -497,6 +508,8 @@ mod tests {
                     occurrence: None,
                     predicate: Some(format!("id = '{k}'")),
                     artifact: None,
+                    requires: None,
+                    source_uri: None,
                 })
                 .collect(),
         }
@@ -574,6 +587,80 @@ mod tests {
         assert_eq!(
             out.partitions[0].artifact.as_ref().map(|a| a.uri.clone()),
             Some("parts/a.parquet".to_string())
+        );
+    }
+
+    /// An ordered chain: each link requires the one before (#326).
+    fn ordered_chain(keys: &[&str]) -> Backfill {
+        let mut b = slices(keys);
+        b.kind = Kind::Sequence;
+        b.chunk_node = None;
+        for i in 1..b.partitions.len() {
+            b.partitions[i].requires = Some(b.partitions[i - 1].key.clone());
+        }
+        b
+    }
+
+    /// Work that records the ORDER it was asked to do things in.
+    struct Ordered {
+        seen: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl SliceWork for Ordered {
+        fn run(&self, slice: &PartitionRun) -> Result<Done, (Option<String>, String)> {
+            // Deliberately BACKWARDS: the earliest link sleeps longest. Run
+            // concurrently, the order recorded would be the reverse of the
+            // chain, so this test cannot pass by luck the way an equal sleep
+            // would - three workers each taking one slice happened to record
+            // a, b, c even with the predicate removed.
+            let ms = 40u64.saturating_sub(20 * (slice.key.as_bytes()[0] - b'a') as u64);
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+            self.seen.lock().unwrap_or_else(|p| p.into_inner()).push(slice.key.clone());
+            Ok(Done { run_id: format!("run-{}", slice.key), artifact: None })
+        }
+        fn requires_artifact(&self) -> bool {
+            false
+        }
+    }
+
+    /// #326 acceptance criterion 3, through the real executor.
+    ///
+    /// `max_concurrent` is 3 here. An unordered plan of three slices would run
+    /// them in parallel and in any order; this one must not, and the constraint
+    /// comes from the claim predicate rather than from a second executor.
+    #[test]
+    fn an_ordered_chain_is_applied_in_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let w = Ordered { seen: Default::default() };
+        let seen = Arc::clone(&w.seen);
+        let out = execute_with(tmp.path(), ordered_chain(&["a", "b", "c"]), true, &w, &|_| {});
+        assert!(out.is_done(), "{:?}", out.counts());
+        assert_eq!(
+            *seen.lock().unwrap(),
+            ["a", "b", "c"],
+            "a delta chain is serial by construction, not by luck"
+        );
+    }
+
+    /// A hole stops the chain instead of being stepped over, and what is left
+    /// is `requested` - blocked, not failed - so the file arriving later and a
+    /// re-plan picks it straight back up.
+    #[test]
+    fn a_chain_stops_at_a_hole_rather_than_stepping_over_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut plan = ordered_chain(&["a", "c"]);
+        // `c` requires `b`, which the publisher never released, so there is no
+        // slice for it at all.
+        plan.partitions[1].requires = Some("b".into());
+        let w = work(false, false, None);
+        let out = execute_with(tmp.path(), plan, true, &w, &|_| {});
+        assert_eq!(out.partitions[0].state, State::Succeeded);
+        assert_eq!(out.partitions[1].state, State::Requested, "c must not have run");
+        assert_eq!(w.ran.load(Ordering::SeqCst), 1, "exactly one slice was worked");
+        assert!(!out.is_done(), "a blocked chain has not finished");
+        assert_eq!(
+            out.blocked_reason(1).as_deref(),
+            Some("waiting for b, which was never published")
         );
     }
 

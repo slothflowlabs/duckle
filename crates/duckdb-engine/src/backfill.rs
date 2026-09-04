@@ -83,6 +83,8 @@ pub enum Kind {
     Partition,
     /// A bounded read of one source, by predicate (#306).
     Chunk,
+    /// One link of an ordered delta chain (#326).
+    Sequence,
 }
 
 impl Kind {
@@ -90,6 +92,7 @@ impl Kind {
         match self {
             Kind::Partition => "partition",
             Kind::Chunk => "chunk",
+            Kind::Sequence => "sequence",
         }
     }
 }
@@ -148,6 +151,23 @@ pub struct PartitionRun {
     /// moved to succeeded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<SliceArtifact>,
+    /// #326: the key that must have SUCCEEDED before this slice may be claimed.
+    ///
+    /// Set only on an ordered chain that declared `requireContinuity`, which is
+    /// what keeps continuity opt-in: a plain watermark is allowed to have gaps,
+    /// and only the operator knows whether this feed promises not to.
+    ///
+    /// Absent means nothing has to come first - the first link of an epoch,
+    /// whose predecessor is the baseline. Present and naming a key that is not
+    /// in this ledger means the predecessor was never published, and the slice
+    /// stays blocked; that is the difference between a hole and a baseline, and
+    /// storing the requirement on the SUCCESSOR is what makes an absent
+    /// predecessor block rather than silently pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires: Option<String>,
+    /// #326: the object this link applies, for provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,6 +195,12 @@ pub struct Backfill {
     /// Where a chunked extract stages its parts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staging: Option<String>,
+    /// #326: which generation of an ordered chain this is - the full snapshot
+    /// that reset it. Carried for provenance; the blocking is done by
+    /// [`PartitionRun::requires`], which the plan builder already resolved
+    /// against this epoch's baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<String>,
     pub partitions: Vec<PartitionRun>,
 }
 
@@ -189,6 +215,61 @@ impl Backfill {
 
     pub fn is_done(&self) -> bool {
         !self.partitions.iter().any(|p| p.state.is_open())
+    }
+
+    /// Whether the slice at `idx` may be claimed in this pass.
+    ///
+    /// #326. The ordering constraint an ordered feed needs is a claim
+    /// predicate, not a second executor and not a scheduler:
+    ///
+    /// ```text
+    /// is_claimable(slice)
+    ///     -> requested?
+    ///     -> if ordered: predecessor succeeded, or predecessor == baseline
+    /// ```
+    ///
+    /// The ledger is the only record of how far the chain has got, so this
+    /// consults the slices themselves rather than a position pointer that would
+    /// have to be kept in agreement with them.
+    ///
+    /// Note which way round the requirement is stored. A missing delta has no
+    /// slice - there is nothing to run - so asking "did my predecessor succeed"
+    /// of a ledger that has no row for it must answer NO. It does, because the
+    /// requirement lives on the successor and names a key: a key with no
+    /// succeeded slice is unsatisfied whether it failed or was never published.
+    pub fn claimable(&self, idx: usize) -> bool {
+        self.partitions.get(idx).is_some_and(|p| {
+            p.state.is_claimable() && self.blocking(p).is_none()
+        })
+    }
+
+    /// The predecessor holding this slice back, if one is.
+    fn blocking<'a>(&'a self, p: &'a PartitionRun) -> Option<&'a str> {
+        let required = p.requires.as_deref()?;
+        match self.partitions.iter().any(|q| q.key == required && q.state == State::Succeeded) {
+            true => None,
+            false => Some(required),
+        }
+    }
+
+    /// Why a slice is not claimable, in the words an operator needs.
+    ///
+    /// The two cases read the same to the ledger and are different to a person:
+    /// a predecessor that failed is a retry, and one that was never published
+    /// is a conversation with the publisher.
+    pub fn blocked_reason(&self, idx: usize) -> Option<String> {
+        let p = self.partitions.get(idx)?;
+        let required = self.blocking(p)?;
+        let published = self.partitions.iter().any(|q| q.key == required);
+        Some(match published {
+            true => format!("waiting for {required}, which has not succeeded"),
+            false => format!("waiting for {required}, which was never published"),
+        })
+    }
+
+    /// Every slice a worker could take right now.
+    pub fn claimable_count(&self) -> usize {
+        (0..self.partitions.len()).filter(|i| self.claimable(*i)).count()
     }
 
     /// Move every failed or interrupted slice back to requested.
@@ -487,6 +568,7 @@ mod tests {
             kind: Kind::Partition,
             chunk_node: None,
             staging: None,
+            epoch: None,
             partitions: parts
                 .into_iter()
                 .map(|p| PartitionRun {
@@ -500,6 +582,8 @@ mod tests {
                     occurrence: None,
                     predicate: None,
                     artifact: None,
+                    requires: None,
+                    source_uri: None,
                 })
                 .collect(),
         }

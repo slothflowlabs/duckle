@@ -608,6 +608,73 @@ pub fn of(doc: &serde_json::Value) -> Option<SequenceDef> {
     serde_json::from_value(doc.get("sequence")?.clone()).ok()
 }
 
+/// Turn a chain into ledger slices.
+///
+/// One slice per PUBLISHED link. A hole gets no slice, because there is nothing
+/// to run: it is represented by the requirement its successor carries, which is
+/// what makes an absent predecessor block instead of quietly passing. The hole
+/// is still nameable - [`verdict`] reports it - it just is not a unit of work.
+///
+/// `requires` is only set when the definition asked for continuity. Without it
+/// the same links are planned and nothing blocks: a plain feed is allowed to
+/// have gaps, and `xf.incremental` keeps the semantics it has.
+pub fn slices(
+    def: &SequenceDef,
+    pipeline: &str,
+    release: Option<&str>,
+    links: &[Link],
+) -> Vec<crate::backfill::PartitionRun> {
+    use crate::backfill::{occurrence_id, PartitionRun, State};
+    links
+        .iter()
+        .filter(|l| !l.is_missing())
+        .map(|l| {
+            let mut params = std::collections::BTreeMap::new();
+            params.insert("sequence_key".to_string(), l.key.clone());
+            if let Some(uri) = &l.uri {
+                params.insert("sequence_object".to_string(), uri.clone());
+            }
+            // Provenance, per acceptance criterion 6: the key, the key that had
+            // to come first, and the object. The producing run and the
+            // resulting position are the ledger's own, already.
+            if let Some(prev) = &l.predecessor {
+                params.insert("sequence_previous".to_string(), prev.clone());
+            }
+            if let Some(epoch) = &def.epoch {
+                params.insert("sequence_epoch".to_string(), epoch.clone());
+            }
+            PartitionRun {
+                occurrence: Some(occurrence_id(
+                    pipeline,
+                    &format!("sequence:{}:{}", def.epoch.as_deref().unwrap_or(""), l.key),
+                    release,
+                    None,
+                )),
+                key: l.key.clone(),
+                state: State::Requested,
+                run_id: None,
+                attempts: 0,
+                error: None,
+                finished_at: None,
+                params,
+                predicate: None,
+                artifact: None,
+                // "predecessor succeeded OR predecessor == the accepted
+                // baseline". The baseline has no slice - it is what the epoch
+                // starts FROM, already applied - so requiring it would block
+                // the first link of every chain forever. Dropping the
+                // requirement is how the second half of the rule is expressed.
+                requires: def
+                    .require_continuity
+                    .then(|| l.predecessor.clone())
+                    .flatten()
+                    .filter(|prev| Some(prev.as_str()) != def.baseline.as_deref()),
+                source_uri: l.uri.clone(),
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -915,6 +982,136 @@ mod tests {
         );
         // And it reads back, so a console can hold one.
         assert_eq!(serde_json::from_value::<Verdict>(serde_json::to_value(&v).unwrap()).unwrap(), v);
+    }
+
+    /// Build a ledger the way a real chain would, for the claim rule.
+    fn ledger(def: &SequenceDef, names: &[&str]) -> crate::backfill::Backfill {
+        let r = read(def, &uris(names)).expect("a reading");
+        let links = chain(def, &r.items).expect("a chain");
+        crate::backfill::Backfill {
+            id: "b1".into(),
+            pipeline: "reg".into(),
+            pipeline_path: "reg.json".into(),
+            created_at: "2026-09-04T00:00:00Z".into(),
+            release_id: None,
+            max_concurrent: 4,
+            pid: None,
+            kind: crate::backfill::Kind::Sequence,
+            chunk_node: None,
+            staging: None,
+            epoch: def.epoch.clone(),
+            partitions: slices(def, "reg", None, &links),
+        }
+    }
+
+    fn at(plan: &crate::backfill::Backfill, key: &str) -> usize {
+        plan.partitions.iter().position(|p| p.key == key).unwrap_or_else(|| panic!("no {key}"))
+    }
+
+    /// Acceptance criteria 2 and 3, as the ledger rule Louis specified.
+    #[test]
+    fn a_link_is_not_claimable_until_its_predecessor_has_succeeded() {
+        use crate::backfill::State;
+        let def = dated("D{date:YYYYMMDD}.zip");
+        let mut plan = ledger(&def, &["D20260901.zip", "D20260902.zip", "D20260903.zip"]);
+
+        // Nothing has run. Only the head of the chain may be claimed, even
+        // though all three are requested and workers are free.
+        assert!(plan.claimable(at(&plan, "2026-09-01")));
+        assert!(!plan.claimable(at(&plan, "2026-09-02")));
+        assert!(!plan.claimable(at(&plan, "2026-09-03")));
+        assert_eq!(plan.claimable_count(), 1, "a chain is not a fan-out");
+
+        // D01 lands -> D02 opens, D03 still waits.
+        let i = at(&plan, "2026-09-01");
+        plan.partitions[i].state = State::Succeeded;
+        assert!(plan.claimable(at(&plan, "2026-09-02")));
+        assert!(!plan.claimable(at(&plan, "2026-09-03")));
+
+        // D02 FAILS -> D03 stays shut, and the reason names the retry.
+        let i = at(&plan, "2026-09-02");
+        plan.partitions[i].state = State::Failed;
+        let three = at(&plan, "2026-09-03");
+        assert!(!plan.claimable(three));
+        assert_eq!(
+            plan.blocked_reason(three).as_deref(),
+            Some("waiting for 2026-09-02, which has not succeeded")
+        );
+
+        // Acceptance criterion 4: retry D02, it succeeds, D03 is eligible.
+        plan.retry_open(None);
+        let i = at(&plan, "2026-09-02");
+        plan.partitions[i].state = State::Succeeded;
+        assert!(plan.claimable(three), "a successful retry unblocks what followed");
+    }
+
+    /// A hole has no slice, so the rule has to block on a key that is absent.
+    #[test]
+    fn a_never_published_predecessor_blocks_and_says_so() {
+        let def = dated("D{date:YYYYMMDD}.zip");
+        let mut plan = ledger(&def, &["D20260901.zip", "D20260903.zip"]);
+        assert_eq!(plan.partitions.len(), 2, "the hole is not a unit of work");
+
+        let i = at(&plan, "2026-09-01");
+        plan.partitions[i].state = crate::backfill::State::Succeeded;
+        let three = at(&plan, "2026-09-03");
+        assert!(!plan.claimable(three), "2026-09-02 was never published");
+        assert_eq!(
+            plan.blocked_reason(three).as_deref(),
+            Some("waiting for 2026-09-02, which was never published"),
+            "a hole and a failure are different conversations"
+        );
+    }
+
+    /// The first link of an epoch answers to the baseline, which has no slice.
+    #[test]
+    fn the_first_link_after_a_baseline_is_claimable() {
+        let def = SequenceDef {
+            baseline: Some("2026-08-31".into()),
+            ..dated("D{date:YYYYMMDD}.zip")
+        };
+        let plan = ledger(&def, &["D20260901.zip", "D20260902.zip"]);
+        let first = at(&plan, "2026-09-01");
+        assert_eq!(
+            plan.partitions[first].requires, None,
+            "requiring the baseline would block every chain forever"
+        );
+        assert!(plan.claimable(first));
+        assert!(!plan.claimable(at(&plan, "2026-09-02")));
+    }
+
+    /// Continuity is opt-in: without it, the same links plan and nothing blocks.
+    #[test]
+    fn without_continuity_nothing_is_ordered() {
+        let def = SequenceDef { require_continuity: false, ..dated("D{date:YYYYMMDD}.zip") };
+        let plan = ledger(&def, &["D20260901.zip", "D20260903.zip"]);
+        assert_eq!(plan.claimable_count(), 2, "a plain feed may have gaps");
+        assert!(plan.partitions.iter().all(|p| p.requires.is_none()));
+    }
+
+    /// Provenance, acceptance criterion 6.
+    #[test]
+    fn a_slice_carries_its_key_predecessor_object_and_epoch() {
+        let def = SequenceDef {
+            baseline: Some("2026-08-31".into()),
+            epoch: Some("F2".into()),
+            ..dated("D{date:YYYYMMDD}.zip")
+        };
+        let plan = ledger(&def, &["D20260901.zip", "D20260902.zip"]);
+        let p = &plan.partitions[at(&plan, "2026-09-02")];
+        assert_eq!(p.params["sequence_key"], "2026-09-02");
+        assert_eq!(p.params["sequence_previous"], "2026-09-01");
+        assert_eq!(p.params["sequence_epoch"], "F2");
+        assert!(p.params["sequence_object"].ends_with("D20260902.zip"));
+        assert_eq!(p.source_uri.as_deref(), Some("s3://reg/D20260902.zip"));
+        // Two epochs of the same key are different work, so a new snapshot does
+        // not collide with what the old generation already did.
+        let other = SequenceDef { epoch: Some("F3".into()), ..def.clone() };
+        let plan2 = ledger(&other, &["D20260901.zip", "D20260902.zip"]);
+        assert_ne!(
+            plan.partitions[0].occurrence, plan2.partitions[0].occurrence,
+            "the epoch is part of what a slice IS"
+        );
     }
 
     #[test]
