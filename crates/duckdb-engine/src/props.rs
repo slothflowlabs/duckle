@@ -610,6 +610,49 @@ mod tests {
         }
     }
 
+    /// A cloud source is the local format reader with a path injected
+    /// (builders.rs:8890-8903), so it honours every CSV and JSON option the
+    /// local one does. Not one of the seven forms offered any of them, which
+    /// left an s3:// CSV readable only as comma-delimited with a header, and a
+    /// ragged one not readable at all - the same complaint that produced the
+    /// src.csv "Malformed rows" section, one connector over.
+    #[test]
+    fn every_cloud_source_offers_the_read_options_it_delegates() {
+        // builders.rs:210-211, the ids routed to build_cloud_source.
+        const SOURCES: [&str; 7] = [
+            "src.s3",
+            "src.gcs",
+            "src.azureblob",
+            "src.http",
+            "src.minio",
+            "src.r2",
+            "src.b2",
+        ];
+        // Read at builders.rs:4825-4885 (CSV) and in build_json_source (JSON).
+        const KEYS: [&str; 11] = [
+            "hasHeader",
+            "delimiter",
+            "quoteChar",
+            "encoding",
+            "skipLines",
+            "nullValue",
+            "nullPadding",
+            "ignoreErrors",
+            "readOptions",
+            "recordsPath",
+            "flatten",
+        ];
+        let mut gaps: Vec<String> = Vec::new();
+        for id in SOURCES {
+            let keys = declared().get(id).unwrap_or_else(|| panic!("{id} is not in the catalog"));
+            let missing: Vec<&str> = KEYS.iter().copied().filter(|k| !keys.contains(*k)).collect();
+            if !missing.is_empty() {
+                gaps.push(format!("{id} does not offer {missing:?}"));
+            }
+        }
+        assert!(gaps.is_empty(), "these delegate to the local readers and hide it: {gaps:#?}");
+    }
+
     #[test]
     fn universal_matches_the_properties_panel() {
         // The drift that caused it: the panel grew universal fields and nothing

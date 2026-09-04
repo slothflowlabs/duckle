@@ -1,4 +1,4 @@
-import type { ComponentManifest, AutodetectFn } from './types';
+import type { ComponentManifest, AutodetectFn, FormSection } from './types';
 import type { Column } from '../../pipeline-types';
 import { synthesizeManifest, portsForComponent, deadLetterFields } from './manifest-synth';
 import { getExternalManifest, PALETTE } from '../palette-data';
@@ -1463,6 +1463,131 @@ const DEAD_LETTER_SINKS = new Set([
     'snk.synapse',
 ]);
 
+// Sources the planner hands to build_cloud_source (builders.rs:210-217), which
+// delegates to the LOCAL format builders with the resolved cloud path injected
+// (builders.rs:8890-8903). So an s3:// CSV honours every option a local CSV
+// does - and not one of the seven forms offered any of them, which left a
+// cloud CSV readable only as comma-delimited with a header, and a ragged one
+// not readable at all. Declared once here for the same reason as the
+// dead-letter section: src.s3 is hand-written and the other six are
+// synthesized, so a per-branch fix would have to be made twice.
+const CLOUD_FORMAT_SOURCES = new Set([
+    'src.s3',
+    'src.gcs',
+    'src.azureblob',
+    'src.http',
+    'src.minio',
+    'src.r2',
+    'src.b2',
+]);
+
+function withCloudReadOptions(id: string, m: ComponentManifest): ComponentManifest {
+    if (!CLOUD_FORMAT_SOURCES.has(id)) return m;
+    if (m.sections.some(s => s.fields.some(f => f.key === 'hasHeader'))) return m;
+    const sections: FormSection[] = [
+            {
+                label: 'Read options (CSV)',
+                fields: [
+                    { key: 'hasHeader', label: 'First row is header', kind: 'bool', defaultValue: true },
+                    {
+                        key: 'delimiter',
+                        label: 'Delimiter',
+                        kind: 'select',
+                        defaultValue: ',',
+                        options: [
+                            { label: 'Comma  ,', value: ',' },
+                            { label: 'Tab  \\t', value: '\t' },
+                            { label: 'Semicolon  ;', value: ';' },
+                            { label: 'Pipe  |', value: '|' },
+                        ],
+                    },
+                    {
+                        key: 'quoteChar',
+                        label: 'Quote character',
+                        kind: 'select',
+                        defaultValue: '"',
+                        options: [
+                            { label: 'Double quote  "', value: '"' },
+                            { label: "Single quote  '", value: "'" },
+                            { label: 'None', value: '' },
+                        ],
+                    },
+                    {
+                        key: 'encoding',
+                        label: 'Encoding',
+                        kind: 'select',
+                        defaultValue: 'utf-8',
+                        options: [
+                            { label: 'UTF-8', value: 'utf-8' },
+                            { label: 'UTF-16', value: 'utf-16' },
+                            { label: 'Latin-1 (ISO-8859-1)', value: 'latin-1' },
+                            { label: 'Windows-1252', value: 'windows-1252' },
+                        ],
+                    },
+                    { key: 'skipLines', label: 'Skip lines (top)', kind: 'integer', defaultValue: 0 },
+                    {
+                        key: 'nullValue',
+                        label: 'Null sentinel',
+                        kind: 'text',
+                        placeholder: 'e.g. NULL, NA, \\N',
+                        description: 'Strings that should be interpreted as NULL.',
+                    },
+                    {
+                        key: 'nullPadding',
+                        label: 'Pad short rows with NULL',
+                        kind: 'bool',
+                        defaultValue: false,
+                        description:
+                            'A row with fewer columns than the header is padded with NULLs instead of failing the read. Maps to read_csv null_padding=true.',
+                    },
+                    {
+                        key: 'ignoreErrors',
+                        label: 'Skip rows that will not parse',
+                        kind: 'bool',
+                        defaultValue: false,
+                        description:
+                            'Drop any row DuckDB cannot read instead of failing the whole file. It does not report which rows went, so prefer padding when the data is worth keeping.',
+                    },
+                    {
+                        key: 'readOptions',
+                        label: 'Extra read options',
+                        kind: 'key-value',
+                        description:
+                            'Any other DuckDB read_csv option, passed through as key=value (e.g. strict_mode=false, union_by_name=true, sample_size=-1).',
+                    },
+                ],
+            },
+            {
+                label: 'Read options (JSON)',
+                fields: [
+                    {
+                        key: 'recordsPath',
+                        label: 'Records path',
+                        kind: 'text',
+                        placeholder: 'data.items',
+                        description: 'Dotted path to the array of records inside the document. Leave blank when the file is already an array or NDJSON.',
+                    },
+                    {
+                        key: 'flatten',
+                        label: 'Flatten nested objects',
+                        kind: 'bool',
+                        defaultValue: false,
+                        description: 'Expand nested objects into columns instead of leaving them as JSON.',
+                    },
+                    {
+                        key: 'keepParentNames',
+                        label: 'Keep parent names',
+                        kind: 'bool',
+                        defaultValue: false,
+                        description:
+                            'Name a flattened column after the object it came from: owner.Id and account.Id rather than Id_1 and Id_2.',
+                    },
+                ],
+            },
+    ];
+    return { ...m, sections: [...m.sections, ...sections] };
+}
+
 function withDeadLetter(id: string, m: ComponentManifest): ComponentManifest {
     if (!DEAD_LETTER_SINKS.has(id)) return m;
     // A branch that already draws them keeps its own wording and placement.
@@ -1482,7 +1607,9 @@ export function getManifest(componentId: string | undefined): ComponentManifest 
         if (declared) return declared;
     }
     const built = MANIFESTS[componentId] ?? synthesizeManifest(componentId);
-    const m = built ? withDeadLetter(componentId, built) : built;
+    const m = built
+        ? withCloudReadOptions(componentId, withDeadLetter(componentId, built))
+        : built;
     if (m && !m.ports) {
         for (const cat of PALETTE) {
             for (const grp of cat.groups) {

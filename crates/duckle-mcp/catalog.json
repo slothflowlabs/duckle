@@ -8041,6 +8041,144 @@
                 "placeholder": "us-east-1"
               }
             ]
+          },
+          {
+            "label": "Read options (CSV)",
+            "fields": [
+              {
+                "key": "hasHeader",
+                "label": "First row is header",
+                "kind": "bool",
+                "defaultValue": true
+              },
+              {
+                "key": "delimiter",
+                "label": "Delimiter",
+                "kind": "select",
+                "defaultValue": ",",
+                "options": [
+                  {
+                    "label": "Comma  ,",
+                    "value": ","
+                  },
+                  {
+                    "label": "Tab  \\t",
+                    "value": "\t"
+                  },
+                  {
+                    "label": "Semicolon  ;",
+                    "value": ";"
+                  },
+                  {
+                    "label": "Pipe  |",
+                    "value": "|"
+                  }
+                ]
+              },
+              {
+                "key": "quoteChar",
+                "label": "Quote character",
+                "kind": "select",
+                "defaultValue": "\"",
+                "options": [
+                  {
+                    "label": "Double quote  \"",
+                    "value": "\""
+                  },
+                  {
+                    "label": "Single quote  '",
+                    "value": "'"
+                  },
+                  {
+                    "label": "None",
+                    "value": ""
+                  }
+                ]
+              },
+              {
+                "key": "encoding",
+                "label": "Encoding",
+                "kind": "select",
+                "defaultValue": "utf-8",
+                "options": [
+                  {
+                    "label": "UTF-8",
+                    "value": "utf-8"
+                  },
+                  {
+                    "label": "UTF-16",
+                    "value": "utf-16"
+                  },
+                  {
+                    "label": "Latin-1 (ISO-8859-1)",
+                    "value": "latin-1"
+                  },
+                  {
+                    "label": "Windows-1252",
+                    "value": "windows-1252"
+                  }
+                ]
+              },
+              {
+                "key": "skipLines",
+                "label": "Skip lines (top)",
+                "kind": "integer",
+                "defaultValue": 0
+              },
+              {
+                "key": "nullValue",
+                "label": "Null sentinel",
+                "kind": "text",
+                "placeholder": "e.g. NULL, NA, \\N",
+                "description": "Strings that should be interpreted as NULL."
+              },
+              {
+                "key": "nullPadding",
+                "label": "Pad short rows with NULL",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "A row with fewer columns than the header is padded with NULLs instead of failing the read. Maps to read_csv null_padding=true."
+              },
+              {
+                "key": "ignoreErrors",
+                "label": "Skip rows that will not parse",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Drop any row DuckDB cannot read instead of failing the whole file. It does not report which rows went, so prefer padding when the data is worth keeping."
+              },
+              {
+                "key": "readOptions",
+                "label": "Extra read options",
+                "kind": "key-value",
+                "description": "Any other DuckDB read_csv option, passed through as key=value (e.g. strict_mode=false, union_by_name=true, sample_size=-1)."
+              }
+            ]
+          },
+          {
+            "label": "Read options (JSON)",
+            "fields": [
+              {
+                "key": "recordsPath",
+                "label": "Records path",
+                "kind": "text",
+                "placeholder": "data.items",
+                "description": "Dotted path to the array of records inside the document. Leave blank when the file is already an array or NDJSON."
+              },
+              {
+                "key": "flatten",
+                "label": "Flatten nested objects",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Expand nested objects into columns instead of leaving them as JSON."
+              },
+              {
+                "key": "keepParentNames",
+                "label": "Keep parent names",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Name a flattened column after the object it came from: owner.Id and account.Id rather than Id_1 and Id_2."
+              }
+            ]
           }
         ],
         "ports": {
@@ -8224,6 +8362,144 @@
                     "value": "jsonl"
                   }
                 ]
+              }
+            ]
+          },
+          {
+            "label": "Read options (CSV)",
+            "fields": [
+              {
+                "key": "hasHeader",
+                "label": "First row is header",
+                "kind": "bool",
+                "defaultValue": true
+              },
+              {
+                "key": "delimiter",
+                "label": "Delimiter",
+                "kind": "select",
+                "defaultValue": ",",
+                "options": [
+                  {
+                    "label": "Comma  ,",
+                    "value": ","
+                  },
+                  {
+                    "label": "Tab  \\t",
+                    "value": "\t"
+                  },
+                  {
+                    "label": "Semicolon  ;",
+                    "value": ";"
+                  },
+                  {
+                    "label": "Pipe  |",
+                    "value": "|"
+                  }
+                ]
+              },
+              {
+                "key": "quoteChar",
+                "label": "Quote character",
+                "kind": "select",
+                "defaultValue": "\"",
+                "options": [
+                  {
+                    "label": "Double quote  \"",
+                    "value": "\""
+                  },
+                  {
+                    "label": "Single quote  '",
+                    "value": "'"
+                  },
+                  {
+                    "label": "None",
+                    "value": ""
+                  }
+                ]
+              },
+              {
+                "key": "encoding",
+                "label": "Encoding",
+                "kind": "select",
+                "defaultValue": "utf-8",
+                "options": [
+                  {
+                    "label": "UTF-8",
+                    "value": "utf-8"
+                  },
+                  {
+                    "label": "UTF-16",
+                    "value": "utf-16"
+                  },
+                  {
+                    "label": "Latin-1 (ISO-8859-1)",
+                    "value": "latin-1"
+                  },
+                  {
+                    "label": "Windows-1252",
+                    "value": "windows-1252"
+                  }
+                ]
+              },
+              {
+                "key": "skipLines",
+                "label": "Skip lines (top)",
+                "kind": "integer",
+                "defaultValue": 0
+              },
+              {
+                "key": "nullValue",
+                "label": "Null sentinel",
+                "kind": "text",
+                "placeholder": "e.g. NULL, NA, \\N",
+                "description": "Strings that should be interpreted as NULL."
+              },
+              {
+                "key": "nullPadding",
+                "label": "Pad short rows with NULL",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "A row with fewer columns than the header is padded with NULLs instead of failing the read. Maps to read_csv null_padding=true."
+              },
+              {
+                "key": "ignoreErrors",
+                "label": "Skip rows that will not parse",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Drop any row DuckDB cannot read instead of failing the whole file. It does not report which rows went, so prefer padding when the data is worth keeping."
+              },
+              {
+                "key": "readOptions",
+                "label": "Extra read options",
+                "kind": "key-value",
+                "description": "Any other DuckDB read_csv option, passed through as key=value (e.g. strict_mode=false, union_by_name=true, sample_size=-1)."
+              }
+            ]
+          },
+          {
+            "label": "Read options (JSON)",
+            "fields": [
+              {
+                "key": "recordsPath",
+                "label": "Records path",
+                "kind": "text",
+                "placeholder": "data.items",
+                "description": "Dotted path to the array of records inside the document. Leave blank when the file is already an array or NDJSON."
+              },
+              {
+                "key": "flatten",
+                "label": "Flatten nested objects",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Expand nested objects into columns instead of leaving them as JSON."
+              },
+              {
+                "key": "keepParentNames",
+                "label": "Keep parent names",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Name a flattened column after the object it came from: owner.Id and account.Id rather than Id_1 and Id_2."
               }
             ]
           }
@@ -8417,6 +8693,144 @@
                 ]
               }
             ]
+          },
+          {
+            "label": "Read options (CSV)",
+            "fields": [
+              {
+                "key": "hasHeader",
+                "label": "First row is header",
+                "kind": "bool",
+                "defaultValue": true
+              },
+              {
+                "key": "delimiter",
+                "label": "Delimiter",
+                "kind": "select",
+                "defaultValue": ",",
+                "options": [
+                  {
+                    "label": "Comma  ,",
+                    "value": ","
+                  },
+                  {
+                    "label": "Tab  \\t",
+                    "value": "\t"
+                  },
+                  {
+                    "label": "Semicolon  ;",
+                    "value": ";"
+                  },
+                  {
+                    "label": "Pipe  |",
+                    "value": "|"
+                  }
+                ]
+              },
+              {
+                "key": "quoteChar",
+                "label": "Quote character",
+                "kind": "select",
+                "defaultValue": "\"",
+                "options": [
+                  {
+                    "label": "Double quote  \"",
+                    "value": "\""
+                  },
+                  {
+                    "label": "Single quote  '",
+                    "value": "'"
+                  },
+                  {
+                    "label": "None",
+                    "value": ""
+                  }
+                ]
+              },
+              {
+                "key": "encoding",
+                "label": "Encoding",
+                "kind": "select",
+                "defaultValue": "utf-8",
+                "options": [
+                  {
+                    "label": "UTF-8",
+                    "value": "utf-8"
+                  },
+                  {
+                    "label": "UTF-16",
+                    "value": "utf-16"
+                  },
+                  {
+                    "label": "Latin-1 (ISO-8859-1)",
+                    "value": "latin-1"
+                  },
+                  {
+                    "label": "Windows-1252",
+                    "value": "windows-1252"
+                  }
+                ]
+              },
+              {
+                "key": "skipLines",
+                "label": "Skip lines (top)",
+                "kind": "integer",
+                "defaultValue": 0
+              },
+              {
+                "key": "nullValue",
+                "label": "Null sentinel",
+                "kind": "text",
+                "placeholder": "e.g. NULL, NA, \\N",
+                "description": "Strings that should be interpreted as NULL."
+              },
+              {
+                "key": "nullPadding",
+                "label": "Pad short rows with NULL",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "A row with fewer columns than the header is padded with NULLs instead of failing the read. Maps to read_csv null_padding=true."
+              },
+              {
+                "key": "ignoreErrors",
+                "label": "Skip rows that will not parse",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Drop any row DuckDB cannot read instead of failing the whole file. It does not report which rows went, so prefer padding when the data is worth keeping."
+              },
+              {
+                "key": "readOptions",
+                "label": "Extra read options",
+                "kind": "key-value",
+                "description": "Any other DuckDB read_csv option, passed through as key=value (e.g. strict_mode=false, union_by_name=true, sample_size=-1)."
+              }
+            ]
+          },
+          {
+            "label": "Read options (JSON)",
+            "fields": [
+              {
+                "key": "recordsPath",
+                "label": "Records path",
+                "kind": "text",
+                "placeholder": "data.items",
+                "description": "Dotted path to the array of records inside the document. Leave blank when the file is already an array or NDJSON."
+              },
+              {
+                "key": "flatten",
+                "label": "Flatten nested objects",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Expand nested objects into columns instead of leaving them as JSON."
+              },
+              {
+                "key": "keepParentNames",
+                "label": "Keep parent names",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Name a flattened column after the object it came from: owner.Id and account.Id rather than Id_1 and Id_2."
+              }
+            ]
           }
         ],
         "ports": {
@@ -8606,6 +9020,144 @@
                     "value": "jsonl"
                   }
                 ]
+              }
+            ]
+          },
+          {
+            "label": "Read options (CSV)",
+            "fields": [
+              {
+                "key": "hasHeader",
+                "label": "First row is header",
+                "kind": "bool",
+                "defaultValue": true
+              },
+              {
+                "key": "delimiter",
+                "label": "Delimiter",
+                "kind": "select",
+                "defaultValue": ",",
+                "options": [
+                  {
+                    "label": "Comma  ,",
+                    "value": ","
+                  },
+                  {
+                    "label": "Tab  \\t",
+                    "value": "\t"
+                  },
+                  {
+                    "label": "Semicolon  ;",
+                    "value": ";"
+                  },
+                  {
+                    "label": "Pipe  |",
+                    "value": "|"
+                  }
+                ]
+              },
+              {
+                "key": "quoteChar",
+                "label": "Quote character",
+                "kind": "select",
+                "defaultValue": "\"",
+                "options": [
+                  {
+                    "label": "Double quote  \"",
+                    "value": "\""
+                  },
+                  {
+                    "label": "Single quote  '",
+                    "value": "'"
+                  },
+                  {
+                    "label": "None",
+                    "value": ""
+                  }
+                ]
+              },
+              {
+                "key": "encoding",
+                "label": "Encoding",
+                "kind": "select",
+                "defaultValue": "utf-8",
+                "options": [
+                  {
+                    "label": "UTF-8",
+                    "value": "utf-8"
+                  },
+                  {
+                    "label": "UTF-16",
+                    "value": "utf-16"
+                  },
+                  {
+                    "label": "Latin-1 (ISO-8859-1)",
+                    "value": "latin-1"
+                  },
+                  {
+                    "label": "Windows-1252",
+                    "value": "windows-1252"
+                  }
+                ]
+              },
+              {
+                "key": "skipLines",
+                "label": "Skip lines (top)",
+                "kind": "integer",
+                "defaultValue": 0
+              },
+              {
+                "key": "nullValue",
+                "label": "Null sentinel",
+                "kind": "text",
+                "placeholder": "e.g. NULL, NA, \\N",
+                "description": "Strings that should be interpreted as NULL."
+              },
+              {
+                "key": "nullPadding",
+                "label": "Pad short rows with NULL",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "A row with fewer columns than the header is padded with NULLs instead of failing the read. Maps to read_csv null_padding=true."
+              },
+              {
+                "key": "ignoreErrors",
+                "label": "Skip rows that will not parse",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Drop any row DuckDB cannot read instead of failing the whole file. It does not report which rows went, so prefer padding when the data is worth keeping."
+              },
+              {
+                "key": "readOptions",
+                "label": "Extra read options",
+                "kind": "key-value",
+                "description": "Any other DuckDB read_csv option, passed through as key=value (e.g. strict_mode=false, union_by_name=true, sample_size=-1)."
+              }
+            ]
+          },
+          {
+            "label": "Read options (JSON)",
+            "fields": [
+              {
+                "key": "recordsPath",
+                "label": "Records path",
+                "kind": "text",
+                "placeholder": "data.items",
+                "description": "Dotted path to the array of records inside the document. Leave blank when the file is already an array or NDJSON."
+              },
+              {
+                "key": "flatten",
+                "label": "Flatten nested objects",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Expand nested objects into columns instead of leaving them as JSON."
+              },
+              {
+                "key": "keepParentNames",
+                "label": "Keep parent names",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Name a flattened column after the object it came from: owner.Id and account.Id rather than Id_1 and Id_2."
               }
             ]
           }
@@ -8799,6 +9351,144 @@
                 ]
               }
             ]
+          },
+          {
+            "label": "Read options (CSV)",
+            "fields": [
+              {
+                "key": "hasHeader",
+                "label": "First row is header",
+                "kind": "bool",
+                "defaultValue": true
+              },
+              {
+                "key": "delimiter",
+                "label": "Delimiter",
+                "kind": "select",
+                "defaultValue": ",",
+                "options": [
+                  {
+                    "label": "Comma  ,",
+                    "value": ","
+                  },
+                  {
+                    "label": "Tab  \\t",
+                    "value": "\t"
+                  },
+                  {
+                    "label": "Semicolon  ;",
+                    "value": ";"
+                  },
+                  {
+                    "label": "Pipe  |",
+                    "value": "|"
+                  }
+                ]
+              },
+              {
+                "key": "quoteChar",
+                "label": "Quote character",
+                "kind": "select",
+                "defaultValue": "\"",
+                "options": [
+                  {
+                    "label": "Double quote  \"",
+                    "value": "\""
+                  },
+                  {
+                    "label": "Single quote  '",
+                    "value": "'"
+                  },
+                  {
+                    "label": "None",
+                    "value": ""
+                  }
+                ]
+              },
+              {
+                "key": "encoding",
+                "label": "Encoding",
+                "kind": "select",
+                "defaultValue": "utf-8",
+                "options": [
+                  {
+                    "label": "UTF-8",
+                    "value": "utf-8"
+                  },
+                  {
+                    "label": "UTF-16",
+                    "value": "utf-16"
+                  },
+                  {
+                    "label": "Latin-1 (ISO-8859-1)",
+                    "value": "latin-1"
+                  },
+                  {
+                    "label": "Windows-1252",
+                    "value": "windows-1252"
+                  }
+                ]
+              },
+              {
+                "key": "skipLines",
+                "label": "Skip lines (top)",
+                "kind": "integer",
+                "defaultValue": 0
+              },
+              {
+                "key": "nullValue",
+                "label": "Null sentinel",
+                "kind": "text",
+                "placeholder": "e.g. NULL, NA, \\N",
+                "description": "Strings that should be interpreted as NULL."
+              },
+              {
+                "key": "nullPadding",
+                "label": "Pad short rows with NULL",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "A row with fewer columns than the header is padded with NULLs instead of failing the read. Maps to read_csv null_padding=true."
+              },
+              {
+                "key": "ignoreErrors",
+                "label": "Skip rows that will not parse",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Drop any row DuckDB cannot read instead of failing the whole file. It does not report which rows went, so prefer padding when the data is worth keeping."
+              },
+              {
+                "key": "readOptions",
+                "label": "Extra read options",
+                "kind": "key-value",
+                "description": "Any other DuckDB read_csv option, passed through as key=value (e.g. strict_mode=false, union_by_name=true, sample_size=-1)."
+              }
+            ]
+          },
+          {
+            "label": "Read options (JSON)",
+            "fields": [
+              {
+                "key": "recordsPath",
+                "label": "Records path",
+                "kind": "text",
+                "placeholder": "data.items",
+                "description": "Dotted path to the array of records inside the document. Leave blank when the file is already an array or NDJSON."
+              },
+              {
+                "key": "flatten",
+                "label": "Flatten nested objects",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Expand nested objects into columns instead of leaving them as JSON."
+              },
+              {
+                "key": "keepParentNames",
+                "label": "Keep parent names",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Name a flattened column after the object it came from: owner.Id and account.Id rather than Id_1 and Id_2."
+              }
+            ]
           }
         ],
         "ports": {
@@ -8988,6 +9678,144 @@
                     "value": "jsonl"
                   }
                 ]
+              }
+            ]
+          },
+          {
+            "label": "Read options (CSV)",
+            "fields": [
+              {
+                "key": "hasHeader",
+                "label": "First row is header",
+                "kind": "bool",
+                "defaultValue": true
+              },
+              {
+                "key": "delimiter",
+                "label": "Delimiter",
+                "kind": "select",
+                "defaultValue": ",",
+                "options": [
+                  {
+                    "label": "Comma  ,",
+                    "value": ","
+                  },
+                  {
+                    "label": "Tab  \\t",
+                    "value": "\t"
+                  },
+                  {
+                    "label": "Semicolon  ;",
+                    "value": ";"
+                  },
+                  {
+                    "label": "Pipe  |",
+                    "value": "|"
+                  }
+                ]
+              },
+              {
+                "key": "quoteChar",
+                "label": "Quote character",
+                "kind": "select",
+                "defaultValue": "\"",
+                "options": [
+                  {
+                    "label": "Double quote  \"",
+                    "value": "\""
+                  },
+                  {
+                    "label": "Single quote  '",
+                    "value": "'"
+                  },
+                  {
+                    "label": "None",
+                    "value": ""
+                  }
+                ]
+              },
+              {
+                "key": "encoding",
+                "label": "Encoding",
+                "kind": "select",
+                "defaultValue": "utf-8",
+                "options": [
+                  {
+                    "label": "UTF-8",
+                    "value": "utf-8"
+                  },
+                  {
+                    "label": "UTF-16",
+                    "value": "utf-16"
+                  },
+                  {
+                    "label": "Latin-1 (ISO-8859-1)",
+                    "value": "latin-1"
+                  },
+                  {
+                    "label": "Windows-1252",
+                    "value": "windows-1252"
+                  }
+                ]
+              },
+              {
+                "key": "skipLines",
+                "label": "Skip lines (top)",
+                "kind": "integer",
+                "defaultValue": 0
+              },
+              {
+                "key": "nullValue",
+                "label": "Null sentinel",
+                "kind": "text",
+                "placeholder": "e.g. NULL, NA, \\N",
+                "description": "Strings that should be interpreted as NULL."
+              },
+              {
+                "key": "nullPadding",
+                "label": "Pad short rows with NULL",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "A row with fewer columns than the header is padded with NULLs instead of failing the read. Maps to read_csv null_padding=true."
+              },
+              {
+                "key": "ignoreErrors",
+                "label": "Skip rows that will not parse",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Drop any row DuckDB cannot read instead of failing the whole file. It does not report which rows went, so prefer padding when the data is worth keeping."
+              },
+              {
+                "key": "readOptions",
+                "label": "Extra read options",
+                "kind": "key-value",
+                "description": "Any other DuckDB read_csv option, passed through as key=value (e.g. strict_mode=false, union_by_name=true, sample_size=-1)."
+              }
+            ]
+          },
+          {
+            "label": "Read options (JSON)",
+            "fields": [
+              {
+                "key": "recordsPath",
+                "label": "Records path",
+                "kind": "text",
+                "placeholder": "data.items",
+                "description": "Dotted path to the array of records inside the document. Leave blank when the file is already an array or NDJSON."
+              },
+              {
+                "key": "flatten",
+                "label": "Flatten nested objects",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Expand nested objects into columns instead of leaving them as JSON."
+              },
+              {
+                "key": "keepParentNames",
+                "label": "Keep parent names",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Name a flattened column after the object it came from: owner.Id and account.Id rather than Id_1 and Id_2."
               }
             ]
           }
@@ -15801,6 +16629,144 @@
                 "label": "Keep the original response at",
                 "kind": "text",
                 "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
+              }
+            ]
+          },
+          {
+            "label": "Read options (CSV)",
+            "fields": [
+              {
+                "key": "hasHeader",
+                "label": "First row is header",
+                "kind": "bool",
+                "defaultValue": true
+              },
+              {
+                "key": "delimiter",
+                "label": "Delimiter",
+                "kind": "select",
+                "defaultValue": ",",
+                "options": [
+                  {
+                    "label": "Comma  ,",
+                    "value": ","
+                  },
+                  {
+                    "label": "Tab  \\t",
+                    "value": "\t"
+                  },
+                  {
+                    "label": "Semicolon  ;",
+                    "value": ";"
+                  },
+                  {
+                    "label": "Pipe  |",
+                    "value": "|"
+                  }
+                ]
+              },
+              {
+                "key": "quoteChar",
+                "label": "Quote character",
+                "kind": "select",
+                "defaultValue": "\"",
+                "options": [
+                  {
+                    "label": "Double quote  \"",
+                    "value": "\""
+                  },
+                  {
+                    "label": "Single quote  '",
+                    "value": "'"
+                  },
+                  {
+                    "label": "None",
+                    "value": ""
+                  }
+                ]
+              },
+              {
+                "key": "encoding",
+                "label": "Encoding",
+                "kind": "select",
+                "defaultValue": "utf-8",
+                "options": [
+                  {
+                    "label": "UTF-8",
+                    "value": "utf-8"
+                  },
+                  {
+                    "label": "UTF-16",
+                    "value": "utf-16"
+                  },
+                  {
+                    "label": "Latin-1 (ISO-8859-1)",
+                    "value": "latin-1"
+                  },
+                  {
+                    "label": "Windows-1252",
+                    "value": "windows-1252"
+                  }
+                ]
+              },
+              {
+                "key": "skipLines",
+                "label": "Skip lines (top)",
+                "kind": "integer",
+                "defaultValue": 0
+              },
+              {
+                "key": "nullValue",
+                "label": "Null sentinel",
+                "kind": "text",
+                "placeholder": "e.g. NULL, NA, \\N",
+                "description": "Strings that should be interpreted as NULL."
+              },
+              {
+                "key": "nullPadding",
+                "label": "Pad short rows with NULL",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "A row with fewer columns than the header is padded with NULLs instead of failing the read. Maps to read_csv null_padding=true."
+              },
+              {
+                "key": "ignoreErrors",
+                "label": "Skip rows that will not parse",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Drop any row DuckDB cannot read instead of failing the whole file. It does not report which rows went, so prefer padding when the data is worth keeping."
+              },
+              {
+                "key": "readOptions",
+                "label": "Extra read options",
+                "kind": "key-value",
+                "description": "Any other DuckDB read_csv option, passed through as key=value (e.g. strict_mode=false, union_by_name=true, sample_size=-1)."
+              }
+            ]
+          },
+          {
+            "label": "Read options (JSON)",
+            "fields": [
+              {
+                "key": "recordsPath",
+                "label": "Records path",
+                "kind": "text",
+                "placeholder": "data.items",
+                "description": "Dotted path to the array of records inside the document. Leave blank when the file is already an array or NDJSON."
+              },
+              {
+                "key": "flatten",
+                "label": "Flatten nested objects",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Expand nested objects into columns instead of leaving them as JSON."
+              },
+              {
+                "key": "keepParentNames",
+                "label": "Keep parent names",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Name a flattened column after the object it came from: owner.Id and account.Id rather than Id_1 and Id_2."
               }
             ]
           }
