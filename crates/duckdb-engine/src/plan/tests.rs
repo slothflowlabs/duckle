@@ -5819,3 +5819,30 @@
         // Out of range is not a port, and must not wrap to one.
         assert_eq!(port_prop(&serde_json::json!({ "port": 70000 }), "port"), None);
     }
+
+    /// The GUI's "- column -" option writes column:"" and the builder emits
+    /// COUNT("") - a quoted empty identifier, which is not valid SQL.
+    #[test]
+    fn a_group_by_count_with_no_column_is_not_broken_sql() {
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/a.csv","hasHeader":true}}},
+                {"id":"g","position":{"x":0,"y":0},"data":{
+                  "label":"Group","componentId":"xf.groupby",
+                  "properties":{"groupKeys":["k"],
+                    "aggregations":[{"column":"","func":"count","output":"n"}]}}}
+              ],
+              "edges":[{"id":"e","source":"s","target":"g","data":{"connectionType":"main"}}]
+            }"#,
+        );
+        let sql = compile(&doc).unwrap().stages.into_iter()
+            .find(|s| s.node_id == "g").unwrap().sql;
+        assert!(
+            !sql.contains("count(\"\")") && !sql.contains("COUNT(\"\")"),
+            "an empty column must not become a quoted empty identifier: {sql}"
+        );
+        assert!(sql.contains("COUNT(*)"), "it means COUNT(*), which is what the option says: {sql}");
+    }

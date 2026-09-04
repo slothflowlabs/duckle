@@ -832,7 +832,18 @@ pub(crate) fn build_aggregate(
         .unwrap_or_default();
     let mut select_terms: Vec<String> = group_by.iter().map(|c| quote_ident(c)).collect();
     for agg in &aggregations {
-        let column = agg.get("column").and_then(JsonValue::as_str).unwrap_or("*");
+        // Empty means the same as absent: COUNT(*). The panel's aggregation
+        // row offers "- column -" as an option and writes `column: ""` for it,
+        // which is PRESENT, so `unwrap_or` never fired and the empty string
+        // went on to be quoted - emitting COUNT("") and failing the run on a
+        // quoted empty identifier. Trimmed as well, because a column picked and
+        // then cleared can leave whitespace behind.
+        let column = agg
+            .get("column")
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .unwrap_or("*");
         // The UI's AggregationsField stores { column, func, output };
         // accept the function/alias spellings too for robustness.
         let func = match agg
