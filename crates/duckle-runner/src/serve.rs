@@ -3256,6 +3256,11 @@ fn load_schedules(state: &State) -> Result<Value, String> {
                 // agreed with the wrong answer.
                 "timezone": s.timezone,
                 "exclude": s.exclude,
+                // #296: and the misfire policy, for the same reason - the tick
+                // loop reads this projection, so a policy that stops here is a
+                // policy that does nothing.
+                "misfire": s.misfire,
+                "catchup": s.catchup,
             }),
         );
     }
@@ -3310,6 +3315,16 @@ fn migrate_legacy_schedules(workspace: &Path) {
                     .map(str::to_string),
                 exclude: cfg
                     .get("exclude")
+                    .cloned()
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .unwrap_or_default(),
+                misfire: cfg
+                    .get("misfire")
+                    .cloned()
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .unwrap_or_default(),
+                catchup: cfg
+                    .get("catchup")
                     .cloned()
                     .and_then(|v| serde_json::from_value(v).ok())
                     .unwrap_or_default(),
@@ -3490,6 +3505,11 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
                 kind,
                 timezone: timezone.clone(),
                 exclude: exclude.clone(),
+                // #296: this route does not edit the misfire policy, so a
+                // schedule it CREATES takes the default (skip), which is the
+                // behaviour every schedule had before the policy existed.
+                misfire: Default::default(),
+                catchup: Default::default(),
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -4070,6 +4090,66 @@ fn cron_decision(
 }
 
 
+/// #296: run and record whatever this schedule missed.
+///
+/// The policy decides; this only carries it out. Every overdue occurrence gets
+/// a recorded outcome whether or not it runs, which is AC1 - "it was skipped"
+/// and "nothing happened" are different states and a moved pointer renders them
+/// the same.
+fn catch_up_schedule(
+    state: &State,
+    schedule_id: &str,
+    cfg: &Value,
+    zone: &duckle_duckdb_engine::cronzone::Zone,
+    exclude: &duckle_duckdb_engine::cronzone::Exclusions,
+    now: chrono::DateTime<chrono::Utc>,
+    pipes: &HashMap<String, PathBuf>,
+) {
+    use duckle_duckdb_engine::occurrences::{self, Decision};
+    let expr = cfg.get("cron").and_then(|v| v.as_str()).unwrap_or_default();
+    let misfire = cfg
+        .get("misfire")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    let bounds = cfg
+        .get("catchup")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    let overdue = match occurrences::catch_up(
+        &state.workspace, schedule_id, expr, zone, exclude, misfire, &bounds, now,
+    ) {
+        Ok(o) if o.is_empty() => return,
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("duckle-runner: schedule {schedule_id}: catch-up: {e}");
+            return;
+        }
+    };
+    for (occ, decision) in overdue {
+        let run = decision == Decision::Fired;
+        // Recorded BEFORE running, so a crash mid-catch-up leaves the
+        // occurrence decided rather than due again - the same ordering the
+        // ledger uses everywhere else.
+        let entry = occurrences::entry(
+            schedule_id,
+            &occ,
+            cfg.get("timezone").and_then(|v| v.as_str()),
+            decision,
+            None,
+            &now.to_rfc3339(),
+        );
+        if let Err(e) = occurrences::record(&state.workspace, &entry) {
+            eprintln!("duckle-runner: schedule {schedule_id}: occurrence not recorded ({e})");
+        }
+        if run {
+            eprintln!("duckle-runner: {schedule_id}: catching up {}", occ.at.to_rfc3339());
+            fire_schedule(state, schedule_id, cfg, pipes);
+        }
+    }
+}
+
 /// #296: write the occurrence this tick is firing into the durable ledger.
 ///
 /// Best effort, and deliberately: a ledger that could not be written is a gap
@@ -4282,6 +4362,13 @@ fn spawn_scheduler(state: Arc<State>) {
                             }
                             Ok(zone) => {
                                 let now = chrono::Utc::now();
+                                // #296: occurrences that came due while nobody
+                                // was listening. Decided over the ledger, so a
+                                // restart measures from what was recorded
+                                // rather than re-arming from "now" and losing
+                                // the window - which is what this loop did,
+                                // because its arming state is in memory.
+                                catch_up_schedule(&state, id, cfg, &zone, &exclude, now, &pipes);
                                 // What was armed IS the occurrence that comes
                                 // due, so it is recorded before the decision
                                 // moves past it. Read out first for that reason.
@@ -6325,6 +6412,8 @@ mod serve_honours_the_schedule {
             kind: duckle_duckdb_engine::schedules::ScheduleKind::Cron { expr: "0 3 * * *".into() },
             timezone: Some("Europe/Brussels".into()),
             exclude: serde_json::from_value(serde_json::json!({ "dates": ["2026-12-25"] })).unwrap(),
+            misfire: Default::default(),
+            catchup: Default::default(),
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,

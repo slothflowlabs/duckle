@@ -81,6 +81,19 @@ pub struct Schedule {
     /// days. Empty by default, which is every schedule written before this.
     #[serde(default, skip_serializing_if = "crate::cronzone::Exclusions::is_empty")]
     pub exclude: crate::cronzone::Exclusions,
+    /// #296: what to do about occurrences that came due while nobody was
+    /// listening - the server down, the machine asleep.
+    ///
+    /// `skip` is the default and is exactly today's behaviour, so no existing
+    /// schedule changes when this ships (AC5). What changes for everyone is
+    /// that a skipped occurrence is now RECORDED rather than silently absent.
+    #[serde(default)]
+    pub misfire: crate::occurrences::Misfire,
+    /// #296: how far a catch-up may go. Only consulted when `misfire` is not
+    /// `skip`, and never optional in effect: `all` without a bound is the
+    /// difference between a catch-up and an outage.
+    #[serde(default)]
+    pub catchup: crate::occurrences::Bounds,
     #[serde(default)]
     pub last_run_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
@@ -168,6 +181,8 @@ mod tests {
         Schedule {
             timezone: None,
             exclude: Default::default(),
+            misfire: Default::default(),
+            catchup: Default::default(),
             id: format!("id-{pipeline}"),
             pipeline_id: pipeline.into(),
             plan_id: None,

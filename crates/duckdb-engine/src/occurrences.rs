@@ -241,6 +241,55 @@ pub fn decide(
         .collect()
 }
 
+/// The newest occurrence this schedule has a record of.
+///
+/// The anchor a catch-up measures from. Taken from the LEDGER rather than from
+/// `next_run_at`, because the ledger is what survives a restart and the pointer
+/// is what a restart re-arms from "now".
+pub fn last_recorded(
+    workspace: &Path,
+    schedule_id: &str,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    read(workspace)
+        .into_iter()
+        .filter(|o| o.schedule_id == schedule_id)
+        .filter_map(|o| chrono::DateTime::parse_from_rfc3339(&o.scheduled_for).ok())
+        .map(|t| t.with_timezone(&chrono::Utc))
+        .max()
+}
+
+/// What this tick should do about occurrences that came due while nobody ran
+/// them, and what should be recorded either way.
+///
+/// Empty when the schedule has no record at all. That is deliberate and it is
+/// the difference between a catch-up and an accident: a schedule seen for the
+/// first time - newly created, or newly reaching a server that has never run
+/// it - has no anchor to measure from, and measuring from the epoch would fire
+/// its entire history. First sighting ARMS; it does not fire. That is what the
+/// tick loop already did and what this must not change.
+///
+/// AC3 - a restart must not decide the same occurrence twice - is satisfied by
+/// where the walk STARTS rather than by filtering afterwards. `last_recorded`
+/// is the newest recorded instant and `missed` enumerates strictly after it, so
+/// an occurrence that has a record cannot come back. A dedup pass on top was
+/// written first and removed: reverting it changed no test, because there was
+/// no case it could catch.
+pub fn catch_up(
+    workspace: &Path,
+    schedule_id: &str,
+    expr: &str,
+    zone: &crate::cronzone::Zone,
+    exclude: &crate::cronzone::Exclusions,
+    misfire: Misfire,
+    bounds: &Bounds,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Vec<(crate::cronzone::Occurrence, Decision)>, String> {
+    let Some(after) = last_recorded(workspace, schedule_id) else {
+        return Ok(Vec::new());
+    };
+    Ok(decide(&missed(expr, zone, exclude, after, now, bounds)?, misfire))
+}
+
 /// Build the record for one occurrence.
 pub fn entry(
     schedule_id: &str,
@@ -485,5 +534,159 @@ mod tests {
         write!(f, "{{\"occurrenceId\":\"half").unwrap();
         drop(f);
         assert_eq!(read(ws.path()).len(), 1, "one torn line hid a complete record");
+    }
+}
+
+/// #296: catch-up decided over the recorded ledger, not over a pointer.
+#[cfg(test)]
+mod catching_up {
+    use super::*;
+    use crate::cronzone::{resolve_zone, Exclusions};
+    use chrono::TimeZone;
+
+    fn utc(d: u32, h: u32) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(2026, 9, d, h, 0, 0).single().expect("one instant")
+    }
+
+    fn fired(ws: &Path, at: chrono::DateTime<chrono::Utc>) {
+        let scheduled_for = at.to_rfc3339();
+        record(
+            ws,
+            &Occurrence {
+                occurrence_id: occurrence_id("s1", &scheduled_for),
+                schedule_id: "s1".into(),
+                scheduled_for,
+                local: String::new(),
+                timezone: Some("UTC".into()),
+                decision: Decision::Fired,
+                run_id: Some("run-1".into()),
+                decided_at: at.to_rfc3339(),
+            },
+        )
+        .unwrap();
+    }
+
+    fn overdue(
+        ws: &Path,
+        misfire: Misfire,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Vec<(crate::cronzone::Occurrence, Decision)> {
+        catch_up(
+            ws,
+            "s1",
+            "0 3 * * *",
+            &resolve_zone(Some("UTC")).unwrap(),
+            &Exclusions::default(),
+            misfire,
+            &Bounds::default(),
+            now,
+        )
+        .unwrap()
+    }
+
+    /// The accident this must not be: a schedule nobody has a record of has no
+    /// anchor, and measuring from the epoch would fire its whole history.
+    #[test]
+    fn a_schedule_seen_for_the_first_time_catches_up_nothing() {
+        let ws = tempfile::tempdir().unwrap();
+        assert!(overdue(ws.path(), Misfire::All, utc(10, 12)).is_empty());
+    }
+
+    /// The server was down from the 1st to the 5th.
+    #[test]
+    fn a_downtime_window_is_decided_by_the_policy() {
+        let ws = tempfile::tempdir().unwrap();
+        fired(ws.path(), utc(1, 3));
+
+        let all = overdue(ws.path(), Misfire::All, utc(5, 12));
+        let days: Vec<u32> = all.iter().map(|(o, _)| chrono::Datelike::day(&o.at)).collect();
+        assert_eq!(days, [2, 3, 4, 5], "one per missed day: {days:?}");
+        assert!(all.iter().all(|(_, d)| *d == Decision::Fired));
+
+        let latest = overdue(ws.path(), Misfire::Latest, utc(5, 12));
+        assert_eq!(latest.len(), 4, "every occurrence still gets an outcome");
+        assert_eq!(
+            latest.iter().filter(|(_, d)| *d == Decision::Fired).count(),
+            1,
+            "only the newest runs"
+        );
+        assert_eq!(latest[3].1, Decision::Fired, "and it is the newest");
+
+        let skip = overdue(ws.path(), Misfire::Skip, utc(5, 12));
+        assert_eq!(skip.len(), 4);
+        assert!(
+            skip.iter().all(|(_, d)| matches!(d, Decision::Skipped { .. })),
+            "skip preserves today's behaviour, and now records it"
+        );
+    }
+
+    /// AC3: a restart re-enumerates the same window and must recognise what it
+    /// already decided.
+    #[test]
+    fn a_restart_does_not_decide_the_same_occurrence_twice() {
+        let ws = tempfile::tempdir().unwrap();
+        fired(ws.path(), utc(1, 3));
+
+        let first = overdue(ws.path(), Misfire::All, utc(4, 12));
+        assert_eq!(first.len(), 3);
+        // The tick records what it decided, as the scheduler does.
+        for (occ, decision) in &first {
+            record(
+                ws.path(),
+                &entry("s1", occ, Some("UTC"), decision.clone(), None, "2026-09-04T12:00:00Z"),
+            )
+            .unwrap();
+        }
+
+        let again = overdue(ws.path(), Misfire::All, utc(4, 12));
+        assert!(again.is_empty(), "a restart would have run these again: {again:?}");
+    }
+
+    /// An excluded day is not an occurrence, so it is not one to catch up on.
+    #[test]
+    fn an_excluded_day_is_not_caught_up() {
+        let ws = tempfile::tempdir().unwrap();
+        fired(ws.path(), utc(1, 3));
+        let out = catch_up(
+            ws.path(),
+            "s1",
+            "0 3 * * *",
+            &resolve_zone(Some("UTC")).unwrap(),
+            &serde_json::from_value(serde_json::json!({ "dates": ["2026-09-03"] })).unwrap(),
+            Misfire::All,
+            &Bounds::default(),
+            utc(5, 12),
+        )
+        .unwrap();
+        let days: Vec<u32> = out.iter().map(|(o, _)| chrono::Datelike::day(&o.at)).collect();
+        assert_eq!(days, [2, 4, 5], "the 3rd was excluded: {days:?}");
+    }
+
+    /// AC2, through the whole path rather than only through `missed`.
+    #[test]
+    fn a_long_outage_is_bounded() {
+        let ws = tempfile::tempdir().unwrap();
+        fired(ws.path(), utc(1, 3));
+        let out = catch_up(
+            ws.path(),
+            "s1",
+            "0 3 * * *",
+            &resolve_zone(Some("UTC")).unwrap(),
+            &Exclusions::default(),
+            Misfire::All,
+            &Bounds { max_catchup_runs: 3, max_catchup_age_days: 365 },
+            utc(20, 12),
+        )
+        .unwrap();
+        assert_eq!(out.len(), 3, "bounded to 3");
+        let days: Vec<u32> = out.iter().map(|(o, _)| chrono::Datelike::day(&o.at)).collect();
+        assert_eq!(days, [18, 19, 20], "and kept the recent end: {days:?}");
+    }
+
+    #[test]
+    fn nothing_overdue_decides_nothing() {
+        let ws = tempfile::tempdir().unwrap();
+        fired(ws.path(), utc(5, 3));
+        assert!(overdue(ws.path(), Misfire::All, utc(5, 4)).is_empty(), "not due again yet");
     }
 }
