@@ -4925,13 +4925,19 @@ mod tests {
         ));
 
         for (pool, cap) in [("heavy", 1usize), ("network", 4usize)] {
+            // Two properties, measured separately, because only one of them can
+            // be observed by counting and the other cannot be observed by
+            // waiting.
+            //
+            // 1. NEVER MORE than the cap. This is the guarantee, and a counter
+            //    sees it whenever it is violated - so more contenders than
+            //    permits is the right shape, and never seeing an overrun is the
+            //    correct outcome rather than a weak one.
             let peak = std::sync::Arc::new(AtomicUsize::new(0));
             let live = std::sync::Arc::new(AtomicUsize::new(0));
             let mut handles = Vec::new();
-            for _ in 0..8 {
-                let gates = gates.clone();
-                let peak = peak.clone();
-                let live = live.clone();
+            for _ in 0..cap * 2 + 2 {
+                let (gates, peak, live) = (gates.clone(), peak.clone(), live.clone());
                 handles.push(std::thread::spawn(move || {
                     let (_permit, got, _waited) = gates.acquire(pool);
                     assert_eq!(got, pool);
@@ -4944,10 +4950,37 @@ mod tests {
             for h in handles {
                 h.join().unwrap();
             }
+            let seen = peak.load(Ordering::SeqCst);
+            assert!(seen <= cap, "pool {pool} admitted {seen} at once, over its cap of {cap}");
+
+            // 2. THE CAP IS REACHABLE - the gate bounds rather than serialises.
+            //    Asserted with a barrier of exactly `cap` threads rather than by
+            //    hoping the OS overlaps them: every one has to ARRIVE before any
+            //    leaves, so the barrier releases only if the gate really held
+            //    `cap` permits at the same moment. The previous version asserted
+            //    peak == cap after a sleep, which is a scheduling coincidence -
+            //    on a loaded runner the threads serialise, the peak comes out
+            //    under the cap, and the test fails while the gate is behaving
+            //    perfectly. That reddened CI.
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(cap));
+            let together = std::sync::Arc::new(AtomicUsize::new(0));
+            let mut handles = Vec::new();
+            for _ in 0..cap {
+                let (gates, barrier, together) =
+                    (gates.clone(), barrier.clone(), together.clone());
+                handles.push(std::thread::spawn(move || {
+                    let (_permit, _got, _waited) = gates.acquire(pool);
+                    barrier.wait();
+                    together.fetch_add(1, Ordering::SeqCst);
+                }));
+            }
+            for h in handles {
+                h.join().unwrap();
+            }
             assert_eq!(
-                peak.load(Ordering::SeqCst),
+                together.load(Ordering::SeqCst),
                 cap,
-                "pool {pool} admitted the wrong number at once"
+                "pool {pool} never held {cap} permits at the same time"
             );
         }
     }
