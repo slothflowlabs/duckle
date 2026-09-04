@@ -70,6 +70,7 @@ pub mod contracts;
 pub mod cronzone;
 pub mod mask;
 pub mod nodeout;
+pub mod occurrences;
 pub mod outcache;
 pub mod params;
 pub mod retry;
