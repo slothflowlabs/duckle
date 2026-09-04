@@ -317,7 +317,7 @@ Components that take credentials. A saved connection keeps them out of the pipel
 | `src.redpanda` | source | - | yes |
 | `src.redshift` | source | yes | yes |
 | `src.rest` | source | yes | yes |
-| `src.s3` | source | yes | - |
+| `src.s3` | source | yes | yes |
 | `src.salesforce` | source | yes | yes |
 | `src.salesforce.bulk` | source | yes | yes |
 | `src.sap` | source | yes | yes |
