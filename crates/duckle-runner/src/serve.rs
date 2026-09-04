@@ -3247,6 +3247,15 @@ fn load_schedules(state: &State) -> Result<Value, String> {
                 // named a plan fired the pipeline it was keyed by instead, and failed
                 // looking for a file nobody had written.
                 "planId": s.plan_id,
+                // #318 and #296, for the same reason and after the same bug.
+                // Both were stored, both were honoured by the desktop
+                // scheduler, and NEITHER reached this projection - so `duckle
+                // serve` fired a `Europe/Brussels` schedule at the container's
+                // UTC clock, and ran on a date the operator had excluded. The
+                // console's own next-run display read them from here too, so it
+                // agreed with the wrong answer.
+                "timezone": s.timezone,
+                "exclude": s.exclude,
             }),
         );
     }
@@ -4028,13 +4037,26 @@ fn plan_step_outcome(result: Result<Value, String>) -> Result<(), String> {
 /// until the OLD occurrence came round: a schedule moved from 03:00 to 09:00
 /// skipped 09:00 entirely and then fired at 03:00 the next morning, at the one
 /// time it had just been moved away from.
+///
+/// #296/#318: the next occurrence comes from the SHARED evaluator, so the zone
+/// and the exclusion calendar are read here rather than only displayed. Before
+/// this it used `cron::Schedule::after` against `chrono::Local`, which meant a
+/// schedule saying `Europe/Brussels` fired at the container's clock and a date
+/// the operator had excluded was fired anyway - on the server, which is the
+/// deployment those two features exist for.
 fn cron_decision(
-    armed: Option<&(String, chrono::DateTime<chrono::Local>)>,
+    armed: Option<&(String, chrono::DateTime<chrono::Utc>)>,
     expr: &str,
-    sched: &cron::Schedule,
-    now: chrono::DateTime<chrono::Local>,
-) -> (bool, Option<(String, chrono::DateTime<chrono::Local>)>) {
-    let next_after_now = || sched.after(&now).next().map(|t| (expr.to_string(), t));
+    zone: &duckle_duckdb_engine::cronzone::Zone,
+    exclude: &duckle_duckdb_engine::cronzone::Exclusions,
+    now: chrono::DateTime<chrono::Utc>,
+) -> (bool, Option<(String, chrono::DateTime<chrono::Utc>)>) {
+    let next_after_now = || {
+        duckle_duckdb_engine::cronzone::next_after_excluding(expr, zone, exclude, now)
+            .ok()
+            .and_then(|(occ, _skipped)| occ)
+            .map(|o| (expr.to_string(), o.at))
+    };
     match armed {
         // Armed from this very expression, and its moment has come.
         Some((e, at)) if e == expr && now >= *at => (true, next_after_now()),
@@ -4127,7 +4149,11 @@ fn spawn_scheduler(state: Arc<State>) {
     std::thread::spawn(move || {
         let mut last_fired: HashMap<String, Instant> = HashMap::new();
         // The armed occurrence AND the expression it came from. See cron_decision.
-        let mut cron_next: HashMap<String, (String, chrono::DateTime<chrono::Local>)> =
+        // UTC, not Local: the armed instant now comes from the shared
+        // evaluator, which resolves the schedule's own zone. Keeping it in the
+        // machine's zone would convert it back on every comparison for no
+        // reason and reintroduce the local-clock assumption being removed.
+        let mut cron_next: HashMap<String, (String, chrono::DateTime<chrono::Utc>)> =
             HashMap::new();
         // #304: checked on a clock, because the failures freshness exists for
         // produce no run at all - a schedule switched off, a server that was
@@ -4194,16 +4220,38 @@ fn spawn_scheduler(state: Arc<State>) {
                     let cron = cfg.get("cron").and_then(|v| v.as_str()).unwrap_or("").trim();
                     if enabled && !cron.is_empty() {
                         last_fired.remove(id);
-                        match normalize_cron(cron).and_then(|e| e.parse::<cron::Schedule>().ok()) {
-                            None => {
+                        // Zone and exclusions come off the projection, which
+                        // now carries them. Absent means the machine's zone and
+                        // no exclusions, which is what every schedule written
+                        // before #318 and #296 means.
+                        let zone = cfg
+                            .get("timezone")
+                            .and_then(|v| v.as_str())
+                            .map(|t| duckle_duckdb_engine::cronzone::resolve_zone(Some(t)))
+                            .unwrap_or_else(|| {
+                                duckle_duckdb_engine::cronzone::resolve_zone(None)
+                            });
+                        let exclude: duckle_duckdb_engine::cronzone::Exclusions = cfg
+                            .get("exclude")
+                            .cloned()
+                            .and_then(|v| serde_json::from_value(v).ok())
+                            .unwrap_or_default();
+                        match zone {
+                            // A zone the machine cannot resolve is a refusal,
+                            // not a silent fall back to local: firing a
+                            // `Europe/Brussels` schedule at UTC because the
+                            // name was misspelled is the bug this is fixing.
+                            Err(e) => {
+                                eprintln!("duckle-runner: schedule {id}: {e}; not firing");
                                 cron_next.remove(id);
                             }
-                            Some(sched) => {
+                            Ok(zone) => {
                                 let (fire, rearm) = cron_decision(
                                     cron_next.get(id),
                                     cron,
-                                    &sched,
-                                    chrono::Local::now(),
+                                    &zone,
+                                    &exclude,
+                                    chrono::Utc::now(),
                                 );
                                 if fire {
                                     fire_schedule(&state, id, cfg, &pipes);
@@ -5820,16 +5868,17 @@ mod tests {
     #[test]
     fn an_edited_cron_expression_is_armed_from_the_new_one() {
         use chrono::{Datelike, TimeZone, Timelike};
-        let parse = |e: &str| {
-            normalize_cron(e).and_then(|x| x.parse::<cron::Schedule>().ok()).expect("bad cron")
-        };
+        use duckle_duckdb_engine::cronzone::Exclusions;
+        // A fixed zone, so the test reads the same clock wherever it runs. UTC
+        // is the honest choice now the decision is made in UTC.
+        let zone = duckle_duckdb_engine::cronzone::resolve_zone(Some("UTC")).unwrap();
+        let none = Exclusions::default();
         let at = |h: u32, m: u32| {
-            chrono::Local.with_ymd_and_hms(2026, 8, 15, h, m, 0).single().expect("ambiguous local time")
+            chrono::Utc.with_ymd_and_hms(2026, 8, 15, h, m, 0).single().expect("one instant")
         };
 
         // 03:00 daily, first seen at 08:00: arm tomorrow, do not fire.
-        let daily_3am = parse("0 3 * * *");
-        let (fire, armed) = cron_decision(None, "0 3 * * *", &daily_3am, at(8, 0));
+        let (fire, armed) = cron_decision(None, "0 3 * * *", &zone, &none, at(8, 0));
         assert!(!fire, "a schedule fired the moment it was first seen");
         let armed = armed.expect("nothing was armed");
         assert_eq!(armed.0, "0 3 * * *");
@@ -5837,8 +5886,7 @@ mod tests {
 
         // Now it is edited to 09:00. The next tick must re-arm from the NEW
         // expression rather than keep waiting for tomorrow's 03:00.
-        let daily_9am = parse("0 9 * * *");
-        let (fire, rearmed) = cron_decision(Some(&armed), "0 9 * * *", &daily_9am, at(8, 0));
+        let (fire, rearmed) = cron_decision(Some(&armed), "0 9 * * *", &zone, &none, at(8, 0));
         assert!(!fire, "the edit itself fired a run");
         let rearmed = rearmed.expect("nothing was armed after the edit");
         assert_eq!(rearmed.0, "0 9 * * *", "still armed by the old expression");
@@ -5846,14 +5894,14 @@ mod tests {
         assert_eq!(rearmed.1.day(), 15, "the edit was pushed to tomorrow");
 
         // And at 09:00 it fires, then arms the following day.
-        let (fire, next) = cron_decision(Some(&rearmed), "0 9 * * *", &daily_9am, at(9, 0));
+        let (fire, next) = cron_decision(Some(&rearmed), "0 9 * * *", &zone, &none, at(9, 0));
         assert!(fire, "the edited schedule did not fire at its new time");
         let next = next.expect("nothing was armed after firing");
         assert_eq!(next.1.day(), 16, "re-armed on the same day, so it would fire twice");
 
         // An unchanged expression that is not due yet is left exactly alone,
         // or the occurrence would be pushed away on every tick and never come.
-        let (fire, held) = cron_decision(Some(&next), "0 9 * * *", &daily_9am, at(9, 1));
+        let (fire, held) = cron_decision(Some(&next), "0 9 * * *", &zone, &none, at(9, 1));
         assert!(!fire);
         assert_eq!(held.unwrap().1, next.1, "an armed occurrence was moved by a tick");
     }
@@ -6097,5 +6145,136 @@ mod delivery_parameters {
         let out = bound(plain, &day_partitioned(declares), &delivery(&[("x", "1")]));
         assert_eq!(out.len(), 1);
         assert_eq!(out["x"], "1");
+    }
+}
+
+/// #296/#318: the server must honour the zone and the exclusion calendar it
+/// was told about, not only display them.
+#[cfg(test)]
+mod serve_honours_the_schedule {
+    use super::*;
+    use chrono::TimeZone;
+    use duckle_duckdb_engine::cronzone::{resolve_zone, Exclusions};
+
+    fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(y, mo, d, h, mi, 0).single().expect("one instant")
+    }
+
+    /// The bug: `duckle serve` armed from `cron::Schedule::after` against the
+    /// machine's clock, so "03:00 Europe/Brussels" fired at 03:00 UTC in a
+    /// container - two hours early in summer, and on the wrong side of
+    /// midnight for anything near it.
+    #[test]
+    fn a_zoned_expression_is_armed_at_the_zones_clock() {
+        let brussels = resolve_zone(Some("Europe/Brussels")).unwrap();
+        let none = Exclusions::default();
+        // Mid-August: Brussels is UTC+2, so 03:00 there is 01:00 UTC.
+        let (fire, armed) = cron_decision(None, "0 3 * * *", &brussels, &none, utc(2026, 8, 15, 0, 0));
+        assert!(!fire, "first sighting must arm, not fire");
+        let armed = armed.expect("armed");
+        assert_eq!(
+            armed.1,
+            utc(2026, 8, 15, 1, 0),
+            "03:00 Brussels in August is 01:00 UTC; armed at {:?}",
+            armed.1
+        );
+
+        // And it fires there, not at 03:00 UTC.
+        let (early, _) = cron_decision(Some(&armed), "0 3 * * *", &brussels, &none, utc(2026, 8, 15, 0, 59));
+        assert!(!early, "fired before its own clock reached it");
+        let (fire, _) = cron_decision(Some(&armed), "0 3 * * *", &brussels, &none, utc(2026, 8, 15, 1, 0));
+        assert!(fire, "did not fire when Brussels reached 03:00");
+    }
+
+    /// The other half, and the one that shipped broken: an excluded date was
+    /// honoured by the desktop scheduler and ignored by the server, which is
+    /// the deployment a maintenance window exists for.
+    #[test]
+    fn an_excluded_date_is_not_fired_on_the_server() {
+        let utc_zone = resolve_zone(Some("UTC")).unwrap();
+        let christmas: Exclusions =
+            serde_json::from_value(serde_json::json!({ "dates": ["2026-12-25"] })).unwrap();
+
+        // Armed on the 24th, looking for the next 03:00.
+        let (_, armed) =
+            cron_decision(None, "0 3 * * *", &utc_zone, &christmas, utc(2026, 12, 24, 12, 0));
+        let armed = armed.expect("armed");
+        assert_eq!(
+            armed.1,
+            utc(2026, 12, 26, 3, 0),
+            "the 25th was excluded, so the next occurrence is the 26th; got {:?}",
+            armed.1
+        );
+
+        // Nothing fires while the excluded day passes.
+        let (fire, _) =
+            cron_decision(Some(&armed), "0 3 * * *", &utc_zone, &christmas, utc(2026, 12, 25, 3, 0));
+        assert!(!fire, "fired on a date the operator excluded");
+    }
+
+    /// An excluded WEEKDAY, and in the schedule's own zone rather than UTC.
+    #[test]
+    fn an_excluded_weekday_is_read_in_the_schedules_zone() {
+        let brussels = resolve_zone(Some("Europe/Brussels")).unwrap();
+        let sundays: Exclusions =
+            serde_json::from_value(serde_json::json!({ "weekdays": ["sunday"] })).unwrap();
+        // 2026-08-16 is a Sunday. A 00:30 Brussels occurrence on that Sunday is
+        // 22:30 UTC on the SATURDAY, so a UTC-based check would keep it.
+        let (_, armed) =
+            cron_decision(None, "30 0 * * *", &brussels, &sundays, utc(2026, 8, 15, 12, 0));
+        let armed = armed.expect("armed");
+        assert_ne!(
+            armed.1,
+            utc(2026, 8, 15, 22, 30),
+            "that instant is Sunday 00:30 in Brussels and must be excluded"
+        );
+        assert_eq!(armed.1, utc(2026, 8, 16, 22, 30), "the next one is Monday 00:30 Brussels");
+    }
+
+    /// The projection is what the scheduler reads, so anything it needs has to
+    /// be in it. Both of these were stored and neither arrived.
+    #[test]
+    fn the_projection_carries_what_the_scheduler_needs() {
+        let s = duckle_duckdb_engine::schedules::Schedule {
+            id: "s1".into(),
+            pipeline_id: "p".into(),
+            name: "nightly".into(),
+            enabled: true,
+            plan_id: None,
+            kind: duckle_duckdb_engine::schedules::ScheduleKind::Cron { expr: "0 3 * * *".into() },
+            timezone: Some("Europe/Brussels".into()),
+            exclude: serde_json::from_value(serde_json::json!({ "dates": ["2026-12-25"] })).unwrap(),
+            last_run_at: None,
+            last_run_status: None,
+            last_run_duration_ms: None,
+            last_run_error: None,
+            next_run_at: None,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        duckle_duckdb_engine::schedules::update(&ws, |all| all.push(s)).unwrap();
+        let state = State {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from("duckdb"),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(
+                Default::default(),
+            )),
+            running: Mutex::new(std::collections::HashSet::new()),
+            runs: Mutex::new(std::collections::HashMap::new()),
+            console: console_auth::Console::configure(&ws, "127.0.0.1", None).unwrap(),
+            host: "127.0.0.1".into(),
+            tick_interval: std::time::Duration::from_secs(15),
+            oidc: None,
+            oidc_endpoints: Mutex::new(None),
+            oidc_logins: Mutex::new(Default::default()),
+        };
+        let projected = load_schedules(&state).expect("a projection");
+        let one = projected.get("p").expect("the schedule");
+        assert_eq!(one.get("timezone").and_then(|v| v.as_str()), Some("Europe/Brussels"));
+        assert_eq!(
+            one.get("exclude").and_then(|v| v.get("dates")).and_then(|v| v.as_array()).map(Vec::len),
+            Some(1),
+            "the exclusion calendar has to reach the scheduler: {one}"
+        );
     }
 }
