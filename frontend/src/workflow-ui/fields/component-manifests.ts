@@ -604,6 +604,20 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                     },
                 ],
             },
+            // Symmetric with snk.s3, which has always offered these. The
+            // engine's S3 secret needs accessKey and secretKey - without them
+            // no CREATE SECRET is emitted at all - and region silently defaults
+            // to us-east-1, so a bucket anywhere else was signed for the wrong
+            // region with nothing in the panel to correct it. A saved connection
+            // was the only way in.
+            {
+                label: 'Credentials',
+                fields: [
+                    { key: 'accessKey', label: 'Access key', kind: 'text' },
+                    { key: 'secretKey', label: 'Secret key', kind: 'text', placeholder: '••••••••' },
+                    { key: 'region', label: 'Region', kind: 'text', placeholder: 'us-east-1' },
+                ],
+            },
         ],
         ports: { inputs: [], outputs: [{ id: 'main', label: 'out', type: 'main' }] },
     },

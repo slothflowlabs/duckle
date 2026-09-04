@@ -8038,6 +8038,28 @@
                 ]
               }
             ]
+          },
+          {
+            "label": "Credentials",
+            "fields": [
+              {
+                "key": "accessKey",
+                "label": "Access key",
+                "kind": "text"
+              },
+              {
+                "key": "secretKey",
+                "label": "Secret key",
+                "kind": "text",
+                "placeholder": "••••••••"
+              },
+              {
+                "key": "region",
+                "label": "Region",
+                "kind": "text",
+                "placeholder": "us-east-1"
+              }
+            ]
           }
         ],
         "ports": {
