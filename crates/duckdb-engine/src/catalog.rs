@@ -605,6 +605,41 @@ pub fn freshness(workspace: &Path) -> BTreeMap<String, Freshness> {
             }
         }
     }
+    // #303/#304: and the durable publication log, which run history is not.
+    //
+    // Run history is a rolling window of the last 50 runs PER PIPELINE, so an
+    // asset written less often than that - a monthly rollup produced by an
+    // hourly pipeline - has the record of its write trimmed away by the runs
+    // that came after it. Freshness then knows of no write at all, and an SLA
+    // reads "no write" as STALE, which is the right reading of a genuinely
+    // unwritten asset and a false alarm here. One that never clears, because
+    // the next window trims it again.
+    //
+    // The materialization log (#325) is the durable record of the same
+    // publications and is not trimmed by volume - only by an explicit retention
+    // horizon an operator sets (#303). Folded in rather than replacing history,
+    // because a workspace that has never built a catalog records runs with no
+    // assets and therefore no events, and its history is all there is.
+    for event in crate::materialize::read(workspace) {
+        for asset in &event.assets {
+            let better = match out.get(asset) {
+                Some(existing) => event.committed_at > existing.last_written_at,
+                None => true,
+            };
+            if better {
+                out.insert(
+                    asset.clone(),
+                    Freshness {
+                        last_written_at: event.committed_at.clone(),
+                        pipeline_id: event.pipeline_id.clone(),
+                        // The event records what was published, not how many
+                        // rows: absent is "not recorded", which is what it is.
+                        rows: None,
+                    },
+                );
+            }
+        }
+    }
     out
 }
 
@@ -2489,5 +2524,119 @@ mod sla_on_the_view {
         };
         let view = view_of(tmp.path(), &catalog);
         assert_eq!(view.assets[0].sla_state, None, "an undeclared asset was given a verdict");
+    }
+}
+
+/// #303 x #304: freshness is derived from a rolling window of run history.
+#[cfg(test)]
+mod freshness_and_the_history_window {
+    use super::*;
+    use crate::history::{append_run_record, AssetTouch, RunRecord};
+
+    fn wrote(n: usize, asset: &str) -> RunRecord {
+        RunRecord {
+            run_id: Some(format!("run-{n}")),
+            at: format!("2026-09-04T{:02}:00:00Z", n % 24),
+            status: "ok".into(),
+            duration_ms: 1,
+            rows: 1,
+            node_count: 1,
+            trigger: "scheduled".into(),
+            error: None,
+            unchanged: false,
+            incomplete: false,
+            incomplete_reason: None,
+            category: None,
+            assets: vec![AssetTouch { id: asset.into(), direction: "write".into(), rows: Some(1) }],
+        }
+    }
+
+    /// An asset written less often than once per 50 runs of its pipeline loses
+    /// the record that it was ever written.
+    #[test]
+    fn an_infrequently_written_asset_falls_out_of_the_window() {
+        let ws = tempfile::tempdir().unwrap();
+        // The monthly rollup, written once.
+        append_run_record(ws.path(), "hourly", wrote(0, "/data/monthly.parquet")).unwrap();
+        assert!(
+            freshness(ws.path()).contains_key("/data/monthly.parquet"),
+            "it was just written"
+        );
+        // Then the pipeline runs hourly, writing something else each time.
+        for n in 1..=60 {
+            append_run_record(ws.path(), "hourly", wrote(n, "/data/hourly.parquet")).unwrap();
+        }
+        let f = freshness(ws.path());
+        assert!(f.contains_key("/data/hourly.parquet"));
+        // Trimmed out of the 50-run window, and still known - because the
+        // publication log is not trimmed by how often OTHER assets are written.
+        let monthly = f
+            .get("/data/monthly.parquet")
+            .expect("an asset must not be forgotten because other runs came after it");
+        assert_eq!(monthly.last_written_at, "2026-09-04T00:00:00Z");
+        assert_eq!(monthly.pipeline_id, "hourly");
+    }
+
+    /// The history window is genuinely the thing that loses it, so a workspace
+    /// with no publication log to fall back on still shows the gap. This pins
+    /// WHY the fix is needed rather than only that it works.
+    #[test]
+    fn the_history_window_alone_would_have_lost_it() {
+        let ws = tempfile::tempdir().unwrap();
+        append_run_record(ws.path(), "hourly", wrote(0, "/data/monthly.parquet")).unwrap();
+        for n in 1..=60 {
+            append_run_record(ws.path(), "hourly", wrote(n, "/data/hourly.parquet")).unwrap();
+        }
+        // Remove the durable log and re-read: history alone has forgotten it.
+        std::fs::remove_file(crate::materialize::log_path(ws.path())).unwrap();
+        assert!(
+            !freshness(ws.path()).contains_key("/data/monthly.parquet"),
+            "the 50-run window is what loses it"
+        );
+    }
+
+    /// And forgetting it is not harmless: an SLA on that asset reports STALE,
+    /// which is a false alarm that never clears.
+    #[test]
+    fn a_forgotten_asset_with_an_sla_is_falsely_reported_stale() {
+        let ws = tempfile::tempdir().unwrap();
+        save_owners(
+            ws.path(),
+            &Owners {
+                assets: vec![OwnerRule {
+                    pattern: "/data/monthly.parquet".into(),
+                    owner: "data".into(),
+                    contact: None,
+                    description: None,
+                    tags: Vec::new(),
+                    maximum_age: Some("60d".into()),
+                    expected_after_schedule: None,
+                }],
+                pipelines: Vec::new(),
+                terms: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+        // Written once, well inside its 60-day allowance.
+        append_run_record(ws.path(), "hourly", wrote(0, "/data/monthly.parquet")).unwrap();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-09-04T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let before = crate::sla::evaluate(ws.path(), now);
+        let judged = |v: &[crate::sla::AssetFreshness]| {
+            v.iter().find(|a| a.asset == "/data/monthly.parquet").map(|a| a.state.clone())
+        };
+        assert_eq!(judged(&before), Some(crate::sla::State::Fresh), "{before:?}");
+
+        // The pipeline goes on running hourly, writing something else.
+        for n in 1..=60 {
+            append_run_record(ws.path(), "hourly", wrote(n, "/data/hourly.parquet")).unwrap();
+        }
+        let after = crate::sla::evaluate(ws.path(), now);
+        assert_eq!(
+            judged(&after),
+            Some(crate::sla::State::Fresh),
+            "an asset written correctly and inside its allowance must not become stale              because OTHER runs pushed its record out of the history window"
+        );
     }
 }
