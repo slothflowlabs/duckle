@@ -1083,3 +1083,113 @@ mod parameter_binding {
         assert_eq!(bound["partition_key"], "BE");
     }
 }
+
+/// #303: which deliveries survive a retention horizon, and which go.
+///
+/// Pure, and separated from the file it lives in, because the interesting part
+/// is the rule rather than the write. The rules are Louis's, and each exists
+/// because the obvious age-only sweep gets it wrong:
+///
+/// ```text
+/// pending              -> never pruned. It has not happened yet; deleting it
+///                         cancels work silently.
+/// failed               -> never pruned by AGE. It is retryable, and a failure
+///                         that ages out is a failure nobody ever fixes.
+/// delivered, past the  -> eligible. The work is done and the record is
+/// horizon                 history.
+/// ```
+///
+/// `before` is an RFC3339 instant: a delivery recorded strictly earlier than it
+/// is old enough to consider. String comparison is correct here because every
+/// timestamp written is UTC RFC3339 from `chrono`, which is lexicographically
+/// ordered - and a delivery whose `at` cannot be compared is KEPT, because a
+/// record nobody can date is not evidence that it is old.
+pub fn retain(all: &BTreeMap<String, Delivery>, before: &str) -> (Vec<Delivery>, Vec<Delivery>) {
+    let mut kept = Vec::new();
+    let mut dropped = Vec::new();
+    for d in all.values() {
+        let old_enough = d.at.as_str() < before && !d.at.is_empty();
+        match d.state {
+            DeliveryState::Delivered if old_enough => dropped.push(d.clone()),
+            _ => kept.push(d.clone()),
+        }
+    }
+    (kept, dropped)
+}
+
+/// Rewrite the delivery ledger to exactly this set.
+pub fn keep_only(workspace: &Path, kept: &[Delivery]) -> Result<(), String> {
+    let map: BTreeMap<String, Delivery> =
+        kept.iter().map(|d| (d.delivery_id.clone(), d.clone())).collect();
+    save_deliveries(workspace, &map)
+}
+
+#[cfg(test)]
+mod retention_rules {
+    use super::*;
+
+    fn d(id: &str, state: DeliveryState, at: &str) -> Delivery {
+        Delivery {
+            delivery_id: id.into(),
+            subscription_id: "s1".into(),
+            event_id: format!("mat-{id}"),
+            pipeline_id: "consumer".into(),
+            state,
+            attempts: 1,
+            last_error: None,
+            run_id: None,
+            at: at.into(),
+            parameters: Default::default(),
+            parameter_error: None,
+        }
+    }
+
+    fn ledger(items: &[Delivery]) -> BTreeMap<String, Delivery> {
+        items.iter().map(|x| (x.delivery_id.clone(), x.clone())).collect()
+    }
+
+    #[test]
+    fn an_old_delivered_record_is_history_and_a_pending_one_is_work() {
+        let all = ledger(&[
+            d("old", DeliveryState::Delivered, "2026-01-01T00:00:00Z"),
+            d("new", DeliveryState::Delivered, "2026-09-01T00:00:00Z"),
+            d("pending", DeliveryState::Pending, "2026-01-01T00:00:00Z"),
+            d("failed", DeliveryState::Failed, "2026-01-01T00:00:00Z"),
+        ]);
+        let (kept, dropped) = retain(&all, "2026-06-01T00:00:00Z");
+        assert_eq!(
+            dropped.iter().map(|x| x.delivery_id.clone()).collect::<Vec<_>>(),
+            ["old"],
+            "only a delivery that HAPPENED and is past the horizon"
+        );
+        let names: Vec<String> = kept.iter().map(|x| x.delivery_id.clone()).collect();
+        assert!(names.contains(&"pending".to_string()), "pending work is not history");
+        assert!(
+            names.contains(&"failed".to_string()),
+            "a failure that ages out is a failure nobody ever fixes"
+        );
+        assert!(names.contains(&"new".to_string()));
+    }
+
+    #[test]
+    fn a_record_nobody_can_date_is_kept() {
+        let all = ledger(&[d("undated", DeliveryState::Delivered, "")]);
+        let (kept, dropped) = retain(&all, "2026-06-01T00:00:00Z");
+        assert!(dropped.is_empty(), "an undated record is not evidence that it is old");
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn keeping_only_a_subset_rewrites_the_ledger() {
+        let tmp = tempfile::tempdir().unwrap();
+        let all = ledger(&[
+            d("a", DeliveryState::Delivered, "2026-01-01T00:00:00Z"),
+            d("b", DeliveryState::Pending, "2026-09-01T00:00:00Z"),
+        ]);
+        save_deliveries(tmp.path(), &all).unwrap();
+        let (kept, _) = retain(&all, "2026-06-01T00:00:00Z");
+        keep_only(tmp.path(), &kept).unwrap();
+        let back = deliveries(tmp.path());
+        assert_eq!(back.keys().collect::<Vec<_>>(), ["b"]);
+    }
+}

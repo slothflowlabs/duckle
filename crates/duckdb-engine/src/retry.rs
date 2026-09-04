@@ -462,6 +462,12 @@ pub fn dir(workspace: &Path) -> PathBuf {
     workspace.join("runs").join("receipts")
 }
 
+/// Where a receipt lives. Public for tests that need to remove one, which is
+/// what retention does to it (#303).
+pub fn path_for_test(workspace: &Path, run_id: &str) -> PathBuf {
+    path_for(workspace, run_id)
+}
+
 fn path_for(workspace: &Path, run_id: &str) -> PathBuf {
     dir(workspace).join(format!("{}.json", crate::connectors::sanitize_path_segment(run_id)))
 }

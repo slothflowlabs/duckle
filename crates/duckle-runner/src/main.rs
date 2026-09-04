@@ -2514,6 +2514,12 @@ fn run_retention() -> ExitCode {
             "--cache-days" => policy.cache_days = it.next().and_then(|v| v.parse().ok()),
             "--logs-days" => policy.logs_days = it.next().and_then(|v| v.parse().ok()),
             "--receipts-keep" => policy.receipts_keep = it.next().and_then(|v| v.parse().ok()),
+            "--materializations-days" => {
+                policy.materializations_days = it.next().and_then(|v| v.parse().ok())
+            }
+            "--deliveries-days" => {
+                policy.deliveries_days = it.next().and_then(|v| v.parse().ok())
+            }
             other => {
                 eprintln!("duckle-runner retention: unknown argument {other}");
                 return ExitCode::from(2);
@@ -2547,6 +2553,11 @@ fn run_retention() -> ExitCode {
         }
         "prune" => {
             let plan = retention::plan(&workspace, &policy);
+            // #303: the ledgers under `.duckle/` are operational history, not
+            // correctness state, and they are pruned by REWRITING rather than
+            // by deleting a file - the whole file holds the records that are
+            // still inside the horizon as well as the ones that are not.
+            let (ledgers, _) = retention::plan_ledgers(&workspace, &policy);
             let bytes: u64 = plan.iter().map(|r| r.bytes).sum();
             if json_out {
                 println!(
@@ -2558,6 +2569,7 @@ fn run_retention() -> ExitCode {
                         "files": plan.len(),
                         "bytes": bytes,
                         "removals": plan,
+                        "ledgers": ledgers,
                     }))
                     .unwrap_or_default()
                 );
@@ -2567,6 +2579,12 @@ fn run_retention() -> ExitCode {
                 }
                 println!("
 {} file(s), {bytes} bytes", plan.len());
+                for l in &ledgers {
+                    println!(
+                        "{:<10} {:>10} record(s), {} kept  ({})",
+                        l.category, l.records, l.kept, l.reason
+                    );
+                }
             }
             if dry_run {
                 if !json_out {
@@ -2575,14 +2593,20 @@ fn run_retention() -> ExitCode {
                 return ExitCode::from(0);
             }
             let (n, freed) = retention::apply(&workspace, &plan);
+            let pruned = retention::apply_ledgers(&workspace, &policy);
             if !json_out {
                 println!("removed {n} file(s), {freed} bytes");
+                for l in &pruned {
+                    if l.records > 0 {
+                        println!("removed {} {} record(s)", l.records, l.category);
+                    }
+                }
             }
             ExitCode::from(0)
         }
         _ => {
             eprintln!(
-                "usage: duckle-runner retention status|prune [--workspace DIR] [--json]                  [--dry-run] [--cache-days N] [--logs-days N] [--receipts-keep N]"
+                "usage: duckle-runner retention status|prune [--workspace DIR] [--json]                  [--dry-run] [--cache-days N] [--logs-days N] [--receipts-keep N]                  [--materializations-days N] [--deliveries-days N]"
             );
             ExitCode::from(2)
         }

@@ -193,13 +193,29 @@ pub fn read(workspace: &Path) -> Vec<Event> {
 ///
 /// Returns the events it added.
 pub fn reconcile(workspace: &Path, pipelines: &[String]) -> Vec<Event> {
-    let known: std::collections::BTreeSet<String> =
-        read(workspace).into_iter().map(|e| e.event_id).collect();
+    // Recognised by WHAT THE PUBLICATION IS - pipeline, run, commit time - not
+    // by `event_id`.
+    //
+    // #303: the id is hashed over those three AND the release, and the release
+    // is read from the producer's receipt. Once retention prunes that receipt
+    // the same publication hashes to a different id, so an id-keyed check does
+    // not recognise the event already on disk, appends a second one, and every
+    // subscription delivers the same publication twice. The three fields below
+    // are all carried on the event itself, so this cannot drift with what
+    // retention has removed.
+    let known: std::collections::BTreeSet<(String, Option<String>, String)> = read(workspace)
+        .into_iter()
+        .map(|e| (e.pipeline_id, e.run_id, e.committed_at))
+        .collect();
     let mut added = Vec::new();
     for pipeline in pipelines {
         for record in crate::history::load_run_history(workspace, pipeline) {
             let Some(event) = event_of(Some(workspace), pipeline, &record) else { continue };
-            if known.contains(&event.event_id) {
+            if known.contains(&(
+                event.pipeline_id.clone(),
+                event.run_id.clone(),
+                event.committed_at.clone(),
+            )) {
                 continue;
             }
             if append(workspace, pipeline, &record).is_ok() {
@@ -408,5 +424,244 @@ mod needs_a_catalog {
         );
         crate::history::append_run_record(ws.path(), "p", no_assets).unwrap();
         assert!(read(ws.path()).is_empty());
+    }
+}
+
+/// #303 x #325: a pruned receipt must not change what a publication IS.
+#[cfg(test)]
+mod survives_a_pruned_receipt {
+    use super::*;
+    use crate::history::{append_run_record, AssetTouch};
+
+    fn published(ws: &Path, run: &str, partition: Option<&str>) -> RunRecord {
+        // The receipt is where an event gets its partition and release, so a
+        // partitioned publication needs one.
+        let mut receipt = crate::retry::begin(ws, run, "scheduled", "producer", "p.json", "h", None);
+        receipt.partition_key = partition.map(str::to_string);
+        receipt.release_id = Some("rel-9".into());
+        crate::retry::write(ws, &receipt).unwrap();
+        RunRecord {
+            run_id: Some(run.into()),
+            at: "2026-09-04T04:00:00Z".into(),
+            status: "ok".into(),
+            duration_ms: 10,
+            rows: 5,
+            node_count: 1,
+            trigger: "scheduled".into(),
+            error: None,
+            unchanged: false,
+            incomplete: false,
+            incomplete_reason: None,
+            category: None,
+            assets: vec![AssetTouch {
+                id: "/data/a.parquet".into(),
+                direction: "write".into(),
+                rows: Some(5),
+            }],
+        }
+    }
+
+    /// Louis's regression, and it is sharper than "the partition goes missing".
+    ///
+    /// `event_id` is hashed over pipeline + run + time + RELEASE, and the
+    /// release is read from the receipt. Prune the receipt and the same
+    /// publication hashes to a DIFFERENT id - so reconcile does not recognise
+    /// the event it already has, appends a second one, and every subscription
+    /// delivers the same publication twice.
+    #[test]
+    fn a_pruned_receipt_does_not_duplicate_the_publication() {
+        let ws = tempfile::tempdir().unwrap();
+        let record = published(ws.path(), "run-7", Some("2026-09-04"));
+        // `append_run_record` emits the event itself - appending again here
+        // would be the test writing the duplicate it then blames the code for.
+        append_run_record(ws.path(), "producer", record.clone()).unwrap();
+        let before = read(ws.path());
+        assert_eq!(before.len(), 1, "one publication, one event");
+        assert_eq!(before[0].partition_key.as_deref(), Some("2026-09-04"));
+
+        // Retention removes the producer's receipt.
+        std::fs::remove_file(crate::retry::path_for_test(ws.path(), "run-7")).unwrap();
+
+        let added = reconcile(ws.path(), &["producer".to_string()]);
+        assert!(
+            added.is_empty(),
+            "a publication that is already recorded must not be recorded again: {added:?}"
+        );
+        let events = read(ws.path());
+        assert_eq!(events.len(), 1, "one publication, one event: {events:?}");
+        assert_eq!(
+            events[0].partition_key.as_deref(),
+            Some("2026-09-04"),
+            "the retained event keeps the provenance it was written with"
+        );
+    }
+
+    /// The event is self-contained (Louis's Option A): everything a delivery
+    /// needs to bind parameters is copied onto it at publication time, so the
+    /// receipt is not consulted again to interpret it.
+    #[test]
+    fn a_retained_event_carries_its_own_provenance() {
+        let ws = tempfile::tempdir().unwrap();
+        let record = published(ws.path(), "run-8", Some("2026-09-04"));
+        append_run_record(ws.path(), "producer", record).unwrap();
+        std::fs::remove_file(crate::retry::path_for_test(ws.path(), "run-8")).unwrap();
+
+        let e = &read(ws.path())[0];
+        assert_eq!(e.partition_key.as_deref(), Some("2026-09-04"));
+        assert_eq!(e.release_id.as_deref(), Some("rel-9"));
+        assert_eq!(e.run_id.as_deref(), Some("run-8"));
+        assert_eq!(e.committed_at, "2026-09-04T04:00:00Z");
+    }
+}
+
+/// #303: which publications survive a retention horizon.
+///
+/// The invariant, in Louis's words: never prune an object that is still needed
+/// to interpret a retained durable object. Here that is one concrete rule -
+/// **an event a retained delivery refers to is protected** - because a delivery
+/// naming an event nobody can read is a record that cannot be explained, and
+/// the pending and failed deliveries that are deliberately never aged out are
+/// exactly the ones that would be orphaned first.
+///
+/// ## What pruning an event MEANS
+///
+/// It bounds replay, and that has to be said out loud rather than discovered:
+///
+/// > A subscription can only replay publication events still inside the
+/// > retention horizon.
+///
+/// A subscriber added today receives the publications still on the log, not
+/// every publication that ever happened. That is what makes a new subscription
+/// deterministic instead of "replay forever", and it is the reason the horizon
+/// is a policy an operator sets rather than a number this module picks.
+pub fn retain(
+    events: &[Event],
+    before: &str,
+    protected: &std::collections::BTreeSet<String>,
+) -> (Vec<Event>, Vec<Event>) {
+    let mut kept = Vec::new();
+    let mut dropped = Vec::new();
+    for e in events {
+        // An undated event is kept: a record nobody can date is not evidence
+        // that it is old.
+        let old_enough = !e.committed_at.is_empty() && e.committed_at.as_str() < before;
+        match old_enough && !protected.contains(&e.event_id) {
+            true => dropped.push(e.clone()),
+            false => kept.push(e.clone()),
+        }
+    }
+    (kept, dropped)
+}
+
+/// Rewrite the log to exactly these events, oldest first.
+///
+/// Temp then rename, so a reader sees the whole previous log or the whole new
+/// one. The log is append-only in normal operation; this is the one writer that
+/// rewrites it, and it must not leave a half-written file behind for the pump
+/// to read as "nothing was ever published".
+pub fn keep_only(workspace: &Path, kept: &[Event]) -> Result<(), String> {
+    let path = log_path(workspace);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let mut body = String::new();
+    for e in kept {
+        body.push_str(&serde_json::to_string(e).map_err(|e| e.to_string())?);
+        body.push('\n');
+    }
+    let tmp = path.with_extension("ndjson.tmp");
+    std::fs::write(&tmp, body).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The runs a retained event or delivery still points at.
+///
+/// #303: a receipt named by something we are keeping must outlive it. The event
+/// carries its own provenance, so this is not needed to READ one - it is needed
+/// so that "which run produced this" stays answerable, which is the whole point
+/// of recording the run id on the event at all.
+pub fn referenced_runs(
+    events: &[Event],
+    deliveries: &[crate::subscribe::Delivery],
+) -> std::collections::BTreeSet<String> {
+    events
+        .iter()
+        .filter_map(|e| e.run_id.clone())
+        .chain(deliveries.iter().filter_map(|d| d.run_id.clone()))
+        .collect()
+}
+
+#[cfg(test)]
+mod event_retention {
+    use super::*;
+
+    fn ev(id: &str, at: &str, run: Option<&str>) -> Event {
+        Event {
+            event_id: id.into(),
+            pipeline_id: "producer".into(),
+            run_id: run.map(str::to_string),
+            release_id: None,
+            partition_key: Some("2026-09-04".into()),
+            trigger: "scheduled".into(),
+            committed_at: at.into(),
+            assets: vec!["/data/a.parquet".into()],
+        }
+    }
+
+    #[test]
+    fn an_old_publication_ages_out_and_a_recent_one_does_not() {
+        let events = vec![
+            ev("old", "2026-01-01T00:00:00Z", None),
+            ev("new", "2026-09-01T00:00:00Z", None),
+        ];
+        let (kept, dropped) = retain(&events, "2026-06-01T00:00:00Z", &Default::default());
+        assert_eq!(dropped.iter().map(|e| e.event_id.clone()).collect::<Vec<_>>(), ["old"]);
+        assert_eq!(kept.iter().map(|e| e.event_id.clone()).collect::<Vec<_>>(), ["new"]);
+    }
+
+    /// The invariant: a delivery that is deliberately never aged out must not
+    /// be left pointing at a publication nobody can read.
+    #[test]
+    fn an_event_a_retained_delivery_needs_is_protected() {
+        let events = vec![ev("old", "2026-01-01T00:00:00Z", None)];
+        let protected = ["old".to_string()].into_iter().collect();
+        let (kept, dropped) = retain(&events, "2026-06-01T00:00:00Z", &protected);
+        assert!(dropped.is_empty(), "a pending delivery still needs it");
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn an_undated_publication_is_kept() {
+        let events = vec![ev("undated", "", None)];
+        let (kept, dropped) = retain(&events, "2026-06-01T00:00:00Z", &Default::default());
+        assert!(dropped.is_empty());
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn rewriting_the_log_keeps_exactly_what_survived() {
+        let ws = tempfile::tempdir().unwrap();
+        let events = vec![
+            ev("old", "2026-01-01T00:00:00Z", None),
+            ev("new", "2026-09-01T00:00:00Z", None),
+        ];
+        keep_only(ws.path(), &events).unwrap();
+        assert_eq!(read(ws.path()).len(), 2);
+
+        let (kept, _) = retain(&events, "2026-06-01T00:00:00Z", &Default::default());
+        keep_only(ws.path(), &kept).unwrap();
+        let back = read(ws.path());
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].event_id, "new");
+        // Still parseable as a log, not just as bytes.
+        assert_eq!(back[0].partition_key.as_deref(), Some("2026-09-04"));
+    }
+
+    #[test]
+    fn the_runs_a_retained_record_points_at_are_named() {
+        let events = vec![ev("e1", "2026-09-01T00:00:00Z", Some("run-a"))];
+        let runs = referenced_runs(&events, &[]);
+        assert!(runs.contains("run-a"));
+        assert_eq!(runs.len(), 1);
     }
 }
