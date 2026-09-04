@@ -274,17 +274,53 @@ mod tests {
         tmp
     }
 
+    /// Serialises every test that reads or writes `DUCKLE_POOLS_FILE`.
+    ///
+    /// `set_var` is process-wide and cargo runs tests as threads in ONE
+    /// process, so a test holding the variable leaks it into any test that
+    /// expects it unset - which is not theoretical: it failed
+    /// `a_workspace_that_never_mentions_pools_behaves_as_before` on CI with
+    /// `names().count()` of 3, the 3 being default plus another test's heavy
+    /// and network, and reddened an unrelated pull request.
+    ///
+    /// Every `Pools::load` in these tests goes through [`load`] for that
+    /// reason. Taking the lock only in `with_server` would order the writers
+    /// against each other and still leave the readers exposed.
+    static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Holds the lock and guarantees the variable is gone before it is
+    /// released - including when the closure panics, which would otherwise
+    /// leave the variable set for whichever test ran next.
+    struct EnvLock(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+    impl Drop for EnvLock {
+        fn drop(&mut self) {
+            std::env::remove_var("DUCKLE_POOLS_FILE");
+        }
+    }
+
+    fn lock() -> EnvLock {
+        EnvLock(ENV.lock().unwrap_or_else(|p| p.into_inner()))
+    }
+
     /// `DUCKLE_POOLS_FILE` set for the duration of one closure.
     fn with_server(path: &str, f: impl FnOnce()) {
+        let _env = lock();
         std::env::set_var("DUCKLE_POOLS_FILE", path);
         f();
-        std::env::remove_var("DUCKLE_POOLS_FILE");
+    }
+
+    /// `Pools::load` with no server file in the environment, whoever else is
+    /// running.
+    fn load(ws: &std::path::Path) -> Pools {
+        let _env = lock();
+        Pools::load(ws)
     }
 
     #[test]
     fn a_workspace_that_never_mentions_pools_behaves_as_before() {
         let tmp = ws(None);
-        let p = Pools::load(tmp.path());
+        let p = load(tmp.path());
         assert_eq!(p.resolve(""), DEFAULT);
         assert_eq!(p.limit(DEFAULT), env_default());
         assert_eq!(p.names().count(), 1);
@@ -293,7 +329,7 @@ mod tests {
     #[test]
     fn a_declared_pool_gets_its_own_limit() {
         let tmp = ws(Some(r#"{"heavy":{"maxConcurrentRuns":1},"network":{"maxConcurrentRuns":8}}"#));
-        let p = Pools::load(tmp.path());
+        let p = load(tmp.path());
         assert_eq!(p.limit("heavy"), 1);
         assert_eq!(p.limit("network"), 8);
         assert_eq!(p.resolve("network"), "network");
@@ -305,7 +341,7 @@ mod tests {
         // A pipeline naming a pool nobody defined must not thereby create one -
         // that would be an opt-out from the protection pools exist to provide.
         let tmp = ws(Some(r#"{"heavy":{"maxConcurrentRuns":1}}"#));
-        let p = Pools::load(tmp.path());
+        let p = load(tmp.path());
         assert_eq!(p.resolve("unlimited"), DEFAULT);
         assert_eq!(p.limit("unlimited"), p.limit(DEFAULT));
     }
@@ -344,7 +380,7 @@ mod tests {
     #[test]
     fn a_pool_of_zero_is_one_rather_than_a_deadlock() {
         let tmp = ws(Some(r#"{"stuck":{"maxConcurrentRuns":0}}"#));
-        assert_eq!(Pools::load(tmp.path()).limit("stuck"), 1);
+        assert_eq!(load(tmp.path()).limit("stuck"), 1);
     }
 
     #[test]
@@ -352,7 +388,7 @@ mod tests {
         // Pools are an optimisation; a broken file must not stop a workspace
         // from running anything at all.
         let tmp = ws(Some("{ not json"));
-        assert_eq!(Pools::load(tmp.path()).limit(DEFAULT), env_default());
+        assert_eq!(load(tmp.path()).limit(DEFAULT), env_default());
     }
 
     #[test]
