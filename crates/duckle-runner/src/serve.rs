@@ -4097,7 +4097,8 @@ fn cron_decision(
 /// and "nothing happened" are different states and a moved pointer renders them
 /// the same.
 fn catch_up_schedule(
-    state: &State,
+    state: &Arc<State>,
+    in_flight: &Arc<Mutex<std::collections::HashSet<String>>>,
     schedule_id: &str,
     cfg: &Value,
     zone: &duckle_duckdb_engine::cronzone::Zone,
@@ -4145,7 +4146,11 @@ fn catch_up_schedule(
         }
         if run {
             eprintln!("duckle-runner: {schedule_id}: catching up {}", occ.at.to_rfc3339());
-            fire_schedule(state, schedule_id, cfg, pipes);
+            // #329: on its own thread, like every other firing. A catch-up is
+            // the LONGEST thing this loop does - it is N runs, not one - so
+            // executing it inline is the worst case of the stall, not an
+            // exception to it.
+            dispatch(state, in_flight, schedule_id, cfg, pipes);
         }
     }
 }
@@ -4182,6 +4187,57 @@ fn record_occurrence(
     if let Err(e) = occurrences::record(&state.workspace, &entry) {
         eprintln!("duckle-runner: schedule {schedule_id}: occurrence not recorded ({e})");
     }
+}
+
+/// #329: hand a due schedule to its own thread and return.
+///
+/// The tick loop used to CALL `fire_schedule` and wait for the pipeline to
+/// finish. Because that loop also polls every other schedule and pumps
+/// materialization deliveries, one slow run stopped all of it: measured, a
+/// five-second schedule fired 9 times in a minute alone and 2 times with a
+/// single ~25s run beside it.
+///
+/// Three things made it worse than "one run is slow". `Gates::acquire` is an
+/// untimed condvar wait, so a saturated pool held the loop as effectively as a
+/// long run. A catch-up is N runs rather than one. And the freshness sweep in
+/// the same loop had already been moved off-thread for exactly this reason -
+/// the runs themselves are unboundedly slower than an SLA sweep.
+///
+/// A thread per firing rather than a pool, because what bounds concurrency is
+/// already elsewhere and would be duplicated here: the resource pool bounds
+/// what RUNS, the on-disk run lock stops one pipeline running twice, and
+/// `in_flight` stops this handing the same schedule out again while it is
+/// going. What is left to bound is the number of schedules an operator wrote,
+/// and a parked thread per one of those is not the cost worth engineering away.
+///
+/// Not a durable queue. That is what `overlapPolicy: queue` needs (#296) and it
+/// is a larger piece; this makes the scheduler responsive, which is true
+/// regardless of which overlap policy a schedule chooses.
+fn dispatch(
+    state: &Arc<State>,
+    in_flight: &Arc<Mutex<std::collections::HashSet<String>>>,
+    id: &str,
+    cfg: &Value,
+    pipes: &HashMap<String, PathBuf>,
+) {
+    {
+        let mut held = in_flight.lock().unwrap_or_else(|p| p.into_inner());
+        if !held.insert(id.to_string()) {
+            // Already going. The run lock would refuse the second one anyway,
+            // but only after a thread had been spawned to find that out.
+            eprintln!("duckle-runner: scheduled {id} is still running, not started again");
+            return;
+        }
+    }
+    let (state, in_flight) = (Arc::clone(state), Arc::clone(in_flight));
+    let (id, cfg, pipes) = (id.to_string(), cfg.clone(), pipes.clone());
+    // Detached: nothing joins it. The run records itself through the ordinary
+    // durable path, so there is no result for the tick to collect - which is
+    // the point of handing it over.
+    std::thread::spawn(move || {
+        fire_schedule(&state, &id, &cfg, &pipes);
+        in_flight.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
+    });
 }
 
 /// Fire one schedule that has come due.
@@ -4276,6 +4332,12 @@ fn spawn_scheduler(state: Arc<State>) {
         // from the end of a run.
         let mut last_freshness: Option<Instant> = None;
         let freshness_running = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // #329: schedules with a run in flight. The tick hands a run to its own
+        // thread and moves on, so this is what stops it handing the SAME
+        // schedule out twice - the on-disk run lock would refuse the second
+        // one, but only after paying for a thread to find out.
+        let in_flight: Arc<Mutex<std::collections::HashSet<String>>> =
+            Arc::new(Mutex::new(std::collections::HashSet::new()));
         loop {
             std::thread::sleep(state.tick_interval);
             // #325: publications are checked every tick. Unlike freshness this
@@ -4368,7 +4430,9 @@ fn spawn_scheduler(state: Arc<State>) {
                                 // rather than re-arming from "now" and losing
                                 // the window - which is what this loop did,
                                 // because its arming state is in memory.
-                                catch_up_schedule(&state, id, cfg, &zone, &exclude, now, &pipes);
+                                catch_up_schedule(
+                                    &state, &in_flight, id, cfg, &zone, &exclude, now, &pipes,
+                                );
                                 // What was armed IS the occurrence that comes
                                 // due, so it is recorded before the decision
                                 // moves past it. Read out first for that reason.
@@ -4389,7 +4453,7 @@ fn spawn_scheduler(state: Arc<State>) {
                                     if let Some(at) = due {
                                         record_occurrence(&state, id, cfg, at, now);
                                     }
-                                    fire_schedule(&state, id, cfg, &pipes);
+                                    dispatch(&state, &in_flight, id, cfg, &pipes);
                                 }
                                 match rearm {
                                     Some(next) => {
@@ -4436,7 +4500,7 @@ fn spawn_scheduler(state: Arc<State>) {
                     // re-evaluated on every tick, silently, for as long as the
                     // process lived.
                     last_fired.insert(id.clone(), now);
-                    fire_schedule(&state, id, cfg, &pipes);
+                    dispatch(&state, &in_flight, id, cfg, &pipes);
                 }
             }
         }
