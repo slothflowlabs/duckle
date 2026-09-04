@@ -526,6 +526,13 @@ function injectHttpTransportSection(manifest: ComponentManifest): void {
 
 const dbReadFields = (): Field[] => [
     {
+        // #330: there was a third option here, "Incremental (by column)", and
+        // choosing it made the run fail before it started -
+        // build_relational_source refuses mode == "incremental" outright. The
+        // Err stays as the guard for pipelines saved while it was offered; what
+        // is removed is the offer. The `incrementalColumn` box that went with
+        // it is gone for the same reason, and with it the capability matrix's
+        // claim that these four sources do incremental reads.
         key: 'mode',
         label: 'Read mode',
         kind: 'select',
@@ -533,7 +540,6 @@ const dbReadFields = (): Field[] => [
         options: [
             { label: 'Whole table', value: 'table' },
             { label: 'Custom SQL', value: 'sql' },
-            { label: 'Incremental (by column)', value: 'incremental' },
         ],
     },
     { key: 'schemaName', label: 'Schema', kind: 'text', placeholder: 'public' },
@@ -544,12 +550,6 @@ const dbReadFields = (): Field[] => [
         kind: 'expression',
         rows: 5,
         placeholder: 'SELECT * FROM orders WHERE status = $1',
-    },
-    {
-        key: 'incrementalColumn',
-        label: 'Incremental column',
-        kind: 'text',
-        placeholder: 'updated_at',
     },
     {
         key: 'fetchSize',
@@ -3921,6 +3921,13 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
     // option + fields only surface on the Salesforce tile; every other REST alias
     // keeps the plain none / bearer / apikey auth.
     const isSalesforce = comp.id === 'src.salesforce';
+    // #330: src.http is drawn by this synthesizer but the ENGINE does not treat
+    // it as a REST source at all - it is in the cloud/object arm
+    // (plan/builders.rs, beside src.s3 / src.gcs), reading a URL as a file. It
+    // never reaches the code that substitutes a saved mark into a request, so
+    // the cursor boxes were a control that could not work, and they were what
+    // made the capability matrix claim src.http does incremental reads.
+    const carriesCursor = comp.id !== 'src.http';
     return base(comp, [
         ...(comp.id === 'src.sap'
             ? [
@@ -4168,20 +4175,24 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
                     defaultValue: 1000,
                     description: 'How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm.',
                 },
+                ...(carriesCursor
+                    ? [
                 {
                     key: 'incrementalField',
                     label: 'Incremental field',
-                    kind: 'text',
+                    kind: 'text' as const,
                     placeholder: 'updated_at',
-                    description: 'A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state.',
+                    description: 'A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state.',
                 },
                 {
                     key: 'incrementalInitial',
                     label: 'Incremental starting value',
-                    kind: 'text',
+                    kind: 'text' as const,
                     placeholder: '1970-01-01',
                     description: 'What {incremental} is on the very first run, before a mark has been saved. Blank is a real choice for an API that reads an empty cursor as "from the beginning". The mark is saved only when the whole pipeline succeeds, and only when it moved forward.',
                 },
+                      ]
+                    : []),
                 {
                     key: 'concurrency',
                     label: 'Requests in flight',
@@ -8337,6 +8348,14 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
     // Synapse is a TDS database wearing a warehouse label; see the note by
     // the snk.synapse route below. Ahead of the src.warehouses group check.
     if (comp.id === 'src.synapse') return synthDbSource(comp);
+    // #330: src.couchdb is a REST source to the engine - it is in the arm that
+    // builds a RestSourceSpec, and the engine has no couchdb-specific handling
+    // whatsoever, so it needs url / responsePath / auth. The palette entry says
+    // as much ("Rides src.rest - Basic auth, responsePath /rows"), but the
+    // component sits in the src.nosql group and was drawn with the MongoDB
+    // form: connectionString, collection, filter, projection. Not one of those
+    // is read for it, and not one of the fields it does need could be set.
+    if (comp.id === 'src.couchdb') return synthApiSource(comp);
     if (groupId === 'src.warehouses') return synthWarehouseSource(comp);
     if (groupId === 'src.storage') return synthStorageSource(comp);
     if (groupId === 'src.streaming') return synthStreamingSource(comp);

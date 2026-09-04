@@ -275,8 +275,12 @@ pub fn advances_saved_state(component_id: &str) -> bool {
         component_id,
         // watermark over an ordered column
         "xf.incremental"
-            // consumed snapshot id
+            // consumed snapshot id. Both ids build one DuckLakeCdcSpec
+            // (plan/mod.rs) and reach one unconditional write, so naming only
+            // the source left the transform advancing state where the source
+            // was refused.
             | "src.ducklake.changes"
+            | "xf.ducklake.cdc"
             // uri -> fingerprint map of what has been seen
             | "src.changed"
             // topic/partition resume offsets
@@ -284,13 +288,18 @@ pub fn advances_saved_state(component_id: &str) -> bool {
             | "src.redpanda"
             // position in the spooled directory
             | "src.spool"
-            // pagination / incremental cursor
-            | "src.rest"
             // open window carried between runs
             | "xf.tumble"
             // the stored baseline a later run compares against
             | "qa.baseline"
     )
+    // The pagination / incremental cursor. Asked of the planner rather than
+    // spelled "src.rest" here: all 31 REST-family ids ride one RestSourceSpec
+    // and one executor, so the vendor aliases advance the same mark through the
+    // same write. Naming only the generic id let a src.github node move a
+    // watermark in a workspace that had forbidden state mutation, and the
+    // drift guard below could not catch it - one write site, many ids.
+    || crate::plan::reads_incremental(component_id)
 }
 
 /// Whether running this component spawns a process outside DuckDB.
@@ -942,6 +951,64 @@ mod tests {
                 "{id} advances saved state and the policy let it through: {err}"
             );
         }
+    }
+
+    /// The other id sharing a write site: plan/mod.rs builds one
+    /// `DuckLakeCdcSpec` for `src.ducklake.changes` AND `xf.ducklake.cdc`, and
+    /// the consumed-snapshot write is unconditional, so the transform advanced
+    /// state where the source was refused.
+    #[test]
+    fn withholding_state_mutation_covers_the_ducklake_cdc_transform() {
+        let p = policy_from("state:
+  allowRead: true
+  allowMutation: false
+");
+        let d = doc_of(serde_json::json!([node(
+            "n",
+            "xf.ducklake.cdc",
+            serde_json::json!({ "path": "l.ducklake", "table": "t" })
+        )]));
+        let err = enforce(&p, &d)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| String::from("<allowed>"));
+        assert!(err.contains("state mutation"), "it writes a consumed snapshot id: {err}");
+    }
+
+    /// #330: the same gap, one level down. `src.rest` was covered and its 30
+    /// vendor aliases were not.
+    ///
+    /// They are not separate connectors: the planner sends all 31 through one
+    /// `RestSourceSpec`, and `run_rest_source` writes the incremental mark for
+    /// whichever id got there (connectors.rs, the `PendingWrite::state` inside
+    /// it). So a `src.github` node with an incremental field advanced a
+    /// watermark in a workspace that had forbidden exactly that, and the
+    /// site-counting drift guard below could not see it - one write site, many
+    /// component ids.
+    #[test]
+    fn withholding_state_mutation_covers_the_rest_vendor_aliases() {
+        let p = policy_from("state:
+  allowRead: true
+  allowMutation: false
+");
+        let mut allowed: Vec<&str> = Vec::new();
+        for id in ["src.github", "src.stripe", "src.shopify", "src.jira", "src.dhis2"] {
+            let d = doc_of(serde_json::json!([node(
+                "n",
+                id,
+                serde_json::json!({
+                    "url": "https://example.invalid/x",
+                    "incrementalField": "updated_at"
+                })
+            )]));
+            if enforce(&p, &d).is_ok() {
+                allowed.push(id);
+            }
+        }
+        assert!(
+            allowed.is_empty(),
+            "these ride the same REST executor and advance the same mark: {allowed:?}"
+        );
     }
 
     /// And the drift guard, because the list above is a list.

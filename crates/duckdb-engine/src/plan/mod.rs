@@ -787,6 +787,61 @@ const ATTACH_PARQUET_SOURCES: &[&str] = &[
     "src.delta",
 ];
 
+/// Whether the engine performs an incremental (cursor) read for this component.
+///
+/// #330: the capability registry used to answer this by asking the MANIFEST -
+/// "it declares an incrementalColumn field, so it does incremental reads" -
+/// and published `Incremental = yes` for eight sources that cannot do it: four
+/// that errored on every run, and four that accepted a cursor and dropped it.
+/// This is the same list the planner branches on, so the registry and the
+/// executor cannot disagree about it again.
+///
+/// These are the generic REST source and its thin vendor aliases. They share
+/// one spec and one executor, which substitutes the saved mark into the
+/// request and writes the next one only after the run succeeds.
+pub fn reads_incremental(component_id: &str) -> bool {
+    matches!(
+        component_id,
+        // GraphQL and its two aliases ride the same spec and executor. The
+        // cursor goes into the serialized body, which for GraphQL is the query
+        // and its variables.
+        "src.graphql"
+            | "src.linear"
+            | "src.monday"
+            | "src.rest"
+            | "src.github"
+            | "src.gitlab"
+            | "src.airtable"
+            | "src.notion"
+            | "src.hubspot"
+            | "src.jira"
+            | "src.stripe"
+            | "src.sendgrid"
+            | "src.mailchimp"
+            | "src.pipedrive"
+            | "src.segment"
+            | "src.salesforce"
+            | "src.xero"
+            | "src.quickbooks"
+            | "src.zendesk"
+            | "src.shopify"
+            | "src.intercom"
+            | "src.couchdb"
+            | "src.odata"
+            | "src.sap"
+            | "src.sap.rfc"
+            | "src.soap"
+            | "src.asana"
+            | "src.trello"
+            | "src.clickup"
+            | "src.slack"
+            | "src.discord"
+            | "src.twilio"
+            | "src.telegram"
+            | "src.dhis2"
+    )
+}
+
 pub fn compile(pipeline: &PipelineDoc) -> Result<CompiledPipeline, EngineError> {
     compile_impl(pipeline, true)
 }
@@ -5591,8 +5646,21 @@ fn build_stage(
             // fans out, so there is nothing to run in parallel and no parent
             // that could fail on its own.
             checkpoint: false,
-            incremental_field: None,
-            incremental_initial: String::new(),
+            // #330: these were hardcoded away, and the form offers both -
+            // synthApiSource draws src.graphql, src.linear and src.monday, so
+            // the box was there, the value was accepted, and no cursor ever
+            // reached the wire. Every run re-fetched everything and nothing
+            // said so. They ride the same RestSourceSpec and the same executor
+            // as src.rest, which substitutes {incremental} into the serialized
+            // body - and a GraphQL request IS a body, so the placeholder works
+            // inside the query text or a variables value.
+            //
+            // As with src.rest, the mark only advances if responsePath points
+            // at the record array rather than at the response envelope.
+            incremental_field: string_prop(&props, "incrementalField")
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()),
+            incremental_initial: string_prop(&props, "incrementalInitial").unwrap_or_default(),
             concurrency: 1,
             on_parent_error: "fail".to_string(),
             transport: http_transport_from_props(&props),
@@ -5620,40 +5688,7 @@ fn build_stage(
             declared_schema: node.data.schema.clone(),
         });
         (String::new(), StageKind::View, None)
-    } else if matches!(
-        component_id,
-        "src.rest"
-            | "src.github"
-            | "src.gitlab"
-            | "src.airtable"
-            | "src.notion"
-            | "src.hubspot"
-            | "src.jira"
-            | "src.stripe"
-            | "src.sendgrid"
-            | "src.mailchimp"
-            | "src.pipedrive"
-            | "src.segment"
-            | "src.salesforce"
-            | "src.xero"
-            | "src.quickbooks"
-            | "src.zendesk"
-            | "src.shopify"
-            | "src.intercom"
-            | "src.couchdb"
-            | "src.odata"
-            | "src.sap"
-            | "src.sap.rfc"
-            | "src.soap"
-            | "src.asana"
-            | "src.trello"
-            | "src.clickup"
-            | "src.slack"
-            | "src.discord"
-            | "src.twilio"
-            | "src.telegram"
-            | "src.dhis2"
-    ) {
+    } else if reads_incremental(component_id) {
         // Generic REST source + thin vendor aliases. Vendors share
         // the same plumbing - the palette/form pre-fills url, auth
         // scheme, and pagination for the well-known APIs so users

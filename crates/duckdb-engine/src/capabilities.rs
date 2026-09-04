@@ -6,12 +6,19 @@
 //! answer is derived from the same catalog the editor renders its forms from
 //! and the MCP server serves to agents.
 //!
-//! That is also the honest limit of it. A capability is inferred from the
-//! DECLARED surface - a component supports incremental reads if it declares an
-//! `incrementalColumn` field - so this reports what a component OFFERS, not
-//! what the engine does with it. Where those two disagree the manifest is
-//! wrong, which is the bug the prop-contract test exists to catch, and this
-//! registry inherits its accuracy rather than adding to it.
+//! Most of it is inferred from the DECLARED surface, so it reports what a
+//! component OFFERS rather than what the engine does with it. Where those two
+//! disagree the manifest is wrong, which is the bug the prop-contract test
+//! exists to catch, and this registry inherits its accuracy rather than
+//! adding to it.
+//!
+//! The axes where that inference was actively WRONG are asked of the engine
+//! instead: `chunking`, `dialect`, `advances_state`, `executes_process`, and
+//! since #330 `incremental`. Reading a declared `incrementalColumn` as "does
+//! incremental reads" published the capability for eight sources that could
+//! not: four where the planner refuses that read mode outright, and four
+//! where the cursor is accepted and silently dropped. A field name is not an
+//! implementation.
 
 use serde_json::Value;
 
@@ -181,7 +188,7 @@ pub fn derive(c: &Value) -> Capabilities {
         connection_ref: has("connectionRef"),
         credentials,
         custom_sql: has("sql") || has("query") || has("rawSql"),
-        incremental: has("incrementalColumn") || has("incrementalField"),
+        incremental: crate::plan::reads_incremental(id),
         pushdown: has("pushdown"),
         write_modes,
         cacheable: has("cacheOutput"),
@@ -244,11 +251,54 @@ mod tests {
         let pg = find("src.postgres");
         assert_eq!(pg.kind, "source");
         assert!(pg.custom_sql, "src.postgres declares sql");
-        assert!(pg.incremental, "it declares incrementalColumn");
+        // #330: NOT incremental. It declared an `incrementalColumn` field, and
+        // that is what this used to be asserting - a field name, locking in a
+        // claim the planner refuses at builders.rs (`incremental read mode
+        // isn't implemented yet`).
+        assert!(!pg.incremental, "the planner refuses src.postgres's incremental mode");
         assert!(pg.pushdown, "it declares pushdown");
         assert!(pg.connection_ref, "it takes a saved connection");
         assert!(pg.credentials, "it declares a password");
         assert!(pg.reject_output, "it has a reject port");
+    }
+
+    /// #330: a component may not OFFER an incremental cursor the engine will
+    /// not use.
+    ///
+    /// This compares the two sides that drifted - the catalog the forms are
+    /// drawn from, and the planner - so it fails whichever way they part: a
+    /// field added to a manifest with no branch behind it, or a branch removed
+    /// while the field stays. Eight available sources failed it when it was
+    /// written: four whose read mode the planner refuses outright, and four
+    /// that took the cursor and dropped it in silence.
+    #[test]
+    fn a_component_that_offers_an_incremental_cursor_has_one() {
+        let mut offered_but_unread: Vec<String> = Vec::new();
+        let mut read_but_unoffered: Vec<String> = Vec::new();
+        for c in all() {
+            if c.availability != "available" {
+                continue;
+            }
+            let offers = c
+                .properties
+                .iter()
+                .any(|p| p == "incrementalColumn" || p == "incrementalField");
+            let reads = crate::plan::reads_incremental(&c.component);
+            if offers && !reads {
+                offered_but_unread.push(c.component.clone());
+            }
+            if reads && !offers {
+                read_but_unoffered.push(c.component.clone());
+            }
+        }
+        assert!(
+            offered_but_unread.is_empty(),
+            "these offer an incremental cursor field and the engine reads none: {offered_but_unread:?}"
+        );
+        assert!(
+            read_but_unoffered.is_empty(),
+            "the engine reads an incremental cursor for these and no form can set one: {read_but_unoffered:?}"
+        );
     }
 
     /// A transform has none of the source-shaped capabilities, which is the

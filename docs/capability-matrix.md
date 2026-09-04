@@ -37,9 +37,9 @@ What a source can be asked to do.
 | `src.ducklake` | yes | - | - | range, time, hash | duckdb | yes |
 | `src.ducklake.changes` | - | - | - | - | - | yes |
 | `src.ducklake.diff` | - | - | - | - | - | yes |
-| `src.postgres` | yes | yes | yes | range, time, hash | postgres | yes |
-| `src.mysql` | yes | yes | yes | range, time, hash | mysql | yes |
-| `src.mariadb` | yes | yes | yes | - | - | yes |
+| `src.postgres` | yes | - | yes | range, time, hash | postgres | yes |
+| `src.mysql` | yes | - | yes | range, time, hash | mysql | yes |
+| `src.mariadb` | yes | - | yes | - | - | yes |
 | `src.sqlserver` | yes | - | - | - | - | yes |
 | `src.oracle` | yes | - | - | range, time, hash | oracle | yes |
 | `src.db2` | yes | - | - | - | - | yes |
@@ -47,7 +47,7 @@ What a source can be asked to do.
 | `src.turso` | yes | - | - | - | - | yes |
 | `src.duckdb` | yes | - | - | range, time, hash | duckdb | yes |
 | `src.clickhouse` | yes | - | - | - | - | yes |
-| `src.cockroach` | yes | yes | yes | - | - | yes |
+| `src.cockroach` | yes | - | yes | - | - | yes |
 | `src.adbc` | yes | - | - | - | - | yes |
 | `src.teradata` | yes | - | - | - | - | yes |
 | `src.snowflake` | yes | - | - | - | - | yes |
@@ -87,9 +87,9 @@ What a source can be asked to do.
 | `src.neo4j` | - | - | - | - | - | yes |
 | `src.elastic` | yes | - | - | - | - | yes |
 | `src.opensearch` | yes | - | - | - | - | yes |
-| `src.couchdb` | - | - | - | - | - | yes |
+| `src.couchdb` | - | yes | - | - | - | yes |
 | `src.ftp` | - | - | - | - | - | yes |
-| `src.http` | - | yes | - | - | - | yes |
+| `src.http` | - | - | - | - | - | yes |
 | `src.email` | - | - | - | - | - | yes |
 | `src.git` | - | - | - | - | - | yes |
 | `src.clipboard` | - | - | - | - | - | yes |
@@ -269,6 +269,7 @@ Components that take credentials. A saved connection keeps them out of the pipel
 | `src.clickhouse` | source | - | yes |
 | `src.clickup` | source | yes | yes |
 | `src.cockroach` | source | yes | yes |
+| `src.couchdb` | source | yes | yes |
 | `src.db2` | source | - | yes |
 | `src.dhis2` | source | yes | yes |
 | `src.discord` | source | yes | yes |
@@ -395,16 +396,49 @@ What running a component does beyond producing rows. Each is read from the engin
 | `snk.lancedb` | - | yes |
 | `snk.pixeltable` | - | yes |
 | `snk.vortex` | - | yes |
+| `src.airtable` | yes | - |
+| `src.asana` | yes | - |
 | `src.changed` | yes | - |
+| `src.clickup` | yes | - |
+| `src.couchdb` | yes | - |
+| `src.dhis2` | yes | - |
+| `src.discord` | yes | - |
 | `src.ducklake.changes` | yes | - |
 | `src.git` | - | yes |
+| `src.github` | yes | - |
+| `src.gitlab` | yes | - |
+| `src.graphql` | yes | - |
+| `src.hubspot` | yes | - |
+| `src.intercom` | yes | - |
+| `src.jira` | yes | - |
 | `src.kafka` | yes | - |
 | `src.lancedb` | - | yes |
+| `src.linear` | yes | - |
+| `src.mailchimp` | yes | - |
+| `src.monday` | yes | - |
+| `src.notion` | yes | - |
+| `src.odata` | yes | - |
+| `src.pipedrive` | yes | - |
 | `src.pixeltable` | - | yes |
+| `src.quickbooks` | yes | - |
 | `src.redpanda` | yes | - |
 | `src.rest` | yes | - |
+| `src.salesforce` | yes | - |
+| `src.sap` | yes | - |
+| `src.sap.rfc` | yes | - |
+| `src.segment` | yes | - |
+| `src.sendgrid` | yes | - |
+| `src.shopify` | yes | - |
+| `src.slack` | yes | - |
+| `src.soap` | yes | - |
 | `src.spool` | yes | - |
+| `src.stripe` | yes | - |
+| `src.telegram` | yes | - |
+| `src.trello` | yes | - |
+| `src.twilio` | yes | - |
 | `src.vortex` | - | yes |
+| `src.xero` | yes | - |
+| `src.zendesk` | yes | - |
 | `xf.dbt` | - | yes |
 | `xf.incremental` | yes | - |
 | `xf.tumble` | yes | - |

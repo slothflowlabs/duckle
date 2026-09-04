@@ -5108,10 +5108,6 @@
                   {
                     "label": "Custom SQL",
                     "value": "sql"
-                  },
-                  {
-                    "label": "Incremental (by column)",
-                    "value": "incremental"
                   }
                 ]
               },
@@ -5133,12 +5129,6 @@
                 "kind": "expression",
                 "rows": 5,
                 "placeholder": "SELECT * FROM orders WHERE status = $1"
-              },
-              {
-                "key": "incrementalColumn",
-                "label": "Incremental column",
-                "kind": "text",
-                "placeholder": "updated_at"
               },
               {
                 "key": "fetchSize",
@@ -5279,10 +5269,6 @@
                   {
                     "label": "Custom SQL",
                     "value": "sql"
-                  },
-                  {
-                    "label": "Incremental (by column)",
-                    "value": "incremental"
                   }
                 ]
               },
@@ -5304,12 +5290,6 @@
                 "kind": "expression",
                 "rows": 5,
                 "placeholder": "SELECT * FROM orders WHERE status = $1"
-              },
-              {
-                "key": "incrementalColumn",
-                "label": "Incremental column",
-                "kind": "text",
-                "placeholder": "updated_at"
               },
               {
                 "key": "fetchSize",
@@ -5450,10 +5430,6 @@
                   {
                     "label": "Custom SQL",
                     "value": "sql"
-                  },
-                  {
-                    "label": "Incremental (by column)",
-                    "value": "incremental"
                   }
                 ]
               },
@@ -5475,12 +5451,6 @@
                 "kind": "expression",
                 "rows": 5,
                 "placeholder": "SELECT * FROM orders WHERE status = $1"
-              },
-              {
-                "key": "incrementalColumn",
-                "label": "Incremental column",
-                "kind": "text",
-                "placeholder": "updated_at"
               },
               {
                 "key": "fetchSize",
@@ -6476,10 +6446,6 @@
                   {
                     "label": "Custom SQL",
                     "value": "sql"
-                  },
-                  {
-                    "label": "Incremental (by column)",
-                    "value": "incremental"
                   }
                 ]
               },
@@ -6501,12 +6467,6 @@
                 "kind": "expression",
                 "rows": 5,
                 "placeholder": "SELECT * FROM orders WHERE status = $1"
-              },
-              {
-                "key": "incrementalColumn",
-                "label": "Incremental column",
-                "kind": "text",
-                "placeholder": "updated_at"
               },
               {
                 "key": "fetchSize",
@@ -6877,10 +6837,6 @@
                   {
                     "label": "Custom SQL",
                     "value": "sql"
-                  },
-                  {
-                    "label": "Incremental (by column)",
-                    "value": "incremental"
                   }
                 ]
               },
@@ -6902,12 +6858,6 @@
                 "kind": "expression",
                 "rows": 5,
                 "placeholder": "SELECT * FROM orders WHERE status = $1"
-              },
-              {
-                "key": "incrementalColumn",
-                "label": "Incremental column",
-                "kind": "text",
-                "placeholder": "updated_at"
               },
               {
                 "key": "fetchSize",
@@ -11789,7 +11739,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -12248,7 +12198,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -12701,7 +12651,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -13201,7 +13151,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -13654,7 +13604,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -14136,7 +14086,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -14589,7 +14539,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -15042,7 +14992,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -15967,69 +15917,372 @@
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Connection",
+            "label": "Request",
             "fields": [
               {
-                "key": "connectionString",
-                "label": "Connection string",
+                "key": "url",
+                "label": "URL",
                 "kind": "text",
                 "required": true,
-                "placeholder": "mongodb://localhost:27017"
+                "placeholder": "https://api.example.com/v1/resource"
               },
               {
-                "key": "database",
-                "label": "Database",
-                "kind": "text",
-                "required": true
-              },
-              {
-                "key": "collection",
-                "label": "Collection / Index",
-                "kind": "text",
-                "required": true
-              }
-            ]
-          },
-          {
-            "label": "Query",
-            "fields": [
-              {
-                "key": "queryMode",
-                "label": "Query mode",
+                "key": "method",
+                "label": "Method",
                 "kind": "select",
-                "defaultValue": "all",
+                "defaultValue": "GET",
                 "options": [
                   {
-                    "label": "All documents",
-                    "value": "all"
+                    "label": "GET",
+                    "value": "GET"
                   },
                   {
-                    "label": "Filter query",
-                    "value": "filter"
+                    "label": "POST",
+                    "value": "POST"
                   },
                   {
-                    "label": "Aggregation pipeline",
-                    "value": "aggregation"
+                    "label": "PUT",
+                    "value": "PUT"
+                  },
+                  {
+                    "label": "DELETE",
+                    "value": "DELETE"
                   }
                 ]
               },
               {
-                "key": "filter",
-                "label": "Filter (JSON)",
-                "kind": "textarea",
-                "rows": 4,
-                "placeholder": "{\"status\": \"active\"}"
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               },
               {
-                "key": "projection",
-                "label": "Projection (JSON)",
+                "key": "body",
+                "label": "Request body",
                 "kind": "textarea",
-                "rows": 3
+                "rows": 4
+              }
+            ]
+          },
+          {
+            "label": "Auth",
+            "fields": [
+              {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "rest"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
               },
               {
-                "key": "limit",
-                "label": "Limit",
-                "kind": "integer"
+                "key": "transportRef",
+                "label": "HTTP transport",
+                "kind": "connection-ref",
+                "accepts": [
+                  "http"
+                ],
+                "description": "Pick a saved HTTP transport to apply a proxy, timeouts and a User-Agent without setting them on every node. Anything you set here on the node wins over the connection."
+              },
+              {
+                "key": "authType",
+                "label": "Auth type",
+                "kind": "select",
+                "defaultValue": "none",
+                "options": [
+                  {
+                    "label": "None",
+                    "value": "none"
+                  },
+                  {
+                    "label": "Bearer token",
+                    "value": "bearer"
+                  },
+                  {
+                    "label": "API key (header)",
+                    "value": "apikey"
+                  },
+                  {
+                    "label": "Basic (user:password)",
+                    "value": "basic"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "authToken",
+                "label": "Token / API key",
+                "kind": "text",
+                "placeholder": "••••••••",
+                "description": "Bearer: the token. API key: the key. Basic: user:password, which is base64-encoded for you, so do not paste an already-encoded value. Use ${ENV:...} to keep the secret out of the pipeline JSON."
+              },
+              {
+                "key": "authHeader",
+                "label": "API key header",
+                "kind": "text",
+                "placeholder": "X-API-Key",
+                "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Response",
+            "fields": [
+              {
+                "key": "responsePath",
+                "label": "Records JSON pointer",
+                "kind": "text",
+                "placeholder": "/data",
+                "description": "RFC 6901 JSON pointer to the array of row objects in the response. Leave empty if the response root IS the array."
+              },
+              {
+                "key": "jsonPath",
+                "label": "Records JSONPath (legacy)",
+                "kind": "text",
+                "placeholder": "$.data[*]",
+                "description": "JSONPath form for compatibility with older pipelines. Prefer the JSON pointer above."
+              }
+            ]
+          },
+          {
+            "label": "Pagination",
+            "fields": [
+              {
+                "key": "paginationType",
+                "label": "Style",
+                "kind": "select",
+                "defaultValue": "none",
+                "options": [
+                  {
+                    "label": "None (single-shot fetch)",
+                    "value": "none"
+                  },
+                  {
+                    "label": "Cursor (token in response body)",
+                    "value": "cursor"
+                  },
+                  {
+                    "label": "Offset / limit",
+                    "value": "offset"
+                  },
+                  {
+                    "label": "Page number",
+                    "value": "page"
+                  },
+                  {
+                    "label": "RFC 5988 Link header (rel=\"next\")",
+                    "value": "link"
+                  }
+                ]
+              },
+              {
+                "key": "cursorNextPath",
+                "label": "Cursor JSON pointer (cursor style)",
+                "kind": "text",
+                "placeholder": "/meta/next_cursor"
+              },
+              {
+                "key": "cursorParam",
+                "label": "Cursor query parameter (cursor style)",
+                "kind": "text",
+                "placeholder": "cursor"
+              },
+              {
+                "key": "offsetParam",
+                "label": "Offset query parameter (offset style)",
+                "kind": "text",
+                "placeholder": "offset"
+              },
+              {
+                "key": "pageSize",
+                "label": "Page size (offset style)",
+                "kind": "integer",
+                "defaultValue": 100
+              },
+              {
+                "key": "totalCountPath",
+                "label": "Total-count JSON pointer (offset style)",
+                "kind": "text",
+                "placeholder": "/total_count",
+                "description": "Optional. JSON pointer to a total-row count in the response (e.g. /total_count for Redmine). When set, offset paging stops once offset + page size reaches the total, instead of relying on a short page."
+              },
+              {
+                "key": "pageParam",
+                "label": "Page query parameter (page style)",
+                "kind": "text",
+                "placeholder": "page"
+              },
+              {
+                "key": "startPage",
+                "label": "Start page (page style)",
+                "kind": "integer",
+                "defaultValue": 1
+              },
+              {
+                "key": "maxPages",
+                "label": "Max pages (safety cap)",
+                "kind": "integer",
+                "defaultValue": 100
+              },
+              {
+                "key": "urlTemplate",
+                "label": "URL per upstream row",
+                "kind": "text",
+                "placeholder": "https://api.example.com/companies/{id}/officers",
+                "description": "Makes one request per row of the connected input, substituting {column} from that row. This is how a parent endpoint feeds a child one: /companies, then /companies/{id}/officers. Leave blank for a single request to the URL above. A column name that does not exist fails the run rather than requesting an empty path."
+              },
+              {
+                "key": "parentKeyColumn",
+                "label": "Carry upstream column",
+                "kind": "text",
+                "placeholder": "id",
+                "description": "Stamped onto every row the child returns, so the results can be joined back to the row that produced them. /companies/42/officers returns officers with nothing in them saying 42."
+              },
+              {
+                "key": "maxRequests",
+                "label": "Max requests (safety cap)",
+                "kind": "integer",
+                "defaultValue": 1000,
+                "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
+              },
+              {
+                "key": "incrementalField",
+                "label": "Incremental field",
+                "kind": "text",
+                "placeholder": "updated_at",
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
+              },
+              {
+                "key": "incrementalInitial",
+                "label": "Incremental starting value",
+                "kind": "text",
+                "placeholder": "1970-01-01",
+                "description": "What {incremental} is on the very first run, before a mark has been saved. Blank is a real choice for an API that reads an empty cursor as \"from the beginning\". The mark is saved only when the whole pipeline succeeds, and only when it moved forward."
+              },
+              {
+                "key": "concurrency",
+                "label": "Requests in flight",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many upstream rows are requested at the same time. 1 keeps the output in upstream order. Above 1 the rows arrive as their requests finish, so the ORDER IS NOT THE UPSTREAM ORDER - use Carry upstream column to keep each result traceable, and do not rely on a downstream LIMIT returning the same rows twice."
+              },
+              {
+                "key": "checkpoint",
+                "label": "Remember completed rows",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Each upstream row is recorded as its requests finish, so a rerun does not fetch it again - a fan-out that died at row 900,001 resumes without repeating the 900,000 that worked. Kept in the same place the AI steps keep theirs. Changing the URL, method, body or response path starts a fresh record, since those change the answer."
+              },
+              {
+                "key": "onParentError",
+                "label": "When a row request fails",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Skip that row and carry on",
+                    "value": "skip"
+                  },
+                  {
+                    "label": "Send it to the reject output",
+                    "value": "reject"
+                  }
+                ],
+                "description": "One failure out of a million requests does not have to discard the 999,999 that worked. The reject output gives each failure a row with the carried key, the URL, the error and the time, so a run that half-failed leaves its failures somewhere you can query rather than only in a log."
+              },
+              {
+                "key": "responseMetadata",
+                "label": "Add response metadata",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
+              },
+              {
+                "key": "rawResponseDestination",
+                "label": "Keep the original response at",
+                "kind": "text",
+                "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
               }
             ]
           },
@@ -16567,20 +16820,6 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "How many upstream rows may each fire a request. The run fails rather than making more, so a careless upstream cannot become a request storm."
-              },
-              {
-                "key": "incrementalField",
-                "label": "Incremental field",
-                "kind": "text",
-                "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
-              },
-              {
-                "key": "incrementalInitial",
-                "label": "Incremental starting value",
-                "kind": "text",
-                "placeholder": "1970-01-01",
-                "description": "What {incremental} is on the very first run, before a mark has been saved. Blank is a real choice for an API that reads an empty cursor as \"from the beginning\". The mark is saved only when the whole pipeline succeeds, and only when it moved forward."
               },
               {
                 "key": "concurrency",
@@ -49286,7 +49525,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -49972,7 +50211,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -50425,7 +50664,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -50878,7 +51117,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -51331,7 +51570,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -51784,7 +52023,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -52237,7 +52476,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -52690,7 +52929,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -53143,7 +53382,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -53596,7 +53835,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -54049,7 +54288,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -54502,7 +54741,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -54955,7 +55194,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -55408,7 +55647,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -55861,7 +56100,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -56314,7 +56553,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -56732,7 +56971,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -57150,7 +57389,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -57603,7 +57842,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -58056,7 +58295,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -58509,7 +58748,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -58962,7 +59201,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -59415,7 +59654,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -59868,7 +60107,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -60321,7 +60560,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -60774,7 +61013,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -61227,7 +61466,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
@@ -61680,7 +61919,7 @@
                 "label": "Incremental field",
                 "kind": "text",
                 "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Leave blank for no incremental state."
+                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
               },
               {
                 "key": "incrementalInitial",
