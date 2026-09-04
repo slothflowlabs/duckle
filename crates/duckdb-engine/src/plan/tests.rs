@@ -6111,3 +6111,70 @@ mod sort_validation {
         assert!(err.to_string().contains("amonut"), "{err}");
     }
 }
+
+/// A GraphQL source has to be buildable from the form that draws it.
+///
+/// The arm requires `query` and reads `variables`, and synthApiSource declared
+/// neither - it draws the REST `body` textarea, which this arm ignores because
+/// it builds the body itself from query + variables. So every src.graphql,
+/// src.linear and src.monday node the editor could produce failed at plan time
+/// on "query required", and the only way to make one was to write the pipeline
+/// file by hand.
+#[cfg(test)]
+mod graphql_source {
+    use super::*;
+
+    fn node(props: serde_json::Value) -> PipelineDoc {
+        serde_json::from_value(serde_json::json!({
+            "nodes": [
+                {"id":"g","position":{"x":0,"y":0},
+                 "data":{"label":"GQL","componentId":"src.graphql","properties": props}},
+                {"id":"k","position":{"x":0,"y":0},
+                 "data":{"label":"out","componentId":"snk.csv","properties":{"path":"/tmp/o.csv"}}}
+            ],
+            "edges":[{"id":"e1","source":"g","target":"k","data":{"connectionType":"main"}}]
+        }))
+        .unwrap()
+    }
+
+    /// The form's own keys, and nothing a hand-written file would add.
+    #[test]
+    fn the_fields_the_form_offers_are_enough_to_compile() {
+        let plan = node(serde_json::json!({
+            "url": "https://api.example.invalid/graphql",
+            "query": "query { issues { nodes { id updatedAt } } }",
+            "variables": "{\"first\": 50}",
+            "responsePath": "/data/issues/nodes",
+        }));
+        let plan = compile(&plan).expect("a node built from the form must compile");
+        assert!(plan.stages.iter().any(|s| s.node_id == "g"), "the source has to be planned");
+    }
+
+    /// And the query has to reach the request body, not just be accepted.
+    #[test]
+    fn the_query_and_variables_become_the_request_body() {
+        let d = node(serde_json::json!({
+            "url": "https://api.example.invalid/graphql",
+            "query": "query Q { things { id } }",
+            "variables": "{\"first\": 50}",
+        }));
+        let plan = compile(&d).expect("compiles");
+        let stage = plan.stages.iter().find(|s| s.node_id == "g").expect("stage");
+        let spec = stage.runtime.as_ref().expect("a GraphQL source runs a request");
+        let body = match spec {
+            crate::plan::RuntimeSpec::RestSource(r) => r.body.clone().unwrap_or_default(),
+            other => panic!("expected a REST-backed source, got {other:?}"),
+        };
+        assert!(body.contains("query Q { things { id } }"), "the query is the body: {body}");
+        assert!(body.contains("\"first\":50"), "and the variables are parsed JSON: {body}");
+    }
+
+    /// The failure this closes, kept so the message stays actionable if the
+    /// form ever drops the field again.
+    #[test]
+    fn a_graphql_node_with_no_query_says_so() {
+        let err = compile(&node(serde_json::json!({ "url": "https://x.invalid/graphql" })))
+            .expect_err("a GraphQL request without a query is not a request");
+        assert!(err.to_string().contains("query required"), "{err}");
+    }
+}

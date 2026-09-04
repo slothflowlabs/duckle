@@ -787,6 +787,16 @@ const ATTACH_PARQUET_SOURCES: &[&str] = &[
     "src.delta",
 ];
 
+/// The GraphQL sources: one arm, one request shape.
+///
+/// Named rather than spelled out at each use so the planner, the capability
+/// registry and anything else asking the question cannot answer it differently.
+/// Linear and Monday are GraphQL-only APIs and get their own tiles; the engine
+/// treats all three identically.
+pub fn is_graphql_source(component_id: &str) -> bool {
+    matches!(component_id, "src.graphql" | "src.linear" | "src.monday")
+}
+
 /// Whether the engine performs an incremental (cursor) read for this component.
 ///
 /// #330: the capability registry used to answer this by asking the MANIFEST -
@@ -5609,7 +5619,7 @@ fn build_stage(
             path,
         });
         (String::new(), StageKind::View, None)
-    } else if matches!(component_id, "src.graphql" | "src.linear" | "src.monday") {
+    } else if is_graphql_source(component_id) {
         // GraphQL source + Linear alias: POST {query, variables} to
         // the endpoint, walk the response data path. Rides
         // RestSourceSpec. Linear's API is exclusively GraphQL so the

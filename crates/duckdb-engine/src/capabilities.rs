@@ -187,7 +187,12 @@ pub fn derive(c: &Value) -> Capabilities {
         artifact_io: port_of(c, "inputs", "artifact") || port_of(c, "outputs", "artifact"),
         connection_ref: has("connectionRef"),
         credentials,
-        custom_sql: has("sql") || has("query") || has("rawSql"),
+        // A GraphQL document is not SQL. The GraphQL sources read a `query`
+        // prop exactly as the SQL-bearing sources do, so keying on the field
+        // name alone published "can be given SQL to run at the source" for
+        // three components that cannot take any.
+        custom_sql: (has("sql") || has("query") || has("rawSql"))
+            && !crate::plan::is_graphql_source(id),
         incremental: crate::plan::reads_incremental(id),
         pushdown: has("pushdown"),
         write_modes,
@@ -299,6 +304,24 @@ mod tests {
             read_but_unoffered.is_empty(),
             "the engine reads an incremental cursor for these and no form can set one: {read_but_unoffered:?}"
         );
+    }
+
+    /// A GraphQL query is not SQL, and the column says "can be given SQL to
+    /// run at the source".
+    ///
+    /// Declaring `query` on the GraphQL sources - which they need, because the
+    /// arm builds the request body from it - flipped Custom SQL to yes for all
+    /// three purely because of the field's name. The same shape of mistake as
+    /// the incremental claim: a capability inferred from a spelling.
+    #[test]
+    fn a_graphql_query_is_not_custom_sql() {
+        for id in ["src.graphql", "src.linear", "src.monday"] {
+            let c = find(id);
+            assert!(c.properties.iter().any(|p| p == "query"), "{id} still needs the field");
+            assert!(!c.custom_sql, "{id} takes a GraphQL document, not SQL");
+        }
+        // And the components that DO take SQL keep saying so.
+        assert!(find("src.postgres").custom_sql, "src.postgres declares sql");
     }
 
     /// A transform has none of the source-shaped capabilities, which is the

@@ -480,6 +480,54 @@ const HTTP_TRANSPORT_IDS = new Set([
     'src.html',
 ]);
 
+// The GraphQL family is a different request shape wearing the same
+// synthesizer. Its arm in plan/mod.rs BUILDS the request body from `query` and
+// `variables`, and neither was declared - so every src.graphql, src.linear and
+// src.monday node the editor could produce failed at plan time on "query
+// required", and the hand-written pipeline that did work was failed by
+// `validate` for setting a property the checker believed was dead.
+const graphqlRequestFields = (): Field[] => [
+    {
+        key: 'query',
+        label: 'Query',
+        kind: 'expression',
+        required: true,
+        rows: 8,
+        monospace: true,
+        placeholder: 'query Issues($first: Int) { issues(first: $first) { nodes { id title updatedAt } } }',
+        description:
+            'The GraphQL document to POST. Put {incremental} anywhere in it, or in a variable, to have the saved mark substituted before the request goes out.',
+    },
+    {
+        key: 'variables',
+        label: 'Variables (JSON)',
+        kind: 'textarea',
+        rows: 4,
+        monospace: true,
+        placeholder: '{ "first": 50 }',
+        description:
+            'Sent as the request variables. Must be a JSON object; anything that does not parse is sent as an empty one.',
+    },
+];
+
+// What the REST arm reads and the GraphQL arm does not: it hardcodes the method
+// to POST and builds the body itself, so both controls would change nothing.
+const restMethodAndBodyFields = (): Field[] => [
+    {
+        key: 'method',
+        label: 'Method',
+        kind: 'select',
+        defaultValue: 'GET',
+        options: [
+            { label: 'GET', value: 'GET' },
+            { label: 'POST', value: 'POST' },
+            { label: 'PUT', value: 'PUT' },
+            { label: 'DELETE', value: 'DELETE' },
+        ],
+    },
+    { key: 'body', label: 'Request body', kind: 'textarea', rows: 4 },
+];
+
 const httpTransportFields = (): Field[] => [
     {
         key: 'httpProxy',
@@ -3928,6 +3976,8 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
     // the cursor boxes were a control that could not work, and they were what
     // made the capability matrix claim src.http does incremental reads.
     const carriesCursor = comp.id !== 'src.http';
+    const isGraphql =
+        comp.id === 'src.graphql' || comp.id === 'src.linear' || comp.id === 'src.monday';
     return base(comp, [
         ...(comp.id === 'src.sap'
             ? [
@@ -3959,23 +4009,19 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
               ]
             : []),
         {
-            label: 'Request',
+            label: isGraphql ? 'Endpoint' : 'Request',
             fields: [
-                { key: 'url', label: 'URL', kind: 'text', required: true, placeholder: 'https://api.example.com/v1/resource' },
                 {
-                    key: 'method',
-                    label: 'Method',
-                    kind: 'select',
-                    defaultValue: 'GET',
-                    options: [
-                        { label: 'GET', value: 'GET' },
-                        { label: 'POST', value: 'POST' },
-                        { label: 'PUT', value: 'PUT' },
-                        { label: 'DELETE', value: 'DELETE' },
-                    ],
+                    key: 'url',
+                    label: isGraphql ? 'GraphQL endpoint' : 'URL',
+                    kind: 'text',
+                    required: true,
+                    placeholder: isGraphql
+                        ? 'https://api.example.com/graphql'
+                        : 'https://api.example.com/v1/resource',
                 },
+                ...(isGraphql ? graphqlRequestFields() : restMethodAndBodyFields()),
                 { key: 'headers', label: 'Headers', kind: 'key-value' },
-                { key: 'body', label: 'Request body', kind: 'textarea', rows: 4 },
             ],
         },
         {

@@ -691,6 +691,34 @@ mod tests {
         assert!(legacy.is_empty(), "a pipeline saved before the change was refused: {legacy:?}");
     }
 
+    /// A GraphQL source is a query and its variables, and neither was
+    /// declared.
+    ///
+    /// The arm requires `query` (plan/mod.rs, "query required") and reads
+    /// `variables`; synthApiSource drew the REST `body` textarea instead, which
+    /// that arm ignores because it builds the body itself. So no node the
+    /// editor could produce would plan, and the hand-written pipeline that DID
+    /// work was failed by `validate` for setting a property the checker
+    /// believed was dead.
+    #[test]
+    fn a_graphql_source_declares_the_query_it_requires() {
+        for id in ["src.graphql", "src.linear", "src.monday"] {
+            let keys = declared().get(id).unwrap_or_else(|| panic!("{id} is not in the catalog"));
+            for k in ["query", "variables"] {
+                assert!(keys.contains(k), "{id} needs {k} and its form does not offer it");
+            }
+            let f = check(&doc(
+                id,
+                serde_json::json!({
+                    "url": "https://x.invalid/graphql",
+                    "query": "query { a { id } }",
+                    "variables": "{}"
+                }),
+            ));
+            assert!(f.is_empty(), "the only shape that works was refused for {id}: {f:?}");
+        }
+    }
+
     #[test]
     fn universal_matches_the_properties_panel() {
         // The drift that caused it: the panel grew universal fields and nothing

@@ -11463,15 +11463,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -11888,49 +11888,38 @@
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Request",
+            "label": "Endpoint",
             "fields": [
               {
                 "key": "url",
-                "label": "URL",
+                "label": "GraphQL endpoint",
                 "kind": "text",
                 "required": true,
-                "placeholder": "https://api.example.com/v1/resource"
+                "placeholder": "https://api.example.com/graphql"
               },
               {
-                "key": "method",
-                "label": "Method",
-                "kind": "select",
-                "defaultValue": "GET",
-                "options": [
-                  {
-                    "label": "GET",
-                    "value": "GET"
-                  },
-                  {
-                    "label": "POST",
-                    "value": "POST"
-                  },
-                  {
-                    "label": "PUT",
-                    "value": "PUT"
-                  },
-                  {
-                    "label": "DELETE",
-                    "value": "DELETE"
-                  }
-                ]
+                "key": "query",
+                "label": "Query",
+                "kind": "expression",
+                "required": true,
+                "rows": 8,
+                "monospace": true,
+                "placeholder": "query Issues($first: Int) { issues(first: $first) { nodes { id title updatedAt } } }",
+                "description": "The GraphQL document to POST. Put {incremental} anywhere in it, or in a variable, to have the saved mark substituted before the request goes out."
+              },
+              {
+                "key": "variables",
+                "label": "Variables (JSON)",
+                "kind": "textarea",
+                "rows": 4,
+                "monospace": true,
+                "placeholder": "{ \"first\": 50 }",
+                "description": "Sent as the request variables. Must be a JSON object; anything that does not parse is sent as an empty one."
               },
               {
                 "key": "headers",
                 "label": "Headers",
                 "kind": "key-value"
-              },
-              {
-                "key": "body",
-                "label": "Request body",
-                "kind": "textarea",
-                "rows": 4
               }
             ]
           },
@@ -12375,15 +12364,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -12875,15 +12864,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -13328,15 +13317,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -13810,15 +13799,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -14263,15 +14252,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -14716,15 +14705,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -15951,15 +15940,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -16550,15 +16539,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -49258,15 +49247,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -49935,15 +49924,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -50388,15 +50377,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -50841,15 +50830,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -51294,15 +51283,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -51747,15 +51736,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -52200,15 +52189,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -52653,15 +52642,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -53106,15 +53095,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -53559,15 +53548,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -54012,15 +54001,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -54465,15 +54454,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -54918,15 +54907,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -55371,15 +55360,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -55790,49 +55779,38 @@
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Request",
+            "label": "Endpoint",
             "fields": [
               {
                 "key": "url",
-                "label": "URL",
+                "label": "GraphQL endpoint",
                 "kind": "text",
                 "required": true,
-                "placeholder": "https://api.example.com/v1/resource"
+                "placeholder": "https://api.example.com/graphql"
               },
               {
-                "key": "method",
-                "label": "Method",
-                "kind": "select",
-                "defaultValue": "GET",
-                "options": [
-                  {
-                    "label": "GET",
-                    "value": "GET"
-                  },
-                  {
-                    "label": "POST",
-                    "value": "POST"
-                  },
-                  {
-                    "label": "PUT",
-                    "value": "PUT"
-                  },
-                  {
-                    "label": "DELETE",
-                    "value": "DELETE"
-                  }
-                ]
+                "key": "query",
+                "label": "Query",
+                "kind": "expression",
+                "required": true,
+                "rows": 8,
+                "monospace": true,
+                "placeholder": "query Issues($first: Int) { issues(first: $first) { nodes { id title updatedAt } } }",
+                "description": "The GraphQL document to POST. Put {incremental} anywhere in it, or in a variable, to have the saved mark substituted before the request goes out."
+              },
+              {
+                "key": "variables",
+                "label": "Variables (JSON)",
+                "kind": "textarea",
+                "rows": 4,
+                "monospace": true,
+                "placeholder": "{ \"first\": 50 }",
+                "description": "Sent as the request variables. Must be a JSON object; anything that does not parse is sent as an empty one."
               },
               {
                 "key": "headers",
                 "label": "Headers",
                 "kind": "key-value"
-              },
-              {
-                "key": "body",
-                "label": "Request body",
-                "kind": "textarea",
-                "rows": 4
               }
             ]
           },
@@ -56277,15 +56255,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -56695,15 +56673,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -57113,15 +57091,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -57566,15 +57544,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -57985,49 +57963,38 @@
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Request",
+            "label": "Endpoint",
             "fields": [
               {
                 "key": "url",
-                "label": "URL",
+                "label": "GraphQL endpoint",
                 "kind": "text",
                 "required": true,
-                "placeholder": "https://api.example.com/v1/resource"
+                "placeholder": "https://api.example.com/graphql"
               },
               {
-                "key": "method",
-                "label": "Method",
-                "kind": "select",
-                "defaultValue": "GET",
-                "options": [
-                  {
-                    "label": "GET",
-                    "value": "GET"
-                  },
-                  {
-                    "label": "POST",
-                    "value": "POST"
-                  },
-                  {
-                    "label": "PUT",
-                    "value": "PUT"
-                  },
-                  {
-                    "label": "DELETE",
-                    "value": "DELETE"
-                  }
-                ]
+                "key": "query",
+                "label": "Query",
+                "kind": "expression",
+                "required": true,
+                "rows": 8,
+                "monospace": true,
+                "placeholder": "query Issues($first: Int) { issues(first: $first) { nodes { id title updatedAt } } }",
+                "description": "The GraphQL document to POST. Put {incremental} anywhere in it, or in a variable, to have the saved mark substituted before the request goes out."
+              },
+              {
+                "key": "variables",
+                "label": "Variables (JSON)",
+                "kind": "textarea",
+                "rows": 4,
+                "monospace": true,
+                "placeholder": "{ \"first\": 50 }",
+                "description": "Sent as the request variables. Must be a JSON object; anything that does not parse is sent as an empty one."
               },
               {
                 "key": "headers",
                 "label": "Headers",
                 "kind": "key-value"
-              },
-              {
-                "key": "body",
-                "label": "Request body",
-                "kind": "textarea",
-                "rows": 4
               }
             ]
           },
@@ -58472,15 +58439,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -58925,15 +58892,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -59378,15 +59345,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -59831,15 +59798,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -60284,15 +60251,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -60737,15 +60704,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -61190,15 +61157,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
@@ -61643,15 +61610,15 @@
                 ]
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
                 "rows": 4
+              },
+              {
+                "key": "headers",
+                "label": "Headers",
+                "kind": "key-value"
               }
             ]
           },
