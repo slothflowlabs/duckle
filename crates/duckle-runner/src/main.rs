@@ -67,6 +67,7 @@ USAGE:
     duckle-runner test [<file.test.json> ...]
     duckle-runner cache <list|clear>       (stage outputs kept for reuse)
     duckle-runner sequence <status|plan|apply> <file.json>
+    duckle-runner deliveries <status|retry>  (#325 subscription pump ledger)
     duckle-runner python <check|prepare>   (the workspace's Python environment)
 
 TEST:
@@ -2053,6 +2054,13 @@ fn main() -> ExitCode {
             }
         };
     }
+    // #325: `deliveries` -> what the subscription pump owes, delivered and
+    // failed. Failed deliveries were recorded and then invisible: nothing
+    // listed them and nothing could retry them, so a delivery that could not be
+    // started stayed failed for good.
+    if std::env::args().nth(1).as_deref() == Some("deliveries") {
+        return run_deliveries();
+    }
     // #326: `sequence` -> ordered delta chains. Above the fallthrough run path,
     // like every other verb, or it is parsed as a bare pipeline path.
     if std::env::args().nth(1).as_deref() == Some("sequence") {
@@ -2533,6 +2541,99 @@ fn run_retry() -> ExitCode {
         Ok(false) => ExitCode::from(1),
         Err(e) => {
             eprintln!("duckle-runner retry: {e}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// `duckle-runner deliveries status|retry` - the subscription pump's ledger (#325).
+fn run_deliveries() -> ExitCode {
+    use duckle_duckdb_engine::subscribe::{self, DeliveryState};
+    let mut it = std::env::args().skip(2);
+    let sub = it.next().unwrap_or_default();
+    let mut workspace = PathBuf::from(".");
+    let mut json_out = false;
+    let mut only: Vec<String> = Vec::new();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--workspace" => workspace = it.next().map(PathBuf::from).unwrap_or(workspace),
+            "--json" => json_out = true,
+            "--id" => only.extend(it.next()),
+            other => {
+                eprintln!("duckle-runner deliveries: unknown argument {other}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let all = subscribe::deliveries(&workspace);
+    match sub.as_str() {
+        "status" => {
+            let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
+            for d in all.values() {
+                let name = match d.state {
+                    DeliveryState::Pending => "pending",
+                    DeliveryState::Delivered => "delivered",
+                    DeliveryState::Failed => "failed",
+                };
+                *counts.entry(name).or_default() += 1;
+            }
+            if json_out {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "schemaVersion": report::SCHEMA_VERSION,
+                        "command": "deliveries.status",
+                        "counts": counts,
+                        "deliveries": all.values().collect::<Vec<_>>(),
+                    }))
+                    .unwrap_or_default()
+                );
+            } else {
+                for (state, n) in &counts {
+                    println!("{state:<10} {n}");
+                }
+                // A failure with no explanation is the state this command
+                // exists to end, so the error is printed rather than counted.
+                for d in all.values().filter(|d| d.state == DeliveryState::Failed) {
+                    println!(
+                        "  FAILED  {:<16} {:<16} {}",
+                        d.subscription_id,
+                        d.pipeline_id,
+                        d.last_error.as_deref().unwrap_or("no reason recorded")
+                    );
+                }
+                if counts.is_empty() {
+                    println!("no deliveries recorded");
+                }
+            }
+            ExitCode::from(0)
+        }
+        "retry" => {
+            let picked = (!only.is_empty()).then_some(only.as_slice());
+            match subscribe::retry_failed(&workspace, picked) {
+                Ok(0) => {
+                    println!("no failed deliveries to retry");
+                    ExitCode::from(0)
+                }
+                Ok(n) => {
+                    println!("{n} delivery(ies) will be attempted again on the next tick");
+                    ExitCode::from(0)
+                }
+                Err(e) => {
+                    eprintln!("duckle-runner deliveries retry: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+        _ => {
+            eprintln!(
+                "usage: duckle-runner deliveries status|retry [--workspace DIR] [--json] [--id ID]
+                 
+                 status  what the subscription pump owes, delivered and failed
+                 retry   make failed deliveries owed again. A DELIVERED publication is
+                         never re-delivered - that is the duplicate run the delivery id
+                         exists to prevent. --id names a subscription or a delivery."
+            );
             ExitCode::from(2)
         }
     }

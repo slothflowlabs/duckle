@@ -371,6 +371,44 @@ pub fn record(workspace: &Path, delivery: Delivery) -> Result<(), String> {
 }
 
 /// Deliveries that failed and can be tried again.
+/// Make failed deliveries eligible again.
+///
+/// #325 AC4 calls a failed delivery retryable and nothing made it so: the pump
+/// writes `Failed` in four places and never writes anything back, so a delivery
+/// that could not be started - a pipeline briefly absent, a parameter binding
+/// since corrected, a cycle since broken - stayed failed for good.
+///
+/// It works by REMOVING the record rather than setting it back to pending,
+/// because [`pending`] derives what is owed from (subscription x event) minus
+/// what is recorded. A record set to `Pending` would still be recorded, so it
+/// would still be skipped - the retry would look like it worked and change
+/// nothing. Deleting it puts the delivery back where it was before anyone tried.
+///
+/// Only failures. A delivered publication is not re-delivered by asking for a
+/// retry, which would be the one way this could cause the duplicate run the
+/// delivery id exists to prevent.
+pub fn retry_failed(workspace: &Path, only: Option<&[String]>) -> Result<usize, String> {
+    let mut all = deliveries(workspace);
+    let doomed: Vec<String> = all
+        .values()
+        .filter(|d| d.state == DeliveryState::Failed)
+        .filter(|d| {
+            only.is_none_or(|ids| {
+                ids.iter().any(|i| i == &d.delivery_id || i == &d.subscription_id)
+            })
+        })
+        .map(|d| d.delivery_id.clone())
+        .collect();
+    if doomed.is_empty() {
+        return Ok(0);
+    }
+    for id in &doomed {
+        all.remove(id);
+    }
+    save_deliveries(workspace, &all)?;
+    Ok(doomed.len())
+}
+
 pub fn failed(workspace: &Path) -> Vec<Delivery> {
     deliveries(workspace)
         .into_values()
@@ -1191,5 +1229,122 @@ mod retention_rules {
         keep_only(tmp.path(), &kept).unwrap();
         let back = deliveries(tmp.path());
         assert_eq!(back.keys().collect::<Vec<_>>(), ["b"]);
+    }
+}
+
+/// #325 AC4: a failed delivery has to actually be retryable.
+#[cfg(test)]
+mod failed_deliveries_can_be_retried {
+    use super::*;
+    use crate::history::{append_run_record, AssetTouch, RunRecord};
+
+    fn subscription() -> Subscription {
+        Subscription {
+            id: "s1".into(),
+            pipeline_id: "consumer".into(),
+            assets: vec!["/data/a.parquet".into()],
+            producer: None,
+            enabled: true,
+            parameters: Default::default(),
+        }
+    }
+
+    /// A workspace with one publication and one subscription to it.
+    fn published(ws: &Path) {
+        std::fs::write(
+            store_path(ws),
+            serde_json::to_string(&vec![subscription()]).unwrap(),
+        )
+        .unwrap();
+        append_run_record(
+            ws,
+            "producer",
+            RunRecord {
+                run_id: Some("run-1".into()),
+                at: "2026-09-04T04:00:00Z".into(),
+                status: "ok".into(),
+                duration_ms: 10,
+                rows: 5,
+                node_count: 1,
+                trigger: "scheduled".into(),
+                error: None,
+                unchanged: false,
+                incomplete: false,
+                incomplete_reason: None,
+                category: None,
+                assets: vec![AssetTouch {
+                    id: "/data/a.parquet".into(),
+                    direction: "write".into(),
+                    rows: Some(5),
+                }],
+            },
+        )
+        .unwrap();
+    }
+
+    /// The whole gap: the pump writes Failed and nothing ever wrote anything
+    /// back, so a delivery that could not be started stayed failed for good.
+    #[test]
+    fn a_failed_delivery_becomes_owed_again() {
+        let ws = tempfile::tempdir().unwrap();
+        published(ws.path());
+
+        let owed = pending(ws.path(), "2026-09-04T05:00:00Z");
+        assert_eq!(owed.len(), 1, "one publication, one subscriber");
+
+        // The pump could not start it - a pipeline briefly absent, say.
+        let mut d = owed[0].clone();
+        d.state = DeliveryState::Failed;
+        d.attempts = 1;
+        d.last_error = Some("no pipeline \"consumer\" in this workspace".into());
+        record(ws.path(), d).unwrap();
+        assert!(
+            pending(ws.path(), "2026-09-04T05:01:00Z").is_empty(),
+            "a recorded delivery is not owed again, which is the bug"
+        );
+
+        assert_eq!(retry_failed(ws.path(), None).unwrap(), 1);
+        let again = pending(ws.path(), "2026-09-04T05:02:00Z");
+        assert_eq!(again.len(), 1, "the retry has to make it owed again");
+        assert_eq!(again[0].event_id, owed[0].event_id, "and it is the SAME publication");
+        assert_eq!(again[0].delivery_id, owed[0].delivery_id, "under its same identity");
+    }
+
+    /// A delivered publication must never be re-delivered by asking for a
+    /// retry - that is the duplicate run the delivery id exists to prevent.
+    #[test]
+    fn a_delivered_publication_is_not_retried() {
+        let ws = tempfile::tempdir().unwrap();
+        published(ws.path());
+        let mut d = pending(ws.path(), "2026-09-04T05:00:00Z")[0].clone();
+        d.state = DeliveryState::Delivered;
+        d.run_id = Some("run-c".into());
+        record(ws.path(), d).unwrap();
+
+        assert_eq!(retry_failed(ws.path(), None).unwrap(), 0, "nothing failed");
+        assert!(
+            pending(ws.path(), "2026-09-04T05:01:00Z").is_empty(),
+            "a delivered publication must not come back"
+        );
+    }
+
+    #[test]
+    fn a_retry_can_name_one_subscription() {
+        let ws = tempfile::tempdir().unwrap();
+        published(ws.path());
+        let mut d = pending(ws.path(), "2026-09-04T05:00:00Z")[0].clone();
+        d.state = DeliveryState::Failed;
+        record(ws.path(), d).unwrap();
+
+        assert_eq!(retry_failed(ws.path(), Some(&["other".into()])).unwrap(), 0);
+        assert!(pending(ws.path(), "2026-09-04T05:01:00Z").is_empty(), "untouched");
+        assert_eq!(retry_failed(ws.path(), Some(&["s1".into()])).unwrap(), 1);
+        assert_eq!(pending(ws.path(), "2026-09-04T05:02:00Z").len(), 1);
+    }
+
+    #[test]
+    fn retrying_nothing_is_not_an_error() {
+        let ws = tempfile::tempdir().unwrap();
+        assert_eq!(retry_failed(ws.path(), None).unwrap(), 0);
     }
 }
