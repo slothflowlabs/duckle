@@ -56,6 +56,20 @@ const ADVANCED_FIELDS: Field[] = [
         description: "PRAGMA memory_limit for this stage only. 0 = no override. NOTE: setting a per-stage limit forces slower per-stage execution (disables batching). For a pipeline-wide cap, set the DUCKLE_MEMORY_LIMIT workspace variable (e.g. 4GB) instead.",
     },
     {
+        key: 'continueOnFailure',
+        label: 'Carry on if this step fails',
+        kind: 'bool',
+        defaultValue: false,
+        description: 'Treat a failure here as something to carry past rather than the end of the run. The engine has read this for every node since it was added and no panel offered it. NOTE: it also forces the slower per-stage execution path, because a stage that may fail on its own cannot be batched with its neighbours.',
+    },
+    {
+        key: 'contracts.allowPii',
+        label: 'Allow PII to reach this sink',
+        kind: 'bool',
+        defaultValue: false,
+        description: 'A column tagged PII reaching a sink refuses to compile, and the refusal tells you to set contracts.allowPii=true - which, until now, nothing in the interface could do. Prefer a qa.mask upstream; this is the deliberate exception when the destination is allowed to hold it.',
+    },
+    {
         key: 'logRowCount',
         label: 'Log row count',
         kind: 'bool',
@@ -337,8 +351,37 @@ export default function PropertiesPanel({
     ];
 
     const setLabel = (label: string) => onUpdate(selected.id, { label });
-    const setProperty = (key: string, value: unknown) =>
-        onUpdate(selected.id, { properties: { ...props, [key]: value } });
+    // A dotted key writes a NESTED property, so a field can reach something the
+    // engine reads under a namespace. `contracts.allowPii` is the case that
+    // forced it: the engine refuses a run when a PII-tagged column reaches a
+    // sink and tells the operator to "set contracts.allowPii=true", which no
+    // panel could do - a flat key would have written the literal string
+    // "contracts.allowPii" and the engine reads props.contracts.allowPii.
+    //
+    // One level only, because that is what exists and a general path setter
+    // would be machinery for a case nobody has. No field key contained a dot
+    // before this, so nothing changes for any existing field.
+    const setProperty = (key: string, value: unknown) => {
+        const dot = key.indexOf('.');
+        if (dot < 0) {
+            onUpdate(selected.id, { properties: { ...props, [key]: value } });
+            return;
+        }
+        const [outer, inner] = [key.slice(0, dot), key.slice(dot + 1)];
+        const existing = (props[outer] ?? {}) as Record<string, unknown>;
+        onUpdate(selected.id, {
+            properties: { ...props, [outer]: { ...existing, [inner]: value } },
+        });
+    };
+    // The read side of the same key, so a nested field shows the value it just
+    // wrote instead of reverting to its default on the next render.
+    const getProperty = (key: string): unknown => {
+        const dot = key.indexOf('.');
+        if (dot < 0) return props[key];
+        const outer = props[key.slice(0, dot)];
+        if (!outer || typeof outer !== 'object') return undefined;
+        return (outer as Record<string, unknown>)[key.slice(dot + 1)];
+    };
     const setSchema = (columns: Column[]) => onUpdate(selected.id, { schema: columns });
 
     const runAutodetect = async () => {
@@ -757,13 +800,22 @@ export default function PropertiesPanel({
                         <div className="properties-section">
                             <div className="form-section">
                                 <div className="form-section-label">{t('properties.reliability')}</div>
-                                {ADVANCED_FIELDS.map(field => (
+                                {ADVANCED_FIELDS.filter(
+                                    field =>
+                                        // The PII contract is only ever consulted
+                                        // at a sink (plan/mod.rs:1102 guards on
+                                        // `cid.starts_with("snk.")`), so offering
+                                        // it anywhere else would be a control that
+                                        // does nothing.
+                                        field.key !== 'contracts.allowPii' ||
+                                        (data.componentId ?? '').startsWith('snk.'),
+                                ).map(field => (
                                     <FieldRenderer
                                         key={field.key}
                                         field={field}
                                         value={
-                                            props[field.key] !== undefined
-                                                ? props[field.key]
+                                            getProperty(field.key) !== undefined
+                                                ? getProperty(field.key)
                                                 : field.defaultValue
                                         }
                                         onChange={v => setProperty(field.key, v)}

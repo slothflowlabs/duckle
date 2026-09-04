@@ -5846,3 +5846,89 @@
         );
         assert!(sql.contains("COUNT(*)"), "it means COUNT(*), which is what the option says: {sql}");
     }
+
+/// The PII contract's escape hatch, in the exact shape the Properties Panel
+/// writes. The gate at plan/mod.rs:1102 has always told the operator to "set
+/// contracts.allowPii=true" and, until the Advanced tab grew the field, nothing
+/// in the interface could write it - so the way out of the refusal was to edit
+/// the pipeline file by hand. Neither half had a test.
+fn pii_doc(sink_props: &str) -> PipelineDoc {
+    pipeline_from_json(&format!(
+        r#"{{
+          "nodes": [
+            {{"id":"s","position":{{"x":0,"y":0}},"data":{{"label":"people","componentId":"src.csv",
+              "properties":{{"path":"/tmp/people.csv","hasHeader":true,"contracts":{{"pii":["email"]}}}},
+              "schema":[{{"name":"id","type":"int64"}},{{"name":"email","type":"string"}}]}}}},
+            {{"id":"k","position":{{"x":0,"y":0}},"data":{{"label":"out","componentId":"snk.csv",
+              "properties":{{"path":"/tmp/out.csv"{}}}}}}}
+          ],
+          "edges":[{{"id":"e1","source":"s","target":"k","data":{{"connectionType":"main"}}}}]
+        }}"#,
+        sink_props
+    ))
+}
+
+#[test]
+fn a_pii_column_reaching_a_sink_is_refused() {
+    let err = compile(&pii_doc("")).expect_err("a tagged column reached a sink unmasked");
+    let msg = err.to_string();
+    assert!(msg.contains("tagged PII"), "the gate must be what refused it: {msg}");
+    assert!(msg.contains("email"), "and it must name the column: {msg}");
+}
+
+#[test]
+fn the_panels_allow_pii_shape_lifts_the_refusal() {
+    // Nested under `contracts`, which is what setProperty('contracts.allowPii')
+    // writes - a flat "contracts.allowPii" key would not be read at all.
+    let plan = compile(&pii_doc(r#","contracts":{"allowPii":true}"#))
+        .expect("the documented escape hatch has to actually compile");
+    assert!(
+        plan.stages.iter().any(|s| s.node_id == "k"),
+        "and the sink still has to be planned"
+    );
+}
+
+#[test]
+fn a_flat_dotted_key_does_not_lift_the_refusal() {
+    // The mistake the panel's dotted-key setter exists to prevent: writing the
+    // literal property "contracts.allowPii" looks right in a pipeline file and
+    // is read by nothing.
+    let err = compile(&pii_doc(r#","contracts.allowPii":true"#))
+        .expect_err("a flat key must not be mistaken for the contract");
+    assert!(err.to_string().contains("tagged PII"), "{err}");
+}
+
+/// The Parquet half of the same delegation. The panel's S3 sink now offers
+/// compression / level / version / row-group size and a CSV header toggle
+/// because build_cloud_sink hands the props to the local builders unchanged;
+/// only the CSV delimiter and null string had a test saying so.
+#[test]
+fn cloud_parquet_sink_honors_the_write_options_the_panel_offers() {
+    let sql = build_cloud_sink(
+        "s3",
+        &serde_json::json!({
+            "path": "s3://b/out.parquet",
+            "compression": "zstd",
+            "compressionLevel": 9,
+            "parquetVersion": "v2",
+            "rowGroupSize": 1000000
+        }),
+        "v",
+    )
+    .unwrap();
+    assert!(sql.contains("COMPRESSION 'zstd'"), "{sql}");
+    assert!(sql.contains("COMPRESSION_LEVEL 9"), "{sql}");
+    assert!(sql.contains("PARQUET_VERSION V2"), "{sql}");
+    assert!(sql.contains("ROW_GROUP_SIZE 1000000"), "{sql}");
+}
+
+#[test]
+fn a_cloud_csv_sink_can_be_written_without_a_header() {
+    let sql = build_cloud_sink(
+        "s3",
+        &serde_json::json!({"path": "s3://b/out.csv", "writeHeader": false}),
+        "v",
+    )
+    .unwrap();
+    assert!(sql.contains("HEADER false"), "the toggle has to reach the COPY: {sql}");
+}

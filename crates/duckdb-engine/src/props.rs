@@ -55,7 +55,7 @@ const CATALOG: &str =
 /// editor had just written - the check being confidently wrong about the
 /// product's own UI. `universal_matches_the_properties_panel` keeps this list
 /// and the panel from drifting apart again.
-const UNIVERSAL: [&str; 9] = [
+const UNIVERSAL: [&str; 10] = [
     "materialize",       // plan/mod.rs:6458, per-node compile loop
     "materializePath",   // plan/mod.rs:6579
     "cache",             // plan/mod.rs:566, apply_stage_cache_in over every node
@@ -65,6 +65,10 @@ const UNIVERSAL: [&str; 9] = [
     "continueOnFailure", // plan/mod.rs:1876
     "logRowCount",       // panel-only today, no runtime read yet
     "sqlOverride",       // builders.rs:159, generic build_view_sql
+    // The panel writes the OUTER key: `contracts.allowPii` is one nested field
+    // inside a `contracts` object, and `check` only ever sees `contracts`.
+    // Read at plan/mod.rs:1102 via contract_flag, on any snk.* node.
+    "contracts",
 ];
 
 /// Keys a builder reads that the component's manifest does not declare.
@@ -501,6 +505,42 @@ mod tests {
         assert!(f.is_empty(), "the editor's own output was refused: {f:?}");
     }
 
+    /// Every write option the engine honours has to be declared, or a pipeline
+    /// that uses it is reported as setting a dead property and fails `validate`.
+    ///
+    /// All four of these are read by builders the sink already delegates to -
+    /// `nullValue` and `partitionBy` at builders.rs:9170/9179 for the local CSV
+    /// sink, and the whole set at builders.rs:9086-9093 for a cloud one - and
+    /// none of them was declared, because both manifests are hand-written and
+    /// so never reach the synthesizer that does declare them.
+    #[test]
+    fn a_sink_write_option_the_engine_honours_is_declared() {
+        let f = check(&doc(
+            "snk.csv",
+            serde_json::json!({
+                "path": "out.csv",
+                "nullValue": r"\N",
+                "partitionBy": ["region"]
+            }),
+        ));
+        assert!(f.is_empty(), "the local CSV sink's own write options were refused: {f:?}");
+
+        let f = check(&doc(
+            "snk.s3",
+            serde_json::json!({
+                "path": "s3://b/out.parquet",
+                "compression": "snappy",
+                "compressionLevel": 9,
+                "parquetVersion": "v2",
+                "rowGroupSize": 1_000_000,
+                "delimiter": "|",
+                "writeHeader": false,
+                "nullValue": "NA"
+            }),
+        ));
+        assert!(f.is_empty(), "the cloud sink's delegated write options were refused: {f:?}");
+    }
+
     #[test]
     fn universal_matches_the_properties_panel() {
         // The drift that caused it: the panel grew universal fields and nothing
@@ -523,6 +563,10 @@ mod tests {
             .collect();
         assert!(universal.len() >= 6, "parsed {universal:?} - the panel's shape changed");
         for key in universal {
+            // A dotted panel key writes a NESTED value, so the property that
+            // lands on the node - and the only one `check` can see - is the
+            // segment before the dot. `contracts.allowPii` writes `contracts`.
+            let key = key.split('.').next().expect("split yields at least one segment");
             assert!(
                 UNIVERSAL.contains(&key),
                 "the Properties Panel writes `{key}` on every node and UNIVERSAL does not \

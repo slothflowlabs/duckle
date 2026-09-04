@@ -1017,6 +1017,34 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                             { label: 'Latin-1', value: 'latin-1' },
                         ],
                     },
+                    {
+                        // build_csv_sink emits NULLSTR from this
+                        // (builders.rs:9170) and the panel never offered it, so
+                        // an empty cell and a NULL were indistinguishable in
+                        // every file Duckle wrote.
+                        key: 'nullValue',
+                        label: 'Write NULL as',
+                        kind: 'text',
+                        placeholder: 'leave blank for an empty field',
+                        description:
+                            'The text written for a NULL. Blank (the default) writes nothing between the delimiters, which a reader cannot tell from an empty string. Common choices are \\N and NULL. Maps to COPY ... (NULLSTR).',
+                    },
+                ],
+            },
+            {
+                // builders.rs:9179 reads partitionBy for the CSV sink exactly as
+                // it does for Parquet, and the synthesized manifest offers it -
+                // but snk.csv is hand-written in MANIFESTS, so it never reaches
+                // the synthesizer. Same shape of gap as the src.csv one below.
+                label: 'Partitioning',
+                fields: [
+                    {
+                        key: 'partitionBy',
+                        label: 'Partition by columns',
+                        kind: 'columns',
+                        description:
+                            'Write a Hive-style partitioned dataset under the output path instead of one file. Each column becomes a directory level (col=value/). Reruns overwrite the slice just emitted and leave sibling partitions alone.',
+                    },
                 ],
             },
         ],
@@ -1065,6 +1093,80 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                     { key: 'accessKey', label: 'Access key', kind: 'text' },
                     { key: 'secretKey', label: 'Secret key', kind: 'text', placeholder: '••••••••' },
                     { key: 'region', label: 'Region', kind: 'text', placeholder: 'us-east-1' },
+                ],
+            },
+            {
+                // build_cloud_sink delegates to the SAME builders as the local
+                // file sinks (builders.rs:9086-9093), so every one of these is
+                // already honoured on an s3:// write - the panel simply never
+                // offered them, which left ZSTD Parquet and comma-with-header
+                // CSV as the only things this sink could produce.
+                //
+                // partitionBy is deliberately absent: builders.rs:9084 strips it
+                // before delegating, so a control for it would do nothing.
+                label: 'Write options',
+                fields: [
+                    {
+                        key: 'compression',
+                        label: 'Compression (Parquet)',
+                        kind: 'select',
+                        defaultValue: 'zstd',
+                        options: [
+                            { label: 'Zstd (smaller)', value: 'zstd' },
+                            { label: 'Snappy (fast)', value: 'snappy' },
+                            { label: 'Gzip', value: 'gzip' },
+                            { label: 'LZ4', value: 'lz4' },
+                            { label: 'None', value: 'none' },
+                        ],
+                    },
+                    {
+                        key: 'compressionLevel',
+                        label: 'Compression level (Parquet)',
+                        kind: 'integer',
+                        visibleWhen: { key: 'compression', equals: 'zstd' },
+                        description: 'ZSTD only (1-22). Leave empty for DuckDB\'s default.',
+                    },
+                    {
+                        key: 'parquetVersion',
+                        label: 'Parquet version',
+                        kind: 'select',
+                        defaultValue: 'v1',
+                        options: [
+                            { label: 'V1 (maximum compatibility)', value: 'v1' },
+                            { label: 'V2 (newer encodings)', value: 'v2' },
+                        ],
+                    },
+                    {
+                        key: 'rowGroupSize',
+                        label: 'Row group size (Parquet)',
+                        kind: 'integer',
+                        description: 'Rows per row group. Leave empty for DuckDB\'s default (~122,880); a larger value cuts metadata overhead on big writes.',
+                    },
+                    {
+                        key: 'delimiter',
+                        label: 'Delimiter (CSV)',
+                        kind: 'select',
+                        defaultValue: ',',
+                        options: [
+                            { label: 'Comma  ,', value: ',' },
+                            { label: 'Tab  \\t', value: '\t' },
+                            { label: 'Semicolon  ;', value: ';' },
+                            { label: 'Pipe  |', value: '|' },
+                        ],
+                    },
+                    {
+                        key: 'writeHeader',
+                        label: 'Write header row (CSV)',
+                        kind: 'bool',
+                        defaultValue: true,
+                    },
+                    {
+                        key: 'nullValue',
+                        label: 'Write NULL as (CSV)',
+                        kind: 'text',
+                        placeholder: 'leave blank for an empty field',
+                        description: 'The text written for a NULL, e.g. \\N. Blank writes nothing between the delimiters.',
+                    },
                 ],
             },
             {
