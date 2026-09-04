@@ -46,6 +46,7 @@ pub mod subscribe;
 pub mod chunk_exec;
 pub mod chunking;
 pub mod partition;
+pub mod sequence;
 pub mod plugin;
 pub mod pools;
 pub mod release;

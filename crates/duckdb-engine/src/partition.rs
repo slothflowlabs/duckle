@@ -227,6 +227,74 @@ pub fn of(doc: &serde_json::Value) -> Option<PartitionDef> {
     serde_json::from_value(doc.get("partition")?.clone()).ok()
 }
 
+/// The canonical key naming the slice that contains this date and hour.
+///
+/// #326 parses a key out of a filename - `D20260901.zip` - and needs the same
+/// spelling [`generate`] would have produced for that day, or the chain and
+/// the ledger would be talking about the same slice under two names.
+///
+/// `hour` is only read for [`Cadence::Hour`]; every coarser cadence names a
+/// whole calendar unit and the hour inside it is not part of the label.
+pub fn key_of(date: chrono::NaiveDate, hour: u32, cadence: Cadence) -> Option<String> {
+    if hour > 23 {
+        return None;
+    }
+    let tz = chrono_tz::UTC;
+    let at = floor(date, cadence, tz)?;
+    let at = match cadence {
+        Cadence::Hour => at + chrono::Duration::hours(hour as i64),
+        _ => at,
+    };
+    Some(key_for(at, cadence))
+}
+
+/// The key immediately after `key`. The whole of #326's continuity primitive.
+///
+/// Computed with the same `floor`/`advance` pair [`generate`] uses rather than
+/// a second arithmetic, because "what comes after 2026-02-28" has to be one
+/// answer: a duplicate would have to be independently right about leap years,
+/// month lengths and the Monday an ISO week starts on, and the copy that drifts
+/// is the one nobody is testing.
+///
+/// A key is a calendar LABEL, not an instant - `2026-09-01` is a publisher's
+/// name for a day, not a moment - so the walk is done in UTC. That is not an
+/// assumption about where the data came from: for day, week, month and year the
+/// successor label is the same in every zone, because it is arithmetic on the
+/// label. `Hour` is the one cadence where a zone with DST would disagree, and a
+/// feed that names its files by local hour across a fold has an ambiguous key
+/// of its own making, which no successor function can repair.
+pub fn next_key(key: &str, cadence: Cadence) -> Option<String> {
+    let tz = chrono_tz::UTC;
+    let at = key_instant(key, cadence, tz)?;
+    let next = advance(at, cadence, tz)?;
+    if next <= at {
+        return None;
+    }
+    Some(key_for(next, cadence))
+}
+
+/// A canonical key, read back as the instant it names.
+fn key_instant(key: &str, cadence: Cadence, tz: chrono_tz::Tz) -> Option<chrono::DateTime<chrono_tz::Tz>> {
+    let key = key.trim();
+    if cadence == Cadence::Hour {
+        let (date, hour) = key.split_once('T')?;
+        let date = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
+        let hour: u32 = hour.parse().ok()?;
+        if hour > 23 {
+            return None;
+        }
+        return Some(floor(date, cadence, tz)? + chrono::Duration::hours(hour as i64));
+    }
+    // A month key is the month's first day and a year key its first day of
+    // January; `floor` then normalises a week key onto its Monday.
+    let text = match cadence {
+        Cadence::Year => format!("{key}-01-01"),
+        Cadence::Month => format!("{key}-01"),
+        _ => key.to_string(),
+    };
+    floor(chrono::NaiveDate::parse_from_str(&text, "%Y-%m-%d").ok()?, cadence, tz)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,5 +433,68 @@ mod tests {
         assert!(p[0].params.contains_key("window_start"));
         assert!(p[0].params.contains_key("window_end"));
         assert!(of(&serde_json::json!({ "nodes": [] })).is_none());
+    }
+
+    /// #326: the successor must be the one `generate` would have produced.
+    ///
+    /// This is the guard that matters, because the failure it catches is
+    /// silent: a `next_key` that disagreed with the generator by one day would
+    /// make every chain look like it had a gap, and the gap would be at a
+    /// different place for every cadence.
+    #[test]
+    fn the_successor_is_the_generators_next_key() {
+        for cadence in [Cadence::Hour, Cadence::Day, Cadence::Week, Cadence::Month, Cadence::Year] {
+            // A range wide enough to cross a leap day, a year boundary and
+            // several month lengths.
+            let keys: Vec<String> = generate(&time(cadence, "UTC"), "2023-12-28", "2024-03-04")
+                .expect("slices")
+                .into_iter()
+                .map(|p| p.key)
+                .collect();
+            assert!(keys.len() > 1, "{cadence:?} produced {} slices", keys.len());
+            for pair in keys.windows(2) {
+                assert_eq!(
+                    next_key(&pair[0], cadence).as_deref(),
+                    Some(pair[1].as_str()),
+                    "{cadence:?}: the successor of {} must be {}",
+                    pair[0],
+                    pair[1]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_successor_crosses_the_awkward_boundaries() {
+        let day = |k: &str| next_key(k, Cadence::Day).unwrap();
+        assert_eq!(day("2024-02-28"), "2024-02-29", "2024 is a leap year");
+        assert_eq!(day("2023-02-28"), "2023-03-01", "2023 is not");
+        assert_eq!(day("2026-12-31"), "2027-01-01");
+        assert_eq!(next_key("2026-01", Cadence::Month).unwrap(), "2026-02");
+        assert_eq!(next_key("2026-12", Cadence::Month).unwrap(), "2027-01");
+        assert_eq!(next_key("2026", Cadence::Year).unwrap(), "2027");
+        assert_eq!(next_key("2026-09-01T23", Cadence::Hour).unwrap(), "2026-09-02T00");
+        // A week key names its Monday, so the successor is seven days on.
+        assert_eq!(next_key("2026-08-31", Cadence::Week).unwrap(), "2026-09-07");
+    }
+
+    #[test]
+    fn a_key_that_is_not_one_has_no_successor() {
+        assert_eq!(next_key("not-a-date", Cadence::Day), None);
+        assert_eq!(next_key("2026-02-30", Cadence::Day), None, "February has no 30th");
+        assert_eq!(next_key("2026-09-01T24", Cadence::Hour), None, "there is no hour 24");
+        assert_eq!(next_key("2026-09-01", Cadence::Hour), None, "an hour key carries an hour");
+    }
+
+    #[test]
+    fn a_parsed_date_canonicalises_to_the_generators_spelling() {
+        let d = chrono::NaiveDate::from_ymd_opt(2026, 9, 3).unwrap();
+        assert_eq!(key_of(d, 0, Cadence::Day).unwrap(), "2026-09-03");
+        assert_eq!(key_of(d, 0, Cadence::Month).unwrap(), "2026-09");
+        assert_eq!(key_of(d, 0, Cadence::Year).unwrap(), "2026");
+        assert_eq!(key_of(d, 7, Cadence::Hour).unwrap(), "2026-09-03T07");
+        // A Thursday's week key is the Monday of that week.
+        assert_eq!(key_of(d, 0, Cadence::Week).unwrap(), "2026-08-31");
+        assert_eq!(key_of(d, 24, Cadence::Hour), None);
     }
 }
