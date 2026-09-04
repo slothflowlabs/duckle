@@ -69,6 +69,7 @@ pub mod checkpoint;
 pub mod contracts;
 pub mod cronzone;
 pub mod mask;
+pub mod nodeout;
 pub mod outcache;
 pub mod params;
 pub mod retry;
@@ -175,6 +176,21 @@ pub struct DuckdbEngine {
     /// only to the process that made it. Cleared per run for the same reason
     /// the run id is - what a previous run produced is that run's provenance.
     pub(crate) artifacts: Arc<std::sync::Mutex<Vec<ProducedArtifact>>>,
+    /// #305: what each node durably produced, so a later retry can bind a
+    /// VERIFIED output instead of trusting that a node once succeeded.
+    pub(crate) outputs: Arc<std::sync::Mutex<
+        std::collections::BTreeMap<String, crate::nodeout::NodeOutput>,
+    >>,
+    /// #305: node id -> a durable output to read INSTEAD of running that node.
+    ///
+    /// Set by a retry from a plan whose entries were verified - uri, size and
+    /// sha256 - before they got here. The engine binds what it is given; the
+    /// checking belongs to the planner, which is the thing that can explain a
+    /// failure to a person.
+    pub(crate) output_bindings: std::collections::BTreeMap<String, String>,
+    /// #305: nodes this run does not have to do at all, because everything that
+    /// reads them is bound from a file.
+    pub(crate) skip_nodes: std::collections::BTreeSet<String>,
     /// The durable run id this engine is executing under (#259).
     ///
     /// Set by whoever minted it - always the same `retry::begin` that writes
@@ -335,6 +351,9 @@ impl DuckdbEngine {
             inherited_subs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             cancel: Arc::new(AtomicBool::new(false)),
             artifacts: Arc::new(std::sync::Mutex::new(Vec::new())),
+            outputs: Arc::new(std::sync::Mutex::new(Default::default())),
+            output_bindings: Default::default(),
+            skip_nodes: Default::default(),
             run_id: None,
             probing: false,
         }
@@ -350,6 +369,55 @@ impl DuckdbEngine {
     /// What external components produced during this run, for the receipt.
     pub fn produced_artifacts(&self) -> Vec<ProducedArtifact> {
         self.artifacts.lock().map(|a| a.clone()).unwrap_or_default()
+    }
+
+    /// #305: read these durable outputs instead of running the nodes that made
+    /// them. The retry planner supplies them, already verified.
+    pub fn with_output_bindings(
+        mut self,
+        bindings: std::collections::BTreeMap<String, String>,
+    ) -> Self {
+        self.output_bindings = bindings;
+        self
+    }
+
+    /// #305: do not stage these nodes at all. Everything that reads them is
+    /// bound, so their relations have no reader.
+    pub fn skipping(mut self, nodes: std::collections::BTreeSet<String>) -> Self {
+        self.skip_nodes = nodes;
+        self
+    }
+
+    /// #305: what this run durably produced, per node, for the receipt.
+    pub fn produced_outputs(
+        &self,
+    ) -> std::collections::BTreeMap<String, crate::nodeout::NodeOutput> {
+        self.outputs.lock().map(|o| o.clone()).unwrap_or_default()
+    }
+
+    /// Record a node's durable output, hashing it now.
+    ///
+    /// Best effort, like the cache write it follows: a file that cannot be
+    /// hashed means a later retry re-runs this node, which is the safe
+    /// direction. Recording it unhashed would not be - it would let a retry
+    /// bind bytes nobody checked.
+    pub(crate) fn record_output(
+        &self,
+        node_id: &str,
+        path: &Path,
+        cache_key: Option<String>,
+        columns: Vec<String>,
+    ) {
+        let Ok(mut out) =
+            crate::nodeout::NodeOutput::of_file(node_id, self.run_id.as_deref(), crate::nodeout::Kind::Relation, path)
+        else {
+            return;
+        };
+        out.cache_key = cache_key;
+        out.columns = columns;
+        if let Ok(mut held) = self.outputs.lock() {
+            held.insert(node_id.to_string(), out);
+        }
     }
 
     pub(crate) fn record_artifacts(&self, node_id: &str, artifacts: &[crate::plugin::Artifact]) {
@@ -396,6 +464,9 @@ impl DuckdbEngine {
             // would file this run's log lines under that run.
             run_id: None,
             artifacts: Arc::new(std::sync::Mutex::new(Vec::new())),
+            outputs: Arc::new(std::sync::Mutex::new(Default::default())),
+            output_bindings: Default::default(),
+            skip_nodes: Default::default(),
             // A new top-level run inherits nothing: what a previous run handed down
             // belonged to that run's call chain.
             inherited_subs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
@@ -416,6 +487,9 @@ impl DuckdbEngine {
             previews: false,
             run_id: None,
             artifacts: Arc::new(std::sync::Mutex::new(Vec::new())),
+            outputs: Arc::new(std::sync::Mutex::new(Default::default())),
+            output_bindings: Default::default(),
+            skip_nodes: Default::default(),
             inherited_subs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             probing: true,
         }
@@ -620,6 +694,31 @@ impl DuckdbEngine {
             &config_fp,
             &input_fp,
         ))
+    }
+
+    /// The columns of a parquet file, for the output record (#305).
+    ///
+    /// Best effort: an empty list means NOT RECORDED rather than "no columns",
+    /// which is why nothing treats emptiness as evidence. Asked of DuckDB
+    /// rather than inferred from the pipeline, because what matters later is
+    /// the shape of the FILE a retry would bind, not the shape the document
+    /// says the node has.
+    fn parquet_columns(&self, file: &Path) -> Vec<String> {
+        // `column_name`, not `name`: DESCRIBE names its first column
+        // `column_name`, and asking for `name` is a binder error that comes
+        // back as an empty list rather than a failure - which is how this
+        // silently recorded no columns at all until it was run.
+        let sql = format!(
+            "SELECT column_name FROM (DESCRIBE SELECT * FROM read_parquet('{}'))",
+            file.to_string_lossy().replace(char::from(92), "/").replace('\'', "''")
+        );
+        self.run_rows(None, &sql)
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|r| r.get("column_name").and_then(|v| v.as_str()).map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn run_rows(&self, db: Option<&Path>, sql: &str) -> Result<Vec<JsonValue>, EngineError> {
@@ -1323,10 +1422,17 @@ impl DuckdbEngine {
             Some(t) => plan::compile_partial(doc, t),
             None => plan::compile(doc),
         };
-        let compiled = match compiled {
+        let mut compiled = match compiled {
             Ok(c) => c,
             Err(e) => return RunResult::failed(total_start, e.to_string()),
         };
+        // #305: a retry reads verified durable outputs instead of re-deriving
+        // them. Applied AFTER compiling rather than inside it, so the compiler
+        // stays a pure function of the document and nothing else has to learn
+        // about retries.
+        plan::apply_output_bindings(&mut compiled.stages, &self.output_bindings);
+        plan::drop_stages(&mut compiled.stages, &self.skip_nodes);
+        let compiled = compiled;
 
         // Component-level run log (Splunk / Dynatrace), gated on
         // DUCKLE_LOG_DIR. We tee every event through it so BOTH the fast
@@ -2402,6 +2508,22 @@ impl DuckdbEngine {
                 if let Some(k) = cache_key.as_ref() {
                     if !did_restore && result.is_ok() {
                         outcache::store(&self.bin, &db_path, &stage.node_id, k);
+                        // #305: and record WHAT was stored, not just the key it
+                        // was filed under. A key is a hash of the inputs - it
+                        // says this work would produce the same answer, not
+                        // that the answer is still on disk, and a cache pruned
+                        // between the two runs is the ordinary way those
+                        // differ. Only after a hit, so nothing is recorded for
+                        // a store that silently failed.
+                        if outcache::hit(k) {
+                            let file = k.file();
+                            self.record_output(
+                                &stage.node_id,
+                                &file,
+                                Some(k.key.clone()),
+                                self.parquet_columns(&file),
+                            );
+                        }
                     }
                 }
                 // Stop retrying on success OR cancellation - a cancel must

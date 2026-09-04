@@ -163,6 +163,11 @@ struct Args {
     /// #305: the run this one is retrying, recorded on the receipt so the two
     /// are linked. `None` for an ordinary run.
     retry_of: Option<String>,
+    /// #305: durable outputs to read instead of running the nodes that made
+    /// them. Verified by the retry planner before they get here.
+    output_bindings: std::collections::BTreeMap<String, String>,
+    /// #305: nodes not to stage at all - everything reading them is bound.
+    skip_nodes: std::collections::BTreeSet<String>,
 }
 
 impl Args {
@@ -280,6 +285,8 @@ fn parse_args() -> Result<Args, String> {
     }
     Ok(Args {
         retry_of: None,
+        output_bindings: Default::default(),
+        skip_nodes: Default::default(),
         target,
         pipeline,
         workspace,
@@ -521,7 +528,12 @@ fn run_with(args: Args) -> Result<bool, String> {
 
     // #259: the engine logs under the id the receipt was written with, so a
     // run's log lines join to its receipt and its history record.
-    let engine = engine.with_run_id(&receipt.run_id);
+    let engine = engine
+        .with_run_id(&receipt.run_id)
+        // #305: bind what the planner verified. Empty for an ordinary run, so
+        // this changes nothing outside a retry.
+        .with_output_bindings(args.output_bindings.clone())
+        .skipping(args.skip_nodes.clone());
     let result = match target.as_deref() {
         Some(t) => engine.execute_pipeline_with_events(&doc, Some(t), Some(&name), |_| {}),
         None => engine.execute_pipeline_named(&doc, &name),
@@ -534,6 +546,9 @@ fn run_with(args: Args) -> Result<bool, String> {
     // finalised so a run's provenance names them.
     let receipt = duckle_duckdb_engine::retry::RunReceipt {
         artifacts: engine.produced_artifacts(),
+        // #305: and what each node durably produced, so a retry can bind a
+        // verified output rather than trust that a node once succeeded.
+        outputs: engine.produced_outputs(),
         ..receipt
     };
     duckle_duckdb_engine::retry::finish(
@@ -2407,31 +2422,12 @@ fn run_retry() -> ExitCode {
         }
     };
 
-    // Whether a recorded output is still there is answered by looking, not by
-    // trusting the receipt. A run that succeeded months ago may have had its
-    // cache pruned since.
-    let ws = workspace.clone();
-    let pname = prior.pipeline_name.clone();
-    let cache_hit = move |node: &str, key: &str| -> Option<String> {
-        let f = duckle_duckdb_engine::outcache::dir(&ws, &pname, node)
-            .join(format!("{key}.parquet"));
-        f.is_file().then(|| f.display().to_string())
-    };
-
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or_default();
     let new_id = format!("retry-{stamp}");
-    let plan = retry::plan(
-        &workspace,
-        &run_id,
-        &doc,
-        &new_id,
-        allow_changed,
-        rerun_sinks,
-        &cache_hit,
-    );
+    let plan = retry::plan(&workspace, &run_id, &doc, &new_id, allow_changed, rerun_sinks);
 
     if json_out {
         println!("{}", serde_json::to_string_pretty(&plan).unwrap_or_default());
@@ -2447,8 +2443,16 @@ fn run_retry() -> ExitCode {
                     retry::Action::Reuse { evidence } => ("reuse ", evidence.clone()),
                     retry::Action::ReExecute { reason } => ("run   ", reason.clone()),
                     retry::Action::RewriteSink { reason } => ("WRITE ", reason.clone()),
+                    retry::Action::Skip { reason } => ("skip  ", reason.clone()),
                 };
                 println!("  {what} {:<24} {why}", d.node_id);
+            }
+            if let Some(s) = &plan.starts_at {
+                println!("starts at: {} ({})", s.node_id, s.reason);
+            }
+            match plan.bindings.len() {
+                0 => println!("bindings : none - every node runs"),
+                n => println!("bindings : {n} verified output(s) read instead of re-derived"),
             }
         }
     }
@@ -2477,6 +2481,8 @@ fn run_retry() -> ExitCode {
         manifest: false,
         verify_manifest: None,
         retry_of: Some(run_id),
+        output_bindings: plan.bindings.clone(),
+        skip_nodes: plan.skipped(),
     };
     match run_with(args) {
         Ok(true) => ExitCode::from(0),

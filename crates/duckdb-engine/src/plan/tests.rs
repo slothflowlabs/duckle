@@ -5596,3 +5596,201 @@
         );
     }
 
+
+    /// #305: a durable output read INSTEAD of running the node that made it.
+    #[test]
+    fn a_bound_output_replaces_the_stage_and_keeps_its_name() {
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/a.csv","hasHeader":true}}},
+                {"id":"f","position":{"x":0,"y":0},"data":{
+                  "label":"Filter","componentId":"xf.filter",
+                  "properties":{"predicate":"amt > 1"}}},
+                {"id":"out","position":{"x":0,"y":0},"data":{
+                  "label":"Write","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/out.parquet"}}}
+              ],
+              "edges":[
+                {"id":"e1","source":"s","target":"f","data":{"connectionType":"main"}},
+                {"id":"e2","source":"f","target":"out","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+
+        let bind = |pairs: &[(&str, &str)]| {
+            let mut stages = compile(&doc).unwrap().stages;
+            let map: std::collections::BTreeMap<String, String> =
+                pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            crate::plan::apply_output_bindings(&mut stages, &map);
+            stages
+        };
+
+        // Nothing bound: the plan is exactly what it was.
+        let before = compile(&doc).unwrap().stages;
+        let plain = bind(&[]);
+        assert_eq!(
+            plain.iter().map(|s| s.sql.clone()).collect::<Vec<_>>(),
+            before.iter().map(|s| s.sql.clone()).collect::<Vec<_>>(),
+            "an ordinary run must be untouched"
+        );
+
+        // Bound: the source reads a parquet somebody else made, under its own
+        // relation name, so nothing downstream can tell.
+        let bound = bind(&[("s", "/ws/cache/p/s/K.parquet")]);
+        let s = bound.iter().find(|x| x.node_id == "s").unwrap();
+        assert!(
+            s.sql.contains("CREATE OR REPLACE VIEW \"s\" AS SELECT * FROM read_parquet("),
+            "{}",
+            s.sql
+        );
+        assert!(s.sql.contains("/ws/cache/p/s/K.parquet"), "{}", s.sql);
+        assert!(!s.sql.contains("read_csv"), "the source is not read again: {}", s.sql);
+        assert!(s.runtime.is_none());
+        assert!(!s.attach_view);
+
+        // Downstream is not edited at all - it still reads "s" by name.
+        let f = bound.iter().find(|x| x.node_id == "f").unwrap();
+        let f_before = before.iter().find(|x| x.node_id == "f").unwrap();
+        assert_eq!(f.sql, f_before.sql, "no consumer is rewritten");
+    }
+
+    /// A sink's effect is outside the run. Reading a file back neither repeats
+    /// nor undoes it, so binding one would silently skip the write it exists to
+    /// do.
+    #[test]
+    fn a_sink_is_never_bound() {
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/a.csv","hasHeader":true}}},
+                {"id":"out","position":{"x":0,"y":0},"data":{
+                  "label":"Write","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/out.parquet"}}}
+              ],
+              "edges":[{"id":"e","source":"s","target":"out","data":{"connectionType":"main"}}]
+            }"#,
+        );
+        let before = compile(&doc).unwrap().stages;
+        let mut stages = compile(&doc).unwrap().stages;
+        crate::plan::apply_output_bindings(
+            &mut stages,
+            &[("out".to_string(), "/ws/anything.parquet".to_string())].into_iter().collect(),
+        );
+        let out = stages.iter().find(|x| x.node_id == "out").unwrap();
+        let out_before = before.iter().find(|x| x.node_id == "out").unwrap();
+        assert_eq!(out.sql, out_before.sql, "the write must still happen");
+    }
+
+    #[test]
+    fn a_quote_in_a_bound_path_cannot_break_out_of_the_literal() {
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [{"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/a.csv","hasHeader":true}}}],
+              "edges":[]
+            }"#,
+        );
+        let mut stages = compile(&doc).unwrap().stages;
+        crate::plan::apply_output_bindings(
+            &mut stages,
+            &[("s".to_string(), "/ws/it's.parquet".to_string())].into_iter().collect(),
+        );
+        assert!(stages[0].sql.contains("it''s.parquet"), "{}", stages[0].sql);
+    }
+
+    /// The two traps binding has to clear, on a stage that actually has them.
+    ///
+    /// `src.csv` has neither, so asserting against a compiled CSV stage proves
+    /// nothing - it was already true. This drives the pass directly instead.
+    #[test]
+    fn binding_clears_the_runtime_hook_and_the_attach() {
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [{"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/a.csv","hasHeader":true}}}],
+              "edges":[]
+            }"#,
+        );
+        let mut stages = compile(&doc).unwrap().stages;
+        // A stage that would take the runtime branch and ignore its SQL, and
+        // would ATTACH a database this run never opened.
+        stages[0].runtime = Some(crate::plan::RuntimeSpec::InstallFallback("/tmp/x".into()));
+        stages[0].attach_view = true;
+
+        crate::plan::apply_output_bindings(
+            &mut stages,
+            &[("s".to_string(), "/ws/s.parquet".to_string())].into_iter().collect(),
+        );
+        assert!(
+            stages[0].runtime.is_none(),
+            "a runtime hook left in place makes the executor ignore the bound SQL entirely"
+        );
+        assert!(
+            !stages[0].attach_view,
+            "it must not ATTACH a source database this run never opened"
+        );
+        assert!(stages[0].sql.contains("read_parquet("), "{}", stages[0].sql);
+    }
+
+    /// #305: a skipped node is not staged at all.
+    ///
+    /// Without this the plan says "skip" and the stage runs anyway - which is
+    /// exactly what happened the first time it was run end to end: the dry run
+    /// reported `skip download` and the retry still read the CSV.
+    #[test]
+    fn a_skipped_node_is_not_staged() {
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/a.csv","hasHeader":true}}},
+                {"id":"f","position":{"x":0,"y":0},"data":{
+                  "label":"Filter","componentId":"xf.filter",
+                  "properties":{"predicate":"amt > 1"}}},
+                {"id":"out","position":{"x":0,"y":0},"data":{
+                  "label":"Write","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/out.parquet"}}}
+              ],
+              "edges":[
+                {"id":"e1","source":"s","target":"f","data":{"connectionType":"main"}},
+                {"id":"e2","source":"f","target":"out","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let mut stages = compile(&doc).unwrap().stages;
+        let before = stages.len();
+        crate::plan::drop_stages(&mut stages, &["s".to_string()].into_iter().collect());
+        assert_eq!(stages.len(), before - 1, "the skipped stage is gone");
+        assert!(!stages.iter().any(|x| x.node_id == "s"));
+        assert!(stages.iter().any(|x| x.node_id == "f"), "its consumer stays");
+    }
+
+    /// A sink is an end, so the backward walk always reaches it. Dropping one
+    /// would silently skip the write it exists to do.
+    #[test]
+    fn a_sink_is_never_dropped() {
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/a.csv","hasHeader":true}}},
+                {"id":"out","position":{"x":0,"y":0},"data":{
+                  "label":"Write","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/out.parquet"}}}
+              ],
+              "edges":[{"id":"e","source":"s","target":"out","data":{"connectionType":"main"}}]
+            }"#,
+        );
+        let mut stages = compile(&doc).unwrap().stages;
+        crate::plan::drop_stages(&mut stages, &["out".to_string()].into_iter().collect());
+        assert!(stages.iter().any(|x| x.node_id == "out"), "the write must still happen");
+    }

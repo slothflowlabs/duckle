@@ -440,6 +440,7 @@ mod tests {
             release_id: None,
             components: Vec::new(),
             artifacts: Vec::new(),
+            outputs: Default::default(),
             partition_key: None,
             resource_pool: None,
             queue_reason: None,

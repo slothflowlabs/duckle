@@ -555,6 +555,66 @@ fn read_paths(sql: &str) -> Vec<String> {
     out
 }
 
+/// #305: replace a stage's work with a durable output somebody already made.
+///
+/// The retry case: `normalize` failed, `parse` succeeded and its output was
+/// recorded and verified, so this run reads that parquet as `parse` rather than
+/// re-deriving it - and `download`, which only `parse` read, is never staged at
+/// all.
+///
+/// Modelled on [`apply_stage_cache_in`], and for its stated reason: the stage
+/// keeps its own relation name, so nothing downstream can tell a bound output
+/// from a computed one. No edge, no consumer and no other stage is touched.
+///
+/// Three things are cleared along with the SQL, and each would otherwise make
+/// the stage do the work anyway:
+///
+/// - `runtime`, or the executor takes the runtime branch and ignores `sql`
+///   entirely;
+/// - `attach_view`, or it tries to ATTACH a source database this run never
+///   opened;
+/// - `from`, because a sink's row count reads it, and a bound stage is not a
+///   sink.
+///
+/// A sink is never bound. Its effect is outside the run and reading a file back
+/// does not repeat or undo it, so binding one would silently skip the write it
+/// exists to do.
+pub fn apply_output_bindings(stages: &mut [Stage], bindings: &std::collections::BTreeMap<String, String>) {
+    if bindings.is_empty() {
+        return;
+    }
+    for stage in stages.iter_mut() {
+        let Some(uri) = bindings.get(&stage.node_id) else { continue };
+        if stage.kind == StageKind::Sink || stage.no_output_relation {
+            continue;
+        }
+        stage.sql = format!(
+            "CREATE OR REPLACE VIEW {} AS SELECT * FROM read_parquet('{}')",
+            quote_ident(&stage.node_id),
+            uri.replace(char::from(92), "/").replace('\'', "''")
+        );
+        stage.runtime = None;
+        stage.attach_view = false;
+    }
+}
+
+/// #305: drop stages this run does not have to do at all.
+///
+/// A skipped node's consumers are all bound from files, so nothing in the plan
+/// reads its relation - that is the invariant the retry planner establishes by
+/// walking backwards from the ends and stopping at every binding. Without this,
+/// `skip` is a line in a report and the stage runs anyway, which is the gap
+/// between a plan and a run that this whole feature exists to close.
+///
+/// A sink is never dropped. It is an end, so the walk always reaches it, and
+/// dropping one would silently skip the write it exists to do.
+pub fn drop_stages(stages: &mut Vec<Stage>, skip: &std::collections::BTreeSet<String>) {
+    if skip.is_empty() {
+        return;
+    }
+    stages.retain(|s| s.kind == StageKind::Sink || !skip.contains(&s.node_id));
+}
+
 /// Materialise the stages that asked to be cached, and read back the ones already done.
 ///
 /// The stage keeps its own relation name either way, so nothing downstream can tell the

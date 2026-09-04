@@ -163,6 +163,17 @@ pub struct RunReceipt {
     /// to rather than carrying its bytes through a table.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<crate::ProducedArtifact>,
+    /// #305: what each node durably produced, by node id.
+    ///
+    /// This is what makes reuse mean something. `nodes[id].status == "ok"` is a
+    /// fact about the past; an entry here is a uri, a size and a sha256, which
+    /// a retry can CHECK before binding it. A run that reuses an output never
+    /// reuses a historical status by itself.
+    ///
+    /// Empty for a run whose nodes were not cache-eligible, which is most of
+    /// them, and for every run written before this existed.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub outputs: BTreeMap<String, crate::nodeout::NodeOutput>,
     /// The external components this run's pipeline named, with their hashes
     /// (#307 criterion 4).
     ///
@@ -290,6 +301,7 @@ pub fn begin(
         parameter_sources: Vec::new(),
         components: Vec::new(),
         artifacts: Vec::new(),
+        outputs: BTreeMap::new(),
         partition_key: None,
         resource_pool: None,
         queue_reason: None,
@@ -550,6 +562,11 @@ pub enum Action {
     ReExecute { reason: String },
     /// It will run again AND it writes somewhere outside the run.
     RewriteSink { reason: String },
+    /// #305: not executed and not even read. Its output is reusable, and
+    /// nothing that DOES execute depends on it, so binding it would be a file
+    /// read for no reader. This is where the hours actually go: a retry that
+    /// starts at `normalize` never touches `download` at all.
+    Skip { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -582,9 +599,40 @@ pub struct Plan {
     pub decisions: Vec<Decision>,
     /// Sinks that would be written again. Empty unless the plan proceeds.
     pub sinks_to_rewrite: Vec<String>,
+    /// #305: node id -> the durable output to bind as that node's relation.
+    ///
+    /// Only the nodes an executing node actually reads. This is what the run
+    /// consumes to skip the upstream work; a plan with no bindings re-executes
+    /// everything, which is what a retry did before this existed.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bindings: BTreeMap<String, String>,
+    /// The earliest node that must run again, and why.
+    ///
+    /// The sentence an operator needs when reuse did not reach as far as they
+    /// hoped: "it starts at parse because parse's output is gone" is
+    /// actionable, and "reuse did not apply" is not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub starts_at: Option<StartsAt>,
+}
+
+/// Where the work actually begins, and what put it there.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartsAt {
+    pub node_id: String,
+    pub reason: String,
 }
 
 impl Plan {
+    /// #305: the nodes this retry does not have to run at all.
+    pub fn skipped(&self) -> std::collections::BTreeSet<String> {
+        self.decisions
+            .iter()
+            .filter(|d| matches!(d.action, Action::Skip { .. }))
+            .map(|d| d.node_id.clone())
+            .collect()
+    }
+
     fn refused(parent: &str, code: &str, message: String) -> Self {
         Plan {
             run_id: String::new(),
@@ -592,16 +640,20 @@ impl Plan {
             refusal: Some(Refusal { code: code.to_string(), message }),
             decisions: Vec::new(),
             sinks_to_rewrite: Vec::new(),
+            bindings: BTreeMap::new(),
+            starts_at: None,
         }
     }
 }
 
 /// Plan a retry of `run_id` against the pipeline as it stands now.
 ///
-/// `cache_hit` answers "is the output recorded under this key still on disk?".
-/// It is a parameter rather than a direct call so the rule can be tested
-/// without a workspace full of parquet, and so the planner never has to know
-/// where the cache keeps things.
+/// #305: there is no `cache_hit` hook any more. Reuse used to ask "is something
+/// filed under this key still on disk?", which needed the planner to be told
+/// where the cache keeps things - and answered a question about a KEY, which is
+/// a hash of the inputs. It now reads the durable output the producing run
+/// recorded and checks that file itself: uri, size, sha256. A retry reuses a
+/// verified output, never a historical status.
 pub fn plan(
     workspace: &Path,
     run_id: &str,
@@ -609,7 +661,6 @@ pub fn plan(
     new_run_id: &str,
     allow_changed: bool,
     rerun_sinks: bool,
-    cache_hit: &dyn Fn(&str, &str) -> Option<String>,
 ) -> Plan {
     let prior = match load(workspace, run_id) {
         Ok(r) => r,
@@ -677,7 +728,7 @@ pub fn plan(
     // the recorded outputs describe work that no longer exists.
     let reuse_allowed = now_hash == prior.pipeline_hash && prior.engine_version == ENGINE_VERSION;
 
-    let mut decisions = Vec::new();
+    let mut decisions: Vec<Decision> = Vec::new();
     let mut sinks = Vec::new();
     for node in &doc.nodes {
         let id = node.id.clone();
@@ -707,25 +758,36 @@ pub fn plan(
                     let reason = "it failed last time".to_string();
                     if is_sink { Action::RewriteSink { reason } } else { Action::ReExecute { reason } }
                 }
-                Some(n) => match n.output_cache_key.as_deref() {
-                    // A sink is never reused even with a key: its effect is
-                    // outside the run, and restoring a table does not undo or
-                    // redo that.
-                    Some(_) if is_sink => Action::RewriteSink {
-                        reason: "a sink writes outside the run, so its result is not reusable".into(),
-                    },
-                    Some(key) => match cache_hit(&id, key) {
-                        Some(evidence) => Action::Reuse { evidence },
-                        // The receipt says it succeeded; the output is gone.
-                        // Trusting the receipt here is what would turn
-                        // "verified reuse" into decoration.
-                        None => Action::ReExecute {
-                            reason: "the recorded output is gone".into(),
+                // A sink is never reused, whatever was recorded: its effect
+                // is outside the run, and binding a relation does not undo or
+                // redo that.
+                Some(_) if is_sink => Action::RewriteSink {
+                    reason: "a sink writes outside the run, so its result is not reusable".into(),
+                },
+                // #305: reuse rides on a VERIFIED durable output, never on the
+                // recorded status. `nodes[id].status == "ok"` is a fact about
+                // the past; an output record is a uri, a size and a hash, and
+                // those can be checked now.
+                Some(n) => match prior.outputs.get(&id) {
+                    Some(out) => match out.verify() {
+                        Ok(()) => Action::Reuse {
+                            evidence: format!("{} ({} bytes, sha256 {})", out.uri, out.bytes, &out.sha256[..out.sha256.len().min(12)]),
                         },
+                        // Trusting the receipt here is exactly what would turn
+                        // "verified reuse" into decoration.
+                        Err(why) => Action::ReExecute { reason: why.describe() },
                     },
                     None => {
-                        let reason = "nothing was cached for it".to_string();
-                        if is_sink { Action::RewriteSink { reason } } else { Action::ReExecute { reason } }
+                        let reason = match n.output_cache_key.is_some() {
+                            // It was cached but under a key alone, by a build
+                            // before outputs were recorded. A key is a hash of
+                            // the INPUTS - it cannot say the file is still
+                            // there - so it is not evidence.
+                            true => "its output was not recorded in a form that can be verified"
+                                .to_string(),
+                            false => "nothing durable was recorded for it".to_string(),
+                        };
+                        Action::ReExecute { reason }
                     }
                 },
             }
@@ -750,12 +812,93 @@ pub fn plan(
         );
     }
 
+    // #305: what actually has to happen, walked BACKWARDS from the ends.
+    //
+    // Forwards does not work, and getting it wrong is not subtle: it leaves the
+    // download running. The question is not "does anything read this node" but
+    // "is this node still needed at all" - and a node whose consumer is bound
+    // from a file is not, because a bound node reads that file rather than its
+    // parents. So the walk starts at the ends and stops at every binding:
+    //
+    //     required(sink)
+    //     required(n) and n is bound   -> stop, its parents are not needed
+    //     required(n) and n must run   -> its parents become required
+    let reusable: std::collections::BTreeSet<&str> = decisions
+        .iter()
+        .filter(|d| matches!(d.action, Action::Reuse { .. }))
+        .map(|d| d.node_id.as_str())
+        .collect();
+    let mut parents: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut has_consumer: std::collections::BTreeSet<&str> = Default::default();
+    for e in &doc.edges {
+        parents.entry(e.target.as_str()).or_default().push(e.source.as_str());
+        has_consumer.insert(e.source.as_str());
+    }
+    // The ends: every sink, and every node nothing reads - a pipeline may
+    // finish in a transform, and dropping it would plan a run that produces
+    // nothing.
+    let mut queue: Vec<&str> = decisions
+        .iter()
+        .filter(|d| {
+            matches!(d.action, Action::RewriteSink { .. })
+                || !has_consumer.contains(d.node_id.as_str())
+        })
+        .map(|d| d.node_id.as_str())
+        .collect();
+    let mut required: std::collections::BTreeSet<&str> = Default::default();
+    while let Some(n) = queue.pop() {
+        if !required.insert(n) {
+            continue;
+        }
+        // A bound node reads its file, not its inputs. The chain stops here,
+        // and everything above it is the work this retry does not do.
+        if reusable.contains(n) {
+            continue;
+        }
+        if let Some(ps) = parents.get(n) {
+            queue.extend(ps.iter().copied());
+        }
+    }
+    let required: std::collections::BTreeSet<String> =
+        required.into_iter().map(str::to_string).collect();
+
+    let mut bindings = BTreeMap::new();
+    for d in decisions.iter_mut() {
+        if !required.contains(&d.node_id) {
+            d.action = Action::Skip {
+                reason: "nothing this retry has to produce depends on it".into(),
+            };
+            continue;
+        }
+        if matches!(d.action, Action::Reuse { .. }) {
+            if let Some(out) = prior.outputs.get(&d.node_id) {
+                bindings.insert(d.node_id.clone(), out.uri.clone());
+            }
+        }
+    }
+
+    // The earliest node in document order that has to run again. Document order
+    // is the order the compiler stages them, so "earliest" is the one an
+    // operator would point at first.
+    let starts_at = decisions
+        .iter()
+        .find(|d| matches!(d.action, Action::ReExecute { .. } | Action::RewriteSink { .. }))
+        .map(|d| StartsAt {
+            node_id: d.node_id.clone(),
+            reason: match &d.action {
+                Action::ReExecute { reason } | Action::RewriteSink { reason } => reason.clone(),
+                _ => String::new(),
+            },
+        });
+
     Plan {
         run_id: new_run_id.to_string(),
         parent_run_id: run_id.to_string(),
         refusal: None,
         decisions,
         sinks_to_rewrite: sinks,
+        bindings,
+        starts_at,
     }
 }
 
@@ -815,7 +958,7 @@ mod tests {
         serde_json::from_value(serde_json::json!({ "nodes": ns, "edges": [] })).unwrap()
     }
 
-    fn receipt(status: &str, hash: &str, nodes: &[(&str, &str, Option<&str>, &str)]) -> RunReceipt {
+    pub(super) fn receipt(status: &str, hash: &str, nodes: &[(&str, &str, Option<&str>, &str)]) -> RunReceipt {
         RunReceipt {
             run_id: "r1".into(),
             trigger: "manual".into(),
@@ -825,6 +968,7 @@ mod tests {
             at: "2026-08-31T00:00:00Z".into(),
             components: Vec::new(),
             artifacts: Vec::new(),
+        outputs: BTreeMap::new(),
             partition_key: None,
             status: status.into(),
             pipeline_name: "p".into(),
@@ -857,11 +1001,19 @@ mod tests {
         }
     }
 
-    fn hit_always(_: &str, _: &str) -> Option<String> {
-        Some("<ws>/cache/p/extract/KEY.parquet".to_string())
+    /// A receipt that records a node's output as a real file on disk.
+    fn with_output(mut r: RunReceipt, node: &str, path: &std::path::Path) -> RunReceipt {
+        let out =
+            crate::nodeout::NodeOutput::of_file(node, Some("r1"), crate::nodeout::Kind::Relation, path)
+                .expect("hashable");
+        r.outputs.insert(node.to_string(), out);
+        r
     }
-    fn hit_never(_: &str, _: &str) -> Option<String> {
-        None
+
+    fn cached(dir: &std::path::Path, node: &str) -> std::path::PathBuf {
+        let p = dir.join(format!("{node}.parquet"));
+        std::fs::write(&p, b"rows").unwrap();
+        p
     }
 
     /// A receipt has to survive the process, or a retry has nothing to read.
@@ -1002,15 +1154,20 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let d = doc_with(&[("extract", "src.xml")]);
         let h = pipeline_hash(&d);
-        write(tmp.path(), &receipt("error", &h, &[("extract", "ok", Some("K"), "source")])).unwrap();
+        let file = cached(tmp.path(), "extract");
+        let r = receipt("error", &h, &[("extract", "ok", Some("K"), "source")]);
+        write(tmp.path(), &with_output(r, "extract", &file)).unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &hit_always);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false);
         assert!(p.refusal.is_none(), "should plan: {:?}", p.refusal);
-        assert_eq!(
-            p.decisions[0].action,
-            Action::Reuse { evidence: "<ws>/cache/p/extract/KEY.parquet".into() },
-            "a cached node whose output is still there must be reused"
-        );
+        // Nothing reads it, so it is the pipeline's END - required, and served
+        // from its verified output rather than re-derived.
+        match &p.decisions[0].action {
+            Action::Reuse { evidence } => {
+                assert!(evidence.contains("sha256"), "the evidence is the file: {evidence}")
+            }
+            other => panic!("a verified output must not be re-executed: {other:?}"),
+        }
     }
 
     /// The word "verified" in the acceptance criteria has to mean something.
@@ -1021,12 +1178,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let d = doc_with(&[("extract", "src.xml")]);
         let h = pipeline_hash(&d);
-        write(tmp.path(), &receipt("error", &h, &[("extract", "ok", Some("K"), "source")])).unwrap();
+        let file = cached(tmp.path(), "extract");
+        let r = receipt("error", &h, &[("extract", "ok", Some("K"), "source")]);
+        write(tmp.path(), &with_output(r, "extract", &file)).unwrap();
+        // Recorded, then pruned - the ordinary way a receipt and reality differ.
+        std::fs::remove_file(&file).unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &hit_never);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false);
         assert_eq!(
             p.decisions[0].action,
-            Action::ReExecute { reason: "the recorded output is gone".into() },
+            Action::ReExecute { reason: "its output is gone".into() },
             "trusting the receipt here would promise reuse of a file that is not there"
         );
     }
@@ -1040,7 +1201,7 @@ mod tests {
         write(tmp.path(), &receipt("error", "a-different-hash", &[("extract", "ok", Some("K"), "source")]))
             .unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &hit_always);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false);
         assert_eq!(p.refusal.as_ref().map(|r| r.code.as_str()), Some("retry:pipeline-changed"));
         assert!(p.decisions.is_empty(), "a refusal must not also plan work");
     }
@@ -1054,7 +1215,7 @@ mod tests {
         write(tmp.path(), &receipt("error", "a-different-hash", &[("extract", "ok", Some("K"), "source")]))
             .unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", true, false, &hit_always);
+        let p = plan(tmp.path(), "r1", &d, "r2", true, false);
         assert!(p.refusal.is_none(), "allow-changed must proceed: {:?}", p.refusal);
         assert!(
             !matches!(p.decisions[0].action, Action::Reuse { .. }),
@@ -1080,13 +1241,13 @@ mod tests {
         )
         .unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &hit_always);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false);
         let r = p.refusal.expect("must refuse");
         assert_eq!(r.code, "retry:would-rewrite-sinks");
         assert!(r.message.contains("publish"), "must name the sink: {}", r.message);
 
         // Told explicitly, it proceeds and still says which sinks it will write.
-        let ok = plan(tmp.path(), "r1", &d, "r2", false, true, &hit_always);
+        let ok = plan(tmp.path(), "r1", &d, "r2", false, true);
         assert!(ok.refusal.is_none());
         assert_eq!(ok.sinks_to_rewrite, vec!["publish".to_string()]);
     }
@@ -1100,7 +1261,7 @@ mod tests {
         let h = pipeline_hash(&d);
         write(tmp.path(), &receipt("error", &h, &[("publish", "ok", Some("K"), "sink")])).unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", false, true, &hit_always);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, true);
         assert!(
             matches!(p.decisions[0].action, Action::RewriteSink { .. }),
             "got {:?}",
@@ -1123,7 +1284,7 @@ mod tests {
         // Only `extract` is recorded, and it failed. `publish` never ran.
         write(tmp.path(), &receipt("error", &h, &[("extract", "error", None, "source")])).unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &hit_always);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false);
         let r = p.refusal.expect("a retry that would write to an unreached sink must still refuse");
         assert_eq!(r.code, "retry:would-rewrite-sinks");
         assert!(r.message.contains("publish"), "must name it: {}", r.message);
@@ -1137,7 +1298,7 @@ mod tests {
         let d = doc_with(&[("n", "src.xml")]);
         let h = pipeline_hash(&d);
         write(tmp.path(), &receipt("ok", &h, &[("n", "ok", None, "source")])).unwrap();
-        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &hit_always);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false);
         assert_eq!(p.refusal.map(|r| r.code), Some("retry:run-succeeded".to_string()));
     }
 
@@ -1147,7 +1308,7 @@ mod tests {
     fn a_run_with_no_receipt_says_so() {
         let tmp = tempfile::tempdir().unwrap();
         let d = doc_with(&[("n", "src.xml")]);
-        let p = plan(tmp.path(), "ghost", &d, "r2", false, false, &hit_always);
+        let p = plan(tmp.path(), "ghost", &d, "r2", false, false);
         let r = p.refusal.expect("must refuse");
         assert_eq!(r.code, "retry:no-receipt");
         assert!(r.message.contains("duckle-runner"), "must say who writes one: {}", r.message);
@@ -1160,11 +1321,192 @@ mod tests {
         let d = doc_with(&[("a", "src.xml"), ("b", "xf.filter")]);
         let h = pipeline_hash(&d);
         write(tmp.path(), &receipt("error", &h, &[("a", "ok", Some("K"), "source")])).unwrap();
-        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &hit_always);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false);
         let b = p.decisions.iter().find(|d| d.node_id == "b").unwrap();
         assert_eq!(
             b.action,
             Action::ReExecute { reason: "the previous run did not record this node".into() }
         );
+    }
+}
+
+/// #305 AC1: a late failure reuses verified upstream outputs.
+#[cfg(test)]
+mod chain_reuse {
+    use super::tests::receipt;
+    use super::*;
+
+    /// The issue's own pipeline: download -> parse -> normalize -> enrich ->
+    /// validate -> publish, wired as a line.
+    fn chain(nodes: &[(&str, &str)]) -> crate::PipelineDoc {
+        let ns: Vec<serde_json::Value> = nodes
+            .iter()
+            .map(|(id, comp)| {
+                serde_json::json!({
+                    "id": id,
+                    "position": { "x": 0, "y": 0 },
+                    "data": { "label": id, "componentId": comp, "properties": {} }
+                })
+            })
+            .collect();
+        let es: Vec<serde_json::Value> = nodes
+            .windows(2)
+            .map(|w| serde_json::json!({ "id": format!("{}-{}", w[0].0, w[1].0),
+                                          "source": w[0].0, "target": w[1].0 }))
+            .collect();
+        serde_json::from_value(serde_json::json!({ "nodes": ns, "edges": es })).unwrap()
+    }
+
+    const PIPE: &[(&str, &str)] = &[
+        ("download", "src.rest"),
+        ("parse", "xf.sql"),
+        ("normalize", "xf.sql"),
+        ("enrich", "xf.sql"),
+        ("publish", "snk.parquet"),
+    ];
+
+    /// Record `ok` for the nodes that finished and `error` for the one that
+    /// broke, with a real durable output for each that produced one.
+    fn prior(
+        tmp: &std::path::Path,
+        done: &[&str],
+        failed: &str,
+        with_outputs: &[&str],
+    ) -> crate::PipelineDoc {
+        let d = chain(PIPE);
+        let h = pipeline_hash(&d);
+        let mut nodes: Vec<(&str, &str, Option<&str>, &str)> = Vec::new();
+        for (id, comp) in PIPE {
+            let kind = if comp.starts_with("snk.") { "sink" } else { "transform" };
+            if done.contains(id) {
+                nodes.push((id, "ok", Some("K"), kind));
+            } else if id == &failed {
+                nodes.push((id, "error", None, kind));
+            }
+        }
+        let mut r = receipt("error", &h, &nodes);
+        for id in with_outputs {
+            let p = tmp.join(format!("{id}.parquet"));
+            std::fs::write(&p, format!("rows of {id}").as_bytes()).unwrap();
+            r.outputs.insert(
+                (*id).to_string(),
+                crate::nodeout::NodeOutput::of_file(
+                    id,
+                    Some("r1"),
+                    crate::nodeout::Kind::Relation,
+                    &p,
+                )
+                .unwrap(),
+            );
+        }
+        write(tmp, &r).unwrap();
+        d
+    }
+
+    fn action<'a>(p: &'a Plan, node: &str) -> &'a Action {
+        &p.decisions.iter().find(|d| d.node_id == node).expect("a decision").action
+    }
+
+    /// The whole point of the issue: `normalize` failed, so `download` is not
+    /// touched at all and `parse` is bound from its verified output.
+    #[test]
+    fn a_late_failure_does_not_repeat_the_download() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = prior(tmp.path(), &["download", "parse"], "normalize", &["download", "parse"]);
+
+        let p = plan(tmp.path(), "r1", &d, "r2", false, true);
+        assert!(p.refusal.is_none(), "{:?}", p.refusal);
+
+        // Nothing that runs reads `download` - `parse` is bound - so it is not
+        // even a file read. This is where the hours are saved.
+        assert!(matches!(action(&p, "download"), Action::Skip { .. }), "{:?}", action(&p, "download"));
+        assert!(matches!(action(&p, "parse"), Action::Reuse { .. }), "{:?}", action(&p, "parse"));
+        assert!(matches!(action(&p, "normalize"), Action::ReExecute { .. }));
+        assert!(matches!(action(&p, "enrich"), Action::ReExecute { .. }));
+        assert!(matches!(action(&p, "publish"), Action::RewriteSink { .. }));
+
+        // Only what an executing node actually reads is bound.
+        assert_eq!(p.bindings.keys().collect::<Vec<_>>(), ["parse"], "{:?}", p.bindings);
+        assert!(p.bindings["parse"].ends_with("parse.parquet"));
+
+        let starts = p.starts_at.as_ref().expect("somewhere to start");
+        assert_eq!(starts.node_id, "normalize");
+        assert!(starts.reason.contains("failed last time"), "{}", starts.reason);
+    }
+
+    /// AC1's other half, which Louis asked for by name: when the expected
+    /// output is gone, the planner walks back to the earliest stage that must
+    /// rerun and says why.
+    #[test]
+    fn a_pruned_output_walks_the_start_back_and_explains_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = prior(tmp.path(), &["download", "parse"], "normalize", &["download", "parse"]);
+        // `parse` was recorded and has since been pruned.
+        std::fs::remove_file(tmp.path().join("parse.parquet")).unwrap();
+
+        let p = plan(tmp.path(), "r1", &d, "r2", false, true);
+        assert!(matches!(action(&p, "parse"), Action::ReExecute { .. }), "{:?}", action(&p, "parse"));
+
+        let starts = p.starts_at.as_ref().expect("somewhere to start");
+        assert_eq!(starts.node_id, "parse", "the start walked back one stage");
+        assert!(starts.reason.contains("gone"), "and says why: {}", starts.reason);
+
+        // `parse` now runs, so `download` IS read - and is bound rather than
+        // re-downloaded, which is the saving that survives.
+        assert!(matches!(action(&p, "download"), Action::Reuse { .. }));
+        assert_eq!(p.bindings.keys().collect::<Vec<_>>(), ["download"]);
+    }
+
+    /// An output edited underneath is not reusable, and is a different sentence
+    /// from one that was deleted.
+    #[test]
+    fn an_output_that_changed_is_refused_by_its_hash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = prior(tmp.path(), &["download", "parse"], "normalize", &["download", "parse"]);
+        std::fs::write(tmp.path().join("parse.parquet"), b"different bytes entirely").unwrap();
+
+        let p = plan(tmp.path(), "r1", &d, "r2", false, true);
+        match action(&p, "parse") {
+            Action::ReExecute { reason } => {
+                assert!(reason.contains("bytes") || reason.contains("hash"), "{reason}")
+            }
+            other => panic!("edited bytes must not be reused: {other:?}"),
+        }
+    }
+
+    /// A node recorded by an older build - a cache key and no durable output -
+    /// is not evidence. A key is a hash of the INPUTS and cannot say the file
+    /// is still there.
+    #[test]
+    fn a_cache_key_alone_is_not_a_durable_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = prior(tmp.path(), &["download", "parse"], "normalize", &[]);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, true);
+        match action(&p, "parse") {
+            Action::ReExecute { reason } => assert!(reason.contains("verif"), "{reason}"),
+            other => panic!("a key is not an output: {other:?}"),
+        }
+        assert!(p.bindings.is_empty());
+        assert_eq!(p.starts_at.as_ref().unwrap().node_id, "download");
+    }
+
+    /// A changed pipeline disables reuse entirely, so nothing is bound even
+    /// though the files are all still there (AC2).
+    #[test]
+    fn a_changed_pipeline_binds_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _ = prior(tmp.path(), &["download", "parse"], "normalize", &["download", "parse"]);
+        // A different pipeline, same node ids.
+        let edited = chain(&[
+            ("download", "src.rest"),
+            ("parse", "xf.jq"),
+            ("normalize", "xf.sql"),
+            ("enrich", "xf.sql"),
+            ("publish", "snk.parquet"),
+        ]);
+        let p = plan(tmp.path(), "r1", &edited, "r2", true, true);
+        assert!(p.refusal.is_none(), "{:?}", p.refusal);
+        assert!(p.bindings.is_empty(), "recorded outputs describe work that no longer exists");
+        assert!(p.decisions.iter().all(|d| !matches!(d.action, Action::Reuse { .. })));
     }
 }
