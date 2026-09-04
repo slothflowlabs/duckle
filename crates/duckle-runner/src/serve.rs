@@ -3600,8 +3600,38 @@ fn pump_deliveries(state: &State) {
     }
     let pipes: HashMap<String, PathBuf> =
         discover_pipelines(&state.workspace).into_iter().map(|(p, id, _)| (id, p)).collect();
+    // #325 criterion 7, as the last line of defence. `validate` refuses a loop
+    // statically, but a workspace can be edited into one between validations,
+    // and a loop that reaches the pump is not a slow bug - it is every pipeline
+    // in the ring running forever. Deliveries into a ring are FAILED with the
+    // loop named rather than skipped: skipping looks exactly like nothing was
+    // published, which is the wrong thing to be told about a trigger storm that
+    // was just prevented.
+    let looping: HashMap<String, String> = match subscribe::load(&state.workspace) {
+        Ok(subs) if !subs.is_empty() => {
+            match duckle_duckdb_engine::catalog::load_or_rebuild(&state.workspace) {
+                Ok(cat) => subscribe::cycles(&cat, &subs)
+                    .iter()
+                    .flat_map(|c| {
+                        let described = c.describe();
+                        c.path.clone().into_iter().map(move |p| (p, described.clone()))
+                    })
+                    .collect(),
+                Err(_) => HashMap::new(),
+            }
+        }
+        _ => HashMap::new(),
+    };
     for mut delivery in pending {
         delivery.attempts += 1;
+        if let Some(loop_path) = looping.get(&delivery.pipeline_id) {
+            delivery.state = DeliveryState::Failed;
+            delivery.last_error = Some(format!(
+                "not delivered: {loop_path} would trigger each other forever. Narrow the assets                  this subscription matches, or set a producer."
+            ));
+            let _ = subscribe::record(&state.workspace, delivery);
+            continue;
+        }
         let Some(file) = pipes.get(&delivery.pipeline_id).map(|p| p.display().to_string()) else {
             // Recorded rather than skipped: a subscription naming a pipeline
             // that no longer exists is a broken subscription, and silence would

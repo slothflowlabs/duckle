@@ -1369,6 +1369,23 @@ embedded under `json` so the pipeline can address its fields; anything else is
 kept verbatim under `body`.
 ";
 
+/// Trigger loops among this workspace's subscriptions, as readable paths.
+///
+/// Best-effort about the INPUTS and exact about the answer: a workspace with no
+/// subscriptions, or no catalog yet, has no loops to report, and neither is an
+/// error - `validate` is run on workspaces that have never built a graph. What
+/// it must never do is stay quiet when it can see one.
+fn workspace_trigger_cycles() -> Vec<String> {
+    use duckle_duckdb_engine::{catalog, subscribe};
+    let ws = std::path::PathBuf::from(".");
+    let subs = subscribe::load(&ws).unwrap_or_default();
+    if subs.is_empty() {
+        return Vec::new();
+    }
+    let Ok(cat) = catalog::load_or_rebuild(&ws) else { return Vec::new() };
+    subscribe::cycles(&cat, &subs).iter().map(|c| c.describe()).collect()
+}
+
 fn run_validate() -> ExitCode {
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut json_out = false;
@@ -1601,6 +1618,24 @@ ies)"),
                     println!("      {e}");
                 }
             }
+        }
+    }
+    // #325 criterion 7: a trigger loop is a property of the WORKSPACE, not of
+    // any one pipeline, so it is checked once here rather than per file. It has
+    // to be static: found after the first delivery, it is a storm, and the
+    // thing that notices is the machine falling over.
+    for cycle in workspace_trigger_cycles() {
+        failed += 1;
+        findings.push(report::Finding::fail(
+            "subscriptions",
+            "trigger-cycle",
+            format!(
+                "these pipelines would trigger each other forever: {cycle}. Narrow the assets a                  subscription matches, or set a producer, so the chain does not come back to                  where it started."
+            ),
+        ));
+        if !json_out && !machine {
+            println!("FAIL  subscriptions");
+            println!("      trigger loop: {cycle}");
         }
     }
     if json_out || machine {

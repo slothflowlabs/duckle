@@ -244,6 +244,165 @@ pub fn failed(workspace: &Path) -> Vec<Delivery> {
         .collect()
 }
 
+/// Which pipelines a publication by `producer` would set running.
+///
+/// Decided by [`wants`], not by a second matching rule. Static validation that
+/// disagreed with runtime delivery would be worse than none: it would refuse
+/// configurations that work and permit ones that loop. Reusing the predicate
+/// makes the two agree by construction, and means the producer filter and the
+/// self-subscription refusal are inherited rather than restated.
+fn triggered_by(producer: &str, writes: &[String], subs: &[Subscription]) -> Vec<String> {
+    // A stand-in publication: what a run of `producer` that wrote everything it
+    // can write would look like. Only `pipeline_id` and `assets` are read by
+    // `wants`; the rest is filled to make a well-formed event.
+    let event = crate::materialize::Event {
+        event_id: String::new(),
+        pipeline_id: producer.to_string(),
+        run_id: None,
+        release_id: None,
+        partition_key: None,
+        trigger: "static-check".to_string(),
+        committed_at: String::new(),
+        assets: writes.to_vec(),
+    };
+    let mut out: Vec<String> =
+        subs.iter().filter(|s| wants(s, &event)).map(|s| s.pipeline_id.clone()).collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Every asset each pipeline WRITES, from the catalog.
+///
+/// Writes only. A read does not start anything, so a read edge cannot be part
+/// of a trigger loop, and including one would refuse the ordinary arrangement
+/// where two pipelines share an input.
+fn writes_by_pipeline(catalog: &crate::catalog::Catalog) -> BTreeMap<String, Vec<String>> {
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for t in &catalog.touches {
+        if t.direction == crate::catalog::Direction::Write {
+            out.entry(t.pipeline_id.clone()).or_default().push(t.asset.clone());
+        }
+    }
+    for v in out.values_mut() {
+        v.sort();
+        v.dedup();
+    }
+    out
+}
+
+/// A trigger loop, as the pipelines around it.
+///
+/// #325 criterion 7. `wants` already refuses `A -> A`, and that is the easy
+/// half: `A -> B -> C -> A` is invisible to a per-subscription rule because no
+/// single subscription is wrong. It only exists in the combined graph, and it
+/// is only cheap to see BEFORE it starts running.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Cycle {
+    /// The pipelines in trigger order, the first repeated at the end so the
+    /// loop reads as a loop: `a -> b -> c -> a`.
+    pub path: Vec<String>,
+}
+
+impl Cycle {
+    pub fn describe(&self) -> String {
+        self.path.join(" -> ")
+    }
+}
+
+/// Every trigger loop in the combined asset and subscription graph.
+///
+/// The graph is pipelines joined by "publishing this would run that": a
+/// pipeline's writes from the catalog, matched against the subscriptions. A
+/// cycle in it is a set of runs that would each cause the next forever.
+///
+/// Depth-first with an explicit stack of the path being explored, so what comes
+/// back is the loop itself rather than the fact that one exists. "There is a
+/// cycle somewhere in your workspace" is not an error anybody can act on.
+pub fn cycles(catalog: &crate::catalog::Catalog, subs: &[Subscription]) -> Vec<Cycle> {
+    let writes = writes_by_pipeline(catalog);
+    let edges: BTreeMap<String, Vec<String>> = writes
+        .iter()
+        .map(|(p, assets)| (p.clone(), triggered_by(p, assets, subs)))
+        .collect();
+
+    let mut found: Vec<Cycle> = Vec::new();
+    let mut done: std::collections::BTreeSet<String> = Default::default();
+    for start in edges.keys() {
+        if done.contains(start) {
+            continue;
+        }
+        // Iterative rather than recursive: a workspace is operator-authored and
+        // a deep chain is legitimate, and a stack overflow inside a validation
+        // check would be a worse failure than the thing it validates.
+        let mut path: Vec<String> = vec![start.clone()];
+        let mut cursor: Vec<usize> = vec![0];
+        let mut on_path: std::collections::BTreeSet<String> = [start.clone()].into();
+        while let Some(depth) = cursor.len().checked_sub(1) {
+            let here = path[depth].clone();
+            let next = edges.get(&here).and_then(|v| v.get(cursor[depth]).cloned());
+            cursor[depth] += 1;
+            let Some(next) = next else {
+                on_path.remove(&here);
+                done.insert(here);
+                path.pop();
+                cursor.pop();
+                continue;
+            };
+            if on_path.contains(&next) {
+                // Report from where the loop closes, not from where the walk
+                // began: `a -> b -> c -> b` names a as a participant it is not.
+                let at = path.iter().position(|p| p == &next).unwrap_or(0);
+                let mut loop_path = path[at..].to_vec();
+                loop_path.push(next);
+                found.push(Cycle { path: loop_path });
+                continue;
+            }
+            if done.contains(&next) {
+                continue;
+            }
+            on_path.insert(next.clone());
+            path.push(next);
+            cursor.push(0);
+        }
+    }
+    found.sort_by(|a, b| a.path.cmp(&b.path));
+    found.dedup();
+    found
+}
+
+/// Refuse a subscription that would close a trigger loop.
+///
+/// Checked against the graph the subscription WOULD make, so the answer is
+/// about the change being made rather than about the workspace in general: a
+/// loop that already exists is not this edit's fault and is not reported here,
+/// or an operator could never fix one subscription at a time.
+pub fn check_addition(
+    catalog: &crate::catalog::Catalog,
+    existing: &[Subscription],
+    candidate: &Subscription,
+) -> Result<(), String> {
+    let before = cycles(catalog, existing);
+    let mut after_subs: Vec<Subscription> =
+        existing.iter().filter(|s| s.id != candidate.id).cloned().collect();
+    after_subs.push(candidate.clone());
+    let after = cycles(catalog, &after_subs);
+
+    let new: Vec<&Cycle> = after.iter().filter(|c| !before.contains(c)).collect();
+    if new.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "subscription {} would make {} run in a loop: {}. A publication by any of these would \
+         start the next one forever. Narrow the assets it matches, or set a producer, so the \
+         chain does not come back to where it started.",
+        candidate.id,
+        candidate.pipeline_id,
+        new.iter().map(|c| c.describe()).collect::<Vec<_>>().join("; ")
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,5 +583,135 @@ mod path_shapes {
             };
             assert!(wants(&s, &event), "a subscription written as {written_as:?} matched nothing");
         }
+    }
+}
+
+/// #325 criterion 7: trigger loops in the combined graph.
+#[cfg(test)]
+mod trigger_cycles {
+    use super::*;
+
+    /// #325 criterion 7: an indirect loop that no single subscription reveals.
+    fn catalog_of(writes: &[(&str, &str)]) -> crate::catalog::Catalog {
+        crate::catalog::Catalog {
+            touches: writes
+                .iter()
+                .map(|(pipeline, asset)| crate::catalog::Touch {
+                    pipeline_id: (*pipeline).into(),
+                    node_id: "n1".into(),
+                    component_id: "snk.parquet".into(),
+                    asset: (*asset).into(),
+                    direction: crate::catalog::Direction::Write,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn sub(id: &str, pipeline: &str, asset: &str) -> Subscription {
+        Subscription {
+            id: id.into(),
+            pipeline_id: pipeline.into(),
+            assets: vec![asset.into()],
+            producer: None,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn an_indirect_trigger_loop_is_found() {
+        // a writes A, b subscribes to A and writes B, c subscribes to B and
+        // writes C, and a subscribes to C. No subscription is wrong on its own.
+        let catalog = catalog_of(&[("a", "/data/A"), ("b", "/data/B"), ("c", "/data/C")]);
+        let subs = vec![
+            sub("s1", "b", "/data/A"),
+            sub("s2", "c", "/data/B"),
+            sub("s3", "a", "/data/C"),
+        ];
+        let found = cycles(&catalog, &subs);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].describe(), "a -> b -> c -> a");
+    }
+
+    #[test]
+    fn a_chain_that_does_not_come_back_is_allowed() {
+        let catalog = catalog_of(&[("a", "/data/A"), ("b", "/data/B"), ("c", "/data/C")]);
+        let subs = vec![sub("s1", "b", "/data/A"), sub("s2", "c", "/data/B")];
+        assert!(cycles(&catalog, &subs).is_empty(), "a -> b -> c is a pipeline, not a loop");
+    }
+
+    /// Reading is not triggering. Two pipelines sharing an input is ordinary.
+    #[test]
+    fn a_read_edge_is_not_a_trigger_edge() {
+        let mut catalog = catalog_of(&[("a", "/data/A"), ("b", "/data/B")]);
+        catalog.touches.push(crate::catalog::Touch {
+            pipeline_id: "a".into(),
+            node_id: "n2".into(),
+            component_id: "src.parquet".into(),
+            asset: "/data/B".into(),
+            direction: crate::catalog::Direction::Read,
+        });
+        // b runs when A is published and writes B, which a merely READS.
+        let subs = vec![sub("s1", "b", "/data/A")];
+        assert!(cycles(&catalog, &subs).is_empty(), "a reads B, it is not run by it");
+    }
+
+    #[test]
+    fn the_loop_is_reported_from_where_it_closes() {
+        // a -> b -> c -> b. `a` starts the walk and is not in the loop.
+        let catalog = catalog_of(&[("a", "/data/A"), ("b", "/data/B"), ("c", "/data/C")]);
+        let subs = vec![
+            sub("s1", "b", "/data/A"),
+            sub("s2", "c", "/data/B"),
+            sub("s3", "b", "/data/C"),
+        ];
+        let found = cycles(&catalog, &subs);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].describe(), "b -> c -> b", "a is not a participant");
+    }
+
+    #[test]
+    fn a_subscription_that_would_close_a_loop_is_refused() {
+        let catalog = catalog_of(&[("a", "/data/A"), ("b", "/data/B"), ("c", "/data/C")]);
+        let existing = vec![sub("s1", "b", "/data/A"), sub("s2", "c", "/data/B")];
+        // Adding it is fine while the chain stays open.
+        assert!(check_addition(&catalog, &existing, &sub("s9", "c", "/data/A")).is_ok());
+        // Closing it is not.
+        let err = check_addition(&catalog, &existing, &sub("s3", "a", "/data/C"))
+            .expect_err("that closes the loop");
+        assert!(err.contains("a -> b -> c -> a"), "it names the loop: {err}");
+        assert!(err.contains("Narrow the assets"), "it says what to do: {err}");
+    }
+
+    /// A loop that is already there is not this edit's fault.
+    #[test]
+    fn an_existing_loop_does_not_block_an_unrelated_subscription() {
+        let catalog = catalog_of(&[("a", "/data/A"), ("b", "/data/B"), ("d", "/data/D")]);
+        let existing = vec![sub("s1", "b", "/data/A"), sub("s2", "a", "/data/B")];
+        assert_eq!(cycles(&catalog, &existing).len(), 1, "a and b already loop");
+        // Editing something else must still be possible, or the workspace is
+        // unrecoverable one subscription at a time.
+        assert!(check_addition(&catalog, &existing, &sub("s3", "d", "/data/A")).is_ok());
+    }
+
+    /// A producer filter is a legitimate way OUT of a loop, and it is honoured
+    /// because the check asks `wants` rather than re-deciding matching.
+    #[test]
+    fn a_producer_filter_breaks_the_loop() {
+        let catalog = catalog_of(&[("a", "/data/A"), ("b", "/data/B")]);
+        let looping = vec![sub("s1", "b", "/data/A"), sub("s2", "a", "/data/B")];
+        assert_eq!(cycles(&catalog, &looping).len(), 1);
+        let mut narrowed = looping.clone();
+        narrowed[1].producer = Some("someone-else".into());
+        assert!(cycles(&catalog, &narrowed).is_empty(), "a is no longer run by b");
+    }
+
+    #[test]
+    fn a_disabled_subscription_is_not_an_edge() {
+        let catalog = catalog_of(&[("a", "/data/A"), ("b", "/data/B")]);
+        let mut subs = vec![sub("s1", "b", "/data/A"), sub("s2", "a", "/data/B")];
+        assert_eq!(cycles(&catalog, &subs).len(), 1);
+        subs[0].enabled = false;
+        assert!(cycles(&catalog, &subs).is_empty());
     }
 }
