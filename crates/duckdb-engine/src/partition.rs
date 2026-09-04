@@ -227,6 +227,44 @@ pub fn of(doc: &serde_json::Value) -> Option<PartitionDef> {
     serde_json::from_value(doc.get("partition")?.clone()).ok()
 }
 
+/// The parameters this definition binds for one key.
+///
+/// #325: a consumer triggered by a partitioned publication should receive the
+/// same window the producer had, and the honest way to get it is to ask the
+/// definition rather than to copy values across. `generate` already knows what
+/// a key binds; this asks it about one key.
+///
+/// `None` when the key is not one this definition produces - a `2026-09-03`
+/// against a `Static` definition listing `BE`, `NL`, or a malformed date. That
+/// is a refusal rather than a guess: binding a window nobody asked for is how a
+/// consumer writes correct-looking rows into the wrong day.
+pub fn params_for(def: &PartitionDef, key: &str) -> Option<BTreeMap<String, String>> {
+    let key = key.trim();
+    match def {
+        // Generating a range would enumerate every key; a static definition is
+        // a fixed list, so the answer is a lookup.
+        PartitionDef::Static { .. } => generate(def, key, key)
+            .ok()?
+            .into_iter()
+            .find(|p| p.key == key)
+            .map(|p| p.params),
+        // A time key names exactly one slice, so generating from it to itself
+        // produces that slice and no other.
+        PartitionDef::Time { .. } => {
+            let day = match key.split('T').next().unwrap_or(key) {
+                d if d.len() == 4 => format!("{d}-01-01"),
+                d if d.len() == 7 => format!("{d}-01"),
+                d => d.to_string(),
+            };
+            let mut found = generate(def, &day, &day).ok()?;
+            match found.len() {
+                1 if found[0].key == key => Some(found.remove(0).params),
+                _ => None,
+            }
+        }
+    }
+}
+
 /// The canonical key naming the slice that contains this date and hour.
 ///
 /// #326 parses a key out of a filename - `D20260901.zip` - and needs the same

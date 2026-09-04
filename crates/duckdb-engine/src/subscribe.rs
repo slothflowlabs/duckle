@@ -53,6 +53,17 @@ pub struct Subscription {
     pub producer: Option<String>,
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// Run parameters to bind on the consumer, as templates over the
+    /// publication: `{"source_date": "${event.partition}"}`.
+    ///
+    /// Values only - the NAMES are the consumer's own declared parameters, so
+    /// what arrives is checked by the pipeline's typed contract rather than by
+    /// a second one here. That is the whole point of the shape: event metadata,
+    /// then ordinary parameter normalisation, then an ordinary durable run, so
+    /// an invalid value fails before the consumer is queued instead of inside
+    /// it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub parameters: BTreeMap<String, String>,
 }
 
 fn yes() -> bool {
@@ -96,6 +107,21 @@ pub struct Delivery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
     pub at: String,
+    /// What the subscription's templates RESOLVED to for this publication.
+    ///
+    /// Stored rather than recomputed, because it is provenance: it answers
+    /// "what was this consumer actually given" after the fact, when the event
+    /// log may have been pruned and the subscription since edited.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub parameters: BTreeMap<String, String>,
+    /// Why the templates could not be resolved, when they could not.
+    ///
+    /// Carried on the delivery rather than thrown, because a subscription that
+    /// asks for a field the publication does not have is a standing
+    /// misconfiguration: it must be visible against the delivery it broke, and
+    /// it must not stop the OTHER deliveries of the same publication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameter_error: Option<String>,
 }
 
 pub fn delivery_id(subscription_id: &str, event_id: &str) -> String {
@@ -190,6 +216,104 @@ pub fn wants(sub: &Subscription, event: &crate::materialize::Event) -> bool {
     })
 }
 
+/// What a publication offers a subscription's templates.
+///
+/// A closed set, deliberately. `${event.anything}` resolving to an empty string
+/// would turn a typo into a silently wrong parameter, and a wrong date on a
+/// partitioned consumer writes correct-looking rows into the wrong day - which
+/// is exactly the class of failure this issue exists to prevent.
+fn event_field(event: &crate::materialize::Event, field: &str) -> Option<Option<String>> {
+    // Outer None: not a field at all. Inner None: a field this publication does
+    // not carry. They are different errors and are reported differently.
+    Some(match field {
+        "partition" => event.partition_key.clone(),
+        "run_id" => event.run_id.clone(),
+        "release_id" => event.release_id.clone(),
+        "event_id" => Some(event.event_id.clone()),
+        "pipeline" => Some(event.pipeline_id.clone()),
+        "committed_at" => Some(event.committed_at.clone()),
+        // The assets are a list; joining them into one string would produce a
+        // value no consumer could use. A subscription that wants one asset
+        // matches one asset.
+        "asset" => event.assets.first().cloned(),
+        _ => return None,
+    })
+}
+
+/// The known template fields, for an error message that can be acted on.
+const EVENT_FIELDS: &str =
+    "partition, run_id, release_id, event_id, pipeline, committed_at, asset";
+
+/// Resolve a subscription's parameter templates against one publication.
+///
+/// Only `${event.<field>}` is substituted, and only as the WHOLE value. A
+/// template is a binding, not a string-building language: allowing
+/// `prefix-${event.partition}` would invite the consumer's typed contract to
+/// receive something that is not the type it declared, and the failure would
+/// land inside the run instead of before it.
+pub fn resolve_parameters(
+    sub: &Subscription,
+    event: &crate::materialize::Event,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut out = BTreeMap::new();
+    for (name, template) in &sub.parameters {
+        let t = template.trim();
+        let Some(field) = t.strip_prefix("${event.").and_then(|r| r.strip_suffix('}')) else {
+            // A literal is a legitimate binding - a constant the consumer needs
+            // - so it is passed through rather than refused.
+            out.insert(name.clone(), template.clone());
+            continue;
+        };
+        match event_field(event, field) {
+            None => {
+                return Err(format!(
+                    "{name} is bound to {t}, and a publication has no {field:?}. Available: \
+                     {EVENT_FIELDS}."
+                ))
+            }
+            Some(None) => {
+                return Err(format!(
+                    "{name} is bound to {t}, and this publication carries no {field}. A publication \
+                     from an unpartitioned run has no partition, so a consumer that needs one \
+                     cannot be triggered by it."
+                ))
+            }
+            Some(Some(value)) => {
+                out.insert(name.clone(), value);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The partition parameters a consumer should inherit from a publication.
+///
+/// #325: "where producer/consumer partition definitions are compatible, the
+/// partition identity could propagate automatically".
+///
+/// Compatible is read STRICTLY as equal. Two definitions that differ - a
+/// different cadence, a different zone, different parameter names - do not
+/// describe the same slices, and a `2026-09-03` that means a Brussels day to one
+/// and a UTC day to the other is off by an hour at both ends. Refusing is the
+/// only safe reading, and the operator can always bind the value explicitly.
+///
+/// Nothing is inherited when the subscription binds parameters itself: an
+/// explicit mapping is a statement about what the consumer wants, and silently
+/// adding to it would make the declared thing not the whole story.
+pub fn inherited_partition(
+    producer: Option<&crate::partition::PartitionDef>,
+    consumer: Option<&crate::partition::PartitionDef>,
+    partition_key: Option<&str>,
+) -> BTreeMap<String, String> {
+    let (Some(producer), Some(consumer), Some(key)) = (producer, consumer, partition_key) else {
+        return BTreeMap::new();
+    };
+    if producer != consumer {
+        return BTreeMap::new();
+    }
+    crate::partition::params_for(consumer, key).unwrap_or_default()
+}
+
 /// Deliveries that should exist and do not: one per (subscription, event) pair
 /// nobody has recorded yet.
 ///
@@ -213,6 +337,14 @@ pub fn pending(workspace: &Path, now: &str) -> Vec<Delivery> {
             if known.contains_key(&id) {
                 continue;
             }
+            // Resolved HERE, where the subscription and the publication are
+            // both in hand. The pump only ever sees the delivery, and a
+            // delivery that had to go back for its event would be reading a log
+            // that is allowed to be pruned.
+            let (parameters, parameter_error) = match resolve_parameters(sub, &event) {
+                Ok(p) => (p, None),
+                Err(e) => (BTreeMap::new(), Some(e)),
+            };
             out.push(Delivery {
                 delivery_id: id,
                 subscription_id: sub.id.clone(),
@@ -223,6 +355,8 @@ pub fn pending(workspace: &Path, now: &str) -> Vec<Delivery> {
                 last_error: None,
                 run_id: None,
                 at: now.to_string(),
+                parameters,
+                parameter_error,
             });
         }
     }
@@ -428,6 +562,7 @@ mod tests {
             assets: assets.iter().map(|a| (*a).to_string()).collect(),
             producer: None,
             enabled: true,
+            parameters: Default::default(),
         }
     }
 
@@ -580,6 +715,7 @@ mod path_shapes {
                 assets: vec![written_as.to_string()],
                 producer: None,
                 enabled: true,
+                parameters: Default::default(),
             };
             assert!(wants(&s, &event), "a subscription written as {written_as:?} matched nothing");
         }
@@ -615,6 +751,7 @@ mod trigger_cycles {
             assets: vec![asset.into()],
             producer: None,
             enabled: true,
+            parameters: Default::default(),
         }
     }
 
@@ -713,5 +850,236 @@ mod trigger_cycles {
         assert_eq!(cycles(&catalog, &subs).len(), 1);
         subs[0].enabled = false;
         assert!(cycles(&catalog, &subs).is_empty());
+    }
+}
+
+/// #325: event metadata -> ordinary typed parameter normalisation.
+#[cfg(test)]
+mod parameter_binding {
+    use super::*;
+    use crate::materialize::Event;
+    use crate::partition::{Cadence, PartitionDef};
+
+    fn event() -> Event {
+        Event {
+            event_id: "mat-abc".into(),
+            pipeline_id: "source.accounts".into(),
+            run_id: Some("run-7".into()),
+            release_id: Some("rel-2".into()),
+            partition_key: Some("2026-09-03".into()),
+            trigger: "scheduled".into(),
+            committed_at: "2026-09-03T04:00:00Z".into(),
+            assets: vec!["/data/accounts.parquet".into()],
+        }
+    }
+
+    fn sub_with(pairs: &[(&str, &str)]) -> Subscription {
+        Subscription {
+            id: "s1".into(),
+            pipeline_id: "normalize.accounts".into(),
+            assets: vec!["/data/accounts.parquet".into()],
+            producer: None,
+            enabled: true,
+            parameters: pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        }
+    }
+
+    /// The pattern from the issue: source.accounts/2026-09-03 -> the consumer.
+    #[test]
+    fn the_publications_partition_and_run_reach_the_consumer() {
+        let sub = sub_with(&[
+            ("source_date", "${event.partition}"),
+            ("producer_run_id", "${event.run_id}"),
+        ]);
+        let bound = resolve_parameters(&sub, &event()).expect("resolved");
+        assert_eq!(bound["source_date"], "2026-09-03");
+        assert_eq!(bound["producer_run_id"], "run-7");
+    }
+
+    #[test]
+    fn every_offered_field_resolves() {
+        let sub = sub_with(&[
+            ("a", "${event.event_id}"),
+            ("b", "${event.pipeline}"),
+            ("c", "${event.committed_at}"),
+            ("d", "${event.release_id}"),
+            ("e", "${event.asset}"),
+        ]);
+        let bound = resolve_parameters(&sub, &event()).unwrap();
+        assert_eq!(bound["a"], "mat-abc");
+        assert_eq!(bound["b"], "source.accounts");
+        assert_eq!(bound["c"], "2026-09-03T04:00:00Z");
+        assert_eq!(bound["d"], "rel-2");
+        assert_eq!(bound["e"], "/data/accounts.parquet");
+    }
+
+    /// A typo must not become an empty string. That is the failure this whole
+    /// binding exists to avoid: a wrong date writes correct-looking rows into
+    /// the wrong day.
+    #[test]
+    fn an_unknown_field_is_refused_and_says_what_exists() {
+        let err = resolve_parameters(&sub_with(&[("d", "${event.partitionn}")]), &event())
+            .expect_err("a typo is not a value");
+        assert!(err.contains("partitionn"), "{err}");
+        assert!(err.contains("partition, run_id"), "it lists what is available: {err}");
+    }
+
+    #[test]
+    fn a_field_this_publication_lacks_is_refused_separately() {
+        let mut e = event();
+        e.partition_key = None;
+        let err = resolve_parameters(&sub_with(&[("d", "${event.partition}")]), &e)
+            .expect_err("an unpartitioned run has no partition");
+        assert!(err.contains("carries no partition"), "{err}");
+    }
+
+    #[test]
+    fn a_literal_is_passed_through() {
+        let bound = resolve_parameters(&sub_with(&[("mode", "incremental")]), &event()).unwrap();
+        assert_eq!(bound["mode"], "incremental");
+    }
+
+    /// A template is a binding, not string building.
+    #[test]
+    fn a_partial_substitution_is_not_attempted() {
+        let bound =
+            resolve_parameters(&sub_with(&[("d", "day-${event.partition}")]), &event()).unwrap();
+        assert_eq!(
+            bound["d"], "day-${event.partition}",
+            "half-substituting would hand the typed contract something that is not its type"
+        );
+    }
+
+    /// A publication that carries a partition.
+    ///
+    /// The partition reaches an event through the run RECEIPT, not the run
+    /// record - `materialize::event_of` reads it from there - so a test that
+    /// wants `${event.partition}` has to write one. That is not a test
+    /// artefact: a workspace whose receipts have been pruned publishes events
+    /// with no partition, and a subscription binding one stops resolving.
+    fn published(tmp: &std::path::Path) {
+        let mut receipt =
+            crate::retry::begin(tmp, "run-7", "scheduled", "source.accounts", "p.json", "h", None);
+        receipt.partition_key = Some("2026-09-03".into());
+        crate::retry::write(tmp, &receipt).unwrap();
+        let record = crate::history::RunRecord {
+            run_id: Some("run-7".into()),
+            at: "2026-09-03T04:00:00Z".into(),
+            status: "ok".into(),
+            duration_ms: 10,
+            rows: 5,
+            node_count: 1,
+            trigger: "scheduled".into(),
+            error: None,
+            unchanged: false,
+            incomplete: false,
+            incomplete_reason: None,
+            category: None,
+            assets: vec![crate::history::AssetTouch {
+                id: "/data/accounts.parquet".into(),
+                direction: "write".into(),
+                rows: Some(5),
+            }],
+        };
+        crate::materialize::append(tmp, "source.accounts", &record).unwrap();
+    }
+
+    #[test]
+    fn a_delivery_carries_what_it_resolved() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            store_path(tmp.path()),
+            serde_json::to_string(&vec![sub_with(&[("source_date", "${event.partition}")])])
+                .unwrap(),
+        )
+        .unwrap();
+        published(tmp.path());
+        let found = pending(tmp.path(), "2026-09-03T05:00:00Z");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].parameters["source_date"], "2026-09-03");
+        assert_eq!(found[0].parameter_error, None);
+    }
+
+    #[test]
+    fn a_broken_template_lands_on_the_delivery_rather_than_being_thrown() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            store_path(tmp.path()),
+            serde_json::to_string(&vec![sub_with(&[("d", "${event.nope}")])]).unwrap(),
+        )
+        .unwrap();
+        published(tmp.path());
+        let found = pending(tmp.path(), "2026-09-03T05:00:00Z");
+        assert_eq!(found.len(), 1);
+        assert!(found[0].parameter_error.is_some(), "the misconfiguration is visible");
+        assert!(found[0].parameters.is_empty());
+    }
+
+    fn day(tz: &str) -> PartitionDef {
+        PartitionDef::Time {
+            cadence: Cadence::Day,
+            timezone: tz.into(),
+            parameter_start: "window_start".into(),
+            parameter_end: "window_end".into(),
+        }
+    }
+
+    #[test]
+    fn equal_partition_definitions_propagate_the_whole_window() {
+        let bound = inherited_partition(
+            Some(&day("Europe/Brussels")),
+            Some(&day("Europe/Brussels")),
+            Some("2026-09-03"),
+        );
+        assert_eq!(bound["partition_key"], "2026-09-03");
+        assert!(
+            bound["window_start"].starts_with("2026-09-03T00:00:00+02"),
+            "regenerated from the definition, in ITS zone: {:?}",
+            bound["window_start"]
+        );
+        assert!(bound["window_end"].starts_with("2026-09-04T00:00:00+02"), "{bound:?}");
+    }
+
+    /// The same key means different instants in different zones. Inheriting
+    /// across that would be wrong by an hour at each end.
+    #[test]
+    fn definitions_that_differ_propagate_nothing() {
+        assert!(inherited_partition(
+            Some(&day("Europe/Brussels")),
+            Some(&day("UTC")),
+            Some("2026-09-03")
+        )
+        .is_empty());
+        let monthly = PartitionDef::Time {
+            cadence: Cadence::Month,
+            timezone: "UTC".into(),
+            parameter_start: "window_start".into(),
+            parameter_end: "window_end".into(),
+        };
+        assert!(
+            inherited_partition(Some(&day("UTC")), Some(&monthly), Some("2026-09-03")).is_empty()
+        );
+    }
+
+    #[test]
+    fn an_unpartitioned_side_propagates_nothing() {
+        assert!(inherited_partition(None, Some(&day("UTC")), Some("2026-09-03")).is_empty());
+        assert!(inherited_partition(Some(&day("UTC")), None, Some("2026-09-03")).is_empty());
+        assert!(inherited_partition(Some(&day("UTC")), Some(&day("UTC")), None).is_empty());
+    }
+
+    #[test]
+    fn a_key_the_definition_cannot_produce_propagates_nothing() {
+        let statik = PartitionDef::Static {
+            keys: vec!["BE".into(), "NL".into()],
+            parameter: "partition".into(),
+        };
+        assert!(
+            inherited_partition(Some(&statik), Some(&statik), Some("2026-09-03")).is_empty(),
+            "a date is not one of the declared keys"
+        );
+        let bound = inherited_partition(Some(&statik), Some(&statik), Some("BE"));
+        assert_eq!(bound["partition"], "BE");
+        assert_eq!(bound["partition_key"], "BE");
     }
 }

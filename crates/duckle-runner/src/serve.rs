@@ -3581,6 +3581,59 @@ fn run_scheduled(state: &State, id: &str, file: &str) {
     }
 }
 
+/// What a publication-triggered run is given.
+///
+/// #325: the subscription's explicit bindings, plus - where the producer and
+/// consumer declare the SAME partition definition - the partition the producer
+/// published, regenerated from that definition rather than copied.
+///
+/// Inheritance is filtered to parameters the consumer actually DECLARES, and
+/// that filter is load-bearing rather than tidiness: an undeclared parameter is
+/// a hard `param:unknown` error, so injecting a window into a consumer that
+/// never asked for one would turn a working delivery into a failing run. What
+/// is not declared is not sent.
+///
+/// An explicit binding wins over an inherited one. The operator wrote it down.
+fn delivery_params(
+    workspace: &Path,
+    pipes: &HashMap<String, PathBuf>,
+    events: &HashMap<String, duckle_duckdb_engine::materialize::Event>,
+    delivery: &duckle_duckdb_engine::subscribe::Delivery,
+    consumer_file: &str,
+) -> HashMap<String, String> {
+    let mut out: HashMap<String, String> = HashMap::new();
+    let _ = workspace;
+    if let Some(event) = events.get(&delivery.event_id) {
+        let read = |p: &Path| -> Option<serde_json::Value> {
+            serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()
+        };
+        let consumer = read(Path::new(consumer_file));
+        let producer = pipes.get(&event.pipeline_id).and_then(|p| read(p));
+        if let (Some(consumer), Some(producer)) = (&consumer, &producer) {
+            let declared: std::collections::BTreeSet<String> = consumer
+                .get("parameters")
+                .and_then(|v| v.as_object())
+                .map(|o| o.keys().cloned().collect())
+                .unwrap_or_default();
+            let inherited = duckle_duckdb_engine::subscribe::inherited_partition(
+                duckle_duckdb_engine::partition::of(producer).as_ref(),
+                duckle_duckdb_engine::partition::of(consumer).as_ref(),
+                event.partition_key.as_deref(),
+            );
+            for (k, v) in inherited {
+                if declared.contains(&k) {
+                    out.insert(k, v);
+                }
+            }
+        }
+    }
+    for (k, v) in &delivery.parameters {
+        out.insert(k.clone(), v.clone());
+    }
+    out
+}
+
+
 /// #325: run what a publication triggered.
 ///
 /// The pump, deliberately separate from the clock scheduler: a subscription is
@@ -3622,8 +3675,24 @@ fn pump_deliveries(state: &State) {
         }
         _ => HashMap::new(),
     };
+    // #325: the publication a delivery came from, for the parameters it binds.
+    // Read once rather than per delivery - one tick can carry many.
+    let events: HashMap<String, duckle_duckdb_engine::materialize::Event> =
+        duckle_duckdb_engine::materialize::read(&state.workspace)
+            .into_iter()
+            .map(|e| (e.event_id.clone(), e))
+            .collect();
     for mut delivery in pending {
         delivery.attempts += 1;
+        // A subscription binding a field the publication does not carry is a
+        // standing misconfiguration, and it fails HERE - before a run exists -
+        // which is the property the issue asks for.
+        if let Some(why) = delivery.parameter_error.clone() {
+            delivery.state = DeliveryState::Failed;
+            delivery.last_error = Some(format!("parameters could not be bound: {why}"));
+            let _ = subscribe::record(&state.workspace, delivery);
+            continue;
+        }
         if let Some(loop_path) = looping.get(&delivery.pipeline_id) {
             delivery.state = DeliveryState::Failed;
             delivery.last_error = Some(format!(
@@ -3658,7 +3727,8 @@ fn pump_deliveries(state: &State) {
                 continue;
             }
         };
-        match execute_one(state, &file, "materialization", &HashMap::new()) {
+        let params = delivery_params(&state.workspace, &pipes, &events, &delivery, &file);
+        match execute_one(state, &file, "materialization", &params) {
             Ok(v) => {
                 let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("?");
                 delivery.run_id =
@@ -5909,5 +5979,123 @@ mod freshness_tick {
             src.contains("past their freshness limit"),
             "a stale asset is found and then not reported anywhere"
         );
+    }
+}
+
+/// #325: what a publication-triggered run is actually given.
+#[cfg(test)]
+mod delivery_parameters {
+    use super::*;
+    use duckle_duckdb_engine::materialize::Event;
+    use duckle_duckdb_engine::subscribe::{Delivery, DeliveryState};
+
+    fn day_partitioned(declares: &str) -> String {
+        format!(
+            r#"{{"partition":{{"type":"time","cadence":"day","timezone":"UTC"}},
+                "parameters":{{{declares}}},"nodes":[],"edges":[]}}"#
+        )
+    }
+
+    fn event() -> Event {
+        Event {
+            event_id: "mat-1".into(),
+            pipeline_id: "producer".into(),
+            run_id: Some("run-7".into()),
+            release_id: None,
+            partition_key: Some("2026-09-03".into()),
+            trigger: "scheduled".into(),
+            committed_at: "2026-09-03T04:00:00Z".into(),
+            assets: vec!["/data/a.parquet".into()],
+        }
+    }
+
+    fn delivery(params: &[(&str, &str)]) -> Delivery {
+        Delivery {
+            delivery_id: "dlv-1".into(),
+            subscription_id: "s1".into(),
+            event_id: "mat-1".into(),
+            pipeline_id: "consumer".into(),
+            state: DeliveryState::Pending,
+            attempts: 0,
+            last_error: None,
+            run_id: None,
+            at: "2026-09-03T05:00:00Z".into(),
+            parameters: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            parameter_error: None,
+        }
+    }
+
+    /// Builds a workspace with a producer and a consumer, and returns what
+    /// `delivery_params` would hand the consumer.
+    fn bound(producer_doc: &str, consumer_doc: &str, d: &Delivery) -> HashMap<String, String> {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("producer.json");
+        let c = tmp.path().join("consumer.json");
+        std::fs::write(&p, producer_doc).unwrap();
+        std::fs::write(&c, consumer_doc).unwrap();
+        let pipes: HashMap<String, PathBuf> =
+            [("producer".to_string(), p), ("consumer".to_string(), c.clone())].into();
+        let events: HashMap<String, Event> = [("mat-1".to_string(), event())].into();
+        delivery_params(tmp.path(), &pipes, &events, d, &c.display().to_string())
+    }
+
+    /// The safety property. An undeclared parameter is a hard `param:unknown`
+    /// error, so inheriting a window into a consumer that never asked for one
+    /// would turn a working delivery into a failing run.
+    #[test]
+    fn nothing_is_inherited_that_the_consumer_does_not_declare() {
+        let out = bound(&day_partitioned(""), &day_partitioned(""), &delivery(&[]));
+        assert!(out.is_empty(), "the consumer declares no parameters: {out:?}");
+    }
+
+    #[test]
+    fn a_declared_partition_parameter_is_inherited() {
+        let declares = r#""partition_key":{"type":"string"}"#;
+        let out = bound(&day_partitioned(declares), &day_partitioned(declares), &delivery(&[]));
+        assert_eq!(out.get("partition_key").map(String::as_str), Some("2026-09-03"));
+        assert!(!out.contains_key("window_start"), "not declared, not sent: {out:?}");
+    }
+
+    #[test]
+    fn declaring_the_window_gets_the_window() {
+        let declares = r#""window_start":{"type":"datetime"},"window_end":{"type":"datetime"}"#;
+        let out = bound(&day_partitioned(declares), &day_partitioned(declares), &delivery(&[]));
+        assert!(out["window_start"].starts_with("2026-09-03T00:00:00+00"), "{out:?}");
+        assert!(out["window_end"].starts_with("2026-09-04T00:00:00+00"), "{out:?}");
+    }
+
+    /// Different definitions describe different slices. Nothing crosses.
+    #[test]
+    fn a_different_cadence_inherits_nothing() {
+        let declares = r#""partition_key":{"type":"string"}"#;
+        let monthly = format!(
+            r#"{{"partition":{{"type":"time","cadence":"month","timezone":"UTC"}},
+                "parameters":{{{declares}}},"nodes":[],"edges":[]}}"#
+        );
+        let out = bound(&day_partitioned(declares), &monthly, &delivery(&[]));
+        assert!(out.is_empty(), "{out:?}");
+    }
+
+    #[test]
+    fn an_explicit_binding_reaches_the_run_and_wins() {
+        let declares = r#""partition_key":{"type":"string"}"#;
+        let out = bound(
+            &day_partitioned(declares),
+            &day_partitioned(declares),
+            &delivery(&[("partition_key", "2026-01-01"), ("other", "x")]),
+        );
+        assert_eq!(out["partition_key"], "2026-01-01", "the operator wrote it down");
+        assert_eq!(out["other"], "x");
+    }
+
+    /// An unpartitioned producer publishes nothing to inherit, and the
+    /// delivery still carries what it bound explicitly.
+    #[test]
+    fn an_unpartitioned_producer_still_binds_explicitly() {
+        let plain = r#"{"nodes":[],"edges":[]}"#;
+        let declares = r#""partition_key":{"type":"string"}"#;
+        let out = bound(plain, &day_partitioned(declares), &delivery(&[("x", "1")]));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out["x"], "1");
     }
 }
