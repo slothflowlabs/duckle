@@ -259,9 +259,42 @@ mod tests {
         // Releasing lets the next caller through, which is what makes the
         // schedule resume on the following tick rather than stalling.
         drop(first);
-        assert!(
-            try_acquire(ws, "nightly-load").is_some(),
-            "lock never became available again"
+        // Asserted on the CLASSIFIED outcome rather than on `is_some()`.
+        //
+        // `try_acquire` collapses "another holder" and "this workspace cannot
+        // be locked at all" into the same `None`, so when this failed on CI it
+        // said only "lock never became available again" - which is the one
+        // thing that could not have been true, since nothing held it. Three
+        // reds and no way to tell contention from an `open` that failed for an
+        // environmental reason, on a runner executing 1160 tests at once.
+        //
+        // HeldByOther is the real regression and still fails loudly. Unusable
+        // is not what this test is about: the property is that RELEASING lets
+        // the next caller through, not that a file can be opened right now.
+        //
+        // An Unusable outcome is retried briefly rather than failed on. It is
+        // not the property under test, and it is transient by definition: a
+        // read-only mount or a filesystem without locks stays broken for the
+        // whole second, while an `open` that lost a race for a file descriptor
+        // on a runner executing 1160 tests at once clears immediately. A
+        // HeldByOther is never retried - that IS the regression, and retrying
+        // it would hide exactly what this test exists to catch.
+        let mut last = None;
+        for _ in 0..50 {
+            match try_acquire_reason(ws, "nightly-load") {
+                AcquireOutcome::Claimed(_) => return,
+                AcquireOutcome::HeldByOther => {
+                    panic!("the lock was still held after its only holder was dropped")
+                }
+                AcquireOutcome::Unusable(e) => {
+                    last = Some(e.to_string());
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
+        }
+        panic!(
+            "the workspace could not be locked at all for a second, so this is the              environment rather than the lock: {}",
+            last.unwrap_or_default()
         );
     }
 
