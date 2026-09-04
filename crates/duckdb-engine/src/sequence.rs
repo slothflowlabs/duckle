@@ -111,6 +111,14 @@ enum Rank {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceDef {
+    /// Where the collection is: a directory, or an `s3://bucket/prefix`.
+    ///
+    /// Optional because the chain is defined over a list of objects, not over a
+    /// way of getting one. Supplying the list directly is what lets the whole
+    /// contract be tested without a network, and it is the seam #324's
+    /// discovery plugs into when a listing should come from somewhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
     /// How an object's leaf name spells its key: `D{date:YYYYMMDD}.KBO.zip`.
     pub pattern: String,
     pub order: Order,
@@ -153,6 +161,35 @@ pub struct Observed {
     pub uri: String,
 }
 
+/// Why an object produced no key.
+///
+/// Four codes rather than the single `invalid_sequence_key` the issue sketched,
+/// because the operator response differs: a mismatch is usually a discovery
+/// filter that is too wide, an invalid date is usually a typo in one
+/// publication, and a duplicate is two objects claiming to be the same delta -
+/// which is the only one of the four that is a correctness emergency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefusalCode {
+    /// The name does not fit the pattern at all.
+    PatternMismatch,
+    InvalidDate,
+    InvalidInteger,
+    /// Two different objects claim one link of the chain.
+    DuplicateSequenceKey,
+}
+
+impl RefusalCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RefusalCode::PatternMismatch => "pattern_mismatch",
+            RefusalCode::InvalidDate => "invalid_date",
+            RefusalCode::InvalidInteger => "invalid_integer",
+            RefusalCode::DuplicateSequenceKey => "duplicate_sequence_key",
+        }
+    }
+}
+
 /// An object that could not produce exactly one key.
 ///
 /// Machine-readable on purpose: the point of the totality contract is that a
@@ -161,15 +198,7 @@ pub struct Observed {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Refusal {
-    /// `pattern_mismatch`, `invalid_date`, `invalid_integer`,
-    /// `duplicate_sequence_key`.
-    ///
-    /// Four codes rather than one `invalid_sequence_key`, because the operator
-    /// response differs: a mismatch is usually a discovery filter that is too
-    /// wide, an invalid date is usually a typo in one publication, and a
-    /// duplicate is two objects claiming to be the same delta - which is the
-    /// only one of the four that is a correctness emergency.
-    pub code: &'static str,
+    pub code: RefusalCode,
     pub uri: String,
     pub expected_pattern: String,
     pub detail: String,
@@ -260,7 +289,11 @@ pub enum Status {
     #[serde(rename_all = "camelCase")]
     Blocked {
         expected: String,
-        next_observed: String,
+        /// The published key that is waiting behind `expected`. Always present
+        /// for a gap - it is what proves one - and absent when the head itself
+        /// failed and nothing after it has arrived.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_observed: Option<String>,
         reason: Reason,
     },
 }
@@ -417,7 +450,7 @@ pub fn read(def: &SequenceDef, uris: &[String]) -> Result<Reading, String> {
         let name = leaf(uri);
         let Some(text) = capture(&c, name) else {
             out.refusals.push(Refusal {
-                code: "pattern_mismatch",
+                code: RefusalCode::PatternMismatch,
                 uri: uri.clone(),
                 expected_pattern: def.pattern.clone(),
                 detail: format!("{name:?} does not match the sequence pattern"),
@@ -443,12 +476,12 @@ pub fn read(def: &SequenceDef, uris: &[String]) -> Result<Reading, String> {
             Err(detail) => {
                 out.refusals.push(Refusal {
                     code: match (&c.slot, def.order) {
-                        (Slot::Date(_), Order::Date { .. }) => "invalid_date",
-                        (Slot::Seq, Order::Integer) => "invalid_integer",
+                        (Slot::Date(_), Order::Date { .. }) => RefusalCode::InvalidDate,
+                        (Slot::Seq, Order::Integer) => RefusalCode::InvalidInteger,
                         // A pattern that cannot produce the declared order is a
                         // definition error, not a bad object; it is reported
                         // per object because that is where it is noticed.
-                        _ => "pattern_mismatch",
+                        _ => RefusalCode::PatternMismatch,
                     },
                     uri: uri.clone(),
                     expected_pattern: def.pattern.clone(),
@@ -462,7 +495,7 @@ pub fn read(def: &SequenceDef, uris: &[String]) -> Result<Reading, String> {
             Some(first) if first == uri => continue,
             Some(first) => {
                 out.refusals.push(Refusal {
-                    code: "duplicate_sequence_key",
+                    code: RefusalCode::DuplicateSequenceKey,
                     uri: uri.clone(),
                     expected_pattern: def.pattern.clone(),
                     detail: format!("{key} is already claimed by {first}"),
@@ -569,36 +602,52 @@ pub fn chain(def: &SequenceDef, items: &[Observed]) -> Result<Vec<Link>, String>
 /// `succeeded` answers "has the slice for this key been applied". It is a
 /// closure rather than a set so the caller can consult the ledger directly -
 /// there is no second copy of the position to fall out of step with.
-pub fn verdict(links: &[Link], succeeded: impl Fn(&str) -> bool) -> Verdict {
+pub fn verdict(
+    links: &[Link],
+    state_of: impl Fn(&str) -> Option<crate::backfill::State>,
+) -> Verdict {
+    use crate::backfill::State;
     // The position is the contiguous run of successes from the start, which is
     // derived rather than stored: it cannot disagree with the slices because it
     // IS the slices.
-    let applied = links.iter().take_while(|l| succeeded(&l.key)).count();
+    let applied =
+        links.iter().take_while(|l| state_of(&l.key) == Some(State::Succeeded)).count();
     let position = applied.checked_sub(1).map(|i| links[i].key.clone());
 
     let Some(next) = links.get(applied) else {
         return Verdict { state: Status::Complete, position };
     };
-    // Anything after the first unapplied link proves the chain is incomplete.
-    // Only an OBSERVED later object proves it; a materialised hole is another
-    // way of saying the same key is missing.
-    let later = links[applied + 1..].iter().find(|l| !l.is_missing());
-    let state = match later {
-        // Nothing after it, so nothing proves a hole. Either the publisher has
-        // not released it, or it is here and has not run - `observed` says
-        // which, and they are different problems.
-        None => Status::WaitingForNext {
+    // Only an OBSERVED later object proves a hole; a materialised hole is
+    // another way of saying the same key is missing.
+    let later = links[applied + 1..].iter().find(|l| !l.is_missing()).map(|l| l.key.clone());
+
+    // Three cases, and the reason they are three is that a state pointer
+    // reports them identically while an operator has to do something different
+    // about each. Deciding this on a boolean "has it succeeded" cannot work: a
+    // link that is published and has not started yet reads the same as one that
+    // failed, and calling the first blocked sends someone to retry a slice that
+    // was never asked to run.
+    let state = match (next.is_missing(), state_of(&next.key), later) {
+        // A hole with something after it. Proven immediately, no grace period.
+        (true, _, Some(next_observed)) => Status::Blocked {
             expected: next.key.clone(),
-            observed: !next.is_missing(),
+            next_observed: Some(next_observed),
+            reason: Reason::SequenceGap,
         },
-        Some(observed) => Status::Blocked {
+        // A hole at the head. Not a gap: the publisher may simply not have
+        // released it, and whether that is LATE is #304's question.
+        (true, _, None) => {
+            Status::WaitingForNext { expected: next.key.clone(), observed: false }
+        }
+        // Published and it failed. Blocked until someone retries it, whether or
+        // not anything after it has arrived.
+        (false, Some(State::Failed | State::Interrupted), later) => Status::Blocked {
             expected: next.key.clone(),
-            next_observed: observed.key.clone(),
-            reason: match next.is_missing() {
-                true => Reason::SequenceGap,
-                false => Reason::PredecessorFailed,
-            },
+            next_observed: later,
+            reason: Reason::PredecessorFailed,
         },
+        // Published and simply not applied yet. Ordinary pending work.
+        (false, _, _) => Status::WaitingForNext { expected: next.key.clone(), observed: true },
     };
     Verdict { state, position }
 }
@@ -606,6 +655,57 @@ pub fn verdict(links: &[Link], succeeded: impl Fn(&str) -> bool) -> Verdict {
 /// The sequence definition a pipeline document declares, if any.
 pub fn of(doc: &serde_json::Value) -> Option<SequenceDef> {
     serde_json::from_value(doc.get("sequence")?.clone()).ok()
+}
+
+/// Every object in the collection, unfiltered.
+///
+/// Listing only. Nothing here decides what is part of the sequence - that is
+/// the pattern's job, and a name that does not match becomes a refusal rather
+/// than being quietly dropped, which is the whole totality contract.
+///
+/// `props` carries S3 credentials when the URI is an `s3://` one; it is the
+/// sequence block itself, so a saved connection merged onto it and keys typed
+/// in by hand arrive identically.
+///
+/// One directory, not a walk. A delta chain is published into one prefix, and
+/// recursing would pull in an archive subdirectory of superseded generations -
+/// which, under a totality contract, becomes a wall of duplicate-key refusals
+/// rather than a silent inclusion.
+pub fn collect(uri: &str, props: &serde_json::Value) -> Result<Vec<String>, String> {
+    if let Some(rest) = uri.strip_prefix("s3://").or_else(|| uri.strip_prefix("s3a://")) {
+        let _ = rest;
+        let cfg = crate::s3::S3Config::from_props(props).ok_or_else(|| {
+            format!(
+                "{uri} needs S3 credentials on the sequence block - an access key and secret, or \
+                 a saved connection"
+            )
+        })?;
+        let (bucket, prefix) = crate::s3::parse_s3_uri(uri).map_err(|e| e.to_string())?;
+        // The same cap the listing source uses, so a prefix holding years of
+        // drops is bounded work rather than an unbounded walk.
+        let objects = cfg.list(&bucket, &prefix, 10_000).map_err(|e| e.to_string())?;
+        return Ok(objects
+            .into_iter()
+            .map(|o| format!("s3://{bucket}/{}", o.key))
+            .filter(|u| !u.ends_with('/'))
+            .collect());
+    }
+    let dir = std::path::Path::new(uri.strip_prefix("file://").unwrap_or(uri));
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut out = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        // Forward slashes, as `backfill::commit` does for the same reason: a
+        // URI that reads `./drops\D20260901.zip` on Windows and
+        // `./drops/D20260901.zip` on Linux is the same object under two names,
+        // and it lands in provenance either way.
+        out.push(entry.path().display().to_string().replace(char::from(92), "/"));
+    }
+    out.sort();
+    Ok(out)
 }
 
 /// Turn a chain into ledger slices.
@@ -675,12 +775,97 @@ pub fn slices(
         .collect()
 }
 
+/// What this workspace has done with each key of a chain.
+///
+/// Read from the ledgers, because they ARE the record of progression - there is
+/// no pointer to consult and therefore none to disagree with. Scoped to the
+/// epoch, so a chain reset by a new full snapshot is not credited with the old
+/// generation's successes, and the old generation's slices stay for provenance
+/// without counting towards the new one.
+///
+/// The STATE, not a "did it succeed" flag. A link that failed and one that has
+/// not been asked to run yet are both "not succeeded" and call for opposite
+/// responses - retry it, or wait - so collapsing them here would make the two
+/// unrecoverable further up.
+pub fn ledger_states(
+    workspace: &std::path::Path,
+    pipeline: &str,
+    epoch: Option<&str>,
+) -> std::collections::BTreeMap<String, crate::backfill::State> {
+    let mut out = std::collections::BTreeMap::new();
+    for b in crate::backfill::list(workspace)
+        .into_iter()
+        .filter(|b| b.kind == crate::backfill::Kind::Sequence && b.pipeline == pipeline)
+        .filter(|b| b.epoch.as_deref() == epoch)
+    {
+        for p in b.partitions {
+            // Ledgers come newest first, and a later ledger for the same epoch
+            // supersedes an earlier one - but a success anywhere stands: the
+            // work was done, and a re-plan that has not run yet must not
+            // un-apply it.
+            match out.get(&p.key) {
+                Some(crate::backfill::State::Succeeded) => {}
+                _ => {
+                    out.insert(p.key, p.state);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Everything a caller wants to know about one chain, in one pass.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Report {
+    #[serde(flatten)]
+    pub verdict: Verdict,
+    /// Whether a hole actually stops work, or is only being reported.
+    pub require_continuity: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<String>,
+    pub links: Vec<Link>,
+    /// Objects that could not produce a key. Never empty-by-omission: an empty
+    /// list means every selected object parsed, not that nothing was checked.
+    pub refusals: Vec<Refusal>,
+}
+
+/// Read a pipeline's chain and say where it stands.
+///
+/// `state_of` answers "what happened to this key", which the caller takes from
+/// the ledger. Passed in rather than looked up here so there is exactly one
+/// record of progression - the slices - and this cannot form a second opinion
+/// about it.
+pub fn report(
+    def: &SequenceDef,
+    props: &serde_json::Value,
+    state_of: impl Fn(&str) -> Option<crate::backfill::State>,
+) -> Result<Report, String> {
+    let uri = def
+        .uri
+        .as_deref()
+        .ok_or("the sequence declares no `uri`, so there is no collection to list")?;
+    let reading = read(def, &collect(uri, props)?)?;
+    let links = chain(def, &reading.items)?;
+    Ok(Report {
+        verdict: verdict(&links, state_of),
+        require_continuity: def.require_continuity,
+        epoch: def.epoch.clone(),
+        baseline: def.baseline.clone(),
+        links,
+        refusals: reading.refusals,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn dated(pattern: &str) -> SequenceDef {
         SequenceDef {
+            uri: None,
             pattern: pattern.to_string(),
             order: Order::Date { cadence: Cadence::Day },
             require_continuity: true,
@@ -695,6 +880,24 @@ mod tests {
 
     fn uris(names: &[&str]) -> Vec<String> {
         names.iter().map(|n| format!("s3://reg/{n}")).collect()
+    }
+
+    /// The ledger view the tests need: these keys succeeded, nothing else ran.
+    fn done<'a>(keys: &'a [&'a str]) -> impl Fn(&str) -> Option<crate::backfill::State> + 'a {
+        move |k| keys.contains(&k).then_some(crate::backfill::State::Succeeded)
+    }
+
+    /// A ledger where some keys succeeded and one FAILED, which is a different
+    /// thing from not having run.
+    fn done_and_failed<'a>(
+        ok: &'a [&'a str],
+        failed: &'a str,
+    ) -> impl Fn(&str) -> Option<crate::backfill::State> + 'a {
+        move |k| match () {
+            _ if ok.contains(&k) => Some(crate::backfill::State::Succeeded),
+            _ if k == failed => Some(crate::backfill::State::Failed),
+            _ => None,
+        }
     }
 
     fn keys(r: &Reading) -> Vec<&str> {
@@ -719,7 +922,7 @@ mod tests {
         assert_eq!(keys(&r), ["2026-09-01", "2026-09-03"]);
         assert_eq!(r.refusals.len(), 1, "the typo must be reported, not skipped");
         let bad = &r.refusals[0];
-        assert_eq!(bad.code, "invalid_date");
+        assert_eq!(bad.code, RefusalCode::InvalidDate);
         assert!(bad.uri.ends_with("D202609O2.zip"), "it names the object: {}", bad.uri);
         assert_eq!(bad.expected_pattern, "D{date:YYYYMMDD}.zip");
         assert!(bad.detail.contains("O2"), "it names what failed: {}", bad.detail);
@@ -740,7 +943,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(keys(&r), ["2026-09-01"]);
-        let codes: Vec<&str> = r.refusals.iter().map(|f| f.code).collect();
+        let codes: Vec<&str> = r.refusals.iter().map(|f| f.code.as_str()).collect();
         assert_eq!(codes, ["pattern_mismatch", "invalid_date", "duplicate_sequence_key"]);
         assert!(
             r.refusals[1].detail.contains("2026-02-30"),
@@ -766,7 +969,7 @@ mod tests {
         // Leading zeros name the same link, so they are a duplicate.
         let r = read(&def, &uris(&["f-007.json", "f-7.json"])).unwrap();
         assert_eq!(keys(&r), ["7"]);
-        assert_eq!(r.refusals[0].code, "duplicate_sequence_key");
+        assert_eq!(r.refusals[0].code, RefusalCode::DuplicateSequenceKey);
     }
 
     #[test]
@@ -782,7 +985,7 @@ mod tests {
         let def = SequenceDef { order: Order::Integer, ..dated("D{date:YYYYMMDD}.zip") };
         let r = read(&def, &uris(&["D20260901.zip"])).unwrap();
         assert!(r.items.is_empty());
-        assert_eq!(r.refusals[0].code, "pattern_mismatch");
+        assert_eq!(r.refusals[0].code, RefusalCode::PatternMismatch);
         assert!(r.refusals[0].detail.contains("{seq}"), "{}", r.refusals[0].detail);
     }
 
@@ -829,7 +1032,7 @@ mod tests {
         let links = chain(&def, &r.items).unwrap();
         assert_eq!(links.len(), 1, "only what follows F2: {links:?}");
         assert_eq!(links[0].key, "2026-09-04");
-        assert!(matches!(verdict(&links, |_| false).state, Status::WaitingForNext { .. }));
+        assert!(matches!(verdict(&links, done(&[])).state, Status::WaitingForNext { .. }));
     }
 
     #[test]
@@ -839,20 +1042,20 @@ mod tests {
         // Nothing after the last success -> waiting, not blocked.
         let r = read(&def, &uris(&["D20260901.zip"])).unwrap();
         let links = chain(&def, &r.items).unwrap();
-        let v = verdict(&links, |k| k == "2026-09-01");
+        let v = verdict(&links, done(&["2026-09-01"]));
         assert_eq!(v.position.as_deref(), Some("2026-09-01"));
         assert_eq!(v.state, Status::Complete, "everything observed is applied");
 
         // A later object proves the hole immediately, with no grace period.
         let r = read(&def, &uris(&["D20260901.zip", "D20260903.zip"])).unwrap();
         let links = chain(&def, &r.items).unwrap();
-        let v = verdict(&links, |k| k == "2026-09-01");
+        let v = verdict(&links, done(&["2026-09-01"]));
         assert_eq!(v.position.as_deref(), Some("2026-09-01"));
         assert_eq!(
             v.state,
             Status::Blocked {
                 expected: "2026-09-02".into(),
-                next_observed: "2026-09-03".into(),
+                next_observed: Some("2026-09-03".into()),
                 reason: Reason::SequenceGap,
             }
         );
@@ -865,22 +1068,20 @@ mod tests {
         let r = read(&def, &uris(&["D20260901.zip", "D20260902.zip", "D20260903.zip"])).unwrap();
         let links = chain(&def, &r.items).unwrap();
 
-        let done = ["2026-09-01"];
-        let v = verdict(&links, |k| done.contains(&k));
+        let v = verdict(&links, done_and_failed(&["2026-09-01"], "2026-09-02"));
         assert_eq!(v.position.as_deref(), Some("2026-09-01"), "the position stays at D01");
         assert_eq!(
             v.state,
             Status::Blocked {
                 expected: "2026-09-02".into(),
-                next_observed: "2026-09-03".into(),
+                next_observed: Some("2026-09-03".into()),
                 // D02 is present, so this is a failure and not a missing file.
                 reason: Reason::PredecessorFailed,
             }
         );
 
         // Retrying D02 successfully makes D03 eligible - acceptance criterion 4.
-        let done = ["2026-09-01", "2026-09-02"];
-        let v = verdict(&links, |k| done.contains(&k));
+        let v = verdict(&links, done(&["2026-09-01", "2026-09-02"]));
         assert_eq!(v.position.as_deref(), Some("2026-09-02"));
         assert_eq!(
             v.state,
@@ -906,8 +1107,11 @@ mod tests {
         let links = chain(&def, &r.items).unwrap();
 
         // D02 failed and D03 somehow succeeded anyway.
-        let done = ["2026-09-01", "2026-09-03"];
-        let v = verdict(&links, |k| done.contains(&k));
+        let v = verdict(&links, |k| match k {
+            "2026-09-01" | "2026-09-03" => Some(crate::backfill::State::Succeeded),
+            "2026-09-02" => Some(crate::backfill::State::Failed),
+            _ => None,
+        });
         assert_eq!(
             v.position.as_deref(),
             Some("2026-09-01"),
@@ -917,7 +1121,7 @@ mod tests {
             v.state,
             Status::Blocked {
                 expected: "2026-09-02".into(),
-                next_observed: "2026-09-03".into(),
+                next_observed: Some("2026-09-03".into()),
                 reason: Reason::PredecessorFailed,
             }
         );
@@ -928,12 +1132,12 @@ mod tests {
         let def = ints("f-{seq}.json");
         let r = read(&def, &uris(&["f-101.json", "f-103.json"])).unwrap();
         let links = chain(&def, &r.items).unwrap();
-        let v = verdict(&links, |k| k == "101");
+        let v = verdict(&links, done(&["101"]));
         assert_eq!(
             v.state,
             Status::Blocked {
                 expected: "102".into(),
-                next_observed: "103".into(),
+                next_observed: Some("103".into()),
                 reason: Reason::SequenceGap,
             },
             "101 succeeded, 103 exists, so 102 is absent - no cadence needed to know that"
@@ -945,7 +1149,7 @@ mod tests {
         let def = dated("D{date:YYYYMMDD}.zip");
         let links = chain(&def, &[]).unwrap();
         assert!(links.is_empty());
-        assert_eq!(verdict(&links, |_| false).state, Status::Complete);
+        assert_eq!(verdict(&links, done(&[])).state, Status::Complete);
     }
 
     #[test]
@@ -969,7 +1173,7 @@ mod tests {
         let def = dated("D{date:YYYYMMDD}.zip");
         let r = read(&def, &uris(&["D20260901.zip", "D20260903.zip"])).unwrap();
         let links = chain(&def, &r.items).unwrap();
-        let v = verdict(&links, |k| k == "2026-09-01");
+        let v = verdict(&links, done(&["2026-09-01"]));
         assert_eq!(
             serde_json::to_value(&v).unwrap(),
             serde_json::json!({
@@ -1112,6 +1316,49 @@ mod tests {
             plan.partitions[0].occurrence, plan2.partitions[0].occurrence,
             "the epoch is part of what a slice IS"
         );
+    }
+
+    /// The whole contract over a real directory: list, parse, chain, verdict.
+    #[test]
+    fn a_directory_of_drops_reports_its_own_hole() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in ["D20260901.zip", "D20260903.zip", "D20260904.zip", "README.md"] {
+            std::fs::write(tmp.path().join(name), b"x").unwrap();
+        }
+        // A subdirectory of superseded generations must not be walked into.
+        std::fs::create_dir(tmp.path().join("archive")).unwrap();
+        std::fs::write(tmp.path().join("archive").join("D20260901.zip"), b"x").unwrap();
+
+        let def = SequenceDef {
+            uri: Some(tmp.path().display().to_string()),
+            baseline: Some("2026-08-31".into()),
+            ..dated("D{date:YYYYMMDD}.zip")
+        };
+        let r = report(&def, &serde_json::json!({}), done(&["2026-09-01"])).expect("a report");
+
+        assert_eq!(
+            r.verdict.state,
+            Status::Blocked {
+                expected: "2026-09-02".into(),
+                next_observed: Some("2026-09-03".into()),
+                reason: Reason::SequenceGap,
+            }
+        );
+        assert_eq!(r.verdict.position.as_deref(), Some("2026-09-01"));
+        // README.md is refused rather than ignored, and the archive copy of
+        // D20260901.zip never reaches the parser to become a duplicate.
+        assert_eq!(r.refusals.len(), 1, "{:?}", r.refusals);
+        assert_eq!(r.refusals[0].code, RefusalCode::PatternMismatch);
+        assert!(r.refusals[0].uri.ends_with("README.md"));
+        assert_eq!(r.links.len(), 4, "01, the hole at 02, 03, 04");
+        assert!(r.links[1].is_missing());
+    }
+
+    #[test]
+    fn a_sequence_with_no_collection_says_so() {
+        let def = dated("D{date:YYYYMMDD}.zip");
+        let err = report(&def, &serde_json::json!({}), done(&[])).expect_err("no uri");
+        assert!(err.contains("uri"), "{err}");
     }
 
     #[test]

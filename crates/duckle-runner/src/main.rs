@@ -53,6 +53,7 @@ mod pipetest;
 mod python;
 mod selfextract;
 mod work;
+mod sequence_cmd;
 mod serve;
 
 const USAGE: &str = "\
@@ -65,6 +66,7 @@ USAGE:
     duckle-runner mcp                      (stdio MCP server for AI agents)
     duckle-runner test [<file.test.json> ...]
     duckle-runner cache <list|clear>       (stage outputs kept for reuse)
+    duckle-runner sequence <status|plan|apply> <file.json>
     duckle-runner python <check|prepare>   (the workspace's Python environment)
 
 TEST:
@@ -1972,6 +1974,11 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         };
+    }
+    // #326: `sequence` -> ordered delta chains. Above the fallthrough run path,
+    // like every other verb, or it is parsed as a bare pipeline path.
+    if std::env::args().nth(1).as_deref() == Some("sequence") {
+        return sequence_cmd::run();
     }
     // `backfill` -> inspect and edit the state a pipeline resumes from, without
     // the desktop app. Must sit above the fallthrough run path, or the verb is
