@@ -750,53 +750,139 @@ pub(crate) fn build_distinct(inputs: &NodeInputs, props: &JsonValue) -> Result<S
     }
 }
 
+/// One ORDER BY key, assembled the same way whichever form it came from.
+///
+/// `nulls` is deliberately an Option and NOT defaulted: an existing pipeline
+/// using `orderBy` emits no NULLS clause today, so inventing one on upgrade
+/// would change the row order of a run that never asked. The single-column
+/// form keeps its own `unwrap_or(true)` default, which is what it has always
+/// emitted.
+fn sort_key(col: &str, dir: Option<&str>, nulls: Option<bool>) -> String {
+    // Allowlist the direction: an unexpected token spliced raw would make a
+    // malformed ORDER BY / parser error (audit B5). Trimmed and lowercased,
+    // because "DESC" is what a hand-written pipeline, an import or an SDK
+    // writes, and matching "desc" exactly meant it sorted ASCENDING in silence.
+    let dir_kw = match dir.unwrap_or("asc").trim().to_ascii_lowercase().as_str() {
+        "desc" => "DESC",
+        _ => "ASC",
+    };
+    let nulls_kw = match nulls {
+        Some(true) => " NULLS LAST",
+        Some(false) => " NULLS FIRST",
+        None => "",
+    };
+    format!("{} {}{}", quote_ident(col.trim()), dir_kw, nulls_kw)
+}
+
+/// `"amount DESC NULLS FIRST"` -> `("amount", Some("desc"), Some(false))`.
+///
+/// A trailing direction inside the string is how multi-column sort was
+/// expressed before the editor could express it at all, so it has to keep
+/// working - which is why the whole string cannot simply be quoted as a column
+/// name. What remains once the trailing keywords are taken off IS the column,
+/// and it is then quoted, so a name with a space in it finally sorts instead of
+/// producing a parse error.
+///
+/// A column literally named `amount DESC` cannot be written this way. The
+/// object form is the unambiguous one and the editor writes it.
+fn parse_sort_string(s: &str) -> Option<(String, Option<String>, Option<bool>)> {
+    let mut toks: Vec<&str> = s.split_whitespace().collect();
+    let mut nulls = None;
+    if toks.len() >= 3 {
+        let last = toks[toks.len() - 1].to_ascii_lowercase();
+        let prev = toks[toks.len() - 2].to_ascii_lowercase();
+        if prev == "nulls" && (last == "first" || last == "last") {
+            nulls = Some(last == "last");
+            toks.truncate(toks.len() - 2);
+        }
+    }
+    let mut dir = None;
+    if toks.len() >= 2 {
+        let last = toks[toks.len() - 1].to_ascii_lowercase();
+        if last == "asc" || last == "desc" {
+            dir = Some(last);
+            toks.truncate(toks.len() - 1);
+        }
+    }
+    if toks.is_empty() {
+        return None;
+    }
+    Some((toks.join(" "), dir, nulls))
+}
+
+/// Every column an `xf.sort` node will actually order by, in whichever form it
+/// is written.
+///
+/// Shared with the validator (plan/graph.rs) so that a key which COMPILES is a
+/// key which VALIDATES. The two halves had drifted: the validator checked each
+/// string entry whole, so `orderBy: ["amount DESC"]` - the documented way to
+/// express multi-column sort before the editor could - was refused as
+/// "column 'amount DESC' not found" before build_sort ever saw it. It also
+/// checked neither the bare-string form nor the legacy `sortColumn`, so a typo
+/// in the editor's own Column field reached DuckDB and failed there instead.
+pub(crate) fn sort_columns(props: &JsonValue) -> Vec<String> {
+    let of = |v: &JsonValue| -> Option<String> {
+        if let Some(s) = v.as_str() {
+            parse_sort_string(s).map(|(col, _, _)| col)
+        } else {
+            v.get("column").and_then(JsonValue::as_str).map(str::to_string)
+        }
+    };
+    let mut out: Vec<String> = match props.get("orderBy") {
+        Some(JsonValue::Array(arr)) => arr.iter().filter_map(of).collect(),
+        Some(JsonValue::String(s)) => {
+            s.split(',').filter_map(parse_sort_string).map(|(col, _, _)| col).collect()
+        }
+        _ => Vec::new(),
+    };
+    if out.is_empty() {
+        if let Some(col) = string_prop(props, "sortColumn").filter(|s| !s.is_empty()) {
+            out.push(col);
+        }
+    }
+    out
+}
+
 pub(crate) fn build_sort(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
     let upstream = inputs.main().ok_or_else(|| "missing main input".to_string())?;
-    let sort_keys: Vec<String> = props
-        .get("orderBy")
-        .and_then(JsonValue::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| {
-                    if let Some(s) = v.as_str() {
-                        Some(s.to_string())
-                    } else if let Some(obj) = v.as_object() {
-                        let col = obj.get("column").and_then(JsonValue::as_str)?;
-                        let dir = obj
-                            .get("direction")
-                            .and_then(JsonValue::as_str)
-                            .unwrap_or("asc");
-                        // Allowlist the direction: an unexpected token spliced
-                        // raw would make a malformed ORDER BY / parser error
-                        // (audit B5). Map asc/desc explicitly; anything else
-                        // falls back to ASC, matching the single-column branch.
-                        let dir_kw = match dir.trim().to_ascii_lowercase().as_str() {
-                            "desc" => "DESC",
-                            _ => "ASC",
-                        };
-                        Some(format!("{} {}", quote_ident(col), dir_kw))
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut sort_keys = sort_keys;
-    // The Sort form writes a single sortColumn + direction + nullsLast.
+    let one = |v: &JsonValue| -> Option<String> {
+        if let Some(s) = v.as_str() {
+            let (col, dir, nulls) = parse_sort_string(s)?;
+            Some(sort_key(&col, dir.as_deref(), nulls))
+        } else if let Some(obj) = v.as_object() {
+            let col = obj.get("column").and_then(JsonValue::as_str)?;
+            Some(sort_key(
+                col,
+                obj.get("direction").and_then(JsonValue::as_str),
+                obj.get("nullsLast").and_then(JsonValue::as_bool),
+            ))
+        } else {
+            None
+        }
+    };
+    let mut sort_keys: Vec<String> = match props.get("orderBy") {
+        Some(JsonValue::Array(arr)) => arr.iter().filter_map(one).collect(),
+        // A bare string, read as the caller plainly meant it - the same
+        // forgiveness columns_list already extends, and for the same reason:
+        // writing "amount" instead of ["amount"] silently produced a node with
+        // no ORDER BY at all, and an unordered result is not a visible failure.
+        Some(JsonValue::String(s)) => s
+            .split(',')
+            .filter_map(parse_sort_string)
+            .map(|(col, dir, nulls)| sort_key(&col, dir.as_deref(), nulls))
+            .collect(),
+        _ => Vec::new(),
+    };
+    // The legacy single-key form. The editor now writes `orderBy`, but a saved
+    // pipeline, the desktop assistant's prompt (apps/desktop/src/llama_chat.rs)
+    // and the Talend importer all still write these, so the read stays.
     if sort_keys.is_empty() {
         if let Some(col) = string_prop(props, "sortColumn").filter(|s| !s.is_empty()) {
-            let dir = if string_prop(props, "direction").as_deref() == Some("desc") {
-                "DESC"
-            } else {
-                "ASC"
-            };
-            let nulls = if props.get("nullsLast").and_then(JsonValue::as_bool).unwrap_or(true) {
-                " NULLS LAST"
-            } else {
-                " NULLS FIRST"
-            };
-            sort_keys.push(format!("{} {}{}", quote_ident(&col), dir, nulls));
+            sort_keys.push(sort_key(
+                &col,
+                string_prop(props, "direction").as_deref(),
+                Some(props.get("nullsLast").and_then(JsonValue::as_bool).unwrap_or(true)),
+            ));
         }
     }
     if sort_keys.is_empty() {

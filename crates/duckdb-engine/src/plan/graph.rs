@@ -210,25 +210,13 @@ pub(crate) fn validate_column_refs(
             check_list("keep")?;
         }
         "xf.sort" => {
-            // orderBy is either an array of column-name strings or
-            // an array of {column, direction} objects. Validate both.
-            if let Some(arr) = p.get("orderBy").and_then(JsonValue::as_array) {
-                for entry in arr {
-                    let c = entry
-                        .as_str()
-                        .map(|s| s.to_string())
-                        .or_else(|| {
-                            entry
-                                .get("column")
-                                .and_then(JsonValue::as_str)
-                                .map(|s| s.to_string())
-                        });
-                    if let Some(c) = c {
-                        let c = c.trim();
-                        if !c.is_empty() {
-                            check(c)?;
-                        }
-                    }
+            // Every shape build_sort reads, through the one helper it reads
+            // them with, so the validator cannot refuse a key the compiler
+            // understands - or wave through one it does not.
+            for c in sort_columns(p) {
+                let c = c.trim();
+                if !c.is_empty() {
+                    check(c)?;
                 }
             }
         }

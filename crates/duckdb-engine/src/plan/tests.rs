@@ -5932,3 +5932,182 @@ fn a_cloud_csv_sink_can_be_written_without_a_header() {
     .unwrap();
     assert!(sql.contains("HEADER false"), "the toggle has to reach the COPY: {sql}");
 }
+
+/// build_sort had no direct unit test. Everything asserted about it was
+/// indirect - one end-to-end sortColumn run and a compile-only fixture that
+/// never looks at the SQL - so every disagreement between its two branches
+/// went unnoticed. These pin the whole surface before it is changed.
+#[cfg(test)]
+mod sorting {
+    use super::*;
+
+    fn sort_sql(props: serde_json::Value) -> String {
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["up".into()]);
+        build_sort(&ni, &props).expect("build_sort")
+    }
+
+    fn order_by(props: serde_json::Value) -> String {
+        let sql = sort_sql(props);
+        match sql.split_once("ORDER BY ") {
+            Some((_, keys)) => keys.to_string(),
+            None => panic!("no ORDER BY in: {sql}"),
+        }
+    }
+
+    /// The two branches parsed `direction` differently: the orderBy element
+    /// branch trims and lowercases, the single-column branch matched "desc"
+    /// exactly. So "DESC" - which a hand-written pipeline, an import or an SDK
+    /// will write - sorted ASCENDING, with no error and no warning.
+    #[test]
+    fn an_uppercase_direction_still_means_descending() {
+        for spelling in ["DESC", "Desc", " desc", "desc "] {
+            let keys = order_by(serde_json::json!({
+                "sortColumn": "amount", "direction": spelling
+            }));
+            assert!(
+                keys.starts_with("\"amount\" DESC"),
+                "direction {spelling:?} must sort descending, got: {keys}"
+            );
+        }
+    }
+
+    /// columns_list accepts a bare string as a one-element list precisely
+    /// because writing "id" instead of ["id"] is the obvious mistake. orderBy
+    /// was the one reader that did not, and the node degraded to an unordered
+    /// SELECT * in silence.
+    #[test]
+    fn a_bare_string_order_by_still_sorts() {
+        assert_eq!(order_by(serde_json::json!({ "orderBy": "amount" })), "\"amount\" ASC");
+    }
+
+    /// The column name went into the SQL verbatim, so any name needing quotes
+    /// produced a parse error rather than a sort.
+    #[test]
+    fn a_column_name_that_needs_quoting_is_quoted() {
+        assert_eq!(order_by(serde_json::json!({ "orderBy": ["my col"] })), "\"my col\" ASC");
+    }
+
+    /// The documented workaround for multi-column sort, which the editor could
+    /// not express: a trailing direction inside the string. It has to keep
+    /// working, which is why the column cannot simply be quoted whole.
+    #[test]
+    fn a_trailing_direction_inside_the_string_is_understood() {
+        assert_eq!(
+            order_by(serde_json::json!({ "orderBy": ["amount DESC", "name asc"] })),
+            "\"amount\" DESC, \"name\" ASC"
+        );
+    }
+
+    /// nullsLast was read only in the single-column fallback, so a multi-column
+    /// sort silently lost it.
+    #[test]
+    fn null_ordering_is_reachable_per_key() {
+        assert_eq!(
+            order_by(serde_json::json!({
+                "orderBy": [
+                    { "column": "a", "direction": "desc", "nullsLast": false },
+                    { "column": "b", "nullsLast": true }
+                ]
+            })),
+            "\"a\" DESC NULLS FIRST, \"b\" ASC NULLS LAST"
+        );
+    }
+
+    /// A key that says nothing about nulls must emit no NULLS clause, or every
+    /// pipeline already using orderBy changes its output ordering on upgrade.
+    #[test]
+    fn a_key_that_says_nothing_about_nulls_emits_no_clause() {
+        assert_eq!(
+            order_by(serde_json::json!({
+                "orderBy": [{ "column": "a" }, { "column": "b", "direction": "desc" }]
+            })),
+            "\"a\" ASC, \"b\" DESC"
+        );
+    }
+
+    /// The single-column form's existing semantics, unchanged.
+    #[test]
+    fn the_single_column_form_keeps_its_null_default() {
+        assert_eq!(order_by(serde_json::json!({ "sortColumn": "c" })), "\"c\" ASC NULLS LAST");
+        assert_eq!(
+            order_by(serde_json::json!({ "sortColumn": "c", "nullsLast": false })),
+            "\"c\" ASC NULLS FIRST"
+        );
+    }
+
+    /// orderBy wins when both are present, and an unconfigured node is still a
+    /// pass-through rather than an error.
+    #[test]
+    fn order_by_wins_and_an_empty_sort_is_a_pass_through() {
+        assert_eq!(
+            order_by(serde_json::json!({ "orderBy": ["a"], "sortColumn": "b" })),
+            "\"a\" ASC"
+        );
+        assert_eq!(sort_sql(serde_json::json!({})), "SELECT * FROM \"up\"");
+    }
+}
+
+/// The validator and build_sort have to agree about what a sort key IS, or one
+/// half rejects a pipeline the other half compiles correctly.
+#[cfg(test)]
+mod sort_validation {
+    use super::*;
+
+    fn doc(sort_props: serde_json::Value) -> PipelineDoc {
+        serde_json::from_value(serde_json::json!({
+            "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{"label":"in","componentId":"src.csv",
+                  "properties":{"path":"/tmp/in.csv","hasHeader":true},
+                  "schema":[{"name":"amount","type":"int64"},{"name":"name","type":"string"}]}},
+                {"id":"t","position":{"x":0,"y":0},"data":{"label":"Sort","componentId":"xf.sort",
+                  "properties": sort_props}},
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/out.csv"}}}
+            ],
+            "edges":[
+                {"id":"e1","source":"s","target":"t","data":{"connectionType":"main"}},
+                {"id":"e2","source":"t","target":"k","data":{"connectionType":"main"}}
+            ]
+        }))
+        .unwrap()
+    }
+
+    /// The documented multi-column workaround. build_sort has always understood
+    /// it; the validator checked the whole string as a column name and refused
+    /// the pipeline before build_sort ever saw it.
+    #[test]
+    fn a_trailing_direction_is_not_read_as_part_of_the_column_name() {
+        let plan = compile(&doc(serde_json::json!({ "orderBy": ["amount DESC", "name"] })))
+            .expect("the string form has to validate as well as compile");
+        let sql = plan.stages.iter().find(|s| s.node_id == "t").expect("sort stage").sql.clone();
+        assert!(sql.contains("ORDER BY \"amount\" DESC, \"name\" ASC"), "{sql}");
+    }
+
+    /// A real typo still has to be caught, or the check is worthless.
+    #[test]
+    fn a_misspelled_sort_column_is_still_refused() {
+        let err = compile(&doc(serde_json::json!({ "orderBy": ["amonut DESC"] })))
+            .expect_err("a column that does not exist must not compile");
+        assert!(err.to_string().contains("amonut"), "it names the typo: {err}");
+    }
+
+    /// The legacy single-key form was never validated at all, so a typo in the
+    /// editor's own Column field survived planning and failed inside DuckDB
+    /// with a message about SQL rather than about the field.
+    #[test]
+    fn a_misspelled_single_sort_column_is_refused_too() {
+        let err = compile(&doc(serde_json::json!({ "sortColumn": "amonut" })))
+            .expect_err("the single-column form must be checked like every other");
+        assert!(err.to_string().contains("amonut"), "{err}");
+    }
+
+    /// The bare-string form compiles, so it must validate.
+    #[test]
+    fn a_bare_string_order_by_is_validated_not_ignored() {
+        compile(&doc(serde_json::json!({ "orderBy": "amount" }))).expect("valid");
+        let err = compile(&doc(serde_json::json!({ "orderBy": "amonut" })))
+            .expect_err("a typo in the bare-string form must be caught");
+        assert!(err.to_string().contains("amonut"), "{err}");
+    }
+}
