@@ -21625,3 +21625,82 @@ fn a_shapefile_keeps_non_latin_attributes_when_an_encoding_is_declared() {
     let cpg = std::path::Path::new(&out).with_extension("cpg");
     assert!(cpg.exists(), "no .cpg sidecar was written beside the shapefile");
 }
+
+/// #330 follow-up: a cursor placed in a HEADER never reached the wire.
+///
+/// The substitution builds a shadowed copy of the spec and rewrites its url,
+/// url_template, body and headers - but `eff_headers`, which is what the
+/// request loop actually sends, was cloned from the ORIGINAL spec further up,
+/// so the header rewrite went into a value nothing reads. An API taking its
+/// cursor as `If-Modified-Since` got the literal placeholder.
+#[test]
+fn an_incremental_cursor_in_a_header_reaches_the_request() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let _g = env_guard();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let asked = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = asked.clone();
+    let handle = std::thread::spawn(move || {
+        // One request, so one accept: waiting for more would block the join.
+        for stream in listener.incoming().take(1) {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            for l in req.lines() {
+                if l.to_ascii_lowercase().starts_with("if-modified-since:") {
+                    seen.lock().unwrap().push(l.trim().to_string());
+                }
+            }
+            let body = r#"{"results":[{"id":"a","updated_at":"2026-03-05"}]}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK{}Content-Type: application/json{}Content-Length: {}{}Connection: close{}{}",
+                CRLF, CRLF, body.len(), CRLF, CRLF, CRLF
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", &ws);
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("c", "src.rest", json!({
+                "url": format!("http://127.0.0.1:{}/things", port),
+                "responsePath": "/results",
+                "headers": [{ "key": "If-Modified-Since", "value": "{incremental}" }],
+                "incrementalField": "updated_at",
+                "incrementalInitial": "1970-01-01",
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "c", "k")]),
+    );
+    let r = engine.execute_pipeline_named(&d, "hdr");
+    assert!(r.error.is_none(), "run failed: {:?}", r.error);
+    let _ = handle.join();
+
+    let got = asked.lock().unwrap().clone();
+    assert!(!got.is_empty(), "the server saw no If-Modified-Since header at all");
+    assert!(
+        got.iter().all(|h| !h.contains("{incremental}")),
+        "the placeholder was sent verbatim: {got:?}"
+    );
+    assert!(
+        got.iter().any(|h| h.contains("1970-01-01")),
+        "the saved mark has to be substituted into the header: {got:?}"
+    );
+}

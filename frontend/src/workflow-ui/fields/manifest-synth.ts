@@ -4182,7 +4182,7 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
                     label: 'Incremental field',
                     kind: 'text' as const,
                     placeholder: 'updated_at',
-                    description: 'A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter or the body and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state.',
+                    description: 'A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state.',
                 },
                 {
                     key: 'incrementalInitial',

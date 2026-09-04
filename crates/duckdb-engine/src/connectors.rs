@@ -15246,6 +15246,18 @@ impl DuckdbEngine {
             }
             s2
         };
+        // ...and the headers that actually go out, which are not these.
+        // `eff_headers` was cloned from the pre-substitution spec further up
+        // (it has to be, because the OAuth token is merged into it before this
+        // point), and the request loop sends `eff_headers`, not `spec.headers`.
+        // So the line above rewrote a copy nothing reads, and an API taking its
+        // cursor as a header - If-Modified-Since, or a vendor's own - was sent
+        // the literal `{incremental}` on every run.
+        if spec.incremental_field.is_some() {
+            for (_, v) in eff_headers.iter_mut() {
+                *v = sub(v);
+            }
+        }
 
         // #257: a parent endpoint can feed a child endpoint. Without a URL
         // template there is one pass and no substitution, exactly what this
