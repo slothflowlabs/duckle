@@ -667,6 +667,12 @@ pub fn plan(
     new_run_id: &str,
     allow_changed: bool,
     rerun_sinks: bool,
+    // #305: the parameters this retry WILL run with. The issue lists "same
+    // normalized non-secret parameters" among the safety checks, and it is not
+    // decoration: a stage's cached output was computed under the values the
+    // original run was given, so reusing it under different ones is the wrong
+    // answer produced quickly.
+    params: &BTreeMap<String, String>,
 ) -> Plan {
     let prior = match load(workspace, run_id) {
         Ok(r) => r,
@@ -730,9 +736,34 @@ pub fn plan(
             ),
         );
     }
+    if params != &prior.parameters && !allow_changed {
+        let differing: Vec<String> = prior
+            .parameters
+            .keys()
+            .chain(params.keys())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .filter(|k| prior.parameters.get(*k) != params.get(*k))
+            .cloned()
+            .collect();
+        return Plan::refused(
+            run_id,
+            "retry:parameters-changed",
+            format!(
+                "run {run_id} was given different parameters from the ones this retry would use                  ({}). Its recorded outputs were computed under the old values, so reusing them                  would produce an answer that belongs to neither set. Pass --allow-changed to                  retry with reuse disabled.",
+                differing.join(", ")
+            ),
+        );
+    }
     // A changed pipeline or engine may still be retried, but never with reuse:
     // the recorded outputs describe work that no longer exists.
-    let reuse_allowed = now_hash == prior.pipeline_hash && prior.engine_version == ENGINE_VERSION;
+    // Parameters belong in this condition, not only in the refusal above:
+    // --allow-changed lets a retry PROCEED, and it must not thereby let it
+    // bind an output computed under values it is no longer using. Without this
+    // the escape hatch is the one path where the safety check does not hold.
+    let reuse_allowed = now_hash == prior.pipeline_hash
+        && prior.engine_version == ENGINE_VERSION
+        && params == &prior.parameters;
 
     let mut decisions: Vec<Decision> = Vec::new();
     let mut sinks = Vec::new();
@@ -1164,7 +1195,7 @@ mod tests {
         let r = receipt("error", &h, &[("extract", "ok", Some("K"), "source")]);
         write(tmp.path(), &with_output(r, "extract", &file)).unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", false, false);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &Default::default());
         assert!(p.refusal.is_none(), "should plan: {:?}", p.refusal);
         // Nothing reads it, so it is the pipeline's END - required, and served
         // from its verified output rather than re-derived.
@@ -1190,7 +1221,7 @@ mod tests {
         // Recorded, then pruned - the ordinary way a receipt and reality differ.
         std::fs::remove_file(&file).unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", false, false);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &Default::default());
         assert_eq!(
             p.decisions[0].action,
             Action::ReExecute { reason: "its output is gone".into() },
@@ -1207,7 +1238,7 @@ mod tests {
         write(tmp.path(), &receipt("error", "a-different-hash", &[("extract", "ok", Some("K"), "source")]))
             .unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", false, false);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &Default::default());
         assert_eq!(p.refusal.as_ref().map(|r| r.code.as_str()), Some("retry:pipeline-changed"));
         assert!(p.decisions.is_empty(), "a refusal must not also plan work");
     }
@@ -1221,7 +1252,7 @@ mod tests {
         write(tmp.path(), &receipt("error", "a-different-hash", &[("extract", "ok", Some("K"), "source")]))
             .unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", true, false);
+        let p = plan(tmp.path(), "r1", &d, "r2", true, false, &Default::default());
         assert!(p.refusal.is_none(), "allow-changed must proceed: {:?}", p.refusal);
         assert!(
             !matches!(p.decisions[0].action, Action::Reuse { .. }),
@@ -1247,13 +1278,13 @@ mod tests {
         )
         .unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", false, false);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &Default::default());
         let r = p.refusal.expect("must refuse");
         assert_eq!(r.code, "retry:would-rewrite-sinks");
         assert!(r.message.contains("publish"), "must name the sink: {}", r.message);
 
         // Told explicitly, it proceeds and still says which sinks it will write.
-        let ok = plan(tmp.path(), "r1", &d, "r2", false, true);
+        let ok = plan(tmp.path(), "r1", &d, "r2", false, true, &Default::default());
         assert!(ok.refusal.is_none());
         assert_eq!(ok.sinks_to_rewrite, vec!["publish".to_string()]);
     }
@@ -1267,7 +1298,7 @@ mod tests {
         let h = pipeline_hash(&d);
         write(tmp.path(), &receipt("error", &h, &[("publish", "ok", Some("K"), "sink")])).unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", false, true);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, true, &Default::default());
         assert!(
             matches!(p.decisions[0].action, Action::RewriteSink { .. }),
             "got {:?}",
@@ -1290,7 +1321,7 @@ mod tests {
         // Only `extract` is recorded, and it failed. `publish` never ran.
         write(tmp.path(), &receipt("error", &h, &[("extract", "error", None, "source")])).unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", false, false);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &Default::default());
         let r = p.refusal.expect("a retry that would write to an unreached sink must still refuse");
         assert_eq!(r.code, "retry:would-rewrite-sinks");
         assert!(r.message.contains("publish"), "must name it: {}", r.message);
@@ -1304,7 +1335,7 @@ mod tests {
         let d = doc_with(&[("n", "src.xml")]);
         let h = pipeline_hash(&d);
         write(tmp.path(), &receipt("ok", &h, &[("n", "ok", None, "source")])).unwrap();
-        let p = plan(tmp.path(), "r1", &d, "r2", false, false);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &Default::default());
         assert_eq!(p.refusal.map(|r| r.code), Some("retry:run-succeeded".to_string()));
     }
 
@@ -1314,7 +1345,7 @@ mod tests {
     fn a_run_with_no_receipt_says_so() {
         let tmp = tempfile::tempdir().unwrap();
         let d = doc_with(&[("n", "src.xml")]);
-        let p = plan(tmp.path(), "ghost", &d, "r2", false, false);
+        let p = plan(tmp.path(), "ghost", &d, "r2", false, false, &Default::default());
         let r = p.refusal.expect("must refuse");
         assert_eq!(r.code, "retry:no-receipt");
         assert!(r.message.contains("duckle-runner"), "must say who writes one: {}", r.message);
@@ -1327,7 +1358,7 @@ mod tests {
         let d = doc_with(&[("a", "src.xml"), ("b", "xf.filter")]);
         let h = pipeline_hash(&d);
         write(tmp.path(), &receipt("error", &h, &[("a", "ok", Some("K"), "source")])).unwrap();
-        let p = plan(tmp.path(), "r1", &d, "r2", false, false);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &Default::default());
         let b = p.decisions.iter().find(|d| d.node_id == "b").unwrap();
         assert_eq!(
             b.action,
@@ -1420,7 +1451,7 @@ mod chain_reuse {
         let tmp = tempfile::tempdir().unwrap();
         let d = prior(tmp.path(), &["download", "parse"], "normalize", &["download", "parse"]);
 
-        let p = plan(tmp.path(), "r1", &d, "r2", false, true);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, true, &Default::default());
         assert!(p.refusal.is_none(), "{:?}", p.refusal);
 
         // Nothing that runs reads `download` - `parse` is bound - so it is not
@@ -1450,7 +1481,7 @@ mod chain_reuse {
         // `parse` was recorded and has since been pruned.
         std::fs::remove_file(tmp.path().join("parse.parquet")).unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", false, true);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, true, &Default::default());
         assert!(matches!(action(&p, "parse"), Action::ReExecute { .. }), "{:?}", action(&p, "parse"));
 
         let starts = p.starts_at.as_ref().expect("somewhere to start");
@@ -1471,7 +1502,7 @@ mod chain_reuse {
         let d = prior(tmp.path(), &["download", "parse"], "normalize", &["download", "parse"]);
         std::fs::write(tmp.path().join("parse.parquet"), b"different bytes entirely").unwrap();
 
-        let p = plan(tmp.path(), "r1", &d, "r2", false, true);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, true, &Default::default());
         match action(&p, "parse") {
             Action::ReExecute { reason } => {
                 assert!(reason.contains("bytes") || reason.contains("hash"), "{reason}")
@@ -1487,7 +1518,7 @@ mod chain_reuse {
     fn a_cache_key_alone_is_not_a_durable_output() {
         let tmp = tempfile::tempdir().unwrap();
         let d = prior(tmp.path(), &["download", "parse"], "normalize", &[]);
-        let p = plan(tmp.path(), "r1", &d, "r2", false, true);
+        let p = plan(tmp.path(), "r1", &d, "r2", false, true, &Default::default());
         match action(&p, "parse") {
             Action::ReExecute { reason } => assert!(reason.contains("verif"), "{reason}"),
             other => panic!("a key is not an output: {other:?}"),
@@ -1510,9 +1541,119 @@ mod chain_reuse {
             ("enrich", "xf.sql"),
             ("publish", "snk.parquet"),
         ]);
-        let p = plan(tmp.path(), "r1", &edited, "r2", true, true);
+        let p = plan(tmp.path(), "r1", &edited, "r2", true, true, &Default::default());
         assert!(p.refusal.is_none(), "{:?}", p.refusal);
         assert!(p.bindings.is_empty(), "recorded outputs describe work that no longer exists");
         assert!(p.decisions.iter().all(|d| !matches!(d.action, Action::Reuse { .. })));
+    }
+}
+
+/// #305: "same normalized non-secret parameters" is a safety check, not a note.
+#[cfg(test)]
+mod parameters_must_match {
+    use super::tests::receipt;
+    use super::*;
+
+    fn doc_one(id: &str) -> crate::PipelineDoc {
+        serde_json::from_value(serde_json::json!({
+            "nodes": [{
+                "id": id,
+                "position": { "x": 0, "y": 0 },
+                "data": { "label": id, "componentId": "src.xml", "properties": {} }
+            }],
+            "edges": []
+        }))
+        .unwrap()
+    }
+
+    fn given(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    /// The failure this closes. A console run bound `jurisdiction=BE`; the
+    /// retry would have run with whatever the pipeline defaults to while
+    /// reusing a cached output computed for BE - an answer belonging to
+    /// neither set.
+    #[test]
+    fn a_retry_with_different_parameters_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = doc_one("extract");
+        let h = pipeline_hash(&d);
+        let mut r = receipt("error", &h, &[("extract", "ok", Some("K"), "source")]);
+        r.parameters = given(&[("jurisdiction", "BE"), ("full_refresh", "false")]);
+        write(tmp.path(), &r).unwrap();
+
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &given(&[("jurisdiction", "NL")]));
+        let refusal = p.refusal.as_ref().expect("a different binding must be refused");
+        assert_eq!(refusal.code, "retry:parameters-changed");
+        assert!(refusal.message.contains("jurisdiction"), "it names what differs: {}", refusal.message);
+        assert!(
+            refusal.message.contains("full_refresh"),
+            "and a parameter that was dropped entirely: {}",
+            refusal.message
+        );
+        assert!(p.decisions.is_empty(), "a refusal plans nothing");
+        assert!(p.bindings.is_empty());
+    }
+
+    /// Replaying the recorded set is what the retry command actually does, so
+    /// the ordinary path must not be refused.
+    #[test]
+    fn replaying_the_recorded_parameters_is_allowed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = doc_one("extract");
+        let h = pipeline_hash(&d);
+        let mut r = receipt("error", &h, &[("extract", "ok", Some("K"), "source")]);
+        r.parameters = given(&[("jurisdiction", "BE")]);
+        write(tmp.path(), &r).unwrap();
+
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &given(&[("jurisdiction", "BE")]));
+        assert!(p.refusal.is_none(), "the same values must plan: {:?}", p.refusal);
+    }
+
+    /// A run that was given nothing, retried with nothing, is the ordinary
+    /// headless case and must stay untouched.
+    #[test]
+    fn a_run_with_no_parameters_is_unaffected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = doc_one("extract");
+        let h = pipeline_hash(&d);
+        write(tmp.path(), &receipt("error", &h, &[("extract", "ok", Some("K"), "source")])).unwrap();
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &Default::default());
+        assert!(p.refusal.is_none(), "{:?}", p.refusal);
+    }
+
+    /// --allow-changed is the stated escape hatch, and it disables reuse the
+    /// same way a changed pipeline does rather than permitting it.
+    #[test]
+    fn allow_changed_retries_without_reuse() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = doc_one("extract");
+        let h = pipeline_hash(&d);
+        let mut r = receipt("error", &h, &[("extract", "ok", Some("K"), "source")]);
+        r.parameters = given(&[("jurisdiction", "BE")]);
+        // A durable output that WOULD be reusable, so the test can tell
+        // "refused" from "allowed but not reused".
+        let file = tmp.path().join("extract.parquet");
+        std::fs::write(&file, b"rows").unwrap();
+        r.outputs.insert(
+            "extract".to_string(),
+            crate::nodeout::NodeOutput::of_file(
+                "extract",
+                Some("r1"),
+                crate::nodeout::Kind::Relation,
+                &file,
+            )
+            .unwrap(),
+        );
+        write(tmp.path(), &r).unwrap();
+
+        let p = plan(tmp.path(), "r1", &d, "r2", true, false, &given(&[("jurisdiction", "NL")]));
+        assert!(p.refusal.is_none(), "the escape hatch must let it through: {:?}", p.refusal);
+        assert!(
+            p.bindings.is_empty(),
+            "but nothing computed under the old values may be bound: {:?}",
+            p.bindings
+        );
     }
 }

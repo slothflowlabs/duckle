@@ -168,6 +168,14 @@ struct Args {
     output_bindings: std::collections::BTreeMap<String, String>,
     /// #305: nodes not to stage at all - everything reading them is bound.
     skip_nodes: std::collections::BTreeSet<String>,
+    /// #305: the run parameters to bind, which for a retry are the ones the
+    /// ORIGINAL run recorded.
+    ///
+    /// A retry that ran with different values would reuse outputs computed
+    /// under the old ones - the exact "same normalized parameters" safety check
+    /// the issue asks for, and the reason this had to reach the run rather than
+    /// only the planner.
+    params: std::collections::BTreeMap<String, String>,
 }
 
 impl Args {
@@ -287,6 +295,7 @@ fn parse_args() -> Result<Args, String> {
         retry_of: None,
         output_bindings: Default::default(),
         skip_nodes: Default::default(),
+        params: Default::default(),
         target,
         pipeline,
         workspace,
@@ -461,6 +470,22 @@ fn run_with(args: Args) -> Result<bool, String> {
     // time. A built bundle deliberately ships these unresolved so each run
     // (e.g. a daily cron of the same artifact) writes a fresh-dated path.
     duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
+    // #305: run parameters, through the same typed boundary the console uses,
+    // so an invalid value fails here rather than inside the run. Empty for an
+    // ordinary headless run, which is what this path has always done; a retry
+    // supplies the set the original run recorded.
+    let recorded_params = {
+        let supplied: Vec<duckle_duckdb_engine::params::Supplied> = args
+            .params
+            .iter()
+            .map(|(name, value)| duckle_duckdb_engine::params::Supplied {
+                name: name.clone(),
+                value: value.clone(),
+                source: "retry of the original run".to_string(),
+            })
+            .collect();
+        context::apply_params_from(&mut doc, &supplied)?.0
+    };
     // Resolve ${workspace}/${projectroot} + workspace context vars on the parent
     // (a file-loaded pipeline doesn't go through the by-id resolver, so these
     // would otherwise pass through literally; foreach children already resolve
@@ -545,6 +570,9 @@ fn run_with(args: Args) -> Result<bool, String> {
     // #307: files external components produced, recorded before the receipt is
     // finalised so a run's provenance names them.
     let receipt = duckle_duckdb_engine::retry::RunReceipt {
+        // #305: what this run was given, so a retry can be checked against it
+        // and can replay it.
+        parameters: recorded_params,
         artifacts: engine.produced_artifacts(),
         // #305: and what each node durably produced, so a retry can bind a
         // verified output rather than trust that a node once succeeded.
@@ -2427,7 +2455,18 @@ fn run_retry() -> ExitCode {
         .map(|d| d.as_millis())
         .unwrap_or_default();
     let new_id = format!("retry-{stamp}");
-    let plan = retry::plan(&workspace, &run_id, &doc, &new_id, allow_changed, rerun_sinks);
+    // The parameters the retry will run with ARE the recorded ones - it replays
+    // them - so this check passes by construction. It is made anyway, because a
+    // future surface that supplies its own must be refused rather than trusted.
+    let plan = retry::plan(
+        &workspace,
+        &run_id,
+        &doc,
+        &new_id,
+        allow_changed,
+        rerun_sinks,
+        &prior.parameters,
+    );
 
     if json_out {
         println!("{}", serde_json::to_string_pretty(&plan).unwrap_or_default());
@@ -2483,6 +2522,11 @@ fn run_retry() -> ExitCode {
         retry_of: Some(run_id),
         output_bindings: plan.bindings.clone(),
         skip_nodes: plan.skipped(),
+        // #305: the SAME values the original run was given. A retry that ran
+        // with different parameters while reusing outputs computed under the
+        // old ones is the safety check the issue asks for, and replaying them
+        // is what makes the check pass by construction rather than by luck.
+        params: prior.parameters.clone(),
     };
     match run_with(args) {
         Ok(true) => ExitCode::from(0),
