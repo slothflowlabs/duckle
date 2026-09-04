@@ -4069,6 +4069,41 @@ fn cron_decision(
     }
 }
 
+
+/// #296: write the occurrence this tick is firing into the durable ledger.
+///
+/// Best effort, and deliberately: a ledger that could not be written is a gap
+/// in the record, and refusing to run the schedule because of it would turn a
+/// bookkeeping failure into a missed job. The record is what makes "did this
+/// occurrence already run" answerable across a restart, which the serve
+/// scheduler could not answer at all - its arming state is in memory.
+fn record_occurrence(
+    state: &State,
+    schedule_id: &str,
+    cfg: &Value,
+    due: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    use duckle_duckdb_engine::occurrences;
+    let timezone = cfg.get("timezone").and_then(|v| v.as_str());
+    let local = duckle_duckdb_engine::cronzone::resolve_zone(timezone)
+        .map(|z| duckle_duckdb_engine::cronzone::local_reading(&z, due))
+        .unwrap_or_default();
+    let entry = occurrences::Occurrence {
+        occurrence_id: occurrences::occurrence_id(schedule_id, &due.to_rfc3339()),
+        schedule_id: schedule_id.to_string(),
+        scheduled_for: due.to_rfc3339(),
+        local,
+        timezone: timezone.map(str::to_string),
+        decision: occurrences::Decision::Fired,
+        run_id: None,
+        decided_at: now.to_rfc3339(),
+    };
+    if let Err(e) = occurrences::record(&state.workspace, &entry) {
+        eprintln!("duckle-runner: schedule {schedule_id}: occurrence not recorded ({e})");
+    }
+}
+
 /// Fire one schedule that has come due.
 ///
 /// Both triggers, cron and interval, arrive here, and both used to carry their own copy of
@@ -4246,14 +4281,27 @@ fn spawn_scheduler(state: Arc<State>) {
                                 cron_next.remove(id);
                             }
                             Ok(zone) => {
+                                let now = chrono::Utc::now();
+                                // What was armed IS the occurrence that comes
+                                // due, so it is recorded before the decision
+                                // moves past it. Read out first for that reason.
+                                let due = cron_next.get(id).map(|(_, at)| *at);
                                 let (fire, rearm) = cron_decision(
                                     cron_next.get(id),
                                     cron,
                                     &zone,
                                     &exclude,
-                                    chrono::Utc::now(),
+                                    now,
                                 );
                                 if fire {
+                                    // #296: the occurrence is recorded whether
+                                    // or not anything downstream succeeds. A
+                                    // schedule that fired and a schedule that
+                                    // did not are otherwise the same silence
+                                    // once the tick loop has moved on.
+                                    if let Some(at) = due {
+                                        record_occurrence(&state, id, cfg, at, now);
+                                    }
                                     fire_schedule(&state, id, cfg, &pipes);
                                 }
                                 match rearm {

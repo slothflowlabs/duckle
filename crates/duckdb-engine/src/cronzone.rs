@@ -208,6 +208,19 @@ where
     }
 }
 
+/// What the clock reads in `zone` at `at`.
+///
+/// #296: an occurrence record keeps the local reading because "03:00 Brussels"
+/// is what the operator asked for and the UTC instant is not recognisable to
+/// them. Formatted here rather than by the caller so a zone is turned into a
+/// wall clock in exactly one place, which is the thing this module exists for.
+pub fn local_reading(zone: &Zone, at: DateTime<Utc>) -> String {
+    match zone {
+        Zone::Local => at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string(),
+        Zone::Named(tz) => at.with_timezone(tz).format("%Y-%m-%d %H:%M:%S").to_string(),
+    }
+}
+
 /// The next occurrence strictly after `after`, evaluated as civil time in
 /// `zone`.
 ///
