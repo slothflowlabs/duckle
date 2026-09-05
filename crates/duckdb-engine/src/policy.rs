@@ -302,6 +302,44 @@ pub fn advances_saved_state(component_id: &str) -> bool {
     || crate::plan::reads_incremental(component_id)
 }
 
+/// Whether THIS node will actually write state, given its properties.
+///
+/// `advances_saved_state` answers the capability question - can this KIND of
+/// component advance state - and the permission needs the narrower one, because
+/// most of these are switchable and the switch is spelled differently per
+/// family. The gate used to read `trackState` for all of them, and only
+/// `src.changed` reads that key, so the check was wrong in both directions at
+/// once: it refused a plain Kafka source that would never have written a byte,
+/// and it waved through one with `trackOffset: true, trackState: false`.
+///
+/// Each arm below mirrors the read in plan/mod.rs that builds the spec, so the
+/// permission fires exactly when the write does.
+fn state_write_is_armed(component_id: &str, props: &serde_json::Value) -> bool {
+    let flag = |key: &str, default: bool| {
+        props.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
+    };
+    match component_id {
+        // plan/mod.rs: `trackOffset`, OFF by default - turning it on changes
+        // where a run starts reading, which is not decided on anyone's behalf.
+        "src.kafka" | "src.redpanda" => flag("trackOffset", false),
+        // plan/mod.rs: `trackOffset`, ON by default.
+        "src.spool" => flag("trackOffset", true),
+        // plan/mod.rs: `trackState`, ON by default. The only component that
+        // reads the key the old gate asked everything about.
+        "src.changed" => flag("trackState", true),
+        // The REST family persists a cursor only when there is one to persist:
+        // run_rest_source computes its state path from `incremental_field`, so
+        // a node without the prop reaches no write at all.
+        id if crate::plan::reads_incremental(id) => props
+            .get("incrementalField")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.trim().is_empty()),
+        // xf.incremental, xf.tumble, qa.baseline and the DuckLake CDC pair
+        // write unconditionally; there is nothing to switch off.
+        _ => true,
+    }
+}
+
 /// Whether running this component spawns a process outside DuckDB.
 ///
 /// #313 asks the capability registry to report execution side effects, and this
@@ -676,11 +714,7 @@ pub fn check(policy: &Policy, doc: &PipelineDoc) -> Vec<Violation> {
         // Clearing a production watermark is a silent full reload, which is why
         // state mutation is its own permission rather than part of the sinks.
         if !policy.allow_state_mutation {
-            let mutates = advances_saved_state(component)
-                && props
-                    .get("trackState")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(true);
+            let mutates = advances_saved_state(component) && state_write_is_armed(component, &props);
             if mutates {
                 out.push(Violation {
                     node: node.id.clone(),
@@ -934,10 +968,27 @@ mod tests {
             ("xf.incremental", serde_json::json!({ "column": "updated_at" })),
             ("src.ducklake.changes", serde_json::json!({ "path": "l.ducklake", "table": "t" })),
             ("src.changed", serde_json::json!({ "uri": "s3://b/p", "listing": true })),
-            ("src.kafka", serde_json::json!({ "brokers": "b:9092", "topic": "t" })),
-            ("src.redpanda", serde_json::json!({ "brokers": "b:9092", "topic": "t" })),
+            // Armed, because that is the question the permission asks. Kafka
+            // and Redpanda persist nothing until `trackOffset` is on, and the
+            // REST family nothing until there is a cursor to advance - see
+            // `state_write_is_armed`. Before that predicate existed this test
+            // passed with these switches absent, which is precisely the bug: it
+            // was asserting that a node writing nothing gets refused.
+            (
+                "src.kafka",
+                serde_json::json!({ "brokers": "b:9092", "topic": "t", "trackOffset": true }),
+            ),
+            (
+                "src.redpanda",
+                serde_json::json!({ "brokers": "b:9092", "topic": "t", "trackOffset": true }),
+            ),
             ("src.spool", serde_json::json!({ "uri": "sftp://h/d" })),
-            ("src.rest", serde_json::json!({ "url": "https://example.invalid/x" })),
+            (
+                "src.rest",
+                serde_json::json!({
+                    "url": "https://example.invalid/x", "incrementalField": "updated_at"
+                }),
+            ),
             ("xf.tumble", serde_json::json!({ "column": "ts", "every": "1 hour" })),
             ("qa.baseline", serde_json::json!({ "name": "b" })),
         ] {
@@ -973,6 +1024,76 @@ mod tests {
             .map(|e| e.to_string())
             .unwrap_or_else(|| String::from("<allowed>"));
         assert!(err.contains("state mutation"), "it writes a consumed snapshot id: {err}");
+    }
+
+    /// The permission has to fire when the node actually writes, and only
+    /// then. It was asking a question no component answers.
+    ///
+    /// The gate read `trackState` for everything. Only `src.changed` reads that
+    /// key. Kafka and Redpanda are armed by `trackOffset` (OFF by default),
+    /// src.spool by `trackOffset` (ON by default), and the REST family by
+    /// having an `incrementalField` at all - so the check refused nodes that
+    /// would never have written a byte, and waved through ones that would.
+    #[test]
+    fn state_mutation_is_judged_on_what_the_node_will_actually_write() {
+        let p = policy_from("state:
+  allowRead: true
+  allowMutation: false
+");
+        let refused = |id: &str, props: JsonValue| -> bool {
+            enforce(&p, &doc_of(serde_json::json!([node("n", id, props)]))).is_err()
+        };
+
+        // Kafka's offsets are off unless asked for, so a plain source writes
+        // nothing and must not be refused.
+        assert!(
+            !refused("src.kafka", serde_json::json!({ "brokers": "b:9092", "topic": "t" })),
+            "a Kafka source that does not track offsets advances nothing"
+        );
+        // ...and turning them on must be refused, whatever `trackState` says -
+        // the engine never reads that key here.
+        assert!(
+            refused(
+                "src.kafka",
+                serde_json::json!({
+                    "brokers": "b:9092", "topic": "t",
+                    "trackOffset": true, "trackState": false
+                })
+            ),
+            "trackOffset is what arms the write, and it was armed"
+        );
+
+        // The REST family writes a mark only when there is a cursor to advance.
+        assert!(
+            !refused("src.github", serde_json::json!({ "url": "https://x.invalid/a" })),
+            "a REST source with no incremental field writes no state"
+        );
+        assert!(
+            refused(
+                "src.github",
+                serde_json::json!({
+                    "url": "https://x.invalid/a", "incrementalField": "updated_at"
+                })
+            ),
+            "and with one, it does"
+        );
+
+        // src.spool is the other way round: on unless turned off.
+        assert!(refused("src.spool", serde_json::json!({ "uri": "sftp://h/d" })));
+        assert!(
+            !refused("src.spool", serde_json::json!({ "uri": "sftp://h/d", "trackOffset": false })),
+            "the offset is what it persists, and it was turned off"
+        );
+
+        // src.changed is the one component that really does read trackState.
+        assert!(refused("src.changed", serde_json::json!({ "uri": "s3://b/p" })));
+        assert!(!refused(
+            "src.changed",
+            serde_json::json!({ "uri": "s3://b/p", "trackState": false })
+        ));
+
+        // A watermark transform has nothing to switch off.
+        assert!(refused("xf.incremental", serde_json::json!({ "column": "updated_at" })));
     }
 
     /// #330: the same gap, one level down. `src.rest` was covered and its 30
