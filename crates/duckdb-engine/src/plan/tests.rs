@@ -6381,3 +6381,55 @@ mod spatial_and_the_ports_that_cannot_exist {
         assert!(sql.contains("ST_Intersects"), "{sql}");
     }
 }
+
+/// A file sink must not silently overwrite when asked to do something else.
+///
+/// snk.parquet offered Append, snk.csv / json / jsonl / excel offered "Error if
+/// exists", and NONE of those builders reads `mode` at all. An unrecognised
+/// mode is not an error in a COPY - it is the default, and the default is
+/// replace. Measured end to end before this guard: rows 1,2 written, a second
+/// run with mode=append writing 3,4, and the file afterwards held ONLY 3,4.
+/// The user asked to add to a dataset and destroyed it, with no error.
+#[cfg(test)]
+mod file_sink_modes {
+    use super::*;
+
+    fn sink(component: &str, mode: &str) -> Result<String, EngineError> {
+        build_sink_sql(
+            component,
+            &serde_json::json!({ "path": "/tmp/out.dat", "mode": mode }),
+            "v",
+            &[],
+            None,
+        )
+    }
+
+    #[test]
+    fn append_on_a_file_sink_is_refused_rather_than_silently_replacing() {
+        let err = sink("snk.parquet", "append").expect_err("append must not plan as a replace");
+        let msg = err.to_string();
+        assert!(msg.contains("append"), "it names the mode: {msg}");
+        assert!(msg.contains("replace") || msg.contains("overwrite"), "and what it would do: {msg}");
+    }
+
+    #[test]
+    fn error_if_exists_is_refused_on_every_file_sink_that_offered_it() {
+        for id in ["snk.csv", "snk.json", "snk.jsonl", "snk.parquet", "snk.excel"] {
+            let err = sink(id, "error")
+                .err()
+                .unwrap_or_else(|| panic!("{id} accepted a mode it does not implement"));
+            assert!(err.to_string().contains("error"), "{id}: {err}");
+        }
+    }
+
+    /// Overwrite is what these sinks do, and an unset mode means the same, so
+    /// both must keep planning exactly as before.
+    #[test]
+    fn overwrite_and_an_unset_mode_still_plan() {
+        for id in ["snk.csv", "snk.json", "snk.parquet", "snk.excel"] {
+            sink(id, "overwrite").unwrap_or_else(|e| panic!("{id} overwrite: {e}"));
+            build_sink_sql(id, &serde_json::json!({ "path": "/tmp/o.dat" }), "v", &[], None)
+                .unwrap_or_else(|e| panic!("{id} default: {e}"));
+        }
+    }
+}

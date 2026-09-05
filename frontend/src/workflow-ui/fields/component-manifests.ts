@@ -982,8 +982,13 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                         kind: 'select',
                         defaultValue: 'overwrite',
                         options: [
+                            // Append and "Error if exists" were here and no
+                            // file-sink builder reads `mode`. A COPY always
+                            // REPLACES, so picking Append destroyed the rows
+                            // already in the file - measured, rows 1,2 gone
+                            // after a second run wrote 3,4. build_sink_sql now
+                            // refuses either rather than replacing in silence.
                             { label: 'Overwrite (replace)', value: 'overwrite' },
-                            { label: 'Error if exists', value: 'error' },
                         ],
                     },
                     {
@@ -1231,9 +1236,13 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                         kind: 'select',
                         defaultValue: 'overwrite',
                         options: [
+                            // Append and "Error if exists" were here and no
+                            // file-sink builder reads `mode`. A COPY always
+                            // REPLACES, so picking Append destroyed the rows
+                            // already in the file - measured, rows 1,2 gone
+                            // after a second run wrote 3,4. build_sink_sql now
+                            // refuses either rather than replacing in silence.
                             { label: 'Overwrite', value: 'overwrite' },
-                            { label: 'Append', value: 'append' },
-                            { label: 'Error if exists', value: 'error' },
                         ],
                     },
                     {

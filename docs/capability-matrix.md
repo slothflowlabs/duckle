@@ -137,19 +137,19 @@ How a sink writes, and what it does with rows it cannot.
 
 | Component | Write modes | Rejects | Artifact I/O |
 |---|---|---|---|
-| `snk.csv` | overwrite, error | - | - |
-| `snk.tsv` | overwrite, error | - | - |
-| `snk.json` | overwrite, error | - | - |
-| `snk.jsonl` | overwrite, error | - | - |
-| `snk.xml` | overwrite, error | - | - |
-| `snk.excel` | overwrite, error | - | - |
-| `snk.parquet` | overwrite, append, error | - | - |
+| `snk.csv` | overwrite | - | - |
+| `snk.tsv` | overwrite | - | - |
+| `snk.json` | overwrite | - | - |
+| `snk.jsonl` | overwrite | - | - |
+| `snk.xml` | overwrite | - | - |
+| `snk.excel` | overwrite | - | - |
+| `snk.parquet` | overwrite | - | - |
 | `snk.vortex` | - | - | - |
-| `snk.avro` | overwrite, error | - | - |
-| `snk.qvd` | overwrite, error | - | - |
+| `snk.avro` | overwrite | - | - |
+| `snk.qvd` | overwrite | - | - |
 | `snk.model` | - | - | - |
-| `snk.yaml` | overwrite, error | - | - |
-| `snk.toml` | overwrite, error | - | - |
+| `snk.yaml` | overwrite | - | - |
+| `snk.toml` | overwrite | - | - |
 | `snk.spatial` | - | - | - |
 | `snk.ftp` | - | - | - |
 | `snk.huggingface` | - | - | - |
@@ -179,11 +179,11 @@ How a sink writes, and what it does with rows it cannot.
 | `snk.salesforce` | - | - | - |
 | `snk.salesforce.bulk` | - | - | - |
 | `snk.s3` | - | - | - |
-| `snk.gcs` | overwrite, error | - | - |
-| `snk.azureblob` | overwrite, error | - | - |
-| `snk.minio` | overwrite, error | - | - |
-| `snk.r2` | overwrite, error | - | - |
-| `snk.b2` | overwrite, error | - | - |
+| `snk.gcs` | overwrite | - | - |
+| `snk.azureblob` | overwrite | - | - |
+| `snk.minio` | overwrite | - | - |
+| `snk.r2` | overwrite | - | - |
+| `snk.b2` | overwrite | - | - |
 | `snk.kafka` | - | - | - |
 | `snk.redpanda` | - | - | - |
 | `snk.nats` | - | - | - |

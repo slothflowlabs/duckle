@@ -9165,6 +9165,37 @@ fn dead_letter_prelude(
     Ok((valid, prelude))
 }
 
+/// A file sink writes with `COPY ... TO`, which only ever REPLACES.
+///
+/// The forms offered "Append" (snk.parquet) and "Error if exists" (csv, json,
+/// jsonl, excel, parquet) and none of these builders reads `mode` at all - an
+/// unrecognised mode is not an error in a COPY, it is the default, and the
+/// default is replace. Measured before this guard existed: rows 1,2 written,
+/// a second run with mode=append writing 3,4, and the file afterwards held ONLY
+/// 3,4. Someone asking to add to a dataset destroyed it, with no error.
+///
+/// The options are gone from the forms. This is for the pipelines already
+/// carrying one, which would otherwise keep silently replacing: refuse, and say
+/// what would have happened.
+fn refuse_unimplemented_file_mode(
+    component_id: &str,
+    props: &JsonValue,
+) -> Result<(), EngineError> {
+    let mode = string_prop(props, "mode").unwrap_or_default();
+    let mode = mode.trim();
+    if mode.is_empty() || mode.eq_ignore_ascii_case("overwrite") {
+        return Ok(());
+    }
+    Err(EngineError::Unsupported(format!(
+        "{component_id}: write mode '{mode}' is not implemented for a file sink - it writes with          COPY, which always replaces the file. Running this would have REPLACED the existing data          rather than {}. Remove the mode, or write to a database sink, which does implement it.",
+        if mode.eq_ignore_ascii_case("append") {
+            "adding to it"
+        } else {
+            "refusing"
+        }
+    )))
+}
+
 pub(crate) fn build_sink_sql(
     component_id: &str,
     props: &JsonValue,
@@ -9173,7 +9204,10 @@ pub(crate) fn build_sink_sql(
     schema: Option<&[duckle_metadata::Column]>,
 ) -> Result<String, EngineError> {
     match component_id {
-        "snk.csv" => Ok(build_csv_sink(props, from_view)),
+        "snk.csv" => {
+            refuse_unimplemented_file_mode(component_id, props)?;
+            Ok(build_csv_sink(props, from_view))
+        }
         "snk.tsv" => {
             let mut p = props.clone();
             if let Some(obj) = p.as_object_mut() {
@@ -9181,8 +9215,14 @@ pub(crate) fn build_sink_sql(
             }
             Ok(build_csv_sink(&p, from_view))
         }
-        "snk.parquet" => Ok(build_parquet_sink(props, from_view)),
-        "snk.json" | "snk.jsonl" => Ok(build_json_sink(props, from_view)),
+        "snk.parquet" => {
+            refuse_unimplemented_file_mode(component_id, props)?;
+            Ok(build_parquet_sink(props, from_view))
+        }
+        "snk.json" | "snk.jsonl" => {
+            refuse_unimplemented_file_mode(component_id, props)?;
+            Ok(build_json_sink(props, from_view))
+        }
         "snk.s3" | "snk.gcs" | "snk.azureblob"
         | "snk.minio" | "snk.r2" | "snk.b2" => {
             // MinIO / R2 / B2 are S3-compatible; the endpoint lives in the
@@ -9205,7 +9245,10 @@ pub(crate) fn build_sink_sql(
             let (eff_from, prelude) = dead_letter_prelude(props, schema, from_view)?;
             Ok(format!("{}{}", prelude, build_relational_sink(component_id, props, &eff_from, cols)?))
         }
-        "snk.excel" => Ok(build_excel_sink(props, from_view)),
+        "snk.excel" => {
+            refuse_unimplemented_file_mode(component_id, props)?;
+            Ok(build_excel_sink(props, from_view))
+        }
         "snk.spatial" => Ok(build_spatial_sink(props, from_view)),
         "snk.iceberg" => Ok(build_iceberg_sink(props, from_view)),
         other => Err(EngineError::Unsupported(format!(

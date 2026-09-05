@@ -21756,3 +21756,48 @@ fn an_inner_join_sends_its_unmatched_rows_to_the_reject_port() {
          rather than vanish. Got: {lost_rows:?}"
     );
 }
+
+/// The data-loss path, end to end: a parquet sink asked to APPEND used to
+/// replace the file, because no file-sink builder reads `mode` and a COPY
+/// always replaces. Rows written by the first run were simply gone.
+///
+/// Now the second run refuses, so the rows survive. That is the assertion that
+/// matters - not the error text, but that the data is still there afterwards.
+#[test]
+fn a_parquet_append_does_not_destroy_what_is_already_there() {
+    let engine = engine_or_skip!();
+    let _g = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    let first = write_file(tmp.path(), "a.csv", "id\n1\n2\n");
+    let second = write_file(tmp.path(), "b.csv", "id\n3\n4\n");
+    let out = out_path(tmp.path(), "out.parquet");
+
+    let run = |src: &str, mode: &str| {
+        let d = doc(
+            json!([
+                node("s", "src.csv", json!({ "path": src, "hasHeader": true })),
+                node("k", "snk.parquet", json!({ "path": out, "mode": mode })),
+            ]),
+            json!([main_edge("e1", "s", "k")]),
+        );
+        engine.execute_pipeline_named(&d, "appendguard")
+    };
+    assert!(run(&first, "overwrite").error.is_none(), "the first write must succeed");
+    let r = run(&second, "append");
+    assert!(r.error.is_some(), "an append to a file sink must be refused, not performed");
+
+    let back = out_path(tmp.path(), "back.csv");
+    let check = doc(
+        json!([
+            node("s", "src.parquet", json!({ "path": out })),
+            node("k", "snk.csv", json!({ "path": back, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    );
+    assert!(engine.execute_pipeline_named(&check, "appendcheck").error.is_none());
+    let rows = std::fs::read_to_string(&back).unwrap_or_default();
+    assert!(
+        rows.contains('1') && rows.contains('2'),
+        "the refused run must leave the original rows untouched, got {rows:?}"
+    );
+}

@@ -126,10 +126,10 @@ const writeModeField = (): Field => ({
     label: 'Write mode',
     kind: 'select',
     defaultValue: 'overwrite',
-    options: [
-        { label: 'Overwrite', value: 'overwrite' },
-        { label: 'Error if exists', value: 'error' },
-    ],
+    // "Error if exists" was here and no file-sink builder reads `mode`: a COPY
+    // always replaces, so the option that promised to refuse a write silently
+    // performed one. build_sink_sql now refuses it rather than replacing.
+    options: [{ label: 'Overwrite', value: 'overwrite' }],
 });
 
 // Validate-before-insert / dead-letter for DB sinks (#101): split rows that
