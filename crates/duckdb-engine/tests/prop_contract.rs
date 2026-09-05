@@ -46,6 +46,7 @@ fn allowed(component: &str, key: &str) -> Option<&'static str> {
         // Legacy spellings the builder still accepts so saved pipelines and
         // imported jobs keep working. The canonical key is declared.
         (_, "additions") => Some("legacy spelling of columns"),
+        (_, "recordPath") => Some("singular spelling of recordsPath"),
         (_, "filterSql") => Some("legacy spelling of predicate"),
         (_, "having") => Some("legacy spelling of havingClause"),
         (_, "keep") => Some("legacy spelling of columns"),
@@ -153,8 +154,12 @@ fn declared_keys() -> BTreeMap<String, BTreeSet<String>> {
 
 /// Map each builder function to the component ids dispatched to it.
 fn ids_by_builder(src: &str) -> BTreeMap<String, BTreeSet<String>> {
+    // `Ok(` has to be seen through: an arm written `=> Ok(build_x(props))`
+    // is as much a dispatch as `=> build_x(props)`, and skipping those made
+    // both contract tests blind to 30-odd components, src.filelist and
+    // src.inline among them.
     let arm = regex::Regex::new(
-        r#"(?m)^\s*((?:"[a-z][\w.]*"\s*\|\s*)*"[a-z][\w.]*")\s*=>\s*([a-z_]\w*)\s*\("#,
+        r#"(?m)^\s*((?:"[a-z][\w.]*"\s*\|\s*)*"[a-z][\w.]*")\s*=>\s*(?:Ok\(\s*)?([a-z_]\w*)\s*\("#,
     )
     .unwrap();
     let lit = regex::Regex::new(r#""([a-z][\w.]*)""#).unwrap();
@@ -608,5 +613,61 @@ fn every_declared_reject_port_is_one_something_can_fill() {
         unfillable.is_empty(),
         "these declare a reject port and nothing can produce their __reject relation, so \
          wiring it fails the run: {unfillable:?}"
+    );
+}
+
+/// A form that sets nothing its builder reads is a form that does nothing.
+///
+/// The union check above is per BUILDER, so a family passes as long as SOME
+/// member declares each key. That hides the opposite failure: a component
+/// whose own form shares no key at all with the builder it dispatches to.
+/// The user fills the panel in, every value lands in the pipeline, and the
+/// builder reads none of them - so the node runs on its defaults and says
+/// nothing. src.inline had a bare notes box and returned
+/// `SELECT NULL WHERE false`, zero rows and no error; src.filelist had the
+/// same box and globbed the filesystem root.
+#[test]
+fn every_component_declares_at_least_one_key_its_builder_reads() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("plan")
+        .join("builders.rs");
+    let src = std::fs::read_to_string(&path).expect("builders.rs");
+    let declared = declared_keys();
+    let read = regex::Regex::new(
+        r#"(?:columns_list|kv_pairs|string_prop|bool_prop|u64_prop|usize_prop|num_prop|int_prop)\s*\(\s*&?props\s*,\s*"(\w+)"|props\s*\.\s*get\(\s*"(\w+)""#,
+    )
+    .unwrap();
+
+    let mut deaf: Vec<String> = Vec::new();
+    for (builder, ids) in ids_by_builder(&src) {
+        let Some(body) = body_of(&src, &builder) else { continue };
+        let keys: BTreeSet<String> = read
+            .captures_iter(body)
+            .filter_map(|c| c.get(1).or_else(|| c.get(2)).map(|m| m.as_str().to_string()))
+            .collect();
+        // Nothing to declare, so nothing to get wrong.
+        if keys.is_empty() {
+            continue;
+        }
+        for id in &ids {
+            let Some(fields) = declared.get(id) else { continue };
+            // A component with no form at all is the other test's business.
+            if fields.is_empty() {
+                continue;
+            }
+            if fields.iter().any(|k| keys.contains(k)) {
+                continue;
+            }
+            deaf.push(format!(
+                "{id} -> {builder}() reads {keys:?} but its form only sets {fields:?}"
+            ));
+        }
+    }
+    deaf.sort();
+    assert!(
+        deaf.is_empty(),
+        "these components have a form that sets nothing the engine reads, so filling it \
+         in changes nothing about the run: {deaf:#?}"
     );
 }

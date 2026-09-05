@@ -401,6 +401,16 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                         placeholder: 'sales.orders',
                         description: 'Read this entire table when no SQL query is given.',
                     },
+                    {
+                        // The arm reads this and this manifest is hand-written,
+                        // so it never passed through the synthesizer that would
+                        // have offered it. Fetch size was fixed at 5000.
+                        key: 'batchSize',
+                        label: 'Rows per fetch',
+                        kind: 'integer',
+                        defaultValue: 5000,
+                        description: 'How many rows are pulled from the ODBC driver at a time. Larger trades memory for fewer round trips.',
+                    },
                 ],
             },
         ],

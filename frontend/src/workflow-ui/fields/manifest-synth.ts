@@ -1239,6 +1239,30 @@ function synthFileSource(comp: ComponentDef): ComponentManifest {
         ...(comp.id === 'src.pdf' || comp.id === 'src.xml' || comp.id === 'src.html'
             ? [artifactInputSection(), artifactAuthSection()]
             : []),
+        // Each arm reads its own throughput knob and neither had a field.
+        ...(comp.id === 'src.pdf'
+            ? [{
+                  label: 'Throughput',
+                  fields: [{
+                      key: 'concurrency',
+                      label: 'Documents at once',
+                      kind: 'integer' as const,
+                      defaultValue: 1,
+                      description: 'How many documents are extracted in parallel. One at a time by default, which is the behaviour this source has always had.',
+                  }],
+              }]
+            : []),
+        ...(comp.id === 'src.xml'
+            ? [{
+                  label: 'Throughput',
+                  fields: [{
+                      key: 'batchRows',
+                      label: 'Rows per batch',
+                      kind: 'integer' as const,
+                      description: 'How many rows the streaming parser buffers before writing them out. Larger is faster and holds more in memory. Blank uses the engine default.',
+                  }],
+              }]
+            : []),
         ...(comp.id === 'src.html'
             ? [{
                   label: 'Follow pagination',
@@ -1528,6 +1552,8 @@ function synthFileSink(comp: ComponentDef): ComponentManifest {
                     { key: 'privateKey', label: 'Private key (PEM)', kind: 'text',
                       placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----',
                       description: 'OpenSSH private key for SFTP key-based auth (instead of a password).' },
+                    { key: 'privateKeyPath', label: 'Private key file', kind: 'file-path',
+                      description: 'Name a key file instead of pasting it. Read when the paste above is empty.' },
                     { key: 'keyPassphrase', label: 'Key passphrase', kind: 'text', placeholder: '••••••••' },
                     { key: 'hostFingerprint', label: 'Host fingerprint', kind: 'text',
                       placeholder: 'SHA256:...',
@@ -1803,6 +1829,11 @@ function fileFormatSection(comp: ComponentDef): FormSection[] {
                 fields: [
                     { key: 'sheet', label: 'Sheet name', kind: 'text', placeholder: 'Sheet1' },
                     { key: 'range', label: 'Cell range', kind: 'text', placeholder: 'A1:F1000' },
+                    // build_excel_source passes this straight to read_xlsx as
+                    // `header =`. It had no field, so a sheet whose first row
+                    // is data was read with that row consumed as the names.
+                    { key: 'hasHeader', label: 'Has header row', kind: 'bool', defaultValue: true,
+                      description: 'Off treats the first row as data and names the columns positionally.' },
                 ],
             },
         ];
@@ -2202,6 +2233,53 @@ function synthLakehouseSink(comp: ComponentDef): ComponentManifest {
 function synthWrongFamilyForm(comp: ComponentDef): ComponentManifest | null {
     const id = comp.id;
 
+    // snk.avro was drawn by the generic file-sink synth, so it offered mode
+    // and compression. AvroSinkSpec has neither - it is path, schema_json and
+    // record_name - so both controls were inert, and the two that work had no
+    // field. The schema one is named in the arm's own comment as the way to
+    // supply a schema, and there was no way to supply it.
+    if (comp.id === 'snk.avro') {
+        return base(comp, [
+            {
+                label: 'Avro',
+                fields: [
+                    { key: 'path', label: 'File path', kind: 'save-path', required: true, placeholder: 'out/rows.avro' },
+                    {
+                        key: 'schemaJson',
+                        label: 'Avro schema (JSON)',
+                        kind: 'textarea',
+                        rows: 6,
+                        monospace: true,
+                        placeholder: '{"type": "record", "name": "Row", "fields": [...]}',
+                        description: 'Written verbatim into the container file. Blank infers the schema from the first row: long for integers, double for floats, string for text, boolean for bool, and a [null, string] union where the first non-null example is text but other rows are null.',
+                    },
+                    {
+                        key: 'recordName',
+                        label: 'Record name',
+                        kind: 'text',
+                        defaultValue: 'Row',
+                        description: 'The record name in the inferred schema. Ignored when a schema is given above, which carries its own.',
+                    },
+                ],
+            },
+        ], 'upstream');
+    }
+    // snk.xml was drawn with the XML SOURCE's shape: rowPath, namespace, plus
+    // the generic file-sink mode and compression. XmlSinkSpec carries none of
+    // those - it has root_element and row_element and nothing else - so every
+    // control on the form was inert and the two that work had no field.
+    if (comp.id === 'snk.xml') {
+        return base(comp, [
+            {
+                label: 'XML',
+                fields: [
+                    { key: 'path', label: 'File path', kind: 'save-path', required: true, placeholder: 'out/rows.xml' },
+                    { key: 'rootElement', label: 'Root element', kind: 'text', defaultValue: 'root', description: 'The single element wrapping the whole document.' },
+                    { key: 'rowElement', label: 'Row element', kind: 'text', defaultValue: 'row', description: 'The element wrapping each row. Columns become child elements inside it.' },
+                ],
+            },
+        ], 'upstream');
+    }
     // --- Messaging, source side -----------------------------------------
     if (id === 'src.rabbit') {
         return base(comp, [
@@ -4171,6 +4249,28 @@ function synthStreamingSource(comp: ComponentDef): ComponentManifest {
                     description: 'Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.',
                     visibleWhen: [{ key: 'format', equals: 'avro' }],
                 },
+                // Only the Kafka arm reads these, and it read both with no
+                // field to set either: the editor could only ever consume
+                // partition 0, and only the first 1000 messages of it, so a
+                // multi-partition topic came back silently short.
+                ...(comp.id === 'src.kafka' || comp.id === 'src.redpanda'
+                    ? ([
+                          {
+                              key: 'partitionId',
+                              label: 'Partition',
+                              kind: 'integer',
+                              defaultValue: 0,
+                              description: 'Which partition to read. This connector consumes one partition per node; point several nodes at a multi-partition topic and union them.',
+                          },
+                          {
+                              key: 'maxRecords',
+                              label: 'Max messages',
+                              kind: 'integer',
+                              defaultValue: 1000,
+                              description: 'The most messages one run will take. This is a batch connector, not a streaming pump.',
+                          },
+                      ] as Field[])
+                    : []),
             ],
         },
     ]);
@@ -4246,6 +4346,26 @@ function synthStreamingSink(comp: ComponentDef): ComponentManifest {
                         ],
                     },
                     { key: 'keyColumn', label: 'Message key column', kind: 'column' },
+                    // Read by the Kafka arm with no field, so every row went
+                    // to partition 0 whatever the topic's partition count.
+                    ...(comp.id === 'snk.kafka' || comp.id === 'snk.redpanda'
+                        ? ([
+                              {
+                                  key: 'partitionId',
+                                  label: 'Partition',
+                                  kind: 'integer',
+                                  defaultValue: 0,
+                                  description: 'Which partition to write to. Every row goes to this one partition.',
+                              },
+                              {
+                                  key: 'batchSize',
+                                  label: 'Batch size',
+                                  kind: 'integer',
+                                  defaultValue: 500,
+                                  description: 'How many records are sent per produce request.',
+                              },
+                          ] as Field[])
+                        : []),
                 ],
             },
         ],
@@ -4794,6 +4914,20 @@ function synthApiSink(comp: ComponentDef): ComponentManifest {
                         description:
                             'JSON sends each row (or the batch) as JSON. Plain text renders each row through the template below and sends the rows newline-joined as one request (e.g. InfluxDB Line Protocol for QuestDB).',
                     },
+                    // The executor has always honoured this and no form offered
+                    // it, so an API needing a named wrapper could only be fed by
+                    // hand-editing the pipeline. Not snk.graphql, which shares
+                    // this form but hardcodes its wrapper to `variables`.
+                    ...(comp.id === 'snk.rest' || comp.id === 'snk.webhook'
+                        ? ([{
+                              key: 'bodyWrap',
+                              label: 'Wrap the batch in a key',
+                              kind: 'text',
+                              placeholder: 'records',
+                              description: 'Sends {"records": [ ...rows ]} instead of a bare array. Blank sends the array on its own. Only applies when batching.',
+                              visibleWhen: [{ key: 'batchMode', equals: 'array' }],
+                          }] as Field[])
+                        : []),
                     {
                         key: 'bodyTemplate',
                         label: 'Body template',
@@ -4916,6 +5050,36 @@ function synthNoSqlSource(comp: ComponentDef): ComponentManifest {
                     },
                     { key: 'size', label: 'Page size', kind: 'integer', defaultValue: 1000 },
                     { key: 'maxPages', label: 'Max pages (safety cap)', kind: 'integer', defaultValue: 100 },
+                ],
+            },
+            {
+                label: 'Paging',
+                fields: [
+                    // The arm has read these since search_after was added and
+                    // neither had a field, so every run used from/size - which
+                    // both engines refuse past index.max_result_window, 10,000
+                    // documents by default. Reading a larger index from the
+                    // editor was not possible.
+                    {
+                        key: 'paginationMode',
+                        label: 'Paging mode',
+                        kind: 'select',
+                        defaultValue: 'from_size',
+                        options: [
+                            { label: 'from / size', value: 'from_size' },
+                            { label: 'search_after (deep paging)', value: 'search_after' },
+                        ],
+                        description: `from / size is simplest but ${vendor} rejects it past index.max_result_window (10,000 documents by default). search_after pages without that ceiling.`,
+                    },
+                    {
+                        key: 'sort',
+                        label: 'Sort (raw JSON array)',
+                        kind: 'textarea',
+                        rows: 2,
+                        placeholder: '[{"@timestamp": "asc"}]',
+                        description: 'The sort that makes paging stable. Left blank it uses _shard_doc, the built-in shard-stable doc id, which needs no field of your own.',
+                        visibleWhen: [{ key: 'paginationMode', equals: 'search_after' }],
+                    },
                 ],
             },
         ]);
@@ -5108,6 +5272,12 @@ function synthMiscSource(comp: ComponentDef): ComponentManifest {
                 fields: [
                     { key: 'privateKeyPath', label: 'Private key file', kind: 'file-path',
                       description: 'OpenSSH private key for SFTP key-based auth (instead of a password).' },
+                    // The arm takes either a pasted PEM or a key file and only
+                    // the file had a field here, while snk.ftp offered only the
+                    // paste. Both sides now offer both.
+                    { key: 'privateKey', label: 'Private key (PEM)', kind: 'text',
+                      placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----',
+                      description: 'Paste the key instead of naming a file. Takes precedence over the file above.' },
                     { key: 'keyPassphrase', label: 'Key passphrase', kind: 'text', placeholder: '••••••••' },
                     { key: 'hostFingerprint', label: 'Host fingerprint', kind: 'text',
                       placeholder: 'SHA256:...',
@@ -6689,6 +6859,37 @@ function synthPipelineControl(comp: ComponentDef): ComponentManifest {
             },
         ], 'declared');
     }
+    // src.filelist and src.inline sit in the ctl.pipeline palette group, so
+    // group-based synthesis drew them with the control form - a notes box and
+    // nothing else. Both builders read props, and neither degrades loudly
+    // without them: build_filelist_source with no directory globs '/*', which
+    // lists the filesystem root, and build_inline_source with no columns
+    // returns `SELECT NULL WHERE false`, zero rows and no error. Routed by id,
+    // like src.artifact directly above.
+    if (comp.id === 'src.filelist') {
+        return base(comp, [
+            {
+                label: 'Files',
+                fields: [
+                    { key: 'directory', label: 'Folder', kind: 'file-path', description: 'The folder to list. Every file in it becomes a row.' },
+                    { key: 'pattern', label: 'Pattern', kind: 'text', placeholder: '*', description: 'Which files to include. Everything, if left blank.' },
+                    { key: 'recursive', label: 'Include sub-folders', kind: 'bool', defaultValue: false },
+                    { key: 'path', label: 'Single file instead', kind: 'file-path', description: 'Naming one file yields one row if it exists and none if it does not, which makes this node a file-exists check. Takes precedence over the folder above.' },
+                ],
+            },
+        ], 'declared');
+    }
+    if (comp.id === 'src.inline') {
+        return base(comp, [
+            {
+                label: 'Rows',
+                fields: [
+                    { key: 'columns', label: 'Columns', kind: 'key-value', required: true, description: 'Each entry is one column: the name on the left, the value on the right. Values are written as text literals, never as SQL.' },
+                    { key: 'rowCount', label: 'Row count', kind: 'integer', defaultValue: 1, description: 'How many identical rows to emit.' },
+                ],
+            },
+        ], 'declared');
+    }
     if (comp.id === 'ctl.setvar') {
         return base(comp, [
             {
@@ -7529,6 +7730,35 @@ function synthCustomCode(comp: ComponentDef): ComponentManifest {
                       : undefined },
             ],
         },
+        // The shell arm reads all three and the shared code form offered none,
+        // so a shell node always ran in the process's own working directory,
+        // through the platform default interpreter, with no time limit.
+        ...(id === 'code.shell'
+            ? ([{
+                  label: 'Shell',
+                  fields: [
+                      {
+                          key: 'workingDir',
+                          label: 'Working directory',
+                          kind: 'file-path',
+                          description: "Where the command runs. Left blank it inherits the engine's own working directory, which is not where a pipeline's files usually are.",
+                      },
+                      {
+                          key: 'shell',
+                          label: 'Interpreter',
+                          kind: 'text',
+                          placeholder: 'bash',
+                          description: 'The interpreter to run the command through. Blank uses the platform default: cmd on Windows, sh elsewhere.',
+                      },
+                      {
+                          key: 'timeoutMs',
+                          label: 'Timeout (ms)',
+                          kind: 'integer',
+                          description: 'Kill the command after this long. Blank means it runs until it exits, which a hung command never does.',
+                      },
+                  ],
+              }] as FormSection[])
+            : []),
         ...outputCacheSection(comp),
     ], 'declared');
 }
@@ -8146,6 +8376,18 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                         placeholder: 'Clean and normalize this address:\n{address}',
                         description: 'Reference columns with {column_name}.',
                     },
+                    {
+                        // Sent as the system message on every request. The arm
+                        // has always read it and no field offered it, so the
+                        // one control that sets a model's standing instructions
+                        // was reachable only by hand-editing the pipeline.
+                        key: 'systemPrompt',
+                        label: 'System prompt',
+                        kind: 'textarea',
+                        rows: 3,
+                        placeholder: 'You are a data cleaning assistant. Answer with the value only.',
+                        description: 'Standing instructions sent with every row, separate from the per-row prompt above. Blank sends none.',
+                    },
                     { key: 'outputColumn', label: 'Output column', kind: 'text', required: true, defaultValue: 'ai_result' },
                     { key: 'temperature', label: 'Temperature', kind: 'number', defaultValue: 0 },
                     { key: 'maxTokens', label: 'Max tokens', kind: 'integer', defaultValue: 256 },
@@ -8222,6 +8464,21 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                     // everywhere else; `overlap` reached nothing.
                     { key: 'chunkOverlap', label: 'Overlap (tokens)', kind: 'integer', defaultValue: 64 },
                     { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'chunk' },
+                    // The arm reads `mode` and it decides the SHAPE of the
+                    // output, which every downstream node has to match. With
+                    // no field it was always explode, and the array form was
+                    // reachable only by hand-editing the pipeline.
+                    {
+                        key: 'mode',
+                        label: 'Output shape',
+                        kind: 'select',
+                        defaultValue: 'explode',
+                        options: [
+                            { label: 'One row per chunk', value: 'explode' },
+                            { label: 'One row per input, chunks as a JSON array', value: 'array' },
+                        ],
+                        description: 'One row per chunk also carries chunk_index and chunk_count alongside the rest of the source row. The array form keeps one row per input and puts the chunks in the output column.',
+                    },
                 ],
             },
         ], 'declared');

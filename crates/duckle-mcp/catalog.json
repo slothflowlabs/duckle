@@ -1596,6 +1596,18 @@
             ]
           },
           {
+            "label": "Throughput",
+            "fields": [
+              {
+                "key": "concurrency",
+                "label": "Documents at once",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many documents are extracted in parallel. One at a time by default, which is the behaviour this source has always had."
+              }
+            ]
+          },
+          {
             "label": "Reuse completed output",
             "fields": [
               {
@@ -2410,6 +2422,17 @@
             ]
           },
           {
+            "label": "Throughput",
+            "fields": [
+              {
+                "key": "batchRows",
+                "label": "Rows per batch",
+                "kind": "integer",
+                "description": "How many rows the streaming parser buffers before writing them out. Larger is faster and holds more in memory. Blank uses the engine default."
+              }
+            ]
+          },
+          {
             "label": "Reuse completed output",
             "fields": [
               {
@@ -2615,6 +2638,13 @@
                 "label": "Cell range",
                 "kind": "text",
                 "placeholder": "A1:F1000"
+              },
+              {
+                "key": "hasHeader",
+                "label": "Has header row",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "Off treats the first row as data and names the columns positionally."
               }
             ]
           }
@@ -6235,6 +6265,13 @@
                 "kind": "text",
                 "placeholder": "sales.orders",
                 "description": "Read this entire table when no SQL query is given."
+              },
+              {
+                "key": "batchSize",
+                "label": "Rows per fetch",
+                "kind": "integer",
+                "defaultValue": 5000,
+                "description": "How many rows are pulled from the ODBC driver at a time. Larger trades memory for fewer round trips."
               }
             ]
           }
@@ -9284,6 +9321,20 @@
                     "equals": "avro"
                   }
                 ]
+              },
+              {
+                "key": "partitionId",
+                "label": "Partition",
+                "kind": "integer",
+                "defaultValue": 0,
+                "description": "Which partition to read. This connector consumes one partition per node; point several nodes at a multi-partition topic and union them."
+              },
+              {
+                "key": "maxRecords",
+                "label": "Max messages",
+                "kind": "integer",
+                "defaultValue": 1000,
+                "description": "The most messages one run will take. This is a batch connector, not a streaming pump."
               }
             ]
           }
@@ -9638,6 +9689,20 @@
                     "equals": "avro"
                   }
                 ]
+              },
+              {
+                "key": "partitionId",
+                "label": "Partition",
+                "kind": "integer",
+                "defaultValue": 0,
+                "description": "Which partition to read. This connector consumes one partition per node; point several nodes at a multi-partition topic and union them."
+              },
+              {
+                "key": "maxRecords",
+                "label": "Max messages",
+                "kind": "integer",
+                "defaultValue": 1000,
+                "description": "The most messages one run will take. This is a batch connector, not a streaming pump."
               }
             ]
           }
@@ -14289,6 +14354,42 @@
                 "defaultValue": 100
               }
             ]
+          },
+          {
+            "label": "Paging",
+            "fields": [
+              {
+                "key": "paginationMode",
+                "label": "Paging mode",
+                "kind": "select",
+                "defaultValue": "from_size",
+                "options": [
+                  {
+                    "label": "from / size",
+                    "value": "from_size"
+                  },
+                  {
+                    "label": "search_after (deep paging)",
+                    "value": "search_after"
+                  }
+                ],
+                "description": "from / size is simplest but Elasticsearch rejects it past index.max_result_window (10,000 documents by default). search_after pages without that ceiling."
+              },
+              {
+                "key": "sort",
+                "label": "Sort (raw JSON array)",
+                "kind": "textarea",
+                "rows": 2,
+                "placeholder": "[{\"@timestamp\": \"asc\"}]",
+                "description": "The sort that makes paging stable. Left blank it uses _shard_doc, the built-in shard-stable doc id, which needs no field of your own.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationMode",
+                    "equals": "search_after"
+                  }
+                ]
+              }
+            ]
           }
         ],
         "ports": {
@@ -14373,6 +14474,42 @@
                 "label": "Max pages (safety cap)",
                 "kind": "integer",
                 "defaultValue": 100
+              }
+            ]
+          },
+          {
+            "label": "Paging",
+            "fields": [
+              {
+                "key": "paginationMode",
+                "label": "Paging mode",
+                "kind": "select",
+                "defaultValue": "from_size",
+                "options": [
+                  {
+                    "label": "from / size",
+                    "value": "from_size"
+                  },
+                  {
+                    "label": "search_after (deep paging)",
+                    "value": "search_after"
+                  }
+                ],
+                "description": "from / size is simplest but OpenSearch rejects it past index.max_result_window (10,000 documents by default). search_after pages without that ceiling."
+              },
+              {
+                "key": "sort",
+                "label": "Sort (raw JSON array)",
+                "kind": "textarea",
+                "rows": 2,
+                "placeholder": "[{\"@timestamp\": \"asc\"}]",
+                "description": "The sort that makes paging stable. Left blank it uses _shard_doc, the built-in shard-stable doc id, which needs no field of your own.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationMode",
+                    "equals": "search_after"
+                  }
+                ]
               }
             ]
           }
@@ -14922,6 +15059,13 @@
                 "label": "Private key file",
                 "kind": "file-path",
                 "description": "OpenSSH private key for SFTP key-based auth (instead of a password)."
+              },
+              {
+                "key": "privateKey",
+                "label": "Private key (PEM)",
+                "kind": "text",
+                "placeholder": "-----BEGIN OPENSSH PRIVATE KEY-----",
+                "description": "Paste the key instead of naming a file. Takes precedence over the file above."
               },
               {
                 "key": "keyPassphrase",
@@ -27526,6 +27670,14 @@
                 "description": "Reference columns with {column_name}."
               },
               {
+                "key": "systemPrompt",
+                "label": "System prompt",
+                "kind": "textarea",
+                "rows": 3,
+                "placeholder": "You are a data cleaning assistant. Answer with the value only.",
+                "description": "Standing instructions sent with every row, separate from the per-row prompt above. Blank sends none."
+              },
+              {
                 "key": "outputColumn",
                 "label": "Output column",
                 "kind": "text",
@@ -27755,6 +27907,23 @@
                 "label": "Output column",
                 "kind": "text",
                 "defaultValue": "chunk"
+              },
+              {
+                "key": "mode",
+                "label": "Output shape",
+                "kind": "select",
+                "defaultValue": "explode",
+                "options": [
+                  {
+                    "label": "One row per chunk",
+                    "value": "explode"
+                  },
+                  {
+                    "label": "One row per input, chunks as a JSON array",
+                    "value": "array"
+                  }
+                ],
+                "description": "One row per chunk also carries chunk_index and chunk_count alongside the rest of the source row. The array form keeps one row per input and puts the chunks in the output column."
               }
             ]
           }
@@ -30059,80 +30228,28 @@
         "schemaSource": "upstream",
         "sections": [
           {
-            "label": "Destination file",
+            "label": "XML",
             "fields": [
               {
                 "key": "path",
-                "label": "Output path",
+                "label": "File path",
                 "kind": "save-path",
                 "required": true,
-                "filters": [
-                  {
-                    "name": "XML",
-                    "extensions": [
-                      "xml"
-                    ]
-                  },
-                  {
-                    "name": "All files",
-                    "extensions": [
-                      "*"
-                    ]
-                  }
-                ]
+                "placeholder": "out/rows.xml"
               },
               {
-                "key": "mode",
-                "label": "Write mode",
-                "kind": "select",
-                "defaultValue": "overwrite",
-                "options": [
-                  {
-                    "label": "Overwrite",
-                    "value": "overwrite"
-                  }
-                ]
-              },
-              {
-                "key": "compression",
-                "label": "Compression",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Gzip",
-                    "value": "gzip"
-                  },
-                  {
-                    "label": "Zstd",
-                    "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "label": "Format",
-            "fields": [
-              {
-                "key": "rowPath",
-                "label": "Row path",
+                "key": "rootElement",
+                "label": "Root element",
                 "kind": "text",
-                "placeholder": "catalog/book",
-                "description": "Slash-separated path to the repeating element that becomes one row (e.g. catalog/book). Element names match by local name so XML namespaces are ignored. Attributes become @name columns and text content becomes _text."
+                "defaultValue": "root",
+                "description": "The single element wrapping the whole document."
               },
               {
-                "key": "namespace",
-                "label": "XML namespace",
-                "kind": "text"
+                "key": "rowElement",
+                "label": "Row element",
+                "kind": "text",
+                "defaultValue": "row",
+                "description": "The element wrapping each row. Columns become child elements inside it."
               }
             ]
           }
@@ -30497,63 +30614,30 @@
         "schemaSource": "upstream",
         "sections": [
           {
-            "label": "Destination file",
+            "label": "Avro",
             "fields": [
               {
                 "key": "path",
-                "label": "Output path",
+                "label": "File path",
                 "kind": "save-path",
                 "required": true,
-                "filters": [
-                  {
-                    "name": "Avro",
-                    "extensions": [
-                      "avro"
-                    ]
-                  },
-                  {
-                    "name": "All files",
-                    "extensions": [
-                      "*"
-                    ]
-                  }
-                ]
+                "placeholder": "out/rows.avro"
               },
               {
-                "key": "mode",
-                "label": "Write mode",
-                "kind": "select",
-                "defaultValue": "overwrite",
-                "options": [
-                  {
-                    "label": "Overwrite",
-                    "value": "overwrite"
-                  }
-                ]
+                "key": "schemaJson",
+                "label": "Avro schema (JSON)",
+                "kind": "textarea",
+                "rows": 6,
+                "monospace": true,
+                "placeholder": "{\"type\": \"record\", \"name\": \"Row\", \"fields\": [...]}",
+                "description": "Written verbatim into the container file. Blank infers the schema from the first row: long for integers, double for floats, string for text, boolean for bool, and a [null, string] union where the first non-null example is text but other rows are null."
               },
               {
-                "key": "compression",
-                "label": "Compression",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Gzip",
-                    "value": "gzip"
-                  },
-                  {
-                    "label": "Zstd",
-                    "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
-                  }
-                ]
+                "key": "recordName",
+                "label": "Record name",
+                "kind": "text",
+                "defaultValue": "Row",
+                "description": "The record name in the inferred schema. Ignored when a schema is given above, which carries its own."
               }
             ]
           }
@@ -31238,6 +31322,12 @@
                 "kind": "text",
                 "placeholder": "-----BEGIN OPENSSH PRIVATE KEY-----",
                 "description": "OpenSSH private key for SFTP key-based auth (instead of a password)."
+              },
+              {
+                "key": "privateKeyPath",
+                "label": "Private key file",
+                "kind": "file-path",
+                "description": "Name a key file instead of pasting it. Read when the paste above is empty."
               },
               {
                 "key": "keyPassphrase",
@@ -37026,6 +37116,20 @@
                 "key": "keyColumn",
                 "label": "Message key column",
                 "kind": "column"
+              },
+              {
+                "key": "partitionId",
+                "label": "Partition",
+                "kind": "integer",
+                "defaultValue": 0,
+                "description": "Which partition to write to. Every row goes to this one partition."
+              },
+              {
+                "key": "batchSize",
+                "label": "Batch size",
+                "kind": "integer",
+                "defaultValue": 500,
+                "description": "How many records are sent per produce request."
               }
             ]
           }
@@ -37109,6 +37213,20 @@
                 "key": "keyColumn",
                 "label": "Message key column",
                 "kind": "column"
+              },
+              {
+                "key": "partitionId",
+                "label": "Partition",
+                "kind": "integer",
+                "defaultValue": 0,
+                "description": "Which partition to write to. Every row goes to this one partition."
+              },
+              {
+                "key": "batchSize",
+                "label": "Batch size",
+                "kind": "integer",
+                "defaultValue": 500,
+                "description": "How many records are sent per produce request."
               }
             ]
           }
@@ -37646,6 +37764,19 @@
                 "description": "JSON sends each row (or the batch) as JSON. Plain text renders each row through the template below and sends the rows newline-joined as one request (e.g. InfluxDB Line Protocol for QuestDB)."
               },
               {
+                "key": "bodyWrap",
+                "label": "Wrap the batch in a key",
+                "kind": "text",
+                "placeholder": "records",
+                "description": "Sends {\"records\": [ ...rows ]} instead of a bare array. Blank sends the array on its own. Only applies when batching.",
+                "visibleWhen": [
+                  {
+                    "key": "batchMode",
+                    "equals": "array"
+                  }
+                ]
+              },
+              {
                 "key": "bodyTemplate",
                 "label": "Body template",
                 "kind": "expression",
@@ -37795,6 +37926,19 @@
                   }
                 ],
                 "description": "JSON sends each row (or the batch) as JSON. Plain text renders each row through the template below and sends the rows newline-joined as one request (e.g. InfluxDB Line Protocol for QuestDB)."
+              },
+              {
+                "key": "bodyWrap",
+                "label": "Wrap the batch in a key",
+                "kind": "text",
+                "placeholder": "records",
+                "description": "Sends {\"records\": [ ...rows ]} instead of a bare array. Blank sends the array on its own. Only applies when batching.",
+                "visibleWhen": [
+                  {
+                    "key": "batchMode",
+                    "equals": "array"
+                  }
+                ]
               },
               {
                 "key": "bodyTemplate",
@@ -40747,17 +40891,24 @@
         "kind": "source",
         "label": "Inline Rows",
         "description": "Rows you write here rather than read from anywhere: a control row, an audit stamp, a fixed lookup. Give each column a name and a value; rowCount repeats the row. Every other source names an external system, so this was previously a throwaway file.",
-        "schemaSource": "upstream",
+        "schemaSource": "declared",
         "sections": [
           {
-            "label": "Settings",
+            "label": "Rows",
             "fields": [
               {
-                "key": "notes",
-                "label": "Notes",
-                "kind": "textarea",
-                "rows": 3,
-                "description": "Component-specific configuration not yet modeled - describe the intent here."
+                "key": "columns",
+                "label": "Columns",
+                "kind": "key-value",
+                "required": true,
+                "description": "Each entry is one column: the name on the left, the value on the right. Values are written as text literals, never as SQL."
+              },
+              {
+                "key": "rowCount",
+                "label": "Row count",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many identical rows to emit."
               }
             ]
           }
@@ -40863,17 +41014,35 @@
         "kind": "source",
         "label": "File List",
         "description": "One row per file in a directory - file (full path) and filename - so a pipeline can iterate a folder. Set a glob pattern and optionally recurse. Pair it with ForEach to process every file.",
-        "schemaSource": "upstream",
+        "schemaSource": "declared",
         "sections": [
           {
-            "label": "Settings",
+            "label": "Files",
             "fields": [
               {
-                "key": "notes",
-                "label": "Notes",
-                "kind": "textarea",
-                "rows": 3,
-                "description": "Component-specific configuration not yet modeled - describe the intent here."
+                "key": "directory",
+                "label": "Folder",
+                "kind": "file-path",
+                "description": "The folder to list. Every file in it becomes a row."
+              },
+              {
+                "key": "pattern",
+                "label": "Pattern",
+                "kind": "text",
+                "placeholder": "*",
+                "description": "Which files to include. Everything, if left blank."
+              },
+              {
+                "key": "recursive",
+                "label": "Include sub-folders",
+                "kind": "bool",
+                "defaultValue": false
+              },
+              {
+                "key": "path",
+                "label": "Single file instead",
+                "kind": "file-path",
+                "description": "Naming one file yields one row if it exists and none if it does not, which makes this node a file-exists check. Takes precedence over the folder above."
               }
             ]
           }
@@ -44710,6 +44879,30 @@
                 "monospace": true,
                 "required": true,
                 "placeholder": "// custom code"
+              }
+            ]
+          },
+          {
+            "label": "Shell",
+            "fields": [
+              {
+                "key": "workingDir",
+                "label": "Working directory",
+                "kind": "file-path",
+                "description": "Where the command runs. Left blank it inherits the engine's own working directory, which is not where a pipeline's files usually are."
+              },
+              {
+                "key": "shell",
+                "label": "Interpreter",
+                "kind": "text",
+                "placeholder": "bash",
+                "description": "The interpreter to run the command through. Blank uses the platform default: cmd on Windows, sh elsewhere."
+              },
+              {
+                "key": "timeoutMs",
+                "label": "Timeout (ms)",
+                "kind": "integer",
+                "description": "Kill the command after this long. Blank means it runs until it exits, which a hung command never does."
               }
             ]
           }

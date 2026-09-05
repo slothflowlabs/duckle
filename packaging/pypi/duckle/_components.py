@@ -21,7 +21,7 @@ COMPONENTS = {
     'code.shell': {
         'kind': 'custom',
         'summary': 'Run an arbitrary shell command and emit one row with {stdout, stderr, exit_code, duration_ms}. Defaults to cmd.exe on Windows, /bin/sh on Unix. Optional timeout + workingDir. Cancellation kills the child process.',
-        'params': ['routineRef', 'language', 'code'],
+        'params': ['routineRef', 'language', 'code', 'workingDir', 'shell', 'timeoutMs'],
     },
     'code.sql': {
         'kind': 'custom',
@@ -291,7 +291,7 @@ COMPONENTS = {
     'snk.avro': {
         'kind': 'sink',
         'summary': "Write rows as an Apache Avro container file via the pure-Rust `apache-avro` crate. Schema is inferred from the first row's column types (long / double / string / boolean) - or supply a JSON Avro schema via the schemaJson field to override. recordName names the inferred record (default `Row`).",
-        'params': ['path', 'mode', 'compression'],
+        'params': ['path', 'schemaJson', 'recordName'],
     },
     'snk.azureblob': {
         'kind': 'sink',
@@ -382,7 +382,7 @@ COMPONENTS = {
     'snk.ftp': {
         'kind': 'sink',
         'summary': 'Upload pipeline output over FTP / FTPS / SFTP',
-        'params': ['protocol', 'host', 'port', 'user', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint', 'remotePath', 'format'],
+        'params': ['protocol', 'host', 'port', 'user', 'password', 'privateKey', 'privateKeyPath', 'keyPassphrase', 'hostFingerprint', 'remotePath', 'format'],
     },
     'snk.gcs': {
         'kind': 'sink',
@@ -422,7 +422,7 @@ COMPONENTS = {
     'snk.kafka': {
         'kind': 'sink',
         'summary': 'Produce one Kafka record per upstream row via the pure-Rust `rskafka` driver. Record key = optional keyColumn value; record value = JSON-stringified row. Records go to a single partition (partitionId, default 0); pipelined batching (default 500 records per produce call). Every write is acknowledg...',
-        'params': ['brokers', 'topic', 'format', 'keyColumn'],
+        'params': ['brokers', 'topic', 'format', 'keyColumn', 'partitionId', 'batchSize'],
     },
     'snk.lancedb': {
         'kind': 'sink',
@@ -547,7 +547,7 @@ COMPONENTS = {
     'snk.redpanda': {
         'kind': 'sink',
         'summary': 'Same wire protocol as Kafka - rides the rskafka driver. Use snk.kafka semantics.',
-        'params': ['brokers', 'topic', 'format', 'keyColumn'],
+        'params': ['brokers', 'topic', 'format', 'keyColumn', 'partitionId', 'batchSize'],
     },
     'snk.redshift': {
         'kind': 'sink',
@@ -557,7 +557,7 @@ COMPONENTS = {
     'snk.rest': {
         'kind': 'sink',
         'summary': 'HTTP POST one batched request containing the result as a JSON array (configurable method, headers, body shape)',
-        'params': ['url', 'method', 'headers', 'batchMode', 'bodyType', 'bodyTemplate', 'authType', 'authToken', 'authHeader'],
+        'params': ['url', 'method', 'headers', 'batchMode', 'bodyType', 'bodyWrap', 'bodyTemplate', 'authType', 'authToken', 'authHeader'],
     },
     'snk.s3': {
         'kind': 'sink',
@@ -637,7 +637,7 @@ COMPONENTS = {
     'snk.webhook': {
         'kind': 'sink',
         'summary': 'HTTP POST one request per row, body = row JSON (configurable method + headers)',
-        'params': ['url', 'method', 'headers', 'batchMode', 'bodyType', 'bodyTemplate', 'authType', 'authToken', 'authHeader'],
+        'params': ['url', 'method', 'headers', 'batchMode', 'bodyType', 'bodyWrap', 'bodyTemplate', 'authType', 'authToken', 'authHeader'],
     },
     'snk.websocket': {
         'kind': 'sink',
@@ -647,7 +647,7 @@ COMPONENTS = {
     'snk.xml': {
         'kind': 'sink',
         'summary': 'Write rows as XML via `quick-xml`. Default shape: `<root><row><col>val</col>...</row>...</root>`. rootElement / rowElement override the wrapper names. Complex (object/array) cell values are JSON-encoded inside CDATA so the file round-trips back through src.xml losslessly.',
-        'params': ['path', 'mode', 'compression', 'rowPath', 'namespace'],
+        'params': ['path', 'rootElement', 'rowElement'],
     },
     'snk.yaml': {
         'kind': 'sink',
@@ -798,7 +798,7 @@ COMPONENTS = {
     'src.elastic': {
         'kind': 'source',
         'summary': 'Read docs from an Elasticsearch index via the _search API. from+size pagination (up to 10000 rows by default); ApiKey auth.',
-        'params': ['endpoint', 'index', 'apiKey', 'query', 'size', 'maxPages'],
+        'params': ['endpoint', 'index', 'apiKey', 'query', 'size', 'maxPages', 'paginationMode', 'sort'],
     },
     'src.email': {
         'kind': 'source',
@@ -808,12 +808,12 @@ COMPONENTS = {
     'src.excel': {
         'kind': 'source',
         'summary': 'Read .xlsx via the DuckDB excel extension',
-        'params': ['path', 'encoding', 'glob', 'sheet', 'range'],
+        'params': ['path', 'encoding', 'glob', 'sheet', 'range', 'hasHeader'],
     },
     'src.filelist': {
         'kind': 'source',
         'summary': 'One row per file in a directory - file (full path) and filename - so a pipeline can iterate a folder. Set a glob pattern and optionally recurse. Pair it with ForEach to process every file.',
-        'params': [],
+        'params': ['directory', 'pattern', 'recursive', 'path'],
     },
     'src.fixedwidth': {
         'kind': 'source',
@@ -823,7 +823,7 @@ COMPONENTS = {
     'src.ftp': {
         'kind': 'source',
         'summary': 'List + download files from an FTP server via the pure-Rust suppaftp client. Glob pattern filter (`*`, `?`); each file becomes one row {filename, size, modified, content_b64}. Use DuckDB `from_base64(content_b64)` downstream for the raw bytes. SFTP is a separate protocol and a separate component.',
-        'params': ['protocol', 'host', 'port', 'user', 'password', 'privateKeyPath', 'keyPassphrase', 'hostFingerprint', 'directory', 'pattern', 'maxFiles'],
+        'params': ['protocol', 'host', 'port', 'user', 'password', 'privateKeyPath', 'privateKey', 'keyPassphrase', 'hostFingerprint', 'directory', 'pattern', 'maxFiles'],
     },
     'src.gcs': {
         'kind': 'source',
@@ -888,7 +888,7 @@ COMPONENTS = {
     'src.inline': {
         'kind': 'source',
         'summary': 'Rows you write here rather than read from anywhere: a control row, an audit stamp, a fixed lookup. Give each column a name and a value; rowCount repeats the row. Every other source names an external system, so this was previously a throwaway file.',
-        'params': [],
+        'params': ['columns', 'rowCount'],
     },
     'src.intercom': {
         'kind': 'source',
@@ -913,7 +913,7 @@ COMPONENTS = {
     'src.kafka': {
         'kind': 'source',
         'summary': 'Batch-consume up to maxRecords messages from a single partition via the pure-Rust `rskafka` driver. Emits {offset, key, value, timestamp_ms} rows. startOffset negative = read from earliest available; positive = read from that offset. Batch ETL semantics - continuous streaming is on the roadmap.',
-        'params': ['brokers', 'topic', 'offset', 'trackOffset', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'format', 'schemaRegistryUrl'],
+        'params': ['brokers', 'topic', 'offset', 'trackOffset', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'format', 'schemaRegistryUrl', 'partitionId', 'maxRecords'],
     },
     'src.kinesis': {
         'kind': 'source',
@@ -998,7 +998,7 @@ COMPONENTS = {
     'src.opensearch': {
         'kind': 'source',
         'summary': 'Read docs from an OpenSearch index via the _search API. Same wire as Elasticsearch; same ApiKey auth.',
-        'params': ['endpoint', 'index', 'apiKey', 'query', 'size', 'maxPages'],
+        'params': ['endpoint', 'index', 'apiKey', 'query', 'size', 'maxPages', 'paginationMode', 'sort'],
     },
     'src.oracle': {
         'kind': 'source',
@@ -1013,7 +1013,7 @@ COMPONENTS = {
     'src.pdf': {
         'kind': 'source',
         'summary': 'One row per PAGE of a PDF: document_id, page_number, text, has_text_layer, width, height and the document metadata. Point it at a file or a folder. Reads the text layer a document already carries, so filings, accounts and invoices become a table you can filter, join and hand to a Python or AI sta...',
-        'params': ['path', 'recursive', 'uriColumn', 'carryColumns', 'shaColumn', 'onError', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl', 'headers', 'user', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint', 'cacheOutput'],
+        'params': ['path', 'recursive', 'uriColumn', 'carryColumns', 'shaColumn', 'onError', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl', 'headers', 'user', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint', 'concurrency', 'cacheOutput'],
     },
     'src.pgvector': {
         'kind': 'source',
@@ -1084,7 +1084,7 @@ COMPONENTS = {
     'src.redpanda': {
         'kind': 'source',
         'summary': 'Same wire protocol as Kafka - rides the rskafka driver. Use src.kafka semantics: batch-consume up to maxRecords from a single partition.',
-        'params': ['brokers', 'topic', 'offset', 'trackOffset', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'format', 'schemaRegistryUrl'],
+        'params': ['brokers', 'topic', 'offset', 'trackOffset', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'format', 'schemaRegistryUrl', 'partitionId', 'maxRecords'],
     },
     'src.redshift': {
         'kind': 'source',
@@ -1199,7 +1199,7 @@ COMPONENTS = {
     'src.teradata': {
         'kind': 'source',
         'summary': 'Read from Teradata through its free ODBC driver (no DuckDB Teradata extension exists). Install the Teradata ODBC driver, then connect with friendly host / user / password / database fields, a DSN, or a full ODBC connection string. Whole-table read or custom SQL; types preserved.',
-        'params': ['driver', 'host', 'user', 'password', 'database', 'dsn', 'connectionString', 'query', 'tableName'],
+        'params': ['driver', 'host', 'user', 'password', 'database', 'dsn', 'connectionString', 'query', 'tableName', 'batchSize'],
     },
     'src.toml': {
         'kind': 'source',
@@ -1254,7 +1254,7 @@ COMPONENTS = {
     'src.xml': {
         'kind': 'source',
         'summary': 'Read XML files via the pure-Rust `quick-xml` parser. rowPath is a slash-separated element walk (e.g. `library/books/book`); every matching element becomes one row. Attributes prefix with `@`, text content goes to `_text`, nested children nest; repeated same-name siblings collapse to arrays.',
-        'params': ['path', 'encoding', 'glob', 'rowPath', 'namespace', 'xsdPath', 'xsdChangePolicy', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint', 'uriColumn', 'carryColumns', 'shaColumn', 'onError', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl', 'headers', 'user', 'cacheOutput'],
+        'params': ['path', 'encoding', 'glob', 'rowPath', 'namespace', 'xsdPath', 'xsdChangePolicy', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint', 'uriColumn', 'carryColumns', 'shaColumn', 'onError', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl', 'headers', 'user', 'batchRows', 'cacheOutput'],
     },
     'src.yaml': {
         'kind': 'source',
@@ -1279,7 +1279,7 @@ COMPONENTS = {
     'xf.ai.chunk': {
         'kind': 'transform',
         'summary': 'Split long text into chunks for RAG / embedding pipelines. No API call - pure local char-window splitting with overlap. Props: inputColumn (default `text`), outputColumn (default `chunk`), chunkSize (default 1000), chunkOverlap (default 100), mode (`explode` = one row per chunk with chunk_index/c...',
-        'params': ['inputColumn', 'chunkSize', 'chunkOverlap', 'outputColumn'],
+        'params': ['inputColumn', 'chunkSize', 'chunkOverlap', 'outputColumn', 'mode'],
     },
     'xf.ai.classify': {
         'kind': 'transform',
@@ -1299,7 +1299,7 @@ COMPONENTS = {
     'xf.ai.llm': {
         'kind': 'transform',
         'summary': 'Per-row LLM completion via any OpenAI-compatible /v1/chat/completions endpoint. Props: promptTemplate with `{column}` substitution (or inputColumn for passthrough), outputColumn (default `completion`), model (default `gpt-4o-mini`), apiKey (required), baseUrl, systemPrompt, temperature. One HTTP ...',
-        'params': ['model', 'apiKey', 'baseUrl', 'endpointPath', 'headers', 'promptTemplate', 'outputColumn', 'temperature', 'maxTokens', 'concurrency', 'checkpoint', 'checkpointKey', 'checkpointFingerprint', 'maxRetries', 'maxRequests', 'maxInputTokens', 'maxOutputTokens', 'maxEstimatedCostUsd', 'inputUsdPerMillionTokens', 'outputUsdPerMillionTokens', 'responseFormat', 'jsonSchema', 'schemaName', 'expandColumns', 'onInvalid'],
+        'params': ['model', 'apiKey', 'baseUrl', 'endpointPath', 'headers', 'promptTemplate', 'systemPrompt', 'outputColumn', 'temperature', 'maxTokens', 'concurrency', 'checkpoint', 'checkpointKey', 'checkpointFingerprint', 'maxRetries', 'maxRequests', 'maxInputTokens', 'maxOutputTokens', 'maxEstimatedCostUsd', 'inputUsdPerMillionTokens', 'outputUsdPerMillionTokens', 'responseFormat', 'jsonSchema', 'schemaName', 'expandColumns', 'onInvalid'],
     },
     'xf.ai.pii': {
         'kind': 'transform',

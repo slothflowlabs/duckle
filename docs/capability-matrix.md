@@ -141,11 +141,11 @@ How a sink writes, and what it does with rows it cannot.
 | `snk.tsv` | overwrite | - | - |
 | `snk.json` | overwrite | - | - |
 | `snk.jsonl` | overwrite | - | - |
-| `snk.xml` | overwrite | - | - |
+| `snk.xml` | - | - | - |
 | `snk.excel` | overwrite | - | - |
 | `snk.parquet` | overwrite | - | - |
 | `snk.vortex` | - | - | - |
-| `snk.avro` | overwrite | - | - |
+| `snk.avro` | - | - | - |
 | `snk.qvd` | overwrite | - | - |
 | `snk.model` | - | - | - |
 | `snk.yaml` | overwrite | - | - |
