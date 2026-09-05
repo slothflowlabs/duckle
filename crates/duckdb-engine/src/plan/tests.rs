@@ -1425,11 +1425,11 @@
         // and join with the plain set operator.
         let mut ni = NodeInputs::default();
         ni.ports.insert("main".into(), vec!["a".into(), "b".into()]);
-        let sql = build_setop(&ni, "INTERSECT").unwrap();
+        let sql = build_setop(&ni, "INTERSECT", &serde_json::json!({})).unwrap();
         assert!(!sql.contains("INTERSECT BY NAME"), "must not emit invalid INTERSECT BY NAME, got: {}", sql);
         assert!(sql.contains(" INTERSECT "), "must join legs with plain INTERSECT, got: {}", sql);
         assert!(sql.contains("WHERE false UNION ALL BY NAME"), "must realign later legs by name, got: {}", sql);
-        let ex = build_setop(&ni, "EXCEPT").unwrap();
+        let ex = build_setop(&ni, "EXCEPT", &serde_json::json!({})).unwrap();
         assert!(ex.contains(" EXCEPT ") && !ex.contains("EXCEPT BY NAME"), "got: {}", ex);
     }
 
@@ -6253,5 +6253,75 @@ mod join_rejects {
         let err = build_reject_sql("xf.join.inner", &serde_json::json!({}), &ni, None)
             .expect_err("no keys, no answer");
         assert!(err.contains("key"), "{err}");
+    }
+}
+
+/// "Column match: by position" did nothing.
+///
+/// The four set operations declare a `matchBy` select, and build_union and
+/// build_setop took no props at all - both hardcoded BY NAME. Someone whose
+/// inputs are positionally aligned but differently NAMED picked "By position",
+/// got a by-name union, and their columns were padded with NULLs into a wider
+/// table instead of stacked. No error, wrong data.
+#[cfg(test)]
+mod set_operation_match_by {
+    use super::*;
+
+    fn two() -> NodeInputs {
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["a".into(), "b".into()]);
+        ni
+    }
+
+    fn by(v: &str) -> serde_json::Value {
+        serde_json::json!({ "matchBy": v })
+    }
+
+    /// By name is the default and stays the default: an existing pipeline that
+    /// never touched the control must emit exactly what it emitted before.
+    #[test]
+    fn by_name_remains_what_an_untouched_node_does() {
+        for props in [serde_json::json!({}), by("name")] {
+            let sql = build_union(&two(), true, &props).unwrap();
+            assert!(sql.contains("UNION BY NAME"), "{sql}");
+        }
+        let all = build_union(&two(), false, &serde_json::json!({})).unwrap();
+        assert!(all.contains("UNION ALL BY NAME"), "{all}");
+    }
+
+    /// The setting the form offers, which is the whole point.
+    #[test]
+    fn by_position_stacks_the_columns_as_they_come() {
+        let sql = build_union(&two(), true, &by("position")).unwrap();
+        assert!(sql.contains(" UNION "), "{sql}");
+        assert!(!sql.contains("BY NAME"), "by position must not realign on names: {sql}");
+
+        let all = build_union(&two(), false, &by("position")).unwrap();
+        assert!(all.contains(" UNION ALL "), "{all}");
+        assert!(!all.contains("BY NAME"), "{all}");
+    }
+
+    /// INTERSECT / EXCEPT realign later legs through a 0-row UNION ALL BY NAME
+    /// template, because `INTERSECT BY NAME` is a parser error. By position
+    /// there is nothing to realign, so the legs are compared as they stand.
+    #[test]
+    fn a_positional_intersect_drops_the_realignment_template() {
+        for op in ["INTERSECT", "EXCEPT"] {
+            let sql = build_setop(&two(), op, &by("position")).unwrap();
+            assert!(sql.contains(&format!(" {op} ")), "{sql}");
+            assert!(
+                !sql.contains("WHERE false UNION ALL BY NAME"),
+                "by position must not realign: {sql}"
+            );
+            assert!(!sql.contains(&format!("{op} BY NAME")), "still invalid syntax: {sql}");
+        }
+    }
+
+    /// And by name it keeps realigning, which is the behaviour that guards
+    /// against comparing the wrong columns.
+    #[test]
+    fn a_named_intersect_still_realigns() {
+        let sql = build_setop(&two(), "INTERSECT", &by("name")).unwrap();
+        assert!(sql.contains("WHERE false UNION ALL BY NAME"), "{sql}");
     }
 }

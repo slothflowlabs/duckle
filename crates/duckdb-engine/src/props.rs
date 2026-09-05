@@ -230,6 +230,32 @@ pub fn check(doc: &PipelineDoc) -> Vec<Finding> {
             });
             continue;
         };
+        // A setting that started working announces itself once. `matchBy:
+        // position` was accepted and ignored on the set operations - both
+        // builders took no props and always matched BY NAME - so a pipeline
+        // carrying it now produces different rows than it did before. The right
+        // rows, but different, and the operator should hear it here rather than
+        // from a downstream number moving. Not a failure: the configuration is
+        // correct, the history is what is surprising. Drop this after a release
+        // cycle, when nobody is upgrading across the change.
+        if matches!(component, "xf.union" | "xf.unionall" | "xf.intersect" | "xf.except")
+            && props
+                .get("matchBy")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("position"))
+        {
+            findings.push(Finding {
+                code: "behaviour_changed".into(),
+                node: node.id.clone(),
+                component: component.to_string(),
+                property: Some("matchBy".into()),
+                suggestion: None,
+                message: format!(
+                    "{component} now matches columns by position, as this node asks. Until                      recently the setting was accepted and ignored, and the columns were                      matched by name - so this node's output may differ from its last run.                      Set matchBy to name to keep the old result."
+                ),
+                fails: false,
+            });
+        }
         for key in props.keys() {
             // Honoured on every node, declared by none. See UNIVERSAL.
             if UNIVERSAL.contains(&key.as_str()) {
@@ -741,6 +767,39 @@ mod tests {
                 "{id} still offers waitForCompletion, which nothing reads"
             );
         }
+    }
+
+    /// A setting that started working has to announce itself.
+    ///
+    /// `matchBy: position` was accepted and ignored on the four set
+    /// operations: both builders took no props and always matched BY NAME. Now
+    /// that it takes effect, a pipeline carrying it produces different rows
+    /// than it did yesterday - the RIGHT rows, but different - and the operator
+    /// should hear that from `validate` rather than from a downstream number
+    /// moving. Non-fatal: the configuration is correct, it is the history that
+    /// is surprising.
+    #[test]
+    fn a_positional_set_operation_says_that_it_now_takes_effect() {
+        for id in ["xf.union", "xf.unionall", "xf.intersect", "xf.except"] {
+            let f = check(&doc(id, serde_json::json!({ "matchBy": "position" })));
+            let notice = f
+                .iter()
+                .find(|x| x.code == "behaviour_changed")
+                .unwrap_or_else(|| panic!("{id} should say the setting now applies: {f:?}"));
+            assert!(!notice.fails, "the pipeline is valid; this is news, not an error");
+            assert!(notice.message.contains("by name"), "{}", notice.message);
+        }
+        // By name is what it always did, so there is nothing to announce.
+        for props in [serde_json::json!({ "matchBy": "name" }), serde_json::json!({})] {
+            let f = check(&doc("xf.union", props));
+            assert!(
+                f.iter().all(|x| x.code != "behaviour_changed"),
+                "nothing changed for a by-name union: {f:?}"
+            );
+        }
+        // And it is scoped to the set operations, not to every matchBy.
+        let f = check(&doc("xf.join", serde_json::json!({ "leftKey": "a", "rightKey": "b" })));
+        assert!(f.iter().all(|x| x.code != "behaviour_changed"), "{f:?}");
     }
 
     #[test]

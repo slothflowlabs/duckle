@@ -245,10 +245,10 @@ pub(crate) fn build_view_sql(
         "xf.rollup" => build_aggregate(inputs, props, GroupMode::Rollup),
         "xf.cube" => build_aggregate(inputs, props, GroupMode::Cube),
         "xf.aggwin" => build_window_aggregate(inputs, props),
-        "xf.union" => build_union(inputs, true),
-        "xf.unionall" => build_union(inputs, false),
-        "xf.intersect" => build_setop(inputs, "INTERSECT"),
-        "xf.except" => build_setop(inputs, "EXCEPT"),
+        "xf.union" => build_union(inputs, true, props),
+        "xf.unionall" => build_union(inputs, false, props),
+        "xf.intersect" => build_setop(inputs, "INTERSECT", props),
+        "xf.except" => build_setop(inputs, "EXCEPT", props),
         "xf.addcol" | "xf.coalesce" => build_addcol(inputs, props),
         "xf.pyexpr" => build_pyexpr(inputs, props),
         "xf.rownum" | "xf.rank" | "xf.denserank" | "xf.lead" | "xf.lag" | "xf.first"
@@ -392,7 +392,7 @@ pub(crate) fn build_view_sql(
             let upstream = inputs.main().ok_or_else(|| missing_input_msg("ctl.replicate"))?;
             Ok(format!("SELECT * FROM {}", quote_ident(upstream)))
         }
-        "ctl.merge" => build_union(inputs, false),
+        "ctl.merge" => build_union(inputs, false, props),
         // Retry wrapper: passthrough view. Retries are read off the
         // form's Advanced tab as retry_attempts/retry_backoff_ms on
         // THIS stage. Useful as an explicit marker in the DAG saying
@@ -1189,7 +1189,24 @@ pub(crate) fn build_arr_contains(inputs: &NodeInputs, props: &JsonValue) -> Resu
     ))
 }
 
-pub(crate) fn build_union(inputs: &NodeInputs, distinct: bool) -> Result<String, String> {
+/// Whether the form asked for positional column matching.
+///
+/// The four set operations declare a `matchBy` select and neither builder took
+/// props, so "By position" silently produced a by-name result: inputs that are
+/// positionally aligned but differently NAMED were padded with NULLs into a
+/// wider table instead of stacked. By name stays the default, which is what an
+/// untouched node has always done.
+fn matches_by_position(props: &JsonValue) -> bool {
+    string_prop(props, "matchBy")
+        .map(|v| v.trim().eq_ignore_ascii_case("position"))
+        .unwrap_or(false)
+}
+
+pub(crate) fn build_union(
+    inputs: &NodeInputs,
+    distinct: bool,
+    props: &JsonValue,
+) -> Result<String, String> {
     let mains = inputs.all_main_ports();
     if mains.is_empty() {
         return Err("Union needs at least one input".into());
@@ -1201,10 +1218,11 @@ pub(crate) fn build_union(inputs: &NodeInputs, distinct: bool) -> Result<String,
     // or one input has an extra column. ETL users almost always expect
     // by-name semantics; legacy positional behavior is still reachable
     // by reordering / projecting columns upstream.
-    let op = if distinct {
-        " UNION BY NAME "
-    } else {
-        " UNION ALL BY NAME "
+    let op = match (distinct, matches_by_position(props)) {
+        (true, false) => " UNION BY NAME ",
+        (false, false) => " UNION ALL BY NAME ",
+        (true, true) => " UNION ",
+        (false, true) => " UNION ALL ",
     };
     Ok(mains
         .iter()
@@ -1213,10 +1231,23 @@ pub(crate) fn build_union(inputs: &NodeInputs, distinct: bool) -> Result<String,
         .join(op))
 }
 
-pub(crate) fn build_setop(inputs: &NodeInputs, op: &str) -> Result<String, String> {
+pub(crate) fn build_setop(
+    inputs: &NodeInputs,
+    op: &str,
+    props: &JsonValue,
+) -> Result<String, String> {
     let mains = inputs.all_main_ports();
     if mains.len() < 2 {
         return Err(format!("{} needs two inputs", op));
+    }
+    // By position there is nothing to realign: the legs are compared as they
+    // stand, which is what positional set semantics mean.
+    if matches_by_position(props) {
+        return Ok(mains
+            .iter()
+            .map(|id| format!("SELECT * FROM {}", quote_ident(id)))
+            .collect::<Vec<_>>()
+            .join(&format!(" {} ", op)));
     }
     // Match by column NAME, not position - otherwise INTERSECT/EXCEPT silently
     // compare the wrong columns when the inputs have a different column order.
