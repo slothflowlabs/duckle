@@ -361,16 +361,28 @@ export default function PropertiesPanel({
     // One level only, because that is what exists and a general path setter
     // would be machinery for a case nobody has. No field key contained a dot
     // before this, so nothing changes for any existing field.
+    // `undefined` is a field saying it has no value, so drop the key rather
+    // than storing it. A key present with an empty value is not the same
+    // thing to the engine, which reads an absent key as "use the default".
+    const withKey = (
+        obj: Record<string, unknown>,
+        key: string,
+        value: unknown,
+    ): Record<string, unknown> => {
+        if (value !== undefined) return { ...obj, [key]: value };
+        const { [key]: _dropped, ...rest } = obj;
+        return rest;
+    };
     const setProperty = (key: string, value: unknown) => {
         const dot = key.indexOf('.');
         if (dot < 0) {
-            onUpdate(selected.id, { properties: { ...props, [key]: value } });
+            onUpdate(selected.id, { properties: withKey(props, key, value) });
             return;
         }
         const [outer, inner] = [key.slice(0, dot), key.slice(dot + 1)];
         const existing = (props[outer] ?? {}) as Record<string, unknown>;
         onUpdate(selected.id, {
-            properties: { ...props, [outer]: { ...existing, [inner]: value } },
+            properties: { ...props, [outer]: withKey(existing, inner, value) },
         });
     };
     // The read side of the same key, so a nested field shows the value it just
