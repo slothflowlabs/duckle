@@ -7097,9 +7097,15 @@ function synthQualityValidation(comp: ComponentDef): ComponentManifest {
         defaultValue: 'reject',
         options: [
             { label: 'Send to reject port', value: 'reject' },
-            { label: 'Log warning, keep row', value: 'warn' },
+            // Was "Log warning, keep row", and it kept nothing - warn took the
+            // same filtered path as reject, so the rows it named were dropped.
+            // The row-keeping half now works; nothing is logged, because a view
+            // stage has no channel to log from, so the label no longer says so.
+            { label: 'Keep row (failures still reach the reject port)', value: 'warn' },
             { label: 'Fail pipeline', value: 'fail' },
         ],
+        description:
+            'The reject port carries the failing rows whatever this says. This chooses what the MAIN output does with them: drop them, keep them, or stop the run.',
     };
     if (id === 'qa.outlier') {
         return base(comp, [

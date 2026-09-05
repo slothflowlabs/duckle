@@ -3495,10 +3495,21 @@ pub(crate) fn build_quality(
     // is the worst of the three, so `fail` now raises where the rows are counted.
     //
     // reject stays exactly what it was, which is also what an unset value does, so
-    // nothing saved changes. warn does not stop the run, so it does not raise either.
-    let stop = string_prop(props, "onFail")
+    // nothing saved changes.
+    let on_fail = string_prop(props, "onFail")
         .map(|s| s.trim().to_ascii_lowercase())
-        .is_some_and(|s| s == "fail");
+        .unwrap_or_default();
+    // warn is labelled "keep row" in the editor and kept nothing: it took this
+    // same filtered path as reject, so the rows it promised to keep were dropped
+    // and the run reported success. Measured at three rows in, two out.
+    //
+    // The failing rows are still on the reject port, which carries them whatever
+    // this setting says, so warn is "everything continues down main, and the
+    // failures are also available to branch on".
+    if on_fail == "warn" {
+        return Ok(format!("SELECT * FROM {}", from));
+    }
+    let stop = on_fail == "fail";
     if stop {
         let msg = format!("{component_id}: a row failed the check and On failure is set to fail");
         return Ok(format!(

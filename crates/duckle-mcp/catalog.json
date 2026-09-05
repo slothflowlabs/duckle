@@ -42271,14 +42271,15 @@
                     "value": "reject"
                   },
                   {
-                    "label": "Log warning, keep row",
+                    "label": "Keep row (failures still reach the reject port)",
                     "value": "warn"
                   },
                   {
                     "label": "Fail pipeline",
                     "value": "fail"
                   }
-                ]
+                ],
+                "description": "The reject port carries the failing rows whatever this says. This chooses what the MAIN output does with them: drop them, keep them, or stop the run."
               }
             ]
           }
@@ -42367,14 +42368,15 @@
                     "value": "reject"
                   },
                   {
-                    "label": "Log warning, keep row",
+                    "label": "Keep row (failures still reach the reject port)",
                     "value": "warn"
                   },
                   {
                     "label": "Fail pipeline",
                     "value": "fail"
                   }
-                ]
+                ],
+                "description": "The reject port carries the failing rows whatever this says. This chooses what the MAIN output does with them: drop them, keep them, or stop the run."
               }
             ]
           }
@@ -42472,14 +42474,15 @@
                     "value": "reject"
                   },
                   {
-                    "label": "Log warning, keep row",
+                    "label": "Keep row (failures still reach the reject port)",
                     "value": "warn"
                   },
                   {
                     "label": "Fail pipeline",
                     "value": "fail"
                   }
-                ]
+                ],
+                "description": "The reject port carries the failing rows whatever this says. This chooses what the MAIN output does with them: drop them, keep them, or stop the run."
               }
             ]
           }
@@ -42561,14 +42564,15 @@
                     "value": "reject"
                   },
                   {
-                    "label": "Log warning, keep row",
+                    "label": "Keep row (failures still reach the reject port)",
                     "value": "warn"
                   },
                   {
                     "label": "Fail pipeline",
                     "value": "fail"
                   }
-                ]
+                ],
+                "description": "The reject port carries the failing rows whatever this says. This chooses what the MAIN output does with them: drop them, keep them, or stop the run."
               }
             ]
           }
@@ -42656,14 +42660,15 @@
                     "value": "reject"
                   },
                   {
-                    "label": "Log warning, keep row",
+                    "label": "Keep row (failures still reach the reject port)",
                     "value": "warn"
                   },
                   {
                     "label": "Fail pipeline",
                     "value": "fail"
                   }
-                ]
+                ],
+                "description": "The reject port carries the failing rows whatever this says. This chooses what the MAIN output does with them: drop them, keep them, or stop the run."
               }
             ]
           }
@@ -42767,14 +42772,15 @@
                     "value": "reject"
                   },
                   {
-                    "label": "Log warning, keep row",
+                    "label": "Keep row (failures still reach the reject port)",
                     "value": "warn"
                   },
                   {
                     "label": "Fail pipeline",
                     "value": "fail"
                   }
-                ]
+                ],
+                "description": "The reject port carries the failing rows whatever this says. This chooses what the MAIN output does with them: drop them, keep them, or stop the run."
               }
             ]
           }

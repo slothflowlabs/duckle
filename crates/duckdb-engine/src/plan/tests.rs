@@ -6433,3 +6433,54 @@ mod file_sink_modes {
         }
     }
 }
+
+/// qa.* "On failure" offers reject / warn / fail, and warn is labelled
+/// "Log warning, keep row" in the editor. It kept nothing: warn took the same
+/// filtered path as reject, so the rows it promised to keep were dropped and
+/// the run reported success.
+///
+/// Measured with the runner's own test harness before this was written -
+/// three rows in, two out, through a qa.notnull with onFail=warn.
+#[cfg(test)]
+mod quality_gate_on_fail {
+    use super::*;
+
+    fn gate(on_fail: &str, reject: bool) -> String {
+        let mut inputs = NodeInputs::default();
+        inputs.ports.insert("main".into(), vec!["up".into()]);
+        build_quality(
+            &inputs,
+            &serde_json::json!({ "columns": "name", "onFail": on_fail }),
+            "qa.notnull",
+            reject,
+        )
+        .expect("gate builds")
+    }
+
+    #[test]
+    fn warn_keeps_every_row() {
+        let sql = gate("warn", false);
+        assert!(
+            !sql.contains("WHERE"),
+            "warn says it keeps the row, so the main output must not filter: {sql}"
+        );
+    }
+
+    #[test]
+    fn reject_still_filters_and_fail_still_raises() {
+        assert!(gate("reject", false).contains("WHERE"), "reject drops failing rows");
+        assert!(gate("", false).contains("WHERE"), "an unset setting behaves as reject");
+        assert!(gate("fail", false).contains("error("), "fail raises");
+    }
+
+    #[test]
+    fn the_reject_port_carries_failures_whatever_the_setting_says() {
+        for mode in ["reject", "warn", "fail"] {
+            let sql = gate(mode, true);
+            assert!(
+                sql.contains("WHERE NOT"),
+                "the reject port must still carry the failing rows for {mode}: {sql}"
+            );
+        }
+    }
+}
