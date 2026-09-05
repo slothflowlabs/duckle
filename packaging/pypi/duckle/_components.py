@@ -97,8 +97,7 @@ COMPONENTS = {
     'ctl.retry': {
         'kind': 'control',
         'summary': 'Per-stage retry already lives in the Advanced tab (Retry attempts + Retry backoff) on every node - no separate component needed. A DAG-scoped retry block (wrap N stages, retry the whole group) still needs the DAG-block refactor; use ctl.try with a recovery fallback for now.',
-        'params': ['maxAttempts'],
-        'unverified': ['backoff', 'strategy'],
+        'params': [],
     },
     'ctl.runevents': {
         'kind': 'control',
@@ -430,9 +429,8 @@ COMPONENTS = {
     },
     'snk.kafka': {
         'kind': 'sink',
-        'summary': 'Produce one Kafka record per upstream row via the pure-Rust `rskafka` driver. Record key = optional keyColumn value; record value = JSON-stringified row. Records go to a single partition (partitionId, default 0); pipelined batching (default 500 records per produce call).',
+        'summary': 'Produce one Kafka record per upstream row via the pure-Rust `rskafka` driver. Record key = optional keyColumn value; record value = JSON-stringified row. Records go to a single partition (partitionId, default 0); pipelined batching (default 500 records per produce call). Every write is acknowledg...',
         'params': ['brokers', 'topic', 'format', 'keyColumn'],
-        'unverified': ['acks'],
     },
     'snk.lancedb': {
         'kind': 'sink',
@@ -563,7 +561,6 @@ COMPONENTS = {
         'kind': 'sink',
         'summary': 'Same wire protocol as Kafka - rides the rskafka driver. Use snk.kafka semantics.',
         'params': ['brokers', 'topic', 'format', 'keyColumn'],
-        'unverified': ['acks'],
     },
     'snk.redshift': {
         'kind': 'sink',
@@ -1299,8 +1296,8 @@ COMPONENTS = {
     'xf.ai.chunk': {
         'kind': 'transform',
         'summary': 'Split long text into chunks for RAG / embedding pipelines. No API call - pure local char-window splitting with overlap. Props: inputColumn (default `text`), outputColumn (default `chunk`), chunkSize (default 1000), chunkOverlap (default 100), mode (`explode` = one row per chunk with chunk_index/c...',
-        'params': ['inputColumn', 'chunkSize', 'outputColumn'],
-        'unverified': ['strategy', 'overlap'],
+        'params': ['inputColumn', 'strategy', 'chunkSize', 'outputColumn'],
+        'unverified': ['overlap'],
     },
     'xf.ai.classify': {
         'kind': 'transform',
@@ -1570,7 +1567,6 @@ COMPONENTS = {
         'kind': 'transform',
         'summary': 'WHERE-style row filter',
         'params': ['predicate'],
-        'unverified': ['rejectOnError'],
     },
     'xf.first': {
         'kind': 'transform',

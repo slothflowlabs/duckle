@@ -776,12 +776,14 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                         description:
                             'Visual builder with column / operator / value, or raw SQL. Rows where the predicate is true are kept.',
                     },
-                    {
-                        key: 'rejectOnError',
-                        label: 'Send errors to reject port',
-                        kind: 'bool',
-                        defaultValue: false,
-                    },
+                    // A "Send errors to reject port" box was here and nothing
+                    // read it. The reject stream is gated purely by WIRING -
+                    // plan/mod.rs only builds it when the port has a consumer,
+                    // exactly as for the joins - and the predicate is spliced
+                    // in raw with no error trapping, so the box neither enabled
+                    // nor disabled anything while claiming to change what
+                    // happens on failure. Wire the reject port to collect the
+                    // rows whose predicate is false or NULL.
                 ],
             },
         ],

@@ -241,7 +241,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.jdbc` Generic JDBC [planned]: Writes data to Generic JDBC
 - `snk.json` JSON: Writes data to JSON
 - `snk.jsonl` JSONL / NDJSON: Writes data to JSONL / NDJSON
-- `snk.kafka` Apache Kafka: Produce one Kafka record per upstream row via the pure-Rust `rskafka` driver. Record key = optional keyColumn value; record value = JSON-stringified row. Records go to a single partition (partitionId, default 0); pipelined batching (default 500 records per produce call)
+- `snk.kafka` Apache Kafka: Produce one Kafka record per upstream row via the pure-Rust `rskafka` driver. Record key = optional keyColumn value; record value = JSON-stringified row. Records go to a single partition (partitionId, default 0); pipelined batching (default 500 records per produce call). Every write is acknowledged by the full in-sync replica set (acks=all) - the driver does not offer a weaker setting
 - `snk.kinesis` AWS Kinesis [planned]: Writes data to AWS Kinesis
 - `snk.lancedb` LanceDB: Write rows to a Lance table (create/overwrite or append) via the bundled duckle-lance sidecar
 - `snk.mariadb` MariaDB: Write to MariaDB via the DuckDB mysql extension (MariaDB speaks the MySQL wire protocol)

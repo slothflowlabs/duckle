@@ -595,7 +595,7 @@ export const PALETTE: Category[] = [
                 id: 'snk.streaming',
                 label: 'Streaming',
                 components: [
-                    snk('kafka', 'Apache Kafka', 'available', 'Produce one Kafka record per upstream row via the pure-Rust `rskafka` driver. Record key = optional keyColumn value; record value = JSON-stringified row. Records go to a single partition (partitionId, default 0); pipelined batching (default 500 records per produce call).'),
+                    snk('kafka', 'Apache Kafka', 'available', 'Produce one Kafka record per upstream row via the pure-Rust `rskafka` driver. Record key = optional keyColumn value; record value = JSON-stringified row. Records go to a single partition (partitionId, default 0); pipelined batching (default 500 records per produce call). Every write is acknowledged by the full in-sync replica set (acks=all) - the driver does not offer a weaker setting.'),
                     snk('redpanda', 'Redpanda', 'available', 'Same wire protocol as Kafka - rides the rskafka driver. Use snk.kafka semantics.'),
                     snk('pulsar', 'Apache Pulsar', 'planned'),
                     snk('nats', 'NATS JetStream', 'available', 'Publish each upstream row as one NATS message via the pure-Rust `async-nats` driver. Payload = JSON-stringified row. Optional subjectSuffixColumn appends a per-row suffix (subject.value) for routed multi-tenant publishing.'),

@@ -4176,8 +4176,14 @@ function synthStreamingSink(comp: ComponentDef): ComponentManifest {
                         required: true,
                     },
                     { key: 'topic', label: 'Topic', kind: 'text', required: true },
-                    { key: 'acks', label: 'Acks', kind: 'select', defaultValue: 'all',
-                      options: [{label:'all',value:'all'},{label:'1',value:'1'},{label:'0',value:'0'}] },
+                    // An `Acks` select (all / 1 / 0) was here and nothing read
+                    // it. rskafka hardcodes acks=-1 in its produce request -
+                    // Kafka's "all" - and produce() takes only records and a
+                    // compression, so the two weaker settings could not be
+                    // asked for. Every write already gets the strongest
+                    // guarantee; the choice was the fiction. Stated in the
+                    // palette description instead, where it is a fact rather
+                    // than a control.
                 ],
             },
             {
@@ -6680,22 +6686,14 @@ function synthPipelineControl(comp: ComponentDef): ComponentManifest {
 function synthErrorControl(comp: ComponentDef): ComponentManifest {
     const id = comp.id;
     if (id === 'ctl.retry') {
-        return base(comp, [
-            {
-                label: 'Retry',
-                fields: [
-                    { key: 'maxAttempts', label: 'Max attempts', kind: 'integer', defaultValue: 3 },
-                    { key: 'backoff', label: 'Backoff (ms)', kind: 'integer', defaultValue: 1000 },
-                    {
-                        key: 'strategy',
-                        label: 'Strategy',
-                        kind: 'select',
-                        defaultValue: 'exponential',
-                        options: [{label:'Linear',value:'linear'},{label:'Exponential',value:'exponential'},{label:'Constant',value:'constant'}],
-                    },
-                ],
-            },
-        ], 'upstream');
+        // Max attempts / Backoff / Strategy were here and nothing read any
+        // of them: the builder is `SELECT * FROM <upstream>` and never touches
+        // props, so a Retry node set to 3 attempts performed zero retries.
+        // This component's own palette entry already says per-stage retry lives
+        // on the Advanced tab and that no separate component is needed - the
+        // description was honest and the form contradicted it. The node keeps
+        // its Advanced tab, which is where retry actually is.
+        return base(comp, [], 'upstream');
     }
     if (id === 'ctl.deadletter') {
         return base(comp, [

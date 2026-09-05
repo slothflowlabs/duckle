@@ -802,6 +802,63 @@ mod tests {
         assert!(f.iter().all(|x| x.code != "behaviour_changed"), "{f:?}");
     }
 
+    /// A durability guarantee must not be offered as a choice the driver
+    /// cannot make.
+    ///
+    /// The Kafka sinks drew an `Acks` select - all / 1 / 0 - and nothing read
+    /// it. rskafka hardcodes `acks: Int16(-1)` in its produce request
+    /// (client/partition.rs:709), which is Kafka's "all", and `produce()` takes
+    /// only records and a compression: there is no way to ask for anything
+    /// else. So the two weaker settings were unreachable.
+    ///
+    /// The error was in the safe direction - every write got the STRONGEST
+    /// guarantee, never a weaker one - but someone who picked 0 for throughput
+    /// paid full-ISR latency and had nothing to tell them why.
+    #[test]
+    fn the_kafka_sinks_do_not_offer_an_acks_setting_the_driver_ignores() {
+        for id in ["snk.kafka", "snk.redpanda"] {
+            let keys = declared().get(id).unwrap_or_else(|| panic!("{id} is not in the catalog"));
+            assert!(
+                !keys.contains("acks"),
+                "{id} offers an Acks control and rskafka always produces with acks=all"
+            );
+        }
+    }
+
+    /// Controls that promise behaviour the engine does not have.
+    ///
+    /// ctl.retry's own palette entry says per-stage retry lives on the Advanced
+    /// tab and "no separate component needed" - and its FORM offered Max
+    /// attempts, Backoff and Strategy anyway. The builder is
+    /// `SELECT * FROM <upstream>` and never touches props, so a Retry node set
+    /// to 3 attempts performs zero retries. The description was honest and the
+    /// form contradicted it.
+    ///
+    /// xf.filter's "Send errors to reject port" is the same shape: the reject
+    /// stream is gated purely by WIRING (plan/mod.rs, `reject_consumers >= 1`),
+    /// exactly like the joins, and the predicate is spliced in raw with no
+    /// error trapping - so the box neither enables nor disables anything, while
+    /// claiming to change what happens on failure.
+    #[test]
+    fn no_control_promises_behaviour_the_engine_does_not_have() {
+        for (id, dead) in [
+            ("ctl.retry", &["maxAttempts", "backoff", "strategy"][..]),
+            ("xf.filter", &["rejectOnError"][..]),
+        ] {
+            let keys = declared().get(id).unwrap_or_else(|| panic!("{id} is not in the catalog"));
+            for k in dead {
+                assert!(!keys.contains(*k), "{id} still offers {k}, which nothing reads");
+            }
+        }
+        // The universal retry settings are what actually retries, and they are
+        // panel-rendered rather than declared - so they must stay accepted.
+        assert!(check(&doc(
+            "ctl.retry",
+            serde_json::json!({ "retryAttempts": 3, "retryBackoffMs": 500 })
+        ))
+        .is_empty());
+    }
+
     #[test]
     fn universal_matches_the_properties_panel() {
         // The drift that caused it: the panel grew universal fields and nothing
