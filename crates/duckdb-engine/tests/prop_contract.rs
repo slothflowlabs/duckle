@@ -365,6 +365,8 @@ mod plan_arms {
         let preds = predicate_ids(&src);
         let starts = arm_starts(&lines);
         let read = regex::Regex::new(r#"string_prop\(\s*&?props\s*,\s*"(\w+)"\s*\)"#).unwrap();
+        let required_msg = regex::Regex::new(r#""[^"\\]*required[^"\\]*""#).unwrap();
+        let word = regex::Regex::new(r"[A-Za-z][A-Za-z0-9_]*").unwrap();
 
         let mut problems: Vec<String> = Vec::new();
         for (n, &start) in starts.iter().enumerate() {
@@ -404,6 +406,53 @@ mod plan_arms {
                      produce will plan. Either the form writes a different name than the arm \
                      reads, or the component is drawn by a synthesizer branch meant for another \
                      family (the src.couchdb bug).",
+                    named,
+                    key.join("/")
+                ));
+            }
+
+            // The OTHER shape of the same requirement. code.wasm writes it as
+            // `if let Some(a) = .. else if let Some(b) = .. else { return Err }`
+            // - no ok_or_else to match - and slipped past the pass above while
+            // being exactly as unbuildable. So read the refusal instead: these
+            // arms all phrase it "<name> required".
+            //
+            // Grounded twice, or it would be noise. The identifiers taken out
+            // of the message are kept only if the arm actually reads them via
+            // string_prop, which is what stops "upstream input required" from
+            // counting. And the statement the refusal belongs to is scanned for
+            // alternates the message does not name: `url required` sits at the
+            // end of `string_prop("url").or_else(|| string_prop("connectionString"))`,
+            // and connectionString satisfies it.
+            let reads: BTreeSet<String> =
+                read.captures_iter(&body).map(|c| c[1].to_string()).collect();
+            for m in required_msg.find_iter(&body) {
+                let text = m.as_str();
+                let mut names: BTreeSet<String> = word
+                    .find_iter(text)
+                    .map(|w| w.as_str().to_string())
+                    .filter(|w| reads.contains(w))
+                    .collect();
+                if names.is_empty() {
+                    continue;
+                }
+                let from = m.start().saturating_sub(700);
+                let back = &body[from..m.start()];
+                let cut = back
+                    .rfind("
+        let ")
+                    .max(back.rfind("
+            let "))
+                    .unwrap_or(0);
+                names.extend(read.captures_iter(&back[cut..]).map(|c| c[1].to_string()));
+                if names.iter().any(|k| union.contains(k) || UNIVERSAL.contains(&k.as_str())) {
+                    continue;
+                }
+                let key: Vec<&str> = names.iter().map(String::as_str).collect();
+                let mut named: Vec<&str> = ids.iter().map(String::as_str).collect();
+                named.sort_unstable();
+                problems.push(format!(
+                    "{:?} REQUIRE {:?} and no field declares it, so no node the editor can                      produce will plan. Either the form writes a different name than the arm                      reads, or the component is drawn by a synthesizer branch meant for another                      family (the src.couchdb bug).",
                     named,
                     key.join("/")
                 ));
