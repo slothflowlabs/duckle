@@ -1325,8 +1325,7 @@ COMPONENTS = {
     'xf.ai.pii': {
         'kind': 'transform',
         'summary': 'Regex-based PII redaction (email, phone, SSN, credit card). No API call. Props: inputColumn (default `text`), outputColumn (defaults to input - overwrites in place), types (comma-list subset; empty = all). LLM-backed redaction is a follow-up.',
-        'params': ['columns', 'action'],
-        'unverified': ['entities'],
+        'params': ['inputColumn', 'outputColumn', 'types'],
     },
     'xf.ai.text_search': {
         'kind': 'transform',

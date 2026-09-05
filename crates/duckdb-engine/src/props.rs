@@ -859,6 +859,76 @@ mod tests {
         .is_empty());
     }
 
+    /// The PII redactor's form was disconnected from its arm in every field.
+    ///
+    /// It wrote `columns`, `entities` and `action`. The arm reads
+    /// `inputColumn`, `outputColumn` and `types` (plan/mod.rs, the xf.ai.pii
+    /// arm) and there is no action concept at all - redaction is always
+    /// replacement with [REDACTED-X].
+    ///
+    /// The sharp end is `entities` vs `types`: the user's list never arrived,
+    /// `types` stayed empty, and empty means ALL in pii_patterns
+    /// (util.rs:1192). So a narrower selection silently over-redacted - and,
+    /// worse, the placeholder advertised `name`, which pii_patterns cannot
+    /// detect. Someone redacting free text expecting names masked shipped
+    /// unmasked names. On a privacy component, that is the failure that
+    /// matters.
+    #[test]
+    fn the_pii_redactor_offers_what_it_actually_reads() {
+        let keys = declared().get("xf.ai.pii").expect("in the catalog");
+        for k in ["inputColumn", "outputColumn", "types"] {
+            assert!(keys.contains(k), "xf.ai.pii reads {k} and the form does not offer it");
+        }
+        for k in ["entities", "action"] {
+            assert!(!keys.contains(k), "xf.ai.pii still offers {k}, which nothing reads");
+        }
+    }
+
+    /// And it must not advertise a type the redactor cannot find.
+    ///
+    /// pii_patterns supports exactly email / credit_card / ssn / phone
+    /// (util.rs:1194-1215). Anything else in the form is a claim that some
+    /// category of personal data is being removed when it is not.
+    #[test]
+    fn the_pii_form_names_only_types_the_redactor_supports() {
+        let doc: serde_json::Value = serde_json::from_str(CATALOG).expect("catalog");
+        let comp = doc["components"]
+            .as_array()
+            .expect("components")
+            .iter()
+            .find(|c| c["id"] == "xf.ai.pii")
+            .expect("xf.ai.pii");
+        // Only where a CHOICE is offered - a placeholder or a select's
+        // options. Prose that says a type is NOT detected is the opposite of
+        // advertising it, and an earlier version of this test failed on its
+        // own warning text.
+        let offered = comp["manifest"]["sections"]
+            .as_array()
+            .expect("sections")
+            .iter()
+            .flat_map(|sec| sec["fields"].as_array().cloned().unwrap_or_default())
+            .map(|f| {
+                format!(
+                    "{} {}",
+                    f["placeholder"].as_str().unwrap_or_default(),
+                    f["options"].to_string()
+                )
+            })
+            .collect::<String>();
+        for unsupported in ["name", "address", "dob", "passport"] {
+            assert!(
+                !offered.contains(unsupported),
+                "the form offers {unsupported:?} as a type and pii_patterns cannot detect it:                  {offered}"
+            );
+        }
+        // And the four that ARE supported have to be named somewhere, or the
+        // user is guessing at the vocabulary.
+        let text = comp.to_string();
+        for supported in ["email", "phone", "ssn", "credit_card"] {
+            assert!(text.contains(supported), "the form never names {supported:?}");
+        }
+    }
+
     #[test]
     fn universal_matches_the_properties_panel() {
         // The drift that caused it: the panel grew universal fields and nothing

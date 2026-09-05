@@ -8150,21 +8150,40 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
     if (id === 'xf.ai.pii') {
         return base(comp, [
             {
+                // Every field here used to be a different name than the arm
+                // reads. It wrote `columns`, `entities` and `action`; the arm
+                // reads `inputColumn`, `outputColumn` and `types`, and has no
+                // action concept - redaction is always replacement with
+                // [REDACTED-X].
+                //
+                // The one that mattered: `entities` never reached `types`, so
+                // `types` stayed empty, and empty means ALL in pii_patterns.
+                // A narrower selection silently over-redacted, and the
+                // placeholder advertised `name`, which the redactor cannot
+                // detect at all - so free text redacted in the belief that
+                // names were masked went out with the names in it.
                 label: 'PII redaction',
                 fields: [
-                    { key: 'columns', label: 'Columns to scan', kind: 'columns', required: true },
-                    { key: 'entities', label: 'Entity types', kind: 'text', placeholder: 'email, phone, ssn, name, credit_card', description: 'Comma-separated PII types to detect.' },
                     {
-                        key: 'action',
-                        label: 'Action',
-                        kind: 'select',
-                        defaultValue: 'mask',
-                        options: [
-                            { label: 'Mask (****)', value: 'mask' },
-                            { label: 'Hash', value: 'hash' },
-                            { label: 'Redact (remove)', value: 'redact' },
-                            { label: 'Tokenize', value: 'tokenize' },
-                        ],
+                        key: 'inputColumn',
+                        label: 'Text column',
+                        kind: 'column',
+                        required: true,
+                        description: 'The column whose text is scanned. One column per node.',
+                    },
+                    {
+                        key: 'outputColumn',
+                        label: 'Write to',
+                        kind: 'text',
+                        placeholder: 'leave blank to redact in place',
+                        description: 'Blank overwrites the text column with its redacted form.',
+                    },
+                    {
+                        key: 'types',
+                        label: 'Types to redact',
+                        kind: 'text',
+                        placeholder: 'leave blank for all four',
+                        description: 'Comma-separated, from exactly: email, phone, ssn, credit_card. Blank redacts all four. These are regex shapes, deliberately conservative - a name, an address or a date of birth has no reliable shape and is NOT detected, so do not rely on this to remove them.',
                     },
                 ],
             },
