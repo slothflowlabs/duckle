@@ -1345,7 +1345,6 @@ COMPONENTS = {
         'kind': 'transform',
         'summary': '',
         'params': ['leftKey', 'rightKey', 'multipleKeys', 'joinType'],
-        'unverified': ['sendUnmatchedToReject'],
     },
     'xf.approx.quantile': {
         'kind': 'transform',
@@ -1550,8 +1549,7 @@ COMPONENTS = {
     'xf.except': {
         'kind': 'transform',
         'summary': 'Rows in the first input only',
-        'params': [],
-        'unverified': ['matchBy'],
+        'params': ['matchBy'],
     },
     'xf.fill_backward': {
         'kind': 'transform',
@@ -1662,8 +1660,7 @@ COMPONENTS = {
     'xf.intersect': {
         'kind': 'transform',
         'summary': 'Rows present in all inputs',
-        'params': [],
-        'unverified': ['matchBy'],
+        'params': ['matchBy'],
     },
     'xf.ip.parse': {
         'kind': 'transform',
@@ -1674,13 +1671,11 @@ COMPONENTS = {
         'kind': 'transform',
         'summary': 'Inner / left / right / full outer join, chosen by the Type dropdown',
         'params': ['leftKey', 'rightKey', 'multipleKeys', 'joinType'],
-        'unverified': ['sendUnmatchedToReject'],
     },
     'xf.join.cross': {
         'kind': 'transform',
         'summary': '',
         'params': ['leftKey', 'rightKey', 'multipleKeys', 'joinType'],
-        'unverified': ['sendUnmatchedToReject'],
     },
     'xf.join.spatial': {
         'kind': 'transform',
@@ -1751,7 +1746,6 @@ COMPONENTS = {
         'kind': 'transform',
         'summary': '',
         'params': ['leftKey', 'rightKey', 'multipleKeys', 'joinType'],
-        'unverified': ['sendUnmatchedToReject'],
     },
     'xf.map': {
         'kind': 'transform',
@@ -1887,7 +1881,6 @@ COMPONENTS = {
         'kind': 'transform',
         'summary': '',
         'params': ['leftKey', 'rightKey', 'multipleKeys', 'joinType'],
-        'unverified': ['sendUnmatchedToReject'],
     },
     'xf.sessionize': {
         'kind': 'transform',
@@ -1992,14 +1985,12 @@ COMPONENTS = {
     'xf.union': {
         'kind': 'transform',
         'summary': 'Combine inputs, drop duplicates',
-        'params': [],
-        'unverified': ['matchBy'],
+        'params': ['matchBy'],
     },
     'xf.unionall': {
         'kind': 'transform',
         'summary': 'Combine inputs, keep all rows',
-        'params': [],
-        'unverified': ['matchBy'],
+        'params': ['matchBy'],
     },
     'xf.unpivot': {
         'kind': 'transform',
