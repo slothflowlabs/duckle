@@ -6831,7 +6831,8 @@ function synthTimingControl(comp: ComponentDef): ComponentManifest {
             {
                 label: 'Delay',
                 fields: [
-                    { key: 'duration', label: 'Duration', kind: 'integer', defaultValue: 1 },
+                    { key: 'duration', label: 'Duration', kind: 'integer', defaultValue: 0,
+                      description: 'An absent duration waits zero, which is what the node did while this box showed 1.' },
                     {
                         key: 'unit',
                         label: 'Unit',
@@ -6859,7 +6860,8 @@ function synthTimingControl(comp: ComponentDef): ComponentManifest {
             {
                 label: 'Throttle',
                 fields: [
-                    { key: 'rate', label: 'Rows per second', kind: 'integer', defaultValue: 100 },
+                    { key: 'rate', label: 'Rows per second', kind: 'integer', defaultValue: 0,
+                      description: 'The engine reads an absent or zero rate as no limit, so the box showed 100 while an untouched node throttled nothing.' },
                 ],
             },
         ], 'upstream');
@@ -8417,7 +8419,7 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                     { key: 'apiKey', label: 'API key', kind: 'text', placeholder: '••••••••' },
                     { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'embedding' },
                     { key: 'dimension', label: 'Dimensions', kind: 'integer', defaultValue: 1536 },
-                    { key: 'batchSize', label: 'Batch size', kind: 'integer', defaultValue: 64 },
+                    { key: 'batchSize', label: 'Batch size', kind: 'integer', defaultValue: 100 },
                     ...aiThroughputFields(),
                     ...aiBudgetFields(),
                     ...aiCustomEndpointFields(),
@@ -8606,7 +8608,7 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                     { key: 'categories', label: 'Labels', kind: 'text', required: true, placeholder: 'positive, neutral, negative', description: 'Comma-separated candidate labels.' },
                     { key: 'model', label: 'Model', kind: 'text', defaultValue: 'gpt-4o-mini' },
                     { key: 'apiKey', label: 'API key', kind: 'text', placeholder: '••••••••' },
-                    { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'label' },
+                    { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'category' },
                     ...aiCustomEndpointFields(),
                     ...aiThroughputFields(),
                     ...aiBudgetFields(),
@@ -8621,7 +8623,7 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                 fields: [
                     { key: 'embeddingColumn', label: 'Embedding column', kind: 'column', description: 'Vector column to compare.' },
                     { key: 'textColumn', label: 'Or text column', kind: 'column', description: 'Embedded on the fly if no vector column.' },
-                    { key: 'threshold', label: 'Similarity threshold', kind: 'number', defaultValue: 0.92, description: '0.0-1.0; higher keeps only very-close rows as duplicates.' },
+                    { key: 'threshold', label: 'Similarity threshold', kind: 'number', defaultValue: 0.95, description: '0.0-1.0; higher keeps only very-close rows as duplicates.' },
                     distanceMetricField(),
                     {
                         key: 'keep',

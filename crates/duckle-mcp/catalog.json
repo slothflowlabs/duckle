@@ -27768,7 +27768,7 @@
                 "key": "batchSize",
                 "label": "Batch size",
                 "kind": "integer",
-                "defaultValue": 64
+                "defaultValue": 100
               },
               {
                 "key": "concurrency",
@@ -28372,7 +28372,7 @@
                 "key": "outputColumn",
                 "label": "Output column",
                 "kind": "text",
-                "defaultValue": "label"
+                "defaultValue": "category"
               },
               {
                 "key": "baseUrl",
@@ -28532,7 +28532,7 @@
                 "key": "threshold",
                 "label": "Similarity threshold",
                 "kind": "number",
-                "defaultValue": 0.92,
+                "defaultValue": 0.95,
                 "description": "0.0-1.0; higher keeps only very-close rows as duplicates."
               },
               {
@@ -40690,7 +40690,8 @@
                 "key": "duration",
                 "label": "Duration",
                 "kind": "integer",
-                "defaultValue": 1
+                "defaultValue": 0,
+                "description": "An absent duration waits zero, which is what the node did while this box showed 1."
               },
               {
                 "key": "unit",
@@ -40838,7 +40839,8 @@
                 "key": "rate",
                 "label": "Rows per second",
                 "kind": "integer",
-                "defaultValue": 100
+                "defaultValue": 0,
+                "description": "The engine reads an absent or zero rate as no limit, so the box showed 100 while an untouched node throttled nothing."
               }
             ]
           }
