@@ -960,6 +960,36 @@ mod tests {
         }
     }
 
+    /// The GraphQL sources are drawn by the REST form, and their arm hardcodes
+    /// everything about paging and fan-out: pagination none, max_pages 1,
+    /// concurrency 1, checkpoint false, on_parent_error "fail", url_template
+    /// and parent_key_column None, max_requests 0. Every one of those controls
+    /// was drawn and read by nothing.
+    ///
+    /// What they DO read has to survive the filtering - the incremental cursor
+    /// sits in the same section as the paging fields, and slicing that array
+    /// by hand removed the wrong half twice before this was done by filtering
+    /// the built manifest instead.
+    #[test]
+    fn the_graphql_sources_do_not_offer_paging_their_arm_hardcodes() {
+        const DEAD: [&str; 6] =
+            ["paginationType", "maxPages", "concurrency", "checkpoint", "urlTemplate", "maxRequests"];
+        for id in ["src.graphql", "src.linear", "src.monday"] {
+            let keys = declared().get(id).unwrap_or_else(|| panic!("{id} is not in the catalog"));
+            for k in DEAD {
+                assert!(!keys.contains(k), "{id} still offers {k}, which its arm hardcodes");
+            }
+            for k in ["query", "variables", "incrementalField", "responsePath"] {
+                assert!(keys.contains(k), "{id} reads {k} and the filtering removed it");
+            }
+        }
+        // src.rest shares the synthesizer and must keep all of it.
+        let rest = declared().get("src.rest").expect("src.rest");
+        for k in DEAD {
+            assert!(rest.contains(k), "src.rest lost {k}, which it genuinely reads");
+        }
+    }
+
     #[test]
     fn universal_matches_the_properties_panel() {
         // The drift that caused it: the panel grew universal fields and nothing

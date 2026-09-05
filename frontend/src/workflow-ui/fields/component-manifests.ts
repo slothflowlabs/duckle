@@ -1586,6 +1586,32 @@ function withCloudReadOptions(id: string, m: ComponentManifest): ComponentManife
     return { ...m, sections: [...m.sections, ...sections] };
 }
 
+// The GraphQL sources are drawn by synthApiSource, which is the REST form, and
+// their arm in plan/mod.rs hardcodes everything to do with paging and fan-out:
+// pagination none, max_pages 1, concurrency 1, checkpoint false,
+// on_parent_error "fail", url_template / parent_key_column None, max_requests 0.
+// So every control below was drawn and read by nothing.
+//
+// Filtered here rather than in the synthesizer because these keys share a
+// `fields:` array with the incremental cursor, which GraphQL DOES use - slicing
+// that array by hand removed the wrong half twice.
+const GRAPHQL_DEAD_KEYS = new Set([
+    'paginationType', 'pageParam', 'pageSize', 'startPage', 'maxPages',
+    'cursorParam', 'cursorNextPath', 'offsetParam', 'totalCountPath',
+    'urlTemplate', 'parentKeyColumn', 'maxRequests', 'concurrency',
+    'checkpoint', 'onParentError',
+]);
+
+function withoutGraphqlPaging(id: string, m: ComponentManifest): ComponentManifest {
+    if (id !== 'src.graphql' && id !== 'src.linear' && id !== 'src.monday') return m;
+    return {
+        ...m,
+        sections: m.sections
+            .map(sec => ({ ...sec, fields: sec.fields.filter(f => !GRAPHQL_DEAD_KEYS.has(f.key)) }))
+            .filter(sec => sec.fields.length > 0),
+    };
+}
+
 function withDeadLetter(id: string, m: ComponentManifest): ComponentManifest {
     if (!DEAD_LETTER_SINKS.has(id)) return m;
     // A branch that already draws them keeps its own wording and placement.
@@ -1606,7 +1632,10 @@ export function getManifest(componentId: string | undefined): ComponentManifest 
     }
     const built = MANIFESTS[componentId] ?? synthesizeManifest(componentId);
     const m = built
-        ? withCloudReadOptions(componentId, withDeadLetter(componentId, built))
+        ? withoutGraphqlPaging(
+              componentId,
+              withCloudReadOptions(componentId, withDeadLetter(componentId, built)),
+          )
         : built;
     if (m && !m.ports) {
         for (const cat of PALETTE) {

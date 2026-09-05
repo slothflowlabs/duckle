@@ -863,7 +863,7 @@ COMPONENTS = {
     'src.graphql': {
         'kind': 'source',
         'summary': 'POST a GraphQL query to an endpoint and walk the response data path. Rides snk.rest/src.rest infrastructure; auth via Bearer / API-Key.',
-        'params': ['url', 'query', 'variables', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
+        'params': ['url', 'query', 'variables', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'incrementalField', 'incrementalInitial', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.html': {
         'kind': 'source',
@@ -933,7 +933,7 @@ COMPONENTS = {
     'src.linear': {
         'kind': 'source',
         'summary': 'Linear GraphQL. Rides src.graphql; auth via API key in Authorization header. responsePath walks /data.<query>.<edges> or similar.',
-        'params': ['url', 'query', 'variables', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
+        'params': ['url', 'query', 'variables', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'incrementalField', 'incrementalInitial', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.mailchimp': {
         'kind': 'source',
@@ -963,7 +963,7 @@ COMPONENTS = {
     'src.monday': {
         'kind': 'source',
         'summary': 'Monday.com GraphQL. Rides src.graphql; auth via Bearer token in Authorization header. POST a GraphQL query as `body`; responsePath /data.<query_name>. Base URL https://api.monday.com/v2.',
-        'params': ['url', 'query', 'variables', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
+        'params': ['url', 'query', 'variables', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'incrementalField', 'incrementalInitial', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.mongodb': {
         'kind': 'source',
