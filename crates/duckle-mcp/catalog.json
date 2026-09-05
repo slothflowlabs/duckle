@@ -3192,12 +3192,6 @@
                 "kind": "text",
                 "placeholder": "leave blank for all columns",
                 "description": "Comma-separated; pushed down to the Parquet reader."
-              },
-              {
-                "key": "rowGroupRange",
-                "label": "Row group range",
-                "kind": "text",
-                "placeholder": "e.g. 0..10"
               }
             ]
           }
@@ -5131,13 +5125,6 @@
                 "placeholder": "SELECT * FROM orders WHERE status = $1"
               },
               {
-                "key": "fetchSize",
-                "label": "Fetch size",
-                "kind": "integer",
-                "defaultValue": 1000,
-                "description": "Rows fetched per round-trip."
-              },
-              {
                 "key": "pushdown",
                 "label": "Run query on server (pushdown)",
                 "kind": "bool",
@@ -5292,13 +5279,6 @@
                 "placeholder": "SELECT * FROM orders WHERE status = $1"
               },
               {
-                "key": "fetchSize",
-                "label": "Fetch size",
-                "kind": "integer",
-                "defaultValue": 1000,
-                "description": "Rows fetched per round-trip."
-              },
-              {
                 "key": "pushdown",
                 "label": "Run query on server (pushdown)",
                 "kind": "bool",
@@ -5451,13 +5431,6 @@
                 "kind": "expression",
                 "rows": 5,
                 "placeholder": "SELECT * FROM orders WHERE status = $1"
-              },
-              {
-                "key": "fetchSize",
-                "label": "Fetch size",
-                "kind": "integer",
-                "defaultValue": 1000,
-                "description": "Rows fetched per round-trip."
               },
               {
                 "key": "pushdown",
@@ -5731,7 +5704,7 @@
               {
                 "key": "oracleRuntimeNote",
                 "label": "Heads-up",
-                "kind": "text",
+                "kind": "note",
                 "description": "Oracle support is built into Duckle. Users only need Oracle Instant Client (libclntsh.so / OCI.dll / libclntsh.dylib) on the library path at runtime. If it is missing the executor surfaces a clear loader error."
               }
             ]
@@ -6469,13 +6442,6 @@
                 "placeholder": "SELECT * FROM orders WHERE status = $1"
               },
               {
-                "key": "fetchSize",
-                "label": "Fetch size",
-                "kind": "integer",
-                "defaultValue": 1000,
-                "description": "Rows fetched per round-trip."
-              },
-              {
                 "key": "pushdown",
                 "label": "Run query on server (pushdown)",
                 "kind": "bool",
@@ -6858,13 +6824,6 @@
                 "kind": "expression",
                 "rows": 5,
                 "placeholder": "SELECT * FROM orders WHERE status = $1"
-              },
-              {
-                "key": "fetchSize",
-                "label": "Fetch size",
-                "kind": "integer",
-                "defaultValue": 1000,
-                "description": "Rows fetched per round-trip."
               }
             ]
           }
@@ -14988,69 +14947,27 @@
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Connection",
+            "label": "Redis",
             "fields": [
               {
                 "key": "connectionString",
-                "label": "Connection string",
+                "label": "Connection URL",
                 "kind": "text",
                 "required": true,
-                "placeholder": "mongodb://localhost:27017"
+                "placeholder": "redis://default:pass@host:6379/0"
               },
               {
-                "key": "database",
-                "label": "Database",
+                "key": "keyPattern",
+                "label": "Key pattern",
                 "kind": "text",
-                "required": true
-              },
-              {
-                "key": "collection",
-                "label": "Collection / Index",
-                "kind": "text",
-                "required": true
-              }
-            ]
-          },
-          {
-            "label": "Query",
-            "fields": [
-              {
-                "key": "queryMode",
-                "label": "Query mode",
-                "kind": "select",
-                "defaultValue": "all",
-                "options": [
-                  {
-                    "label": "All documents",
-                    "value": "all"
-                  },
-                  {
-                    "label": "Filter query",
-                    "value": "filter"
-                  },
-                  {
-                    "label": "Aggregation pipeline",
-                    "value": "aggregation"
-                  }
-                ]
-              },
-              {
-                "key": "filter",
-                "label": "Filter (JSON)",
-                "kind": "textarea",
-                "rows": 4,
-                "placeholder": "{\"status\": \"active\"}"
-              },
-              {
-                "key": "projection",
-                "label": "Projection (JSON)",
-                "kind": "textarea",
-                "rows": 3
+                "defaultValue": "*",
+                "description": "SCAN match pattern. * reads every key."
               },
               {
                 "key": "limit",
-                "label": "Limit",
-                "kind": "integer"
+                "label": "Max keys",
+                "kind": "integer",
+                "defaultValue": 10000
               }
             ]
           }
@@ -17522,33 +17439,36 @@
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Vector store",
+            "label": "Milvus",
             "fields": [
               {
-                "key": "endpoint",
-                "label": "Endpoint / host",
-                "kind": "text"
-              },
-              {
-                "key": "apiKey",
-                "label": "API key",
-                "kind": "text",
-                "placeholder": "••••••••"
-              },
-              {
-                "key": "collection",
-                "label": "Collection / index",
-                "kind": "text",
-                "required": true
-              },
-              {
                 "key": "connectionRef",
-                "label": "Or use saved connection",
+                "label": "Saved connection",
                 "kind": "connection-ref",
                 "accepts": [
                   "milvus"
                 ],
                 "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
+                "key": "endpoint",
+                "label": "Endpoint",
+                "kind": "text",
+                "required": true,
+                "placeholder": "https://in03-xxxx.api.gcp-us-west1.zillizcloud.com"
+              },
+              {
+                "key": "collection",
+                "label": "Collection",
+                "kind": "text",
+                "required": true
+              },
+              {
+                "key": "apiKey",
+                "label": "API key",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "••••••••"
               }
             ]
           },
@@ -17556,40 +17476,30 @@
             "label": "Query",
             "fields": [
               {
-                "key": "queryMode",
-                "label": "Mode",
-                "kind": "select",
-                "defaultValue": "fetch",
-                "options": [
-                  {
-                    "label": "Fetch all",
-                    "value": "fetch"
-                  },
-                  {
-                    "label": "Similarity search",
-                    "value": "search"
-                  }
-                ]
-              },
-              {
-                "key": "queryText",
-                "label": "Query text",
-                "kind": "textarea",
-                "rows": 2,
-                "description": "For similarity search."
-              },
-              {
-                "key": "topK",
-                "label": "Top K",
-                "kind": "integer",
-                "defaultValue": 10
+                "key": "outputFields",
+                "label": "Fields to return",
+                "kind": "text",
+                "placeholder": "id, title, source",
+                "description": "Comma-separated. Blank returns the collection default."
               },
               {
                 "key": "filter",
-                "label": "Metadata filter (JSON)",
-                "kind": "textarea",
-                "rows": 3,
-                "placeholder": "{\"source\": \"docs\"}"
+                "label": "Filter expression",
+                "kind": "text",
+                "placeholder": "id > 0",
+                "description": "Milvus boolean expression. Blank uses 'id > 0', which matches everything."
+              },
+              {
+                "key": "pageSize",
+                "label": "Page size",
+                "kind": "integer",
+                "defaultValue": 100
+              },
+              {
+                "key": "maxPages",
+                "label": "Max pages",
+                "kind": "integer",
+                "defaultValue": 100
               }
             ]
           }
@@ -20430,12 +20340,6 @@
             "id": "main",
             "label": "matched",
             "type": "main"
-          },
-          {
-            "id": "reject",
-            "label": "unmatched",
-            "type": "reject",
-            "optional": true
           }
         ]
       },
@@ -20530,12 +20434,6 @@
               "id": "main",
               "label": "matched",
               "type": "main"
-            },
-            {
-              "id": "reject",
-              "label": "unmatched",
-              "type": "reject",
-              "optional": true
             }
           ]
         }
@@ -20982,14 +20880,8 @@
         "outputs": [
           {
             "id": "main",
-            "label": "matched",
-            "type": "main"
-          },
-          {
-            "id": "reject",
             "label": "unmatched",
-            "type": "reject",
-            "optional": true
+            "type": "main"
           }
         ]
       },
@@ -21082,14 +20974,8 @@
           "outputs": [
             {
               "id": "main",
-              "label": "matched",
-              "type": "main"
-            },
-            {
-              "id": "reject",
               "label": "unmatched",
-              "type": "reject",
-              "optional": true
+              "type": "main"
             }
           ]
         }
@@ -29888,38 +29774,6 @@
                 "required": true
               },
               {
-                "key": "provider",
-                "label": "Provider",
-                "kind": "select",
-                "defaultValue": "openai",
-                "options": [
-                  {
-                    "label": "OpenAI",
-                    "value": "openai"
-                  },
-                  {
-                    "label": "Anthropic",
-                    "value": "anthropic"
-                  },
-                  {
-                    "label": "Cohere",
-                    "value": "cohere"
-                  },
-                  {
-                    "label": "Hugging Face",
-                    "value": "huggingface"
-                  },
-                  {
-                    "label": "Local (Ollama)",
-                    "value": "ollama"
-                  },
-                  {
-                    "label": "Custom (OpenAI-compatible)",
-                    "value": "custom"
-                  }
-                ]
-              },
-              {
                 "key": "model",
                 "label": "Model",
                 "kind": "text",
@@ -30103,38 +29957,6 @@
           {
             "label": "Model",
             "fields": [
-              {
-                "key": "provider",
-                "label": "Provider",
-                "kind": "select",
-                "defaultValue": "openai",
-                "options": [
-                  {
-                    "label": "OpenAI",
-                    "value": "openai"
-                  },
-                  {
-                    "label": "Anthropic",
-                    "value": "anthropic"
-                  },
-                  {
-                    "label": "Cohere",
-                    "value": "cohere"
-                  },
-                  {
-                    "label": "Hugging Face",
-                    "value": "huggingface"
-                  },
-                  {
-                    "label": "Local (Ollama)",
-                    "value": "ollama"
-                  },
-                  {
-                    "label": "Custom (OpenAI-compatible)",
-                    "value": "custom"
-                  }
-                ]
-              },
               {
                 "key": "model",
                 "label": "Model",
@@ -30408,37 +30230,13 @@
                 "required": true
               },
               {
-                "key": "strategy",
-                "label": "Strategy",
-                "kind": "select",
-                "defaultValue": "recursive",
-                "options": [
-                  {
-                    "label": "Fixed size",
-                    "value": "fixed"
-                  },
-                  {
-                    "label": "Sentence",
-                    "value": "sentence"
-                  },
-                  {
-                    "label": "Recursive",
-                    "value": "recursive"
-                  },
-                  {
-                    "label": "Semantic",
-                    "value": "semantic"
-                  }
-                ]
-              },
-              {
                 "key": "chunkSize",
                 "label": "Chunk size (tokens)",
                 "kind": "integer",
                 "defaultValue": 512
               },
               {
-                "key": "overlap",
+                "key": "chunkOverlap",
                 "label": "Overlap (tokens)",
                 "kind": "integer",
                 "defaultValue": 64
@@ -30613,38 +30411,6 @@
                 "required": true,
                 "placeholder": "positive, neutral, negative",
                 "description": "Comma-separated candidate labels."
-              },
-              {
-                "key": "provider",
-                "label": "Provider",
-                "kind": "select",
-                "defaultValue": "openai",
-                "options": [
-                  {
-                    "label": "OpenAI",
-                    "value": "openai"
-                  },
-                  {
-                    "label": "Anthropic",
-                    "value": "anthropic"
-                  },
-                  {
-                    "label": "Cohere",
-                    "value": "cohere"
-                  },
-                  {
-                    "label": "Hugging Face",
-                    "value": "huggingface"
-                  },
-                  {
-                    "label": "Local (Ollama)",
-                    "value": "ollama"
-                  },
-                  {
-                    "label": "Custom (OpenAI-compatible)",
-                    "value": "custom"
-                  }
-                ]
               },
               {
                 "key": "model",
@@ -35796,7 +35562,7 @@
               {
                 "key": "oracleRuntimeNote",
                 "label": "Heads-up",
-                "kind": "text",
+                "kind": "note",
                 "description": "Oracle support is built into Duckle. Users only need Oracle Instant Client (libclntsh.so / OCI.dll / libclntsh.dylib) on the library path at runtime. If it is missing the executor surfaces a clear loader error."
               }
             ]
@@ -41842,7 +41608,7 @@
               {
                 "key": "shapeHint",
                 "label": "Row shape",
-                "kind": "text",
+                "kind": "note",
                 "description": "Each upstream row is sent as a doc, preceded by a {\"index\":{\"_index\":\"<index>\"}} action line. Content-Type is application/x-ndjson."
               }
             ]
@@ -41914,7 +41680,7 @@
               {
                 "key": "shapeHint",
                 "label": "Row shape",
-                "kind": "text",
+                "kind": "note",
                 "description": "Each upstream row is sent as a doc, preceded by a {\"index\":{\"_index\":\"<index>\"}} action line. Content-Type is application/x-ndjson."
               }
             ]
@@ -42231,7 +41997,7 @@
               {
                 "key": "shapeHint",
                 "label": "Row shape",
-                "kind": "text",
+                "kind": "note",
                 "description": "Each upstream row should already have {id, values, metadata}. Use a Project / Add Column upstream to rename your embedding column to \"values\" and any extras into a \"metadata\" struct."
               }
             ]
@@ -42303,7 +42069,7 @@
               {
                 "key": "shapeHint",
                 "label": "Row shape",
-                "kind": "text",
+                "kind": "note",
                 "description": "Each upstream row should already have {id, vector, payload}. Use Project / Add Column upstream to reshape if needed."
               }
             ]
@@ -42368,7 +42134,7 @@
               {
                 "key": "shapeHint",
                 "label": "Row shape",
-                "kind": "text",
+                "kind": "note",
                 "description": "Each upstream row should already have {class, properties, vector}. The engine wraps the batch in {objects: [...]}."
               }
             ]
@@ -42586,7 +42352,7 @@
               {
                 "key": "shapeHint",
                 "label": "Row shape",
-                "kind": "text",
+                "kind": "note",
                 "description": "Each upstream row should have {id, vector, ...}. The engine wraps as {collectionName, data: [...]}."
               }
             ]
@@ -42885,12 +42651,6 @@
                 "label": "Branch conditions",
                 "kind": "key-value",
                 "description": "branch_name → boolean expression. Rows go down the first matching branch."
-              },
-              {
-                "key": "defaultBranch",
-                "label": "Default branch name",
-                "kind": "text",
-                "defaultValue": "else"
               }
             ]
           }

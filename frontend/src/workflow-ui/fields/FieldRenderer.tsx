@@ -330,6 +330,11 @@ function renderInput(field: Field, value: unknown, onChange: (v: unknown) => voi
             );
         case 'sort-keys':
             return <SortKeysField value={value as SortKey[] | undefined} onChange={onChange} />;
+        case 'note':
+            // No input: a note is something the component wants you to know,
+            // and these were previously `text` fields, so a fact about the
+            // connector looked like a setting with an empty value.
+            return <div className="field-note">{field.description}</div>;
         default: {
             // The switch had no default and returns React.ReactNode, which
             // includes undefined - so adding a kind to the union and forgetting

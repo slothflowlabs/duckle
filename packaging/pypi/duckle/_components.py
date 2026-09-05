@@ -122,7 +122,6 @@ COMPONENTS = {
         'kind': 'control',
         'summary': 'Route rows to case_1..N outputs by condition; first match wins',
         'params': ['branches'],
-        'unverified': ['defaultBranch'],
     },
     'ctl.throttle': {
         'kind': 'control',
@@ -369,7 +368,6 @@ COMPONENTS = {
         'kind': 'sink',
         'summary': 'Bulk-index docs via the _bulk NDJSON API (configurable host, index, ApiKey auth)',
         'params': ['endpoint', 'index', 'apiKey'],
-        'unverified': ['shapeHint'],
     },
     'snk.email': {
         'kind': 'sink',
@@ -445,7 +443,6 @@ COMPONENTS = {
         'kind': 'sink',
         'summary': 'Insert rows to a Milvus collection via /v1/vector/insert',
         'params': ['endpoint', 'collection', 'apiKey'],
-        'unverified': ['shapeHint'],
     },
     'snk.minio': {
         'kind': 'sink',
@@ -486,13 +483,11 @@ COMPONENTS = {
         'kind': 'sink',
         'summary': 'Bulk-index docs via the OpenSearch _bulk NDJSON API (same shape as Elasticsearch)',
         'params': ['endpoint', 'index', 'apiKey'],
-        'unverified': ['shapeHint'],
     },
     'snk.oracle': {
         'kind': 'sink',
         'summary': 'INSERT to Oracle via the official `oracle` Rust crate. Built into the shipped binary - users need Oracle Instant Client on the library path at runtime. Multi-row INSERT ALL ... SELECT 1 FROM dual idiom batched at 1000 rows.',
         'params': ['connect', 'user', 'password', 'schema', 'tableName', 'batchSize', 'mode', 'conflictColumns', 'deleteColumn', 'deleteValue'],
-        'unverified': ['oracleRuntimeNote'],
     },
     'snk.parquet': {
         'kind': 'sink',
@@ -508,7 +503,6 @@ COMPONENTS = {
         'kind': 'sink',
         'summary': 'Upsert vectors to a Pinecone index via /vectors/upsert with Api-Key auth',
         'params': ['indexHost', 'apiKey'],
-        'unverified': ['shapeHint'],
     },
     'snk.pixeltable': {
         'kind': 'sink',
@@ -529,7 +523,6 @@ COMPONENTS = {
         'kind': 'sink',
         'summary': 'Upsert points to a Qdrant collection via PUT /collections/{name}/points',
         'params': ['clusterUrl', 'collection', 'apiKey'],
-        'unverified': ['shapeHint'],
     },
     'snk.quack': {
         'kind': 'sink',
@@ -645,7 +638,6 @@ COMPONENTS = {
         'kind': 'sink',
         'summary': 'Batch upsert objects to a Weaviate cluster via /v1/batch/objects with Bearer auth',
         'params': ['endpoint', 'apiKey'],
-        'unverified': ['shapeHint'],
     },
     'snk.webhook': {
         'kind': 'sink',
@@ -742,7 +734,6 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'Read from CockroachDB via the DuckDB postgres extension',
         'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'connectTimeout', 'options', 'connParams', 'mode', 'schemaName', 'tableName', 'sql', 'pushdown', 'readOnly', 'connString'],
-        'unverified': ['fetchSize'],
     },
     'src.couchdb': {
         'kind': 'source',
@@ -953,13 +944,11 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'Read from MariaDB via the DuckDB mysql extension',
         'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'mode', 'schemaName', 'tableName', 'sql', 'pushdown', 'readOnly', 'connString'],
-        'unverified': ['fetchSize'],
     },
     'src.milvus': {
         'kind': 'source',
         'summary': 'Query Milvus via POST /v1/vector/query. Offset pagination on `offset` + `limit`; emits each `data[]` element as a row. Provide a filter expression (default `id > 0`) and optional outputFields. apiKey via Bearer.',
-        'params': ['endpoint', 'apiKey', 'collection', 'connectionRef', 'topK', 'filter'],
-        'unverified': ['queryMode', 'queryText'],
+        'params': ['connectionRef', 'endpoint', 'collection', 'apiKey', 'outputFields', 'filter', 'pageSize', 'maxPages'],
     },
     'src.minio': {
         'kind': 'source',
@@ -990,7 +979,6 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'Read from MySQL via the DuckDB mysql extension',
         'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'mode', 'schemaName', 'tableName', 'sql', 'pushdown', 'readOnly', 'connString'],
-        'unverified': ['fetchSize'],
     },
     'src.nats': {
         'kind': 'source',
@@ -1021,13 +1009,11 @@ COMPONENTS = {
         'kind': 'source',
         'summary': "Read Oracle via the official `oracle` Rust crate (ODPI-C). Built into the shipped binary - users need Oracle Instant Client (libclntsh.{so,dll,dylib}) on the library path at RUNTIME; the executor surfaces a clear OCI loader error if it's missing. SQL auth via user / password; EZ Connect string fo...",
         'params': ['connect', 'user', 'password', 'schema', 'tableName', 'query', 'parallelColumn', 'parallelDegree'],
-        'unverified': ['oracleRuntimeNote'],
     },
     'src.parquet': {
         'kind': 'source',
         'summary': 'Read columnar Parquet files',
         'params': ['path', 'columns'],
-        'unverified': ['rowGroupRange'],
     },
     'src.pdf': {
         'kind': 'source',
@@ -1059,7 +1045,6 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'Read from PostgreSQL via the DuckDB postgres extension',
         'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'connectTimeout', 'options', 'connParams', 'mode', 'schemaName', 'tableName', 'sql', 'pushdown', 'readOnly', 'connString'],
-        'unverified': ['fetchSize'],
     },
     'src.pubsub': {
         'kind': 'source',
@@ -1099,8 +1084,7 @@ COMPONENTS = {
     'src.redis': {
         'kind': 'source',
         'summary': "SCAN keys matching a pattern (default *) and GET each value via the sync `redis` Rust client. Emits {key, value} rows. limit caps the walk so a million-key DB doesn't spin forever.",
-        'params': ['connectionString', 'database', 'collection', 'filter', 'projection', 'limit'],
-        'unverified': ['queryMode'],
+        'params': ['connectionString', 'keyPattern', 'limit'],
     },
     'src.redpanda': {
         'kind': 'source',
@@ -1295,14 +1279,12 @@ COMPONENTS = {
     'xf.ai.chunk': {
         'kind': 'transform',
         'summary': 'Split long text into chunks for RAG / embedding pipelines. No API call - pure local char-window splitting with overlap. Props: inputColumn (default `text`), outputColumn (default `chunk`), chunkSize (default 1000), chunkOverlap (default 100), mode (`explode` = one row per chunk with chunk_index/c...',
-        'params': ['inputColumn', 'strategy', 'chunkSize', 'outputColumn'],
-        'unverified': ['overlap'],
+        'params': ['inputColumn', 'chunkSize', 'chunkOverlap', 'outputColumn'],
     },
     'xf.ai.classify': {
         'kind': 'transform',
         'summary': 'Per-row LLM-backed classification. Props: inputColumn (default `text`), outputColumn (default `category`), categories (required, comma-separated list), model (default `gpt-4o-mini`), apiKey, baseUrl. The model is prompted to pick exactly one category; anything outside the list normalizes to `UNKN...',
         'params': ['inputColumn', 'categories', 'model', 'apiKey', 'outputColumn', 'baseUrl', 'endpointPath', 'headers', 'concurrency', 'checkpoint', 'checkpointKey', 'checkpointFingerprint', 'maxRetries', 'maxRequests', 'maxInputTokens', 'maxOutputTokens', 'maxEstimatedCostUsd', 'inputUsdPerMillionTokens', 'outputUsdPerMillionTokens'],
-        'unverified': ['provider'],
     },
     'xf.ai.dedupe': {
         'kind': 'transform',
@@ -1313,13 +1295,11 @@ COMPONENTS = {
         'kind': 'transform',
         'summary': 'Per-row embedding via any OpenAI-compatible /v1/embeddings endpoint. Props: inputColumn (default `text`), outputColumn (default `embedding`), model (default `text-embedding-3-small`), apiKey (required, sent as Bearer), baseUrl (default `https://api.openai.com` - point at Cohere, Voyage, llama.cpp...',
         'params': ['inputColumn', 'model', 'apiKey', 'outputColumn', 'dimension', 'batchSize', 'concurrency', 'checkpoint', 'checkpointKey', 'checkpointFingerprint', 'maxRetries', 'maxRequests', 'maxInputTokens', 'maxOutputTokens', 'maxEstimatedCostUsd', 'inputUsdPerMillionTokens', 'outputUsdPerMillionTokens', 'baseUrl', 'endpointPath', 'headers'],
-        'unverified': ['provider'],
     },
     'xf.ai.llm': {
         'kind': 'transform',
         'summary': 'Per-row LLM completion via any OpenAI-compatible /v1/chat/completions endpoint. Props: promptTemplate with `{column}` substitution (or inputColumn for passthrough), outputColumn (default `completion`), model (default `gpt-4o-mini`), apiKey (required), baseUrl, systemPrompt, temperature. One HTTP ...',
         'params': ['model', 'apiKey', 'baseUrl', 'endpointPath', 'headers', 'promptTemplate', 'outputColumn', 'temperature', 'maxTokens', 'concurrency', 'checkpoint', 'checkpointKey', 'checkpointFingerprint', 'maxRetries', 'maxRequests', 'maxInputTokens', 'maxOutputTokens', 'maxEstimatedCostUsd', 'inputUsdPerMillionTokens', 'outputUsdPerMillionTokens', 'responseFormat', 'jsonSchema', 'schemaName', 'expandColumns', 'onInvalid'],
-        'unverified': ['provider'],
     },
     'xf.ai.pii': {
         'kind': 'transform',

@@ -3594,6 +3594,33 @@ pub(crate) fn build_reject_sql(
         // NULL on the right makes NOT IN return UNKNOWN, which would silently
         // reject every row - the last place to reintroduce that gotcha is the
         // stream someone is using to account for missing data.
+        // Unmatched features: the same anti-join, with the spatial predicate
+        // in place of key equality. xf.anti and xf.join.cross are deliberately
+        // absent - an anti join's MAIN output already IS the unmatched rows,
+        // and a cross join has no predicate, so neither can have a meaningful
+        // reject stream. Their ports are removed rather than filled.
+        "xf.join.spatial" => {
+            let left = inputs
+                .main()
+                .ok_or_else(|| "spatial join reject: missing main input".to_string())?;
+            let right = inputs
+                .first_lookup()
+                .ok_or_else(|| "spatial join reject: missing lookup input".to_string())?;
+            let left_col = string_prop(props, "leftGeomColumn")
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "spatial join reject: leftGeomColumn required".to_string())?;
+            let right_col = string_prop(props, "rightGeomColumn")
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "spatial join reject: rightGeomColumn required".to_string())?;
+            Ok(Some(format!(
+                "SELECT * FROM {l} m WHERE NOT EXISTS (SELECT 1 FROM {r} r WHERE {f}(m.{lc}, r.{rc}))",
+                l = quote_ident(left),
+                r = quote_ident(right),
+                f = spatial_relation_fn(props),
+                lc = quote_ident(&left_col),
+                rc = quote_ident(&right_col),
+            )))
+        }
         "xf.join" | "xf.join.inner" | "xf.lookup" | "xf.lookup.outer" | "xf.semi"
         | "xf.semi.join" => {
             let left = inputs
@@ -8091,6 +8118,28 @@ pub(crate) fn build_text_similarity(inputs: &NodeInputs, props: &JsonValue) -> R
 /// against a fixed target. The classic "orders inside delivery zone"
 /// example is `left=orders.point JOIN right=zones.polygon ON
 /// ST_Within(orders.point, zones.polygon)`.
+/// The DuckDB spatial function a `relation` names.
+///
+/// Shared by the join and by its reject stream, so the two halves cannot
+/// disagree about what "matched" meant - including the fallback, which an
+/// unrecognised relation lands on.
+fn spatial_relation_fn(props: &JsonValue) -> &'static str {
+    match string_prop(props, "relation").unwrap_or_default().as_str() {
+        "contains" => "ST_Contains",
+        "within" => "ST_Within",
+        "touches" => "ST_Touches",
+        "crosses" => "ST_Crosses",
+        "overlaps" => "ST_Overlaps",
+        "equals" => "ST_Equals",
+        // #220: Covers / CoveredBy differ from Contains / Within at the
+        // boundary - a geometry covers another that touches its edge, which
+        // Contains rejects. That distinction is why GIS tools expose both.
+        "covers" => "ST_Covers",
+        "coveredby" => "ST_CoveredBy",
+        _ => "ST_Intersects",
+    }
+}
+
 pub(crate) fn build_spatial_join(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
     let left = inputs
         .main()
@@ -8104,21 +8153,7 @@ pub(crate) fn build_spatial_join(inputs: &NodeInputs, props: &JsonValue) -> Resu
     let right_col = string_prop(props, "rightGeomColumn")
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "Spatial Join needs rightGeomColumn".to_string())?;
-    let relation = string_prop(props, "relation").unwrap_or_else(|| "intersects".into());
-    let fn_name = match relation.as_str() {
-        "contains" => "ST_Contains",
-        "within" => "ST_Within",
-        "touches" => "ST_Touches",
-        "crosses" => "ST_Crosses",
-        "overlaps" => "ST_Overlaps",
-        "equals" => "ST_Equals",
-        // #220: Covers / CoveredBy differ from Contains / Within at the
-        // boundary - a geometry covers another that touches its edge, which
-        // Contains rejects. That distinction is why GIS tools expose both.
-        "covers" => "ST_Covers",
-        "coveredby" => "ST_CoveredBy",
-        _ => "ST_Intersects",
-    };
+    let fn_name = spatial_relation_fn(props);
     let kind = match string_prop(props, "joinType").as_deref() {
         Some("left") => "LEFT",
         _ => "INNER",

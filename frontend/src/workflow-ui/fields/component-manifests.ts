@@ -211,12 +211,9 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                         placeholder: 'leave blank for all columns',
                         description: 'Comma-separated; pushed down to the Parquet reader.',
                     },
-                    {
-                        key: 'rowGroupRange',
-                        label: 'Row group range',
-                        kind: 'text',
-                        placeholder: 'e.g. 0..10',
-                    },
+                    // A `rowGroupRange` box was here. build_parquet_source reads
+                    // path and columns and nothing else; read_parquet in the
+                    // pinned DuckDB exposes no row-group selection.
                 ],
             },
         ],

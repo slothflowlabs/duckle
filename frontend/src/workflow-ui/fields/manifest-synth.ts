@@ -599,13 +599,8 @@ const dbReadFields = (): Field[] => [
         rows: 5,
         placeholder: 'SELECT * FROM orders WHERE status = $1',
     },
-    {
-        key: 'fetchSize',
-        label: 'Fetch size',
-        kind: 'integer',
-        defaultValue: 1000,
-        description: 'Rows fetched per round-trip.',
-    },
+    // A `fetchSize` box was here. build_relational_source never reads it -
+    // the round-trip size is DuckDB's, not ours to set.
 ];
 
 // Read-mode fields shared by the ATTACH-backed duck sources (ducklake,
@@ -769,14 +764,23 @@ export function portsForComponent(comp: ComponentDef): NodePorts {
         id === 'xf.semi' ||
         id === 'xf.anti'
     ) {
+        // An anti join's MATCHED output already IS the unmatched rows, so a
+        // second port labelled "unmatched" would mean the opposite thing on the
+        // same node. A cross join has no predicate, so nothing is ever
+        // unmatched. Both advertised the port and nothing could fill it: wiring
+        // it failed the run with `Table with name <node>__reject does not
+        // exist`. Every other member of the family now fills it.
+        const hasUnmatched = id !== 'xf.anti' && id !== 'xf.join.cross';
         return {
             inputs: [
                 { id: 'main', label: 'driving', type: 'main' },
                 { id: 'lookup', label: 'lookup', type: 'lookup' },
             ],
             outputs: [
-                { id: 'main', label: 'matched', type: 'main' },
-                { id: 'reject', label: 'unmatched', type: 'reject', optional: true },
+                { id: 'main', label: id === 'xf.anti' ? 'unmatched' : 'matched', type: 'main' },
+                ...(hasUnmatched
+                    ? [{ id: 'reject', label: 'unmatched', type: 'reject' as const, optional: true }]
+                    : []),
             ],
         };
     }
@@ -3032,7 +3036,7 @@ function synthDbSource(comp: ComponentDef): ComponentManifest {
                     {
                         key: 'oracleRuntimeNote',
                         label: 'Heads-up',
-                        kind: 'text',
+                        kind: 'note',
                         description: 'Oracle support is built into Duckle. Users only need Oracle Instant Client (libclntsh.so / OCI.dll / libclntsh.dylib) on the library path at runtime. If it is missing the executor surfaces a clear loader error.',
                     },
                 ],
@@ -3232,7 +3236,7 @@ function synthDbSink(comp: ComponentDef): ComponentManifest {
                     {
                         key: 'oracleRuntimeNote',
                         label: 'Heads-up',
-                        kind: 'text',
+                        kind: 'note',
                         description: 'Oracle support is built into Duckle. Users only need Oracle Instant Client (libclntsh.so / OCI.dll / libclntsh.dylib) on the library path at runtime. If it is missing the executor surfaces a clear loader error.',
                     },
                 ],
@@ -4998,7 +5002,7 @@ function synthNoSqlSink(comp: ComponentDef): ComponentManifest {
                         {
                             key: 'shapeHint',
                             label: 'Row shape',
-                            kind: 'text',
+                            kind: 'note',
                             description: `Each upstream row is sent as a doc, preceded by a {"index":{"_index":"<index>"}} action line. Content-Type is application/x-ndjson.`,
                         },
                     ],
@@ -6420,7 +6424,8 @@ function synthRoutingControl(comp: ComponentDef): ComponentManifest {
                 fields: [
                     { key: 'branches', label: 'Branch conditions', kind: 'key-value',
                       description: 'branch_name → boolean expression. Rows go down the first matching branch.' },
-                    { key: 'defaultBranch', label: 'Default branch name', kind: 'text', defaultValue: 'else' },
+                    // A `defaultBranch` name was here and build_switch hardcodes
+                    // the fallback relation, so renaming it changed nothing.
                 ],
             },
         ], 'upstream');
@@ -7489,20 +7494,10 @@ function synthCustomCode(comp: ComponentDef): ComponentManifest {
 
 // AI / Vector ----------------------------------------------------------
 
-const aiProviderField = (): Field => ({
-    key: 'provider',
-    label: 'Provider',
-    kind: 'select',
-    defaultValue: 'openai',
-    options: [
-        { label: 'OpenAI', value: 'openai' },
-        { label: 'Anthropic', value: 'anthropic' },
-        { label: 'Cohere', value: 'cohere' },
-        { label: 'Hugging Face', value: 'huggingface' },
-        { label: 'Local (Ollama)', value: 'ollama' },
-        { label: 'Custom (OpenAI-compatible)', value: 'custom' },
-    ],
-});
+// A Provider select (OpenAI / Anthropic / Cohere / HuggingFace / Ollama) lived
+// here and no engine arm read it - there is no `provider` literal anywhere in
+// crates/ or apps/. The control that does work is `baseUrl`, which every AI arm
+// honours, so pointing that at a provider is how a provider is chosen.
 
 // #258: the two knobs that decide how a batch-inference stage behaves at
 // scale. Parallel requests defaults to 1, which is exactly the sequential
@@ -7655,7 +7650,7 @@ function synthVectorSink(comp: ComponentDef): ComponentManifest {
                     {
                         key: 'shapeHint',
                         label: 'Row shape',
-                        kind: 'text',
+                        kind: 'note',
                         description: 'Each upstream row should already have {id, values, metadata}. Use a Project / Add Column upstream to rename your embedding column to "values" and any extras into a "metadata" struct.',
                     },
                 ],
@@ -7743,7 +7738,7 @@ function synthVectorSink(comp: ComponentDef): ComponentManifest {
                     {
                         key: 'shapeHint',
                         label: 'Row shape',
-                        kind: 'text',
+                        kind: 'note',
                         description: 'Each upstream row should already have {id, vector, payload}. Use Project / Add Column upstream to reshape if needed.',
                     },
                 ],
@@ -7771,7 +7766,7 @@ function synthVectorSink(comp: ComponentDef): ComponentManifest {
                     {
                         key: 'shapeHint',
                         label: 'Row shape',
-                        kind: 'text',
+                        kind: 'note',
                         description: 'Each upstream row should already have {class, properties, vector}. The engine wraps the batch in {objects: [...]}.',
                     },
                 ],
@@ -7794,7 +7789,7 @@ function synthVectorSink(comp: ComponentDef): ComponentManifest {
                     {
                         key: 'shapeHint',
                         label: 'Row shape',
-                        kind: 'text',
+                        kind: 'note',
                         description: 'Each upstream row should have {id, vector, ...}. The engine wraps as {collectionName, data: [...]}.',
                     },
                 ],
@@ -8075,7 +8070,6 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                 label: 'Embeddings',
                 fields: [
                     { key: 'inputColumn', label: 'Text column', kind: 'column', required: true },
-                    aiProviderField(),
                     { key: 'model', label: 'Model', kind: 'text', defaultValue: 'text-embedding-3-small' },
                     { key: 'apiKey', label: 'API key', kind: 'text', placeholder: '••••••••' },
                     { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'embedding' },
@@ -8093,7 +8087,6 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
             {
                 label: 'Model',
                 fields: [
-                    aiProviderField(),
                     { key: 'model', label: 'Model', kind: 'text', defaultValue: 'gpt-4o-mini' },
                     { key: 'apiKey', label: 'API key', kind: 'text', placeholder: '••••••••' },
                     ...aiCustomEndpointFields(),
@@ -8180,20 +8173,13 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                 label: 'Chunking',
                 fields: [
                     { key: 'inputColumn', label: 'Text column', kind: 'column', required: true },
-                    {
-                        key: 'strategy',
-                        label: 'Strategy',
-                        kind: 'select',
-                        defaultValue: 'recursive',
-                        options: [
-                            { label: 'Fixed size', value: 'fixed' },
-                            { label: 'Sentence', value: 'sentence' },
-                            { label: 'Recursive', value: 'recursive' },
-                            { label: 'Semantic', value: 'semantic' },
-                        ],
-                    },
+                    // A `strategy` select (sentence / recursive / semantic) was here.
+                    // AiChunkSpec has no strategy member and the arm never looks for
+                    // one - the splitter is fixed-size only.
                     { key: 'chunkSize', label: 'Chunk size (tokens)', kind: 'integer', defaultValue: 512 },
-                    { key: 'overlap', label: 'Overlap (tokens)', kind: 'integer', defaultValue: 64 },
+                    // The engine reads `chunkOverlap`, which is also the name used
+                    // everywhere else; `overlap` reached nothing.
+                    { key: 'chunkOverlap', label: 'Overlap (tokens)', kind: 'integer', defaultValue: 64 },
                     { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'chunk' },
                 ],
             },
@@ -8248,7 +8234,6 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                 fields: [
                     { key: 'inputColumn', label: 'Text column', kind: 'column', required: true },
                     { key: 'categories', label: 'Labels', kind: 'text', required: true, placeholder: 'positive, neutral, negative', description: 'Comma-separated candidate labels.' },
-                    aiProviderField(),
                     { key: 'model', label: 'Model', kind: 'text', defaultValue: 'gpt-4o-mini' },
                     { key: 'apiKey', label: 'API key', kind: 'text', placeholder: '••••••••' },
                     { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'label' },
@@ -8800,6 +8785,51 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
     // form: connectionString, collection, filter, projection. Not one of those
     // is read for it, and not one of the fields it does need could be set.
     if (comp.id === 'src.couchdb') return synthApiSource(comp);
+    // src.milvus reads endpoint / collection / outputFields / apiKey / filter /
+    // pageSize / maxPages and nothing else. The shared vector form offered it a
+    // Mode select with "Similarity search" and a Query text box, and the arm has
+    // no search path at all: Milvus search wants a query VECTOR and there is no
+    // embedding step here, so "search by text" could never have been honoured.
+    if (comp.id === 'src.milvus') {
+        return base(comp, [
+            {
+                label: 'Milvus',
+                fields: [
+                    // Kept from the form this replaces: a saved connection is
+                    // expanded into whatever fields the node's arm reads.
+                    connectionRefField(connectionKindFor(comp.id)),
+                    { key: 'endpoint', label: 'Endpoint', kind: 'text', required: true, placeholder: 'https://in03-xxxx.api.gcp-us-west1.zillizcloud.com' },
+                    { key: 'collection', label: 'Collection', kind: 'text', required: true },
+                    { key: 'apiKey', label: 'API key', kind: 'text', secret: true, placeholder: '••••••••' },
+                ],
+            },
+            {
+                label: 'Query',
+                fields: [
+                    { key: 'outputFields', label: 'Fields to return', kind: 'text', placeholder: 'id, title, source', description: 'Comma-separated. Blank returns the collection default.' },
+                    { key: 'filter', label: 'Filter expression', kind: 'text', placeholder: 'id > 0', description: "Milvus boolean expression. Blank uses 'id > 0', which matches everything." },
+                    { key: 'pageSize', label: 'Page size', kind: 'integer', defaultValue: 100 },
+                    { key: 'maxPages', label: 'Max pages', kind: 'integer', defaultValue: 100 },
+                ],
+            },
+        ]);
+    }
+    // src.redis is a key scan, not a document store: the arm reads url (or
+    // connectionString), keyPattern and limit. The NoSQL group synth drew it the
+    // MongoDB form - queryMode, collection, database, projection - none of which
+    // it reads.
+    if (comp.id === 'src.redis') {
+        return base(comp, [
+            {
+                label: 'Redis',
+                fields: [
+                    { key: 'connectionString', label: 'Connection URL', kind: 'text', required: true, placeholder: 'redis://default:pass@host:6379/0' },
+                    { key: 'keyPattern', label: 'Key pattern', kind: 'text', defaultValue: '*', description: 'SCAN match pattern. * reads every key.' },
+                    { key: 'limit', label: 'Max keys', kind: 'integer', defaultValue: 10000 },
+                ],
+            },
+        ]);
+    }
     if (groupId === 'src.warehouses') return synthWarehouseSource(comp);
     if (groupId === 'src.storage') return synthStorageSource(comp);
     if (groupId === 'src.streaming') return synthStreamingSource(comp);

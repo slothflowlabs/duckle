@@ -67,6 +67,11 @@ def field_keys(component):
     out = []
     for section in manifest.get("sections") or []:
         for field in section.get("fields") or []:
+            # A note is guidance rendered on the form, not a setting, so it is
+            # not a property the engine could read and must not be reported as
+            # one the engine ignores.
+            if field.get("kind") == "note":
+                continue
             key = field.get("key")
             if key and key not in SKIP_KEYS and key not in out:
                 out.append(key)

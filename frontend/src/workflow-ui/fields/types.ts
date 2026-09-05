@@ -23,7 +23,10 @@ export type FieldKind =
     | 'routine-ref'
     | 'pipeline-ref'
     | 'ducklake-snapshot'
-    | 'sort-keys';
+    | 'sort-keys'
+    // Guidance on a form, not a setting. Rendered as static text with no input,
+    // so a fact about the component stops being a box someone can type into.
+    | 'note';
 
 // Multi-column sort. The engine's build_sort reads `orderBy` as an ordered
 // array of these, and prefers it over the single `sortColumn` it falls back to.

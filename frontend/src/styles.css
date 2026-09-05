@@ -3494,6 +3494,18 @@ html[dir='rtl'] .topbar-lang {
     border-bottom: none;
 }
 
+/* Guidance on a form, not a setting. These were `text` inputs, so a fact about
+   the connector looked like an empty box waiting to be filled in. */
+.field-note {
+    padding: 6px 8px;
+    border-left: 2px solid var(--border-strong);
+    background: var(--bg-2);
+    border-radius: 0 3px 3px 0;
+    color: var(--text-2);
+    font-size: 0.8462rem;
+    line-height: 1.5;
+}
+
 /* Sort keys apply left to right, so their order is part of the value and the
    rows have to be reorderable rather than just add/remove. */
 .field-sort-move {

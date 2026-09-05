@@ -6325,3 +6325,59 @@ mod set_operation_match_by {
         assert!(sql.contains("WHERE false UNION ALL BY NAME"), "{sql}");
     }
 }
+
+/// The last three reject ports the join family advertised and could not fill.
+///
+/// xf.join.spatial can: unmatched is "no feature satisfied the predicate", the
+/// same anti-join shape as a key join with ST_ in place of equality.
+///
+/// xf.anti and xf.join.cross cannot, structurally. An anti join's MAIN output
+/// already IS the unmatched rows, so a reject port there would have to mean the
+/// matched ones - a second meaning for the same word on the same canvas. A
+/// cross join has no predicate, so nothing is ever unmatched. Their ports are
+/// gone rather than filled.
+#[cfg(test)]
+mod spatial_and_the_ports_that_cannot_exist {
+    use super::*;
+
+    #[test]
+    fn a_spatial_join_rejects_features_that_matched_nothing() {
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["l".into()]);
+        ni.ports.insert("lookup".into(), vec!["r".into()]);
+        let sql = build_reject_sql(
+            "xf.join.spatial",
+            &serde_json::json!({
+                "leftGeomColumn": "geom",
+                "rightGeomColumn": "shape",
+                "relation": "within"
+            }),
+            &ni,
+            None,
+        )
+        .expect("reject sql")
+        .expect("a spatial join has unmatched features to reject");
+        assert!(sql.contains("NOT EXISTS"), "{sql}");
+        assert!(sql.contains("ST_Within"), "the reject must use the SAME predicate: {sql}");
+        assert!(sql.contains("m.\"geom\"") && sql.contains("r.\"shape\""), "{sql}");
+    }
+
+    /// An unrecognised relation falls back to ST_Intersects in the join, so it
+    /// has to fall back the same way here - or the two halves disagree about
+    /// what "matched" meant.
+    #[test]
+    fn the_reject_falls_back_to_the_same_default_predicate() {
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["l".into()]);
+        ni.ports.insert("lookup".into(), vec!["r".into()]);
+        let sql = build_reject_sql(
+            "xf.join.spatial",
+            &serde_json::json!({ "leftGeomColumn": "g", "rightGeomColumn": "g" }),
+            &ni,
+            None,
+        )
+        .expect("ok")
+        .expect("some sql");
+        assert!(sql.contains("ST_Intersects"), "{sql}");
+    }
+}
