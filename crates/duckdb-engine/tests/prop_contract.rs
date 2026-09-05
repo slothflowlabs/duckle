@@ -358,6 +358,172 @@ mod plan_arms {
         (ids, i)
     }
 
+    /// Keys a `plan/mod.rs` arm reads OPTIONALLY that no component it serves
+    /// declares, and why each is correct rather than a missing field.
+    ///
+    /// Adding to this list is a deliberate act, and every entry names the
+    /// source line that settles it. "It looks like an alias" is not a reason:
+    /// open the arm and confirm the canonical key is the one declared.
+    fn arm_allowed(component: &str, key: &str) -> Option<&'static str> {
+        match (component, key) {
+            // Legacy or alternate spellings, resolved by `.or_else` onto a key
+            // the form DOES declare.
+            (_, "textColumn") => Some("alternate spelling of inputColumn (mod.rs:6225)"),
+            (_, "prompt") => Some("#142 legacy spelling of promptTemplate (mod.rs:6362)"),
+            (_, "token") => Some("alternate spelling of authToken (mod.rs:3503, 5498)"),
+            (_, "partitionColumn") => Some("alternate spelling of parallelColumn (mod.rs:4159)"),
+            (_, "rootPath") => Some("alternate spelling of rowPath (mod.rs:4873)"),
+            ("snk.teradata", "schema") => Some("alternate spelling of database (mod.rs:3417)"),
+            ("snk.rest" | "snk.webhook", "bodyShape") => {
+                Some("override of the declared batchMode, which maps onto it (mod.rs:2184)")
+            }
+            ("src.kafka" | "src.redpanda", "startOffset") => Some(
+                "numeric form of the declared `offset` select; the arm's own comment says the UI \
+                 exposes latest/earliest and a hand-authored number wins (mod.rs:4324)",
+            ),
+
+            // Read, but nothing a form could usefully offer.
+            ("snk.salesforce", "api") => Some(
+                "the only accepted value is `collections`; `bulk` returns an error pointing at \
+                 snk.salesforce.bulk, so there is no choice to present (mod.rs:2809)",
+            ),
+            ("src.ftp" | "snk.ftp", "secure") => Some(
+                "OR-ed with a protocol of ftps, and the protocol select already offers FTPS \
+                 (mod.rs:3202, 4677)",
+            ),
+            ("ctl.deadletter", "mode") => Some(
+                "the dead-letter writer is a COPY, which always replaces the file, so overwrite \
+                 is the only mode it could honour (mod.rs:4079)",
+            ),
+            ("xf.ai.llm", "inputColumn") => Some(
+                "used only when prompt_template is empty, and the form makes promptTemplate \
+                 required, so it never applies to an editor-built node (connectors.rs:13067)",
+            ),
+            (_, "privateKeyPath") => Some(
+                "hand-set alternative to the declared privateKey, named in that field's own \
+                 description",
+            ),
+
+            // Rendered by PropertiesPanel itself rather than by a manifest
+            // section, so it is reachable in the editor and invisible to a
+            // check that reads manifests.
+            (_, "materialize" | "materializePath") => {
+                Some("panel-level field, PropertiesPanel.tsx:92 and :110")
+            }
+
+            // Not an arm at all: shared prologue, which this splitter attributes
+            // to whichever arm follows it.
+            (_, "cacheOutput") => Some(
+                "shared prologue gated by CACHEABLE_COMPONENTS, declared via outputCacheSection",
+            ),
+            (_, "publishGroup") => Some("guarded to snk.ducklake, which declares it (mod.rs:6995)"),
+            _ => None,
+        }
+    }
+
+    /// The same union rule as the builders test, over every key a `plan/mod.rs`
+    /// arm reads - not only the required ones.
+    ///
+    /// The required-props test below deliberately stopped at keys whose absence
+    /// FAILS the run. But an optional prop with a default fails quietly, which
+    /// is worse, and running this found 14 real gaps at once. Three of them
+    /// silently truncated data:
+    ///
+    /// - `src.kafka` and `snk.kafka` read `partitionId`, defaulting to 0, with
+    ///   no field, so the editor could only ever read or write partition 0.
+    /// - `src.kafka` capped every read at `maxRecords`, default 1000.
+    /// - `src.elastic` / `src.opensearch` read `paginationMode`, so without a
+    ///   field every run used from/size, which both engines refuse past
+    ///   `index.max_result_window` - 10,000 documents by default.
+    ///
+    /// The alias rule is what makes the result readable: within one `let ..;`
+    /// statement, if any key is declared then every key in that statement is a
+    /// spelling of the same setting. Without it this reports 57 arms; with it,
+    /// 26, of which 14 were real.
+    #[test]
+    fn every_optional_property_an_arm_reads_is_one_some_component_declares() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("plan")
+            .join("mod.rs");
+        let src = std::fs::read_to_string(&path).expect("plan/mod.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let declared = declared_keys();
+        let preds = predicate_ids(&src);
+        let starts = arm_starts(&lines);
+        let read = regex::Regex::new(
+            r#"(?:string_prop|bool_prop|columns_list|kv_pairs)\(\s*&?props\s*,\s*"(\w+)"\s*\)|props\s*\.\s*get\(\s*"(\w+)"\s*\)"#,
+        )
+        .unwrap();
+        let stmt = regex::Regex::new(r"(?s)let\s.{0,600}?;").unwrap();
+        let lit = regex::Regex::new(r#""(\w+)""#).unwrap();
+
+        let mut problems: Vec<String> = Vec::new();
+        // This check reads Rust with a regex, so it can pass by matching
+        // NOTHING - which is how the builders test silently skipped every
+        // `=> Ok(build_x(` arm for months. Count what was actually inspected
+        // and refuse to be green on an empty sweep.
+        let (mut arms_seen, mut keys_seen) = (0usize, 0usize);
+        for (n, &start) in starts.iter().enumerate() {
+            let (ids, open) = ids_of(&lines, start, &preds);
+            let ids: BTreeSet<String> =
+                ids.into_iter().filter(|i| declared.contains_key(i)).collect();
+            if ids.is_empty() {
+                continue;
+            }
+            arms_seen += 1;
+            let end = starts.get(n + 1).copied().unwrap_or(lines.len());
+            let body = lines[open..end].join("\n");
+            let union: BTreeSet<&str> = ids
+                .iter()
+                .filter_map(|id| declared.get(id))
+                .flatten()
+                .map(String::as_str)
+                .collect();
+
+            // Alias rule: a statement naming a declared key vouches for every
+            // other key in that same statement.
+            let mut covered: BTreeSet<String> = union.iter().map(|s| s.to_string()).collect();
+            for m in stmt.find_iter(&body) {
+                let keys: Vec<String> =
+                    lit.captures_iter(m.as_str()).map(|c| c[1].to_string()).collect();
+                if keys.iter().any(|k| union.contains(k.as_str())) {
+                    covered.extend(keys);
+                }
+            }
+
+            for c in read.captures_iter(&body) {
+                let key = c.get(1).or_else(|| c.get(2)).map(|m| m.as_str()).unwrap_or_default();
+                keys_seen += 1;
+                if key.is_empty() || covered.contains(key) {
+                    continue;
+                }
+                if ids.iter().any(|id| arm_allowed(id, key).is_some()) {
+                    continue;
+                }
+                let mut named: Vec<&str> = ids.iter().map(String::as_str).collect();
+                named.sort_unstable();
+                problems.push(format!(
+                    "{named:?} read `{key}` and no form declares it, so the setting works and is \
+                     reachable only by hand-editing the pipeline JSON"
+                ));
+            }
+        }
+        assert!(
+            arms_seen > 100 && keys_seen > 500,
+            "this check inspected {arms_seen} arms and {keys_seen} prop reads, which is far too \
+             few - the arm splitter or the read pattern has stopped matching, and a green result \
+             here would mean nothing"
+        );
+        problems.sort();
+        problems.dedup();
+        assert!(
+            problems.is_empty(),
+            "engine settings with no field to set them:\n  {}",
+            problems.join("\n  ")
+        );
+    }
+
     #[test]
     fn every_required_property_a_source_arm_reads_is_one_its_component_declares() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

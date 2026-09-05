@@ -1618,7 +1618,7 @@ const GRAPHQL_DEAD_KEYS = new Set([
     'paginationType', 'pageParam', 'pageSize', 'startPage', 'maxPages',
     'cursorParam', 'cursorNextPath', 'offsetParam', 'totalCountPath',
     'urlTemplate', 'parentKeyColumn', 'maxRequests', 'concurrency',
-    'checkpoint', 'onParentError',
+    'checkpoint', 'onParentError', 'nextUrlPath',
 ]);
 
 function withoutGraphqlPaging(id: string, m: ComponentManifest): ComponentManifest {

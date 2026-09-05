@@ -972,8 +972,19 @@ mod tests {
     /// the built manifest instead.
     #[test]
     fn the_graphql_sources_do_not_offer_paging_their_arm_hardcodes() {
-        const DEAD: [&str; 6] =
-            ["paginationType", "maxPages", "concurrency", "checkpoint", "urlTemplate", "maxRequests"];
+        // `nextUrlPath` names paginationType in its visibleWhen, and a key
+        // named there counts as declared - so leaving the field in put
+        // `paginationType` back on these components even though the field
+        // itself had been filtered out.
+        const DEAD: [&str; 7] = [
+            "paginationType",
+            "maxPages",
+            "concurrency",
+            "checkpoint",
+            "urlTemplate",
+            "maxRequests",
+            "nextUrlPath",
+        ];
         for id in ["src.graphql", "src.linear", "src.monday"] {
             let keys = declared().get(id).unwrap_or_else(|| panic!("{id} is not in the catalog"));
             for k in DEAD {

@@ -3465,6 +3465,13 @@ function synthWarehouseSource(comp: ComponentDef): ComponentManifest {
                     { key: 'workspace', label: 'Workspace host', kind: 'text', required: true, placeholder: 'dbc-xxxxxxxx.cloud.databricks.com' },
                     { key: 'pat', label: 'Personal Access Token', kind: 'text', required: true, placeholder: '••••••••' },
                     { key: 'warehouseId', label: 'SQL warehouse ID', kind: 'text', required: true, placeholder: '0a1b2c3d4e5f6g7h' },
+                    // The runner builds the statements URL from the workspace
+                    // host unless this overrides it outright. Honoured all
+                    // along with no field, so a proxied or non-standard host
+                    // was not reachable from the editor.
+                    { key: 'endpoint', label: 'Statements API URL (override)', kind: 'text',
+                      placeholder: 'https://dbc-xxxxxxxx.cloud.databricks.com/api/2.0/sql/statements/',
+                      description: 'Replaces the URL built from the workspace host above. Leave blank unless you go through a proxy or a non-standard host.' },
                 ],
             },
             {
@@ -3591,6 +3598,13 @@ function synthWarehouseSink(comp: ComponentDef): ComponentManifest {
                     { key: 'workspace', label: 'Workspace host', kind: 'text', required: true, placeholder: 'dbc-xxxxxxxx.cloud.databricks.com' },
                     { key: 'pat', label: 'Personal Access Token', kind: 'text', required: true, placeholder: '••••••••' },
                     { key: 'warehouseId', label: 'SQL warehouse ID', kind: 'text', required: true, placeholder: '0a1b2c3d4e5f6g7h' },
+                    // The runner builds the statements URL from the workspace
+                    // host unless this overrides it outright. Honoured all
+                    // along with no field, so a proxied or non-standard host
+                    // was not reachable from the editor.
+                    { key: 'endpoint', label: 'Statements API URL (override)', kind: 'text',
+                      placeholder: 'https://dbc-xxxxxxxx.cloud.databricks.com/api/2.0/sql/statements/',
+                      description: 'Replaces the URL built from the workspace host above. Leave blank unless you go through a proxy or a non-standard host.' },
                 ],
             },
             {
@@ -3639,6 +3653,12 @@ function synthWarehouseSink(comp: ComponentDef): ComponentManifest {
                     { key: 'privateKeyPath', label: 'PEM private key path (JWT mode)', kind: 'file-path', description: 'Required when Auth type is JWT. Reads PKCS#8-encoded RSA private key from disk; the engine signs RS256 claims and computes the public-key fingerprint.' },
                     { key: 'warehouse', label: 'Warehouse', kind: 'text', placeholder: 'compute_wh' },
                     { key: 'role', label: 'Role', kind: 'text', placeholder: 'analyst' },
+                    // Overrides the URL built from the account above. Read all
+                    // along with no field, so a private-link or proxied host
+                    // was not reachable from the editor.
+                    { key: 'endpoint', label: 'API URL (override)', kind: 'text',
+                      placeholder: 'https://myorg-account.snowflakecomputing.com/api/v2/statements',
+                      description: 'Replaces the whole statements URL, which is otherwise built from the account above. Give the full path, not just the host. Leave blank unless you go through a proxy or a private-link host.' },
                 ],
             },
             {
@@ -4431,6 +4451,10 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
     // the cursor boxes were a control that could not work, and they were what
     // made the capability matrix claim src.http does incremental reads.
     const carriesCursor = comp.id !== 'src.http';
+    // Same reason, same component: the REST arm is what reads how a response is
+    // parsed and how it pages, and src.http never reaches it. Both would be
+    // controls that do nothing.
+    const readsRestResponse = comp.id !== 'src.http';
     const isGraphql =
         comp.id === 'src.graphql' || comp.id === 'src.linear' || comp.id === 'src.monday';
     return base(comp, [
@@ -4574,6 +4598,39 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
         {
             label: 'Response',
             fields: [
+                ...(readsRestResponse && comp.id !== 'src.soap'
+                    ? ([{
+                          // The arm parses XML when this says so, or when the
+                          // source IS src.soap. With no field, a REST API that
+                          // answers in XML was parsed as JSON and found no rows.
+                          //
+                          // Not offered on src.soap, where the arm forces XML
+                          // whatever this holds: a control that cannot change
+                          // the outcome is worse than no control.
+                          key: 'responseFormat',
+                          label: 'Response format',
+                          kind: 'select',
+                          defaultValue: 'json',
+                          options: [
+                              { label: 'JSON', value: 'json' },
+                              { label: 'XML', value: 'xml' },
+                          ],
+                          description: 'Pick XML for an API that answers in XML rather than JSON.',
+                      }] as Field[])
+                    : []),
+                ...(comp.id === 'src.soap'
+                    ? ([{
+                          // Read only for SOAP. Settable through Headers as
+                          // well - the arm adds its own only when the headers
+                          // do not already carry one - but a SOAP call should
+                          // not need that to be known.
+                          key: 'soapAction',
+                          label: 'SOAPAction',
+                          kind: 'text',
+                          placeholder: 'urn:GetCustomer',
+                          description: 'Sent as the SOAPAction header, which SOAP 1.1 services usually require. Ignored if you set that header yourself above.',
+                      }] as Field[])
+                    : []),
                 {
                     key: 'responsePath',
                     label: 'Records JSON pointer',
@@ -4604,8 +4661,23 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
                         { label: 'Offset / limit', value: 'offset' },
                         { label: 'Page number', value: 'page' },
                         { label: 'RFC 5988 Link header (rel="next")', value: 'link' },
+                        { label: 'Next-link in the response body (OData)', value: 'nextUrl' },
                     ],
                 },
+                ...(readsRestResponse
+                    ? ([{
+                          // The engine has always read this. Without it in the
+                          // list above, `nextUrl` was unreachable, and src.odata
+                          // and the SAP OData sources - which DEFAULT to it -
+                          // could not be put back once Style had been touched.
+                          key: 'nextUrlPath',
+                          label: 'Next-link JSON pointer (next-link style)',
+                          kind: 'text',
+                          placeholder: '/@odata.nextLink',
+                          description: 'RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.',
+                          visibleWhen: [{ key: 'paginationType', equals: 'nextUrl' }],
+                      }] as Field[])
+                    : []),
                 {
                     key: 'cursorNextPath',
                     label: 'Cursor JSON pointer (cursor style)',

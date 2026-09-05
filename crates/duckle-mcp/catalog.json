@@ -6873,6 +6873,13 @@
                 "kind": "text",
                 "required": true,
                 "placeholder": "0a1b2c3d4e5f6g7h"
+              },
+              {
+                "key": "endpoint",
+                "label": "Statements API URL (override)",
+                "kind": "text",
+                "placeholder": "https://dbc-xxxxxxxx.cloud.databricks.com/api/2.0/sql/statements/",
+                "description": "Replaces the URL built from the workspace host above. Leave blank unless you go through a proxy or a non-standard host."
               }
             ]
           },
@@ -10514,6 +10521,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -10557,6 +10581,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -10956,6 +10997,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -11264,6 +11322,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -11307,6 +11382,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -11746,6 +11838,13 @@
             "label": "Response",
             "fields": [
               {
+                "key": "soapAction",
+                "label": "SOAPAction",
+                "kind": "text",
+                "placeholder": "urn:GetCustomer",
+                "description": "Sent as the SOAPAction header, which SOAP 1.1 services usually require. Ignored if you set that header yourself above."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -11789,6 +11888,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -12199,6 +12315,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -12242,6 +12375,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -12681,6 +12831,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -12724,6 +12891,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -13134,6 +13318,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -13177,6 +13378,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -13587,6 +13805,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -13630,6 +13865,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -14745,6 +14997,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -14788,6 +15057,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -15376,6 +15662,10 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
                   }
                 ]
               },
@@ -34417,6 +34707,13 @@
                 "label": "Role",
                 "kind": "text",
                 "placeholder": "analyst"
+              },
+              {
+                "key": "endpoint",
+                "label": "API URL (override)",
+                "kind": "text",
+                "placeholder": "https://myorg-account.snowflakecomputing.com/api/v2/statements",
+                "description": "Replaces the whole statements URL, which is otherwise built from the account above. Give the full path, not just the host. Leave blank unless you go through a proxy or a private-link host."
               }
             ]
           },
@@ -34945,6 +35242,13 @@
                 "kind": "text",
                 "required": true,
                 "placeholder": "0a1b2c3d4e5f6g7h"
+              },
+              {
+                "key": "endpoint",
+                "label": "Statements API URL (override)",
+                "kind": "text",
+                "placeholder": "https://dbc-xxxxxxxx.cloud.databricks.com/api/2.0/sql/statements/",
+                "description": "Replaces the URL built from the workspace host above. Leave blank unless you go through a proxy or a non-standard host."
               }
             ]
           },
@@ -45386,6 +45690,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -45429,6 +45750,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -46060,6 +46398,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -46103,6 +46458,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -46513,6 +46885,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -46556,6 +46945,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -46966,6 +47372,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -47009,6 +47432,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -47419,6 +47859,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -47462,6 +47919,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -47872,6 +48346,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -47915,6 +48406,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -48325,6 +48833,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -48368,6 +48893,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -48778,6 +49320,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -48821,6 +49380,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -49231,6 +49807,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -49274,6 +49867,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -49684,6 +50294,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -49727,6 +50354,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -50137,6 +50781,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -50180,6 +50841,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -50590,6 +51268,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -50633,6 +51328,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -51043,6 +51755,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -51086,6 +51815,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -51496,6 +52242,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -51539,6 +52302,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -51932,6 +52712,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -52240,6 +53037,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -52283,6 +53097,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -52646,6 +53477,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -52689,6 +53537,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -53058,6 +53923,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -53101,6 +53983,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -53511,6 +54410,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -53554,6 +54470,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -53947,6 +54880,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -54261,6 +55211,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -54304,6 +55271,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -54714,6 +55698,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -54757,6 +55758,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -55167,6 +56185,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -55210,6 +56245,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -55620,6 +56672,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -55663,6 +56732,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -56073,6 +57159,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -56116,6 +57219,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -56526,6 +57646,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -56569,6 +57706,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -56979,6 +58133,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -57022,6 +58193,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
@@ -57432,6 +58620,23 @@
             "label": "Response",
             "fields": [
               {
+                "key": "responseFormat",
+                "label": "Response format",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "XML",
+                    "value": "xml"
+                  }
+                ],
+                "description": "Pick XML for an API that answers in XML rather than JSON."
+              },
+              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -57475,6 +58680,23 @@
                   {
                     "label": "RFC 5988 Link header (rel=\"next\")",
                     "value": "link"
+                  },
+                  {
+                    "label": "Next-link in the response body (OData)",
+                    "value": "nextUrl"
+                  }
+                ]
+              },
+              {
+                "key": "nextUrlPath",
+                "label": "Next-link JSON pointer (next-link style)",
+                "kind": "text",
+                "placeholder": "/@odata.nextLink",
+                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
+                "visibleWhen": [
+                  {
+                    "key": "paginationType",
+                    "equals": "nextUrl"
                   }
                 ]
               },
