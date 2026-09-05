@@ -10385,143 +10385,34 @@
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Broker",
+            "label": "NATS",
             "fields": [
               {
-                "key": "brokers",
-                "label": "Bootstrap servers",
+                "key": "urls",
+                "label": "Servers",
                 "kind": "text",
                 "required": true,
-                "placeholder": "broker1:9092,broker2:9092"
+                "placeholder": "nats://localhost:4222,nats://host2:4222",
+                "description": "Comma-separated. Also accepted as `servers` in a hand-written pipeline."
               },
               {
-                "key": "topic",
-                "label": "Topic",
+                "key": "subject",
+                "label": "Subject",
                 "kind": "text",
-                "required": true
+                "required": true,
+                "placeholder": "orders.*"
               },
               {
-                "key": "offset",
-                "label": "Initial offset",
-                "kind": "select",
-                "defaultValue": "earliest",
-                "options": [
-                  {
-                    "label": "Latest",
-                    "value": "latest"
-                  },
-                  {
-                    "label": "Earliest",
-                    "value": "earliest"
-                  }
-                ]
+                "key": "maxRecords",
+                "label": "Max messages",
+                "kind": "integer",
+                "defaultValue": 1000
               },
               {
-                "key": "trackOffset",
-                "label": "Resume where the last run stopped",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "Remember the offset reached and carry on from it next run, so a scheduled read becomes a continuous one. Without it, Earliest re-reads the whole backlog every run and Latest skips everything that arrived between runs. The position is saved only when the whole run succeeds, so a failure after the read re-delivers those records rather than losing them."
-              }
-            ]
-          },
-          {
-            "label": "Security",
-            "fields": [
-              {
-                "key": "security",
-                "label": "Security protocol",
-                "kind": "select",
-                "defaultValue": "plaintext",
-                "options": [
-                  {
-                    "label": "PLAINTEXT",
-                    "value": "plaintext"
-                  },
-                  {
-                    "label": "SSL",
-                    "value": "ssl"
-                  },
-                  {
-                    "label": "SASL_SSL",
-                    "value": "sasl_ssl"
-                  },
-                  {
-                    "label": "SASL_PLAINTEXT",
-                    "value": "sasl_plaintext"
-                  }
-                ]
-              },
-              {
-                "key": "saslMechanism",
-                "label": "SASL mechanism",
-                "kind": "select",
-                "defaultValue": "PLAIN",
-                "options": [
-                  {
-                    "label": "PLAIN",
-                    "value": "PLAIN"
-                  },
-                  {
-                    "label": "SCRAM-SHA-256",
-                    "value": "SCRAM-SHA-256"
-                  },
-                  {
-                    "label": "SCRAM-SHA-512",
-                    "value": "SCRAM-SHA-512"
-                  }
-                ],
-                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
-              },
-              {
-                "key": "saslUsername",
-                "label": "SASL username",
-                "kind": "text"
-              },
-              {
-                "key": "saslPassword",
-                "label": "SASL password",
-                "kind": "text",
-                "placeholder": "••••••••"
-              }
-            ]
-          },
-          {
-            "label": "Format",
-            "fields": [
-              {
-                "key": "format",
-                "label": "Message format",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "Avro (Confluent Schema Registry)",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "Plain text",
-                    "value": "text"
-                  }
-                ],
-                "description": "Avro decodes Confluent-framed messages against the registry below. JSON and Plain text both hand the message back as text for SQL to parse. Protobuf is not offered because it is not implemented - it would need the .proto descriptors, and picking it would have produced mangled text rather than an error."
-              },
-              {
-                "key": "schemaRegistryUrl",
-                "label": "Schema Registry URL",
-                "kind": "text",
-                "placeholder": "https://schema-registry.internal:8081",
-                "description": "Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.",
-                "visibleWhen": [
-                  {
-                    "key": "format",
-                    "equals": "avro"
-                  }
-                ]
+                "key": "timeoutMs",
+                "label": "Idle timeout (ms)",
+                "kind": "integer",
+                "defaultValue": 5000
               }
             ]
           }
@@ -10574,143 +10465,34 @@
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Broker",
+            "label": "RabbitMQ",
             "fields": [
               {
-                "key": "brokers",
-                "label": "Bootstrap servers",
+                "key": "url",
+                "label": "Connection URL",
                 "kind": "text",
                 "required": true,
-                "placeholder": "broker1:9092,broker2:9092"
+                "placeholder": "amqp://user:pass@host:5672/%2f"
               },
               {
-                "key": "topic",
-                "label": "Topic",
+                "key": "queue",
+                "label": "Queue",
                 "kind": "text",
                 "required": true
               },
               {
-                "key": "offset",
-                "label": "Initial offset",
-                "kind": "select",
-                "defaultValue": "earliest",
-                "options": [
-                  {
-                    "label": "Latest",
-                    "value": "latest"
-                  },
-                  {
-                    "label": "Earliest",
-                    "value": "earliest"
-                  }
-                ]
+                "key": "maxMessages",
+                "label": "Max messages",
+                "kind": "integer",
+                "defaultValue": 1000,
+                "description": "How many messages to take in one run."
               },
               {
-                "key": "trackOffset",
-                "label": "Resume where the last run stopped",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "Remember the offset reached and carry on from it next run, so a scheduled read becomes a continuous one. Without it, Earliest re-reads the whole backlog every run and Latest skips everything that arrived between runs. The position is saved only when the whole run succeeds, so a failure after the read re-delivers those records rather than losing them."
-              }
-            ]
-          },
-          {
-            "label": "Security",
-            "fields": [
-              {
-                "key": "security",
-                "label": "Security protocol",
-                "kind": "select",
-                "defaultValue": "plaintext",
-                "options": [
-                  {
-                    "label": "PLAINTEXT",
-                    "value": "plaintext"
-                  },
-                  {
-                    "label": "SSL",
-                    "value": "ssl"
-                  },
-                  {
-                    "label": "SASL_SSL",
-                    "value": "sasl_ssl"
-                  },
-                  {
-                    "label": "SASL_PLAINTEXT",
-                    "value": "sasl_plaintext"
-                  }
-                ]
-              },
-              {
-                "key": "saslMechanism",
-                "label": "SASL mechanism",
-                "kind": "select",
-                "defaultValue": "PLAIN",
-                "options": [
-                  {
-                    "label": "PLAIN",
-                    "value": "PLAIN"
-                  },
-                  {
-                    "label": "SCRAM-SHA-256",
-                    "value": "SCRAM-SHA-256"
-                  },
-                  {
-                    "label": "SCRAM-SHA-512",
-                    "value": "SCRAM-SHA-512"
-                  }
-                ],
-                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
-              },
-              {
-                "key": "saslUsername",
-                "label": "SASL username",
-                "kind": "text"
-              },
-              {
-                "key": "saslPassword",
-                "label": "SASL password",
-                "kind": "text",
-                "placeholder": "••••••••"
-              }
-            ]
-          },
-          {
-            "label": "Format",
-            "fields": [
-              {
-                "key": "format",
-                "label": "Message format",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "Avro (Confluent Schema Registry)",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "Plain text",
-                    "value": "text"
-                  }
-                ],
-                "description": "Avro decodes Confluent-framed messages against the registry below. JSON and Plain text both hand the message back as text for SQL to parse. Protobuf is not offered because it is not implemented - it would need the .proto descriptors, and picking it would have produced mangled text rather than an error."
-              },
-              {
-                "key": "schemaRegistryUrl",
-                "label": "Schema Registry URL",
-                "kind": "text",
-                "placeholder": "https://schema-registry.internal:8081",
-                "description": "Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.",
-                "visibleWhen": [
-                  {
-                    "key": "format",
-                    "equals": "avro"
-                  }
-                ]
+                "key": "timeoutMs",
+                "label": "Idle timeout (ms)",
+                "kind": "integer",
+                "defaultValue": 5000,
+                "description": "Stop waiting once the queue has been quiet this long."
               }
             ]
           }
@@ -10763,143 +10545,74 @@
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Broker",
+            "label": "Kinesis stream",
             "fields": [
               {
-                "key": "brokers",
-                "label": "Bootstrap servers",
+                "key": "region",
+                "label": "Region",
                 "kind": "text",
                 "required": true,
-                "placeholder": "broker1:9092,broker2:9092"
+                "placeholder": "us-east-1"
               },
               {
-                "key": "topic",
-                "label": "Topic",
+                "key": "streamName",
+                "label": "Stream",
                 "kind": "text",
                 "required": true
               },
               {
-                "key": "offset",
-                "label": "Initial offset",
-                "kind": "select",
-                "defaultValue": "earliest",
-                "options": [
-                  {
-                    "label": "Latest",
-                    "value": "latest"
-                  },
-                  {
-                    "label": "Earliest",
-                    "value": "earliest"
-                  }
-                ]
-              },
-              {
-                "key": "trackOffset",
-                "label": "Resume where the last run stopped",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "Remember the offset reached and carry on from it next run, so a scheduled read becomes a continuous one. Without it, Earliest re-reads the whole backlog every run and Latest skips everything that arrived between runs. The position is saved only when the whole run succeeds, so a failure after the read re-delivers those records rather than losing them."
-              }
-            ]
-          },
-          {
-            "label": "Security",
-            "fields": [
-              {
-                "key": "security",
-                "label": "Security protocol",
-                "kind": "select",
-                "defaultValue": "plaintext",
-                "options": [
-                  {
-                    "label": "PLAINTEXT",
-                    "value": "plaintext"
-                  },
-                  {
-                    "label": "SSL",
-                    "value": "ssl"
-                  },
-                  {
-                    "label": "SASL_SSL",
-                    "value": "sasl_ssl"
-                  },
-                  {
-                    "label": "SASL_PLAINTEXT",
-                    "value": "sasl_plaintext"
-                  }
-                ]
-              },
-              {
-                "key": "saslMechanism",
-                "label": "SASL mechanism",
-                "kind": "select",
-                "defaultValue": "PLAIN",
-                "options": [
-                  {
-                    "label": "PLAIN",
-                    "value": "PLAIN"
-                  },
-                  {
-                    "label": "SCRAM-SHA-256",
-                    "value": "SCRAM-SHA-256"
-                  },
-                  {
-                    "label": "SCRAM-SHA-512",
-                    "value": "SCRAM-SHA-512"
-                  }
-                ],
-                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
-              },
-              {
-                "key": "saslUsername",
-                "label": "SASL username",
-                "kind": "text"
-              },
-              {
-                "key": "saslPassword",
-                "label": "SASL password",
+                "key": "accessKeyId",
+                "label": "Access key ID",
                 "kind": "text",
+                "required": true
+              },
+              {
+                "key": "secretAccessKey",
+                "label": "Secret access key",
+                "kind": "text",
+                "required": true,
+                "secret": true,
                 "placeholder": "••••••••"
+              },
+              {
+                "key": "sessionToken",
+                "label": "Session token",
+                "kind": "text",
+                "secret": true,
+                "description": "Only for temporary STS credentials."
               }
             ]
           },
           {
-            "label": "Format",
+            "label": "Read",
             "fields": [
               {
-                "key": "format",
-                "label": "Message format",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "Avro (Confluent Schema Registry)",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "Plain text",
-                    "value": "text"
-                  }
-                ],
-                "description": "Avro decodes Confluent-framed messages against the registry below. JSON and Plain text both hand the message back as text for SQL to parse. Protobuf is not offered because it is not implemented - it would need the .proto descriptors, and picking it would have produced mangled text rather than an error."
+                "key": "shardIndex",
+                "label": "Shard index",
+                "kind": "integer",
+                "defaultValue": 0
               },
               {
-                "key": "schemaRegistryUrl",
-                "label": "Schema Registry URL",
-                "kind": "text",
-                "placeholder": "https://schema-registry.internal:8081",
-                "description": "Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.",
-                "visibleWhen": [
+                "key": "iteratorType",
+                "label": "Start at",
+                "kind": "select",
+                "defaultValue": "TRIM_HORIZON",
+                "options": [
                   {
-                    "key": "format",
-                    "equals": "avro"
+                    "label": "Oldest available (TRIM_HORIZON)",
+                    "value": "TRIM_HORIZON"
+                  },
+                  {
+                    "label": "Newest only (LATEST)",
+                    "value": "LATEST"
                   }
                 ]
+              },
+              {
+                "key": "maxRecords",
+                "label": "Max records",
+                "kind": "integer",
+                "defaultValue": 1000
               }
             ]
           }
@@ -11141,143 +10854,34 @@
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Broker",
+            "label": "Google Pub/Sub",
             "fields": [
               {
-                "key": "brokers",
-                "label": "Bootstrap servers",
-                "kind": "text",
-                "required": true,
-                "placeholder": "broker1:9092,broker2:9092"
-              },
-              {
-                "key": "topic",
-                "label": "Topic",
+                "key": "project",
+                "label": "Project ID",
                 "kind": "text",
                 "required": true
               },
               {
-                "key": "offset",
-                "label": "Initial offset",
-                "kind": "select",
-                "defaultValue": "earliest",
-                "options": [
-                  {
-                    "label": "Latest",
-                    "value": "latest"
-                  },
-                  {
-                    "label": "Earliest",
-                    "value": "earliest"
-                  }
-                ]
-              },
-              {
-                "key": "trackOffset",
-                "label": "Resume where the last run stopped",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "Remember the offset reached and carry on from it next run, so a scheduled read becomes a continuous one. Without it, Earliest re-reads the whole backlog every run and Latest skips everything that arrived between runs. The position is saved only when the whole run succeeds, so a failure after the read re-delivers those records rather than losing them."
-              }
-            ]
-          },
-          {
-            "label": "Security",
-            "fields": [
-              {
-                "key": "security",
-                "label": "Security protocol",
-                "kind": "select",
-                "defaultValue": "plaintext",
-                "options": [
-                  {
-                    "label": "PLAINTEXT",
-                    "value": "plaintext"
-                  },
-                  {
-                    "label": "SSL",
-                    "value": "ssl"
-                  },
-                  {
-                    "label": "SASL_SSL",
-                    "value": "sasl_ssl"
-                  },
-                  {
-                    "label": "SASL_PLAINTEXT",
-                    "value": "sasl_plaintext"
-                  }
-                ]
-              },
-              {
-                "key": "saslMechanism",
-                "label": "SASL mechanism",
-                "kind": "select",
-                "defaultValue": "PLAIN",
-                "options": [
-                  {
-                    "label": "PLAIN",
-                    "value": "PLAIN"
-                  },
-                  {
-                    "label": "SCRAM-SHA-256",
-                    "value": "SCRAM-SHA-256"
-                  },
-                  {
-                    "label": "SCRAM-SHA-512",
-                    "value": "SCRAM-SHA-512"
-                  }
-                ],
-                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
-              },
-              {
-                "key": "saslUsername",
-                "label": "SASL username",
-                "kind": "text"
-              },
-              {
-                "key": "saslPassword",
-                "label": "SASL password",
+                "key": "subscription",
+                "label": "Subscription",
                 "kind": "text",
-                "placeholder": "••••••••"
-              }
-            ]
-          },
-          {
-            "label": "Format",
-            "fields": [
-              {
-                "key": "format",
-                "label": "Message format",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "Avro (Confluent Schema Registry)",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "Plain text",
-                    "value": "text"
-                  }
-                ],
-                "description": "Avro decodes Confluent-framed messages against the registry below. JSON and Plain text both hand the message back as text for SQL to parse. Protobuf is not offered because it is not implemented - it would need the .proto descriptors, and picking it would have produced mangled text rather than an error."
+                "required": true
               },
               {
-                "key": "schemaRegistryUrl",
-                "label": "Schema Registry URL",
+                "key": "accessToken",
+                "label": "Access token",
                 "kind": "text",
-                "placeholder": "https://schema-registry.internal:8081",
-                "description": "Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.",
-                "visibleWhen": [
-                  {
-                    "key": "format",
-                    "equals": "avro"
-                  }
-                ]
+                "required": true,
+                "secret": true,
+                "placeholder": "${ENV:GCP_TOKEN}",
+                "description": "OAuth2 Bearer token. `gcloud auth print-access-token` mints one."
+              },
+              {
+                "key": "maxMessages",
+                "label": "Max messages",
+                "kind": "integer",
+                "defaultValue": 100
               }
             ]
           }
@@ -15499,69 +15103,58 @@
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Connection",
+            "label": "DynamoDB table",
             "fields": [
               {
-                "key": "connectionString",
-                "label": "Connection string",
+                "key": "region",
+                "label": "Region",
                 "kind": "text",
                 "required": true,
-                "placeholder": "mongodb://localhost:27017"
+                "placeholder": "us-east-1"
               },
               {
-                "key": "database",
-                "label": "Database",
+                "key": "tableName",
+                "label": "Table",
                 "kind": "text",
                 "required": true
               },
               {
-                "key": "collection",
-                "label": "Collection / Index",
+                "key": "accessKeyId",
+                "label": "Access key ID",
                 "kind": "text",
                 "required": true
+              },
+              {
+                "key": "secretAccessKey",
+                "label": "Secret access key",
+                "kind": "text",
+                "required": true,
+                "secret": true,
+                "placeholder": "••••••••"
+              },
+              {
+                "key": "sessionToken",
+                "label": "Session token",
+                "kind": "text",
+                "secret": true,
+                "description": "Only for temporary STS credentials."
               }
             ]
           },
           {
-            "label": "Query",
+            "label": "Scan",
             "fields": [
               {
-                "key": "queryMode",
-                "label": "Query mode",
-                "kind": "select",
-                "defaultValue": "all",
-                "options": [
-                  {
-                    "label": "All documents",
-                    "value": "all"
-                  },
-                  {
-                    "label": "Filter query",
-                    "value": "filter"
-                  },
-                  {
-                    "label": "Aggregation pipeline",
-                    "value": "aggregation"
-                  }
-                ]
+                "key": "limitPerPage",
+                "label": "Items per page",
+                "kind": "integer",
+                "defaultValue": 1000
               },
               {
-                "key": "filter",
-                "label": "Filter (JSON)",
-                "kind": "textarea",
-                "rows": 4,
-                "placeholder": "{\"status\": \"active\"}"
-              },
-              {
-                "key": "projection",
-                "label": "Projection (JSON)",
-                "kind": "textarea",
-                "rows": 3
-              },
-              {
-                "key": "limit",
-                "label": "Limit",
-                "kind": "integer"
+                "key": "maxPages",
+                "label": "Max pages",
+                "kind": "integer",
+                "defaultValue": 100
               }
             ]
           }
@@ -17053,16 +16646,18 @@
                 "key": "host",
                 "label": "IMAP host",
                 "kind": "text",
-                "required": true
+                "required": true,
+                "placeholder": "imap.fastmail.com"
               },
               {
                 "key": "port",
                 "label": "Port",
                 "kind": "integer",
-                "defaultValue": 993
+                "defaultValue": 993,
+                "description": "Defaults to 993 (IMAPS)."
               },
               {
-                "key": "username",
+                "key": "user",
                 "label": "Username",
                 "kind": "text",
                 "required": true
@@ -17071,19 +16666,21 @@
                 "key": "password",
                 "label": "Password",
                 "kind": "text",
+                "required": true,
                 "placeholder": "••••••••"
               },
               {
-                "key": "folder",
-                "label": "Folder",
+                "key": "mailbox",
+                "label": "Mailbox",
                 "kind": "text",
                 "defaultValue": "INBOX"
               },
               {
-                "key": "filter",
-                "label": "Search criteria",
-                "kind": "text",
-                "placeholder": "UNSEEN"
+                "key": "maxMessages",
+                "label": "Max messages",
+                "kind": "integer",
+                "defaultValue": 50,
+                "description": "How many messages to read from the mailbox in one run."
               }
             ]
           }
@@ -17139,27 +16736,46 @@
             "label": "Repository",
             "fields": [
               {
-                "key": "url",
-                "label": "Repository URL",
-                "kind": "text",
-                "required": true
+                "key": "repo",
+                "label": "Local clone",
+                "kind": "file-path",
+                "required": true,
+                "description": "Path to a repository already on this machine. The reader runs the system `git` inside it; it does not clone or fetch, so a remote URL will not work here."
               },
               {
-                "key": "branch",
-                "label": "Branch",
-                "kind": "text",
-                "defaultValue": "main"
+                "key": "mode",
+                "label": "Read",
+                "kind": "select",
+                "defaultValue": "log",
+                "options": [
+                  {
+                    "label": "Commits (git log)",
+                    "value": "log"
+                  },
+                  {
+                    "label": "Files at a revision (git ls-tree)",
+                    "value": "files"
+                  }
+                ]
               },
               {
-                "key": "path",
-                "label": "File path in repo",
-                "kind": "text"
+                "key": "revision",
+                "label": "Revision",
+                "kind": "text",
+                "defaultValue": "HEAD",
+                "placeholder": "HEAD, a branch, a tag or a SHA"
               },
               {
-                "key": "authToken",
-                "label": "Access token",
+                "key": "pathFilter",
+                "label": "Limit to path",
                 "kind": "text",
-                "placeholder": "••••••••"
+                "placeholder": "src/"
+              },
+              {
+                "key": "maxRows",
+                "label": "Max rows",
+                "kind": "integer",
+                "defaultValue": 1000
               }
             ]
           }
@@ -17585,74 +17201,54 @@
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Vector store",
+            "label": "Qdrant",
             "fields": [
               {
-                "key": "endpoint",
-                "label": "Endpoint / host",
-                "kind": "text"
-              },
-              {
-                "key": "apiKey",
-                "label": "API key",
-                "kind": "text",
-                "placeholder": "••••••••"
-              },
-              {
-                "key": "collection",
-                "label": "Collection / index",
-                "kind": "text",
-                "required": true
-              },
-              {
                 "key": "connectionRef",
-                "label": "Or use saved connection",
+                "label": "Saved connection",
                 "kind": "connection-ref",
                 "accepts": [
                   "qdrant"
                 ],
                 "description": "Pick a connection from the Connections folder to auto-fill the fields below."
-              }
-            ]
-          },
-          {
-            "label": "Query",
-            "fields": [
-              {
-                "key": "queryMode",
-                "label": "Mode",
-                "kind": "select",
-                "defaultValue": "fetch",
-                "options": [
-                  {
-                    "label": "Fetch all",
-                    "value": "fetch"
-                  },
-                  {
-                    "label": "Similarity search",
-                    "value": "search"
-                  }
-                ]
               },
               {
-                "key": "queryText",
-                "label": "Query text",
-                "kind": "textarea",
-                "rows": 2,
-                "description": "For similarity search."
+                "key": "clusterUrl",
+                "label": "Cluster URL",
+                "kind": "text",
+                "required": true,
+                "placeholder": "https://xyz.eu-central.aws.cloud.qdrant.io:6333"
               },
               {
-                "key": "topK",
-                "label": "Top K",
+                "key": "collection",
+                "label": "Collection",
+                "kind": "text",
+                "required": true
+              },
+              {
+                "key": "apiKey",
+                "label": "API key",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "••••••••"
+              },
+              {
+                "key": "pageSize",
+                "label": "Page size",
                 "kind": "integer",
-                "defaultValue": 10
+                "defaultValue": 100
               },
               {
-                "key": "filter",
-                "label": "Metadata filter (JSON)",
-                "kind": "textarea",
-                "rows": 3,
-                "placeholder": "{\"source\": \"docs\"}"
+                "key": "maxPages",
+                "label": "Max pages",
+                "kind": "integer",
+                "defaultValue": 100
+              },
+              {
+                "key": "withVector",
+                "label": "Include the vector",
+                "kind": "bool",
+                "defaultValue": false
               }
             ]
           }
@@ -17705,74 +17301,55 @@
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Vector store",
+            "label": "Weaviate",
             "fields": [
               {
-                "key": "endpoint",
-                "label": "Endpoint / host",
-                "kind": "text"
-              },
-              {
-                "key": "apiKey",
-                "label": "API key",
-                "kind": "text",
-                "placeholder": "••••••••"
-              },
-              {
-                "key": "collection",
-                "label": "Collection / index",
-                "kind": "text",
-                "required": true
-              },
-              {
                 "key": "connectionRef",
-                "label": "Or use saved connection",
+                "label": "Saved connection",
                 "kind": "connection-ref",
                 "accepts": [
                   "weaviate"
                 ],
                 "description": "Pick a connection from the Connections folder to auto-fill the fields below."
-              }
-            ]
-          },
-          {
-            "label": "Query",
-            "fields": [
-              {
-                "key": "queryMode",
-                "label": "Mode",
-                "kind": "select",
-                "defaultValue": "fetch",
-                "options": [
-                  {
-                    "label": "Fetch all",
-                    "value": "fetch"
-                  },
-                  {
-                    "label": "Similarity search",
-                    "value": "search"
-                  }
-                ]
               },
               {
-                "key": "queryText",
-                "label": "Query text",
-                "kind": "textarea",
-                "rows": 2,
-                "description": "For similarity search."
+                "key": "endpoint",
+                "label": "Endpoint",
+                "kind": "text",
+                "required": true,
+                "placeholder": "https://my-cluster.weaviate.network"
               },
               {
-                "key": "topK",
-                "label": "Top K",
+                "key": "class",
+                "label": "Class",
+                "kind": "text",
+                "required": true,
+                "description": "Weaviate calls a collection a class."
+              },
+              {
+                "key": "apiKey",
+                "label": "API key",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "••••••••"
+              },
+              {
+                "key": "pageSize",
+                "label": "Page size",
                 "kind": "integer",
-                "defaultValue": 10
+                "defaultValue": 100
               },
               {
-                "key": "filter",
-                "label": "Metadata filter (JSON)",
-                "kind": "textarea",
-                "rows": 3,
-                "placeholder": "{\"source\": \"docs\"}"
+                "key": "maxPages",
+                "label": "Max pages",
+                "kind": "integer",
+                "defaultValue": 100
+              },
+              {
+                "key": "withVector",
+                "label": "Include the vector",
+                "kind": "bool",
+                "defaultValue": false
               }
             ]
           }
@@ -40774,69 +40351,34 @@
         "schemaSource": "upstream",
         "sections": [
           {
-            "label": "Broker",
+            "label": "NATS",
             "fields": [
               {
-                "key": "brokers",
-                "label": "Bootstrap servers",
+                "key": "urls",
+                "label": "Servers",
                 "kind": "text",
-                "required": true
+                "required": true,
+                "placeholder": "nats://localhost:4222,nats://host2:4222",
+                "description": "Comma-separated. Also accepted as `servers` in a hand-written pipeline."
               },
               {
-                "key": "topic",
-                "label": "Topic",
+                "key": "subject",
+                "label": "Subject",
                 "kind": "text",
-                "required": true
+                "required": true,
+                "placeholder": "orders.created"
               },
               {
-                "key": "acks",
-                "label": "Acks",
-                "kind": "select",
-                "defaultValue": "all",
-                "options": [
-                  {
-                    "label": "all",
-                    "value": "all"
-                  },
-                  {
-                    "label": "1",
-                    "value": "1"
-                  },
-                  {
-                    "label": "0",
-                    "value": "0"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "label": "Format",
-            "fields": [
-              {
-                "key": "format",
-                "label": "Message format",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "Avro",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "Protobuf",
-                    "value": "protobuf"
-                  }
-                ]
+                "key": "subjectSuffixColumn",
+                "label": "Subject suffix from column",
+                "kind": "column",
+                "description": "Appended to the subject per row, so one sink can fan out across subjects."
               },
               {
-                "key": "keyColumn",
-                "label": "Message key column",
-                "kind": "column"
+                "key": "batchSize",
+                "label": "Batch size",
+                "kind": "integer",
+                "defaultValue": 500
               }
             ]
           }
@@ -40877,69 +40419,33 @@
         "schemaSource": "upstream",
         "sections": [
           {
-            "label": "Broker",
+            "label": "RabbitMQ",
             "fields": [
               {
-                "key": "brokers",
-                "label": "Bootstrap servers",
+                "key": "url",
+                "label": "Connection URL",
                 "kind": "text",
-                "required": true
+                "required": true,
+                "placeholder": "amqp://user:pass@host:5672/%2f"
               },
               {
-                "key": "topic",
-                "label": "Topic",
+                "key": "routingKey",
+                "label": "Routing key",
                 "kind": "text",
-                "required": true
+                "required": true,
+                "description": "With no exchange set this is the queue name, via the default direct exchange."
               },
               {
-                "key": "acks",
-                "label": "Acks",
-                "kind": "select",
-                "defaultValue": "all",
-                "options": [
-                  {
-                    "label": "all",
-                    "value": "all"
-                  },
-                  {
-                    "label": "1",
-                    "value": "1"
-                  },
-                  {
-                    "label": "0",
-                    "value": "0"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "label": "Format",
-            "fields": [
-              {
-                "key": "format",
-                "label": "Message format",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "Avro",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "Protobuf",
-                    "value": "protobuf"
-                  }
-                ]
+                "key": "exchange",
+                "label": "Exchange",
+                "kind": "text",
+                "placeholder": "leave blank for the default exchange"
               },
               {
-                "key": "keyColumn",
-                "label": "Message key column",
-                "kind": "column"
+                "key": "batchSize",
+                "label": "Batch size",
+                "kind": "integer",
+                "defaultValue": 500
               }
             ]
           }
@@ -40980,11 +40486,11 @@
         "schemaSource": "upstream",
         "sections": [
           {
-            "label": "Broker",
+            "label": "Google Pub/Sub",
             "fields": [
               {
-                "key": "brokers",
-                "label": "Bootstrap servers",
+                "key": "project",
+                "label": "Project ID",
                 "kind": "text",
                 "required": true
               },
@@ -40995,54 +40501,20 @@
                 "required": true
               },
               {
-                "key": "acks",
-                "label": "Acks",
-                "kind": "select",
-                "defaultValue": "all",
-                "options": [
-                  {
-                    "label": "all",
-                    "value": "all"
-                  },
-                  {
-                    "label": "1",
-                    "value": "1"
-                  },
-                  {
-                    "label": "0",
-                    "value": "0"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "label": "Format",
-            "fields": [
-              {
-                "key": "format",
-                "label": "Message format",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "Avro",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "Protobuf",
-                    "value": "protobuf"
-                  }
-                ]
+                "key": "accessToken",
+                "label": "Access token",
+                "kind": "text",
+                "required": true,
+                "secret": true,
+                "placeholder": "${ENV:GCP_TOKEN}",
+                "description": "OAuth2 Bearer token. `gcloud auth print-access-token` mints one."
               },
               {
-                "key": "keyColumn",
-                "label": "Message key column",
-                "kind": "column"
+                "key": "batchSize",
+                "label": "Batch size",
+                "kind": "integer",
+                "defaultValue": 100,
+                "description": "Pub/Sub accepts at most 1000 messages per publish."
               }
             ]
           }
@@ -41920,117 +41392,84 @@
         "schemaSource": "upstream",
         "sections": [
           {
-            "label": "Request",
+            "label": "SMTP server",
             "fields": [
               {
-                "key": "url",
-                "label": "URL",
+                "key": "host",
+                "label": "SMTP host",
                 "kind": "text",
-                "required": true
+                "required": true,
+                "placeholder": "smtp.example.com"
               },
               {
-                "key": "method",
-                "label": "Method",
-                "kind": "select",
-                "defaultValue": "POST",
-                "options": [
-                  {
-                    "label": "POST",
-                    "value": "POST"
-                  },
-                  {
-                    "label": "PUT",
-                    "value": "PUT"
-                  },
-                  {
-                    "label": "PATCH",
-                    "value": "PATCH"
-                  }
-                ]
+                "key": "port",
+                "label": "Port",
+                "kind": "integer",
+                "defaultValue": 587
               },
               {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
+                "key": "user",
+                "label": "Username",
+                "kind": "text"
               },
               {
-                "key": "batchMode",
-                "label": "Batch mode",
-                "kind": "select",
-                "defaultValue": "one",
-                "options": [
-                  {
-                    "label": "One request per row",
-                    "value": "one"
-                  },
-                  {
-                    "label": "Batch into array",
-                    "value": "array"
-                  }
-                ]
+                "key": "password",
+                "label": "Password",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "••••••••"
               },
               {
-                "key": "bodyType",
-                "label": "Body type",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "Plain text / raw",
-                    "value": "text"
-                  }
-                ],
-                "description": "JSON sends each row (or the batch) as JSON. Plain text renders each row through the template below and sends the rows newline-joined as one request (e.g. InfluxDB Line Protocol for QuestDB)."
-              },
-              {
-                "key": "bodyTemplate",
-                "label": "Body template",
-                "kind": "expression",
-                "rows": 4,
-                "placeholder": "weather,location=${location} temperature=${temperature} ${timestamp}",
-                "description": "Used when Body type is Plain text. Each row becomes one line; ${column} placeholders are filled from that row. Set a Content-Type header (default text/plain) if the endpoint needs one."
+                "key": "fromAddress",
+                "label": "From",
+                "kind": "text",
+                "required": true,
+                "placeholder": "duckle@example.com"
               }
             ]
           },
           {
-            "label": "Auth",
+            "label": "One mail per row",
             "fields": [
               {
-                "key": "authType",
-                "label": "Auth type",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Bearer",
-                    "value": "bearer"
-                  },
-                  {
-                    "label": "API key",
-                    "value": "apikey"
-                  }
-                ]
+                "key": "toColumn",
+                "label": "To column",
+                "kind": "column",
+                "defaultValue": "to"
               },
               {
-                "key": "authToken",
-                "label": "Token",
-                "kind": "text",
-                "placeholder": "••••••••"
+                "key": "subjectColumn",
+                "label": "Subject column",
+                "kind": "column",
+                "defaultValue": "subject"
               },
               {
-                "key": "authHeader",
-                "label": "API key header",
+                "key": "bodyColumn",
+                "label": "Body column",
+                "kind": "column",
+                "defaultValue": "body"
+              }
+            ]
+          },
+          {
+            "label": "Notification (no input wired)",
+            "fields": [
+              {
+                "key": "to",
+                "label": "To",
                 "kind": "text",
-                "placeholder": "X-API-Key",
-                "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+                "description": "Required when nothing is connected to this sink: the node then sends one fixed message instead of one per row."
+              },
+              {
+                "key": "subject",
+                "label": "Subject",
+                "kind": "text"
+              },
+              {
+                "key": "body",
+                "label": "Body",
+                "kind": "textarea",
+                "rows": 4
               }
             ]
           }
@@ -42337,59 +41776,34 @@
         "schemaSource": "upstream",
         "sections": [
           {
-            "label": "Connection",
+            "label": "Redis",
             "fields": [
               {
                 "key": "connectionString",
-                "label": "Connection string",
+                "label": "Connection URL",
                 "kind": "text",
-                "required": true
+                "required": true,
+                "placeholder": "redis://localhost:6379"
               },
               {
-                "key": "database",
-                "label": "Database",
-                "kind": "text",
-                "required": true
+                "key": "keyColumn",
+                "label": "Key column",
+                "kind": "column",
+                "required": true,
+                "description": "The column whose value becomes each record key."
               },
               {
-                "key": "collection",
-                "label": "Collection / Index",
-                "kind": "text",
-                "required": true
-              }
-            ]
-          },
-          {
-            "label": "Write",
-            "fields": [
-              {
-                "key": "mode",
-                "label": "Write mode",
-                "kind": "select",
-                "defaultValue": "insert",
-                "options": [
-                  {
-                    "label": "Insert",
-                    "value": "insert"
-                  },
-                  {
-                    "label": "Upsert",
-                    "value": "upsert"
-                  },
-                  {
-                    "label": "Replace",
-                    "value": "replace"
-                  },
-                  {
-                    "label": "Delete",
-                    "value": "delete"
-                  }
-                ]
+                "key": "valueColumn",
+                "label": "Value column",
+                "kind": "column",
+                "description": "Leave blank to store the whole row as JSON."
               },
               {
-                "key": "idColumn",
-                "label": "ID column",
-                "kind": "column"
+                "key": "ttlSeconds",
+                "label": "TTL (seconds)",
+                "kind": "integer",
+                "defaultValue": 0,
+                "description": "0 sets no expiry."
               },
               {
                 "key": "batchSize",
@@ -44819,17 +44233,59 @@
         "kind": "transform",
         "label": "File Operation",
         "description": "One typed filesystem operation: copy, move or delete a file. Staging a file between a landing area and a working area is ordinary batch work; before this the only filesystem-capable component ran a shell command, which cannot serve both platforms from one authored pipeline.",
-        "schemaSource": "upstream",
+        "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Settings",
+            "label": "File operation",
             "fields": [
               {
-                "key": "notes",
-                "label": "Notes",
-                "kind": "textarea",
-                "rows": 3,
-                "description": "Component-specific configuration not yet modeled - describe the intent here."
+                "key": "op",
+                "label": "Operation",
+                "kind": "select",
+                "defaultValue": "copy",
+                "options": [
+                  {
+                    "label": "Copy",
+                    "value": "copy"
+                  },
+                  {
+                    "label": "Move",
+                    "value": "move"
+                  },
+                  {
+                    "label": "Delete",
+                    "value": "delete"
+                  },
+                  {
+                    "label": "Archive",
+                    "value": "archive"
+                  }
+                ]
+              },
+              {
+                "key": "source",
+                "label": "Source",
+                "kind": "file-path",
+                "required": true
+              },
+              {
+                "key": "destination",
+                "label": "Destination",
+                "kind": "text",
+                "description": "Required for every operation except Delete."
+              },
+              {
+                "key": "overwrite",
+                "label": "Overwrite an existing destination",
+                "kind": "bool",
+                "defaultValue": true
+              },
+              {
+                "key": "failOnError",
+                "label": "Fail the run on error",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Off by default: the operation is reported and the run continues."
               }
             ]
           }
@@ -45112,17 +44568,17 @@
         "kind": "transform",
         "label": "Try / Catch",
         "description": "Installs a fallback pipeline. If any downstream stage in this execution fails, the fallback runs as a side effect before the original error surfaces - useful for notifications, rollbacks, cleanup. Slice of the DAG-block refactor; true continuation-style try/catch needs the multi-week refactor (see docs/dag-block-refactor.md).",
-        "schemaSource": "upstream",
+        "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Settings",
+            "label": "Fallback",
             "fields": [
               {
-                "key": "notes",
-                "label": "Notes",
-                "kind": "textarea",
-                "rows": 3,
-                "description": "Component-specific configuration not yet modeled - describe the intent here."
+                "key": "fallbackPipelineRef",
+                "label": "Run this if the try branch fails",
+                "kind": "pipeline-ref",
+                "required": true,
+                "description": "Also accepted as `fallbackPath` in a hand-written pipeline."
               }
             ]
           }

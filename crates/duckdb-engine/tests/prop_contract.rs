@@ -259,3 +259,162 @@ fn every_property_a_builder_reads_is_one_its_component_declares() {
         problems.join("\n  ")
     );
 }
+
+/// Settings the Properties Panel writes on ANY node, declared by no manifest.
+/// Mirrors `props::UNIVERSAL`, which an integration test cannot see.
+const UNIVERSAL: &[&str] = &[
+    "materialize",
+    "materializePath",
+    "cache",
+    "retryAttempts",
+    "retryBackoffMs",
+    "memoryLimitMb",
+    "continueOnFailure",
+    "logRowCount",
+    "sqlOverride",
+    "contracts",
+];
+
+/// The other half of the engine, which the test above cannot see.
+///
+/// `every_property_a_builder_reads_is_one_its_component_declares` reads
+/// `plan/builders.rs` and matches `"id" => builder_fn(` dispatch arms. Most
+/// SOURCES are not built that way: they are inline `} else if
+/// matches!(component_id, ...) {` arms inside `plan/mod.rs` that build a spec
+/// rather than returning SQL. That whole half was unchecked, which is how
+/// `src.graphql` shipped requiring a `query` prop no form declared - the
+/// component could not be configured at all, and the suite stayed green.
+///
+/// This looks only for the sharpest shape: a prop read in a chain ending in
+/// `.ok_or_else`, which is the engine saying the node REFUSES TO PLAN without
+/// it. If nothing declares that name, no form can produce a working node.
+/// Optional props read in these arms are a real question too, but a much
+/// noisier one - alternate spellings, element keys inside structured values -
+/// and are left to the builders test's union rule rather than guessed at here.
+///
+/// Validated against history: run against the catalog from before `src.graphql`
+/// was fixed it reports `query`, and against the one after it does not.
+mod plan_arms {
+    use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn predicate_ids(src: &str) -> BTreeMap<String, BTreeSet<String>> {
+        let sig = regex::Regex::new(r"(?s)pub fn (\w+)\(component_id: &str\) -> bool \{(.*?)\n\}")
+            .unwrap();
+        let lit = regex::Regex::new(r#""([a-z][\w.]*)""#).unwrap();
+        sig.captures_iter(src)
+            .map(|c| {
+                let ids: BTreeSet<String> =
+                    lit.captures_iter(&c[2]).map(|m| m[1].to_string()).collect();
+                (c[1].to_string(), ids)
+            })
+            .collect()
+    }
+
+    /// Line indices where a top-level arm of the component if/else chain opens.
+    fn arm_starts(lines: &[&str]) -> Vec<usize> {
+        lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| {
+                l.starts_with("    } else if ")
+                    || l.starts_with("    if component_id == ")
+                    || l.starts_with("    if matches!(")
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// The ids an arm's condition names, and the line its body opens on.
+    fn ids_of(
+        lines: &[&str],
+        start: usize,
+        preds: &BTreeMap<String, BTreeSet<String>>,
+    ) -> (BTreeSet<String>, usize) {
+        let lit = regex::Regex::new(r#""([a-z][\w.]*\.[\w.]+)""#).unwrap();
+        let (mut i, mut depth, mut cond) = (start, 0i32, String::new());
+        while i < lines.len() {
+            cond.push_str(lines[i]);
+            cond.push('\n');
+            depth += lines[i].matches('(').count() as i32;
+            depth -= lines[i].matches(')').count() as i32;
+            if lines[i].trim_end().ends_with('{') && depth <= 0 {
+                break;
+            }
+            i += 1;
+        }
+        let mut ids: BTreeSet<String> =
+            lit.captures_iter(&cond).map(|c| c[1].to_string()).collect();
+        for (name, pid) in preds {
+            if cond.contains(&format!("{name}(component_id)")) {
+                ids.extend(pid.iter().cloned());
+            }
+        }
+        (ids, i)
+    }
+
+    #[test]
+    fn every_required_property_a_source_arm_reads_is_one_its_component_declares() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("plan")
+            .join("mod.rs");
+        let src = std::fs::read_to_string(&path).expect("plan/mod.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let declared = declared_keys();
+        let preds = predicate_ids(&src);
+        let starts = arm_starts(&lines);
+        let read = regex::Regex::new(r#"string_prop\(\s*&?props\s*,\s*"(\w+)"\s*\)"#).unwrap();
+
+        let mut problems: Vec<String> = Vec::new();
+        for (n, &start) in starts.iter().enumerate() {
+            let (ids, open) = ids_of(&lines, start, &preds);
+            if ids.is_empty() || !ids.iter().any(|i| declared.contains_key(i)) {
+                continue;
+            }
+            let end = starts.get(n + 1).copied().unwrap_or(lines.len());
+            let body = lines[open..end].join("\n");
+            let union: BTreeSet<&String> =
+                ids.iter().filter_map(|id| declared.get(id)).flatten().collect();
+
+            let mut consumed = 0usize;
+            for m in read.find_iter(&body) {
+                if m.start() < consumed {
+                    continue;
+                }
+                // One statement: the whole `let x = string_prop(..)...?;` chain.
+                let stop =
+                    body[m.start()..].find(';').map(|o| m.start() + o).unwrap_or(body.len());
+                let chain = &body[m.start()..stop];
+                if !chain.contains(".ok_or_else") {
+                    continue;
+                }
+                consumed = stop;
+                // Any spelling the chain accepts satisfies it.
+                let names: BTreeSet<String> =
+                    read.captures_iter(chain).map(|c| c[1].to_string()).collect();
+                if names.iter().any(|k| union.contains(k) || UNIVERSAL.contains(&k.as_str())) {
+                    continue;
+                }
+                let key: Vec<&str> = names.iter().map(String::as_str).collect();
+                let mut named: Vec<&str> = ids.iter().map(String::as_str).collect();
+                named.sort_unstable();
+                problems.push(format!(
+                    "{:?} REQUIRE {:?} and no field declares it, so no node the editor can \
+                     produce will plan. Either the form writes a different name than the arm \
+                     reads, or the component is drawn by a synthesizer branch meant for another \
+                     family (the src.couchdb bug).",
+                    named,
+                    key.join("/")
+                ));
+            }
+        }
+        problems.sort();
+        problems.dedup();
+        assert!(
+            problems.is_empty(),
+            "components that cannot be configured from their own form:\n  {}",
+            problems.join("\n  ")
+        );
+    }
+}

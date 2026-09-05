@@ -197,7 +197,7 @@ How a sink writes, and what it does with rows it cannot.
 | `snk.mongodb` | insert, replace, upsert | - | - |
 | `snk.cassandra` | - | - | - |
 | `snk.scylla` | - | - | - |
-| `snk.redis` | insert, upsert, replace, delete | - | - |
+| `snk.redis` | - | - | - |
 | `snk.neo4j` | - | - | - |
 | `snk.elastic` | - | - | - |
 | `snk.opensearch` | - | - | - |
@@ -243,6 +243,7 @@ Components that take credentials. A saved connection keeps them out of the pipel
 | `snk.pgvector` | sink | yes | yes |
 | `snk.pinecone` | sink | - | yes |
 | `snk.postgres` | sink | yes | yes |
+| `snk.pubsub` | sink | - | yes |
 | `snk.qdrant` | sink | - | yes |
 | `snk.quack` | sink | - | yes |
 | `snk.r2` | sink | yes | yes |
@@ -273,11 +274,11 @@ Components that take credentials. A saved connection keeps them out of the pipel
 | `src.db2` | source | - | yes |
 | `src.dhis2` | source | yes | yes |
 | `src.discord` | source | yes | yes |
+| `src.dynamodb` | source | - | yes |
 | `src.elastic` | source | - | yes |
 | `src.email` | source | - | yes |
 | `src.ftp` | source | - | yes |
 | `src.gcs` | source | yes | yes |
-| `src.git` | source | - | yes |
 | `src.github` | source | yes | yes |
 | `src.gitlab` | source | yes | yes |
 | `src.gizmosql` | source | - | yes |
@@ -299,7 +300,6 @@ Components that take credentials. A saved connection keeps them out of the pipel
 | `src.monday` | source | yes | yes |
 | `src.motherduck` | source | - | yes |
 | `src.mysql` | source | yes | yes |
-| `src.nats` | source | - | yes |
 | `src.neo4j` | source | - | yes |
 | `src.notion` | source | yes | yes |
 | `src.odata` | source | yes | yes |
@@ -314,7 +314,6 @@ Components that take credentials. A saved connection keeps them out of the pipel
 | `src.quack` | source | - | yes |
 | `src.quickbooks` | source | yes | yes |
 | `src.r2` | source | yes | yes |
-| `src.rabbit` | source | - | yes |
 | `src.redpanda` | source | - | yes |
 | `src.redshift` | source | yes | yes |
 | `src.rest` | source | yes | yes |

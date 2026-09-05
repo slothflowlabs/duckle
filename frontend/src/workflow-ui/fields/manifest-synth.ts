@@ -2139,6 +2139,290 @@ function synthLakehouseSink(comp: ComponentDef): ComponentManifest {
 /// sinks live in the snk.databases / snk.nosql groups whose generic synths
 /// would otherwise win, and hand the user a form full of fields the engine
 /// never reads.
+// Components whose form belonged to another family entirely.
+//
+// Each of these ships in the palette, draws a plausible form, and could not
+// produce a node that plans: the engine's arm refuses on a required prop that
+// no field declared. The whole `*.streaming` group is the clearest case - the
+// declared key list was byte-identical across Kafka, Redpanda, RabbitMQ, NATS,
+// Pub/Sub and Kinesis, and only Kafka and Redpanda actually read `brokers` and
+// `topic`. Routed by id ahead of the group checks, the way src.couchdb and
+// src.synapse are, but with purpose-built field sets because no existing
+// synthesizer matches these contracts.
+//
+// Every field below is read by the component's arm in plan/mod.rs, and every
+// required prop that arm demands is present. `prop_contract`'s
+// `every_required_property_a_source_arm_reads_is_one_its_component_declares`
+// is what holds that true.
+function synthWrongFamilyForm(comp: ComponentDef): ComponentManifest | null {
+    const id = comp.id;
+
+    // --- Messaging, source side -----------------------------------------
+    if (id === 'src.rabbit') {
+        return base(comp, [
+            {
+                label: 'RabbitMQ',
+                fields: [
+                    { key: 'url', label: 'Connection URL', kind: 'text', required: true, placeholder: 'amqp://user:pass@host:5672/%2f' },
+                    { key: 'queue', label: 'Queue', kind: 'text', required: true },
+                    { key: 'maxMessages', label: 'Max messages', kind: 'integer', defaultValue: 1000, description: 'How many messages to take in one run.' },
+                    { key: 'timeoutMs', label: 'Idle timeout (ms)', kind: 'integer', defaultValue: 5000, description: 'Stop waiting once the queue has been quiet this long.' },
+                ],
+            },
+        ]);
+    }
+    if (id === 'src.nats') {
+        return base(comp, [
+            {
+                label: 'NATS',
+                fields: [
+                    { key: 'urls', label: 'Servers', kind: 'text', required: true, placeholder: 'nats://localhost:4222,nats://host2:4222', description: 'Comma-separated. Also accepted as `servers` in a hand-written pipeline.' },
+                    { key: 'subject', label: 'Subject', kind: 'text', required: true, placeholder: 'orders.*' },
+                    { key: 'maxRecords', label: 'Max messages', kind: 'integer', defaultValue: 1000 },
+                    { key: 'timeoutMs', label: 'Idle timeout (ms)', kind: 'integer', defaultValue: 5000 },
+                ],
+            },
+        ]);
+    }
+    if (id === 'src.pubsub') {
+        return base(comp, [
+            {
+                label: 'Google Pub/Sub',
+                fields: [
+                    { key: 'project', label: 'Project ID', kind: 'text', required: true },
+                    { key: 'subscription', label: 'Subscription', kind: 'text', required: true },
+                    { key: 'accessToken', label: 'Access token', kind: 'text', required: true, secret: true, placeholder: '${ENV:GCP_TOKEN}', description: 'OAuth2 Bearer token. `gcloud auth print-access-token` mints one.' },
+                    { key: 'maxMessages', label: 'Max messages', kind: 'integer', defaultValue: 100 },
+                ],
+            },
+        ]);
+    }
+    if (id === 'src.kinesis') {
+        return base(comp, [
+            {
+                label: 'Kinesis stream',
+                fields: [
+                    { key: 'region', label: 'Region', kind: 'text', required: true, placeholder: 'us-east-1' },
+                    { key: 'streamName', label: 'Stream', kind: 'text', required: true },
+                    { key: 'accessKeyId', label: 'Access key ID', kind: 'text', required: true },
+                    { key: 'secretAccessKey', label: 'Secret access key', kind: 'text', required: true, secret: true, placeholder: '••••••••' },
+                    { key: 'sessionToken', label: 'Session token', kind: 'text', secret: true, description: 'Only for temporary STS credentials.' },
+                ],
+            },
+            {
+                label: 'Read',
+                fields: [
+                    { key: 'shardIndex', label: 'Shard index', kind: 'integer', defaultValue: 0 },
+                    {
+                        key: 'iteratorType',
+                        label: 'Start at',
+                        kind: 'select',
+                        defaultValue: 'TRIM_HORIZON',
+                        options: [
+                            { label: 'Oldest available (TRIM_HORIZON)', value: 'TRIM_HORIZON' },
+                            { label: 'Newest only (LATEST)', value: 'LATEST' },
+                        ],
+                    },
+                    { key: 'maxRecords', label: 'Max records', kind: 'integer', defaultValue: 1000 },
+                ],
+            },
+        ]);
+    }
+    if (id === 'src.dynamodb') {
+        return base(comp, [
+            {
+                label: 'DynamoDB table',
+                fields: [
+                    { key: 'region', label: 'Region', kind: 'text', required: true, placeholder: 'us-east-1' },
+                    { key: 'tableName', label: 'Table', kind: 'text', required: true },
+                    { key: 'accessKeyId', label: 'Access key ID', kind: 'text', required: true },
+                    { key: 'secretAccessKey', label: 'Secret access key', kind: 'text', required: true, secret: true, placeholder: '••••••••' },
+                    { key: 'sessionToken', label: 'Session token', kind: 'text', secret: true, description: 'Only for temporary STS credentials.' },
+                ],
+            },
+            {
+                label: 'Scan',
+                fields: [
+                    { key: 'limitPerPage', label: 'Items per page', kind: 'integer', defaultValue: 1000 },
+                    { key: 'maxPages', label: 'Max pages', kind: 'integer', defaultValue: 100 },
+                ],
+            },
+        ]);
+    }
+
+    // --- Messaging, sink side -------------------------------------------
+    if (id === 'snk.rabbit') {
+        return base(comp, [
+            {
+                label: 'RabbitMQ',
+                fields: [
+                    { key: 'url', label: 'Connection URL', kind: 'text', required: true, placeholder: 'amqp://user:pass@host:5672/%2f' },
+                    { key: 'routingKey', label: 'Routing key', kind: 'text', required: true, description: 'With no exchange set this is the queue name, via the default direct exchange.' },
+                    { key: 'exchange', label: 'Exchange', kind: 'text', placeholder: 'leave blank for the default exchange' },
+                    { key: 'batchSize', label: 'Batch size', kind: 'integer', defaultValue: 500 },
+                ],
+            },
+        ], 'upstream');
+    }
+    if (id === 'snk.nats') {
+        return base(comp, [
+            {
+                label: 'NATS',
+                fields: [
+                    { key: 'urls', label: 'Servers', kind: 'text', required: true, placeholder: 'nats://localhost:4222,nats://host2:4222', description: 'Comma-separated. Also accepted as `servers` in a hand-written pipeline.' },
+                    { key: 'subject', label: 'Subject', kind: 'text', required: true, placeholder: 'orders.created' },
+                    { key: 'subjectSuffixColumn', label: 'Subject suffix from column', kind: 'column', description: 'Appended to the subject per row, so one sink can fan out across subjects.' },
+                    { key: 'batchSize', label: 'Batch size', kind: 'integer', defaultValue: 500 },
+                ],
+            },
+        ], 'upstream');
+    }
+    if (id === 'snk.pubsub') {
+        return base(comp, [
+            {
+                label: 'Google Pub/Sub',
+                fields: [
+                    { key: 'project', label: 'Project ID', kind: 'text', required: true },
+                    { key: 'topic', label: 'Topic', kind: 'text', required: true },
+                    { key: 'accessToken', label: 'Access token', kind: 'text', required: true, secret: true, placeholder: '${ENV:GCP_TOKEN}', description: 'OAuth2 Bearer token. `gcloud auth print-access-token` mints one.' },
+                    { key: 'batchSize', label: 'Batch size', kind: 'integer', defaultValue: 100, description: 'Pub/Sub accepts at most 1000 messages per publish.' },
+                ],
+            },
+        ], 'upstream');
+    }
+    if (id === 'snk.redis') {
+        return base(comp, [
+            {
+                label: 'Redis',
+                fields: [
+                    { key: 'connectionString', label: 'Connection URL', kind: 'text', required: true, placeholder: 'redis://localhost:6379' },
+                    { key: 'keyColumn', label: 'Key column', kind: 'column', required: true, description: 'The column whose value becomes each record key.' },
+                    { key: 'valueColumn', label: 'Value column', kind: 'column', description: 'Leave blank to store the whole row as JSON.' },
+                    { key: 'ttlSeconds', label: 'TTL (seconds)', kind: 'integer', defaultValue: 0, description: '0 sets no expiry.' },
+                    { key: 'batchSize', label: 'Batch size', kind: 'integer', defaultValue: 1000 },
+                ],
+            },
+        ], 'upstream');
+    }
+    if (id === 'snk.email') {
+        return base(comp, [
+            {
+                label: 'SMTP server',
+                fields: [
+                    { key: 'host', label: 'SMTP host', kind: 'text', required: true, placeholder: 'smtp.example.com' },
+                    { key: 'port', label: 'Port', kind: 'integer', defaultValue: 587 },
+                    { key: 'user', label: 'Username', kind: 'text' },
+                    { key: 'password', label: 'Password', kind: 'text', secret: true, placeholder: '••••••••' },
+                    { key: 'fromAddress', label: 'From', kind: 'text', required: true, placeholder: 'duckle@example.com' },
+                ],
+            },
+            {
+                // With an input wired, one mail per row and the addresses come
+                // from columns. With nothing wired, the node is a notification
+                // and `to` / `subject` / `body` are the message itself.
+                label: 'One mail per row',
+                fields: [
+                    { key: 'toColumn', label: 'To column', kind: 'column', defaultValue: 'to' },
+                    { key: 'subjectColumn', label: 'Subject column', kind: 'column', defaultValue: 'subject' },
+                    { key: 'bodyColumn', label: 'Body column', kind: 'column', defaultValue: 'body' },
+                ],
+            },
+            {
+                label: 'Notification (no input wired)',
+                fields: [
+                    { key: 'to', label: 'To', kind: 'text', description: 'Required when nothing is connected to this sink: the node then sends one fixed message instead of one per row.' },
+                    { key: 'subject', label: 'Subject', kind: 'text' },
+                    { key: 'body', label: 'Body', kind: 'textarea', rows: 4 },
+                ],
+            },
+        ], 'upstream');
+    }
+
+    // --- Vector stores ---------------------------------------------------
+    if (id === 'src.qdrant') {
+        return base(comp, [
+            {
+                label: 'Qdrant',
+                fields: [
+                    // Kept from the form this replaces: a saved connection is
+                    // expanded into whatever fields the node's arm reads, so
+                    // dropping the picker would take away a capability it had.
+                    connectionRefField(connectionKindFor(comp.id)),
+                    { key: 'clusterUrl', label: 'Cluster URL', kind: 'text', required: true, placeholder: 'https://xyz.eu-central.aws.cloud.qdrant.io:6333' },
+                    { key: 'collection', label: 'Collection', kind: 'text', required: true },
+                    { key: 'apiKey', label: 'API key', kind: 'text', secret: true, placeholder: '••••••••' },
+                    { key: 'pageSize', label: 'Page size', kind: 'integer', defaultValue: 100 },
+                    { key: 'maxPages', label: 'Max pages', kind: 'integer', defaultValue: 100 },
+                    { key: 'withVector', label: 'Include the vector', kind: 'bool', defaultValue: false },
+                ],
+            },
+        ]);
+    }
+    if (id === 'src.weaviate') {
+        return base(comp, [
+            {
+                label: 'Weaviate',
+                fields: [
+                    // Kept from the form this replaces: a saved connection is
+                    // expanded into whatever fields the node's arm reads, so
+                    // dropping the picker would take away a capability it had.
+                    connectionRefField(connectionKindFor(comp.id)),
+                    { key: 'endpoint', label: 'Endpoint', kind: 'text', required: true, placeholder: 'https://my-cluster.weaviate.network' },
+                    { key: 'class', label: 'Class', kind: 'text', required: true, description: 'Weaviate calls a collection a class.' },
+                    { key: 'apiKey', label: 'API key', kind: 'text', secret: true, placeholder: '••••••••' },
+                    { key: 'pageSize', label: 'Page size', kind: 'integer', defaultValue: 100 },
+                    { key: 'maxPages', label: 'Max pages', kind: 'integer', defaultValue: 100 },
+                    { key: 'withVector', label: 'Include the vector', kind: 'bool', defaultValue: false },
+                ],
+            },
+        ]);
+    }
+
+    // --- Control -----------------------------------------------------------
+    if (id === 'ctl.file') {
+        return base(comp, [
+            {
+                label: 'File operation',
+                fields: [
+                    {
+                        key: 'op',
+                        label: 'Operation',
+                        kind: 'select',
+                        defaultValue: 'copy',
+                        options: [
+                            { label: 'Copy', value: 'copy' },
+                            { label: 'Move', value: 'move' },
+                            { label: 'Delete', value: 'delete' },
+                            { label: 'Archive', value: 'archive' },
+                        ],
+                    },
+                    { key: 'source', label: 'Source', kind: 'file-path', required: true },
+                    { key: 'destination', label: 'Destination', kind: 'text', description: 'Required for every operation except Delete.' },
+                    { key: 'overwrite', label: 'Overwrite an existing destination', kind: 'bool', defaultValue: true },
+                    { key: 'failOnError', label: 'Fail the run on error', kind: 'bool', defaultValue: false, description: 'Off by default: the operation is reported and the run continues.' },
+                ],
+            },
+        ]);
+    }
+    if (id === 'ctl.try') {
+        return base(comp, [
+            {
+                label: 'Fallback',
+                fields: [
+                    {
+                        key: 'fallbackPipelineRef',
+                        label: 'Run this if the try branch fails',
+                        kind: 'pipeline-ref',
+                        required: true,
+                        description: 'Also accepted as `fallbackPath` in a hand-written pipeline.',
+                    },
+                ],
+            },
+        ]);
+    }
+    return null;
+}
+
 function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
     if (comp.id === 'xf.tumble') {
         return base(comp, [
@@ -4794,34 +5078,59 @@ function synthMiscSource(comp: ComponentDef): ComponentManifest {
         return synthApiSource(comp);
     }
     if (id === 'src.email') {
+        // The engine reads user / mailbox / maxMessages (plan/mod.rs, the
+        // src.email arm). This offered `username`, `folder` and a `filter` that
+        // nothing reads, so the node refused with "user required" and there was
+        // no field to answer it with.
         return base(comp, [
             {
                 label: 'IMAP',
                 fields: [
-                    { key: 'host', label: 'IMAP host', kind: 'text', required: true },
-                    { key: 'port', label: 'Port', kind: 'integer', defaultValue: 993 },
-                    { key: 'username', label: 'Username', kind: 'text', required: true },
-                    { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
-                    { key: 'folder', label: 'Folder', kind: 'text', defaultValue: 'INBOX' },
+                    { key: 'host', label: 'IMAP host', kind: 'text', required: true, placeholder: 'imap.fastmail.com' },
+                    { key: 'port', label: 'Port', kind: 'integer', defaultValue: 993, description: 'Defaults to 993 (IMAPS).' },
+                    { key: 'user', label: 'Username', kind: 'text', required: true },
+                    { key: 'password', label: 'Password', kind: 'text', required: true, placeholder: '••••••••' },
+                    { key: 'mailbox', label: 'Mailbox', kind: 'text', defaultValue: 'INBOX' },
                     {
-                        key: 'filter',
-                        label: 'Search criteria',
-                        kind: 'text',
-                        placeholder: 'UNSEEN',
+                        key: 'maxMessages',
+                        label: 'Max messages',
+                        kind: 'integer',
+                        defaultValue: 50,
+                        description: 'How many messages to read from the mailbox in one run.',
                     },
                 ],
             },
         ]);
     }
     if (id === 'src.git') {
+        // Every field here was wrong. The reader shells out to the system `git`
+        // against a LOCAL CLONE (plan/mod.rs, the src.git arm: "repo required
+        // (path to local clone)"), so it never fetches and needs no token - and
+        // it reads revision / pathFilter / maxRows, not branch / path.
         return base(comp, [
             {
                 label: 'Repository',
                 fields: [
-                    { key: 'url', label: 'Repository URL', kind: 'text', required: true },
-                    { key: 'branch', label: 'Branch', kind: 'text', defaultValue: 'main' },
-                    { key: 'path', label: 'File path in repo', kind: 'text' },
-                    { key: 'authToken', label: 'Access token', kind: 'text', placeholder: '••••••••' },
+                    {
+                        key: 'repo',
+                        label: 'Local clone',
+                        kind: 'file-path',
+                        required: true,
+                        description: 'Path to a repository already on this machine. The reader runs the system `git` inside it; it does not clone or fetch, so a remote URL will not work here.',
+                    },
+                    {
+                        key: 'mode',
+                        label: 'Read',
+                        kind: 'select',
+                        defaultValue: 'log',
+                        options: [
+                            { label: 'Commits (git log)', value: 'log' },
+                            { label: 'Files at a revision (git ls-tree)', value: 'files' },
+                        ],
+                    },
+                    { key: 'revision', label: 'Revision', kind: 'text', defaultValue: 'HEAD', placeholder: 'HEAD, a branch, a tag or a SHA' },
+                    { key: 'pathFilter', label: 'Limit to path', kind: 'text', placeholder: 'src/' },
+                    { key: 'maxRows', label: 'Max rows', kind: 'integer', defaultValue: 1000 },
                 ],
             },
         ]);
@@ -8383,6 +8692,12 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
         // would otherwise claim it and offer a path picker with no offset
         // fields. Routed by id, like the connectors above.
         const m = synthNewConnector(comp);
+        if (m) return m;
+    }
+    {
+        // #330 follow-up: components drawn by another family's synthesizer,
+        // which could not produce a node that plans. Same by-id routing.
+        const m = synthWrongFamilyForm(comp);
         if (m) return m;
     }
     if (comp.id === 'src.model') return synthModelSource(comp);
