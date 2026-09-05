@@ -48225,56 +48225,10 @@
         "schemaSource": "declared",
         "sections": [
           {
-            "label": "Code",
+            "label": "Module",
             "fields": [
               {
-                "key": "routineRef",
-                "label": "Use saved routine (optional)",
-                "kind": "routine-ref",
-                "accepts": [
-                  "wasm"
-                ],
-                "description": "Pick a saved routine, or write inline below."
-              },
-              {
-                "key": "language",
-                "label": "Language",
-                "kind": "select",
-                "defaultValue": "wasm",
-                "options": [
-                  {
-                    "label": "Python",
-                    "value": "python"
-                  },
-                  {
-                    "label": "Rust",
-                    "value": "rust"
-                  },
-                  {
-                    "label": "JavaScript",
-                    "value": "javascript"
-                  },
-                  {
-                    "label": "Bash",
-                    "value": "bash"
-                  },
-                  {
-                    "label": "WASM",
-                    "value": "wasm"
-                  }
-                ]
-              },
-              {
-                "key": "code",
-                "label": "Source",
-                "kind": "textarea",
-                "rows": 12,
-                "monospace": true,
-                "required": true,
-                "placeholder": "// custom code"
-              },
-              {
-                "key": "wasmPath",
+                "key": "path",
                 "label": "WASM file",
                 "kind": "file-path",
                 "filters": [
@@ -48284,14 +48238,52 @@
                       "wasm"
                     ]
                   }
-                ]
+                ],
+                "description": "The compiled module. Supply this or the inline bytes below."
               },
               {
+                "key": "wasmB64",
+                "label": "Inline module (base64)",
+                "kind": "textarea",
+                "rows": 4,
+                "monospace": true,
+                "description": "The module bytes, base64-encoded, kept in the pipeline itself. Used in preference to the file when both are set."
+              },
+              {
+                "key": "function",
+                "label": "Exported function",
+                "kind": "text",
+                "defaultValue": "transform",
+                "description": "Must take (i32, i32) and return an i64 packing (out_ptr << 32) | out_len. The module must also export its `memory`."
+              }
+            ]
+          },
+          {
+            "label": "Columns",
+            "fields": [
+              {
+                "key": "inputColumn",
+                "label": "Text column",
+                "kind": "column",
+                "defaultValue": "text"
+              },
+              {
+                "key": "outputColumn",
+                "label": "Write to",
+                "kind": "text",
+                "defaultValue": "result"
+              }
+            ]
+          },
+          {
+            "label": "Execution",
+            "fields": [
+              {
                 "key": "reuseInstance",
-                "label": "Reuse module instance across rows",
+                "label": "Reuse the module instance across rows",
                 "kind": "bool",
                 "defaultValue": false,
-                "placeholder": "Faster, but module memory/state persists between rows (default: fresh instance per row)"
+                "description": "Faster, but module memory and state persist between rows. A fresh instance per row is the default for that reason."
               }
             ]
           },

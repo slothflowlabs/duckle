@@ -7389,6 +7389,63 @@ function synthCustomCode(comp: ComponentDef): ComponentManifest {
             },
         ], 'declared');
     }
+    // A compiled module is not source code, and the generic form below gave
+    // code.wasm a required "Source" textarea, a Language select and a routine
+    // picker that its arm reads none of - while offering the module as
+    // `wasmPath`, which is not the key the arm reads either. A node built from
+    // that form failed with "either wasmB64 or path required" and a filled-in
+    // file picker on screen.
+    if (id === 'code.wasm') {
+        return base(comp, [
+            {
+                label: 'Module',
+                fields: [
+                    {
+                        key: 'path',
+                        label: 'WASM file',
+                        kind: 'file-path',
+                        filters: [{ name: 'WebAssembly', extensions: ['wasm'] }],
+                        description: 'The compiled module. Supply this or the inline bytes below.',
+                    },
+                    {
+                        key: 'wasmB64',
+                        label: 'Inline module (base64)',
+                        kind: 'textarea',
+                        rows: 4,
+                        monospace: true,
+                        description: 'The module bytes, base64-encoded, kept in the pipeline itself. Used in preference to the file when both are set.',
+                    },
+                    {
+                        key: 'function',
+                        label: 'Exported function',
+                        kind: 'text',
+                        defaultValue: 'transform',
+                        description: 'Must take (i32, i32) and return an i64 packing (out_ptr << 32) | out_len. The module must also export its `memory`.',
+                    },
+                ],
+            },
+            {
+                label: 'Columns',
+                fields: [
+                    { key: 'inputColumn', label: 'Text column', kind: 'column', defaultValue: 'text' },
+                    { key: 'outputColumn', label: 'Write to', kind: 'text', defaultValue: 'result' },
+                ],
+            },
+            {
+                label: 'Execution',
+                fields: [
+                    {
+                        key: 'reuseInstance',
+                        label: 'Reuse the module instance across rows',
+                        kind: 'bool',
+                        defaultValue: false,
+                        description: 'Faster, but module memory and state persist between rows. A fresh instance per row is the default for that reason.',
+                    },
+                ],
+            },
+            ...outputCacheSection(comp),
+        ], 'declared');
+    }
     const langDefault =
         id === 'code.python' ? 'python' :
         id === 'code.rust' ? 'rust' :
@@ -7424,11 +7481,6 @@ function synthCustomCode(comp: ComponentDef): ComponentManifest {
                   description: id === 'code.python'
                       ? 'Three entry points, and the one you define picks the mode. process(row): a dict in, a dict or None out, a row at a time. transform(table): the whole table at once as a pyarrow Table. transform_batches(batch): streamed a RecordBatch at a time, so a table larger than memory still runs. The last two need pyarrow, and both keep types that the row path would stringify. INPUT_PATH holds the Parquet file the rows arrive in, if you would rather scan it yourself.'
                       : undefined },
-                ...(id === 'code.wasm' ? [{ key: 'wasmPath', label: 'WASM file', kind: 'file-path' as const,
-                    filters: [{ name: 'WebAssembly', extensions: ['wasm'] }] },
-                  { key: 'reuseInstance', label: 'Reuse module instance across rows', kind: 'bool' as const,
-                    defaultValue: false,
-                    placeholder: 'Faster, but module memory/state persists between rows (default: fresh instance per row)' }] : []),
             ],
         },
         ...outputCacheSection(comp),

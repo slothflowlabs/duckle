@@ -36,8 +36,7 @@ COMPONENTS = {
     'code.wasm': {
         'kind': 'custom',
         'summary': 'Per-row WASM transform via the pure-Rust wasmi interpreter (sandboxed - no fs / net / env access). Supply the module as `wasmB64` (base64) or `path` to a .wasm file. Module must export `memory` and a function `transform(i32, i32) -> i64` packing (out_ptr << 32) | out_len. Defaults: inputColumn=te...',
-        'params': ['routineRef', 'language', 'code', 'reuseInstance', 'cacheOutput'],
-        'unverified': ['wasmPath'],
+        'params': ['path', 'wasmB64', 'function', 'inputColumn', 'outputColumn', 'reuseInstance', 'cacheOutput'],
     },
     'ctl.anchor': {
         'kind': 'control',

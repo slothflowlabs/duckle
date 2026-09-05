@@ -929,6 +929,37 @@ mod tests {
         }
     }
 
+    /// code.wasm could not be built from its form either.
+    ///
+    /// It was drawn by the generic code-component synthesizer: a required
+    /// "Source" textarea (`code`), a Language select and a routine picker,
+    /// none of which its arm reads. The arm needs the module as `wasmB64` or
+    /// `path` and refuses without one; the form offered `wasmPath`, a
+    /// different key. So a node built here failed with "either wasmB64 or path
+    /// required" while showing a filled-in file picker.
+    ///
+    /// The required-prop detector missed this one: the arm expresses the
+    /// requirement as `if .. else if .. else { return Err }`, not the
+    /// `.ok_or_else` chain the detector matches. Worth knowing about that
+    /// detector rather than trusting it to be exhaustive.
+    #[test]
+    fn a_wasm_node_can_supply_its_module() {
+        let keys = declared().get("code.wasm").expect("in the catalog");
+        assert!(
+            keys.contains("path") || keys.contains("wasmB64"),
+            "code.wasm needs the module as `path` or `wasmB64` and the form offers neither"
+        );
+        assert!(!keys.contains("wasmPath"), "wasmPath is not a key the arm reads");
+        for k in ["inputColumn", "outputColumn", "function"] {
+            assert!(keys.contains(k), "code.wasm reads {k} and the form does not offer it");
+        }
+        // The generic code fields belong to the interpreted components, not to
+        // a compiled module.
+        for k in ["code", "language", "routineRef"] {
+            assert!(!keys.contains(k), "code.wasm still offers {k}, which its arm never reads");
+        }
+    }
+
     #[test]
     fn universal_matches_the_properties_panel() {
         // The drift that caused it: the panel grew universal fields and nothing
