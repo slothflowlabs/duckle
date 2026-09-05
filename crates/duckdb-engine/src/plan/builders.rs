@@ -3548,6 +3548,42 @@ pub(crate) fn build_reject_sql(
         // declared column type, kept as raw text for review (issue #15).
         "src.csv" => Ok(build_csv_reject_sql(props, declared, false)),
         "src.tsv" => Ok(build_csv_reject_sql(props, declared, true)),
+        // The join family's unmatched LEFT rows. These components declare a
+        // `reject` output port and nothing filled it, so wiring the port failed
+        // the whole run with `Table with name <node>__reject does not exist` -
+        // an internal name, for a port the editor offers.
+        //
+        // An inner join and a semi join DROP these rows, and the port is wired
+        // precisely to find out which ones went. A lookup is a LEFT join, so it
+        // emits them too (padded with NULLs); there the reject stream is the
+        // diagnostic "which rows found nothing", which is what the form's
+        // `sendUnmatchedToReject` promised by name.
+        //
+        // NOT EXISTS rather than NOT IN, for the reason build_semi gives: one
+        // NULL on the right makes NOT IN return UNKNOWN, which would silently
+        // reject every row - the last place to reintroduce that gotcha is the
+        // stream someone is using to account for missing data.
+        "xf.join" | "xf.join.inner" | "xf.lookup" | "xf.lookup.outer" | "xf.semi"
+        | "xf.semi.join" => {
+            let left = inputs
+                .main()
+                .ok_or_else(|| "join reject: missing main input".to_string())?;
+            let right = inputs
+                .first_lookup()
+                .ok_or_else(|| "join reject: missing lookup input".to_string())?;
+            let (left_keys, right_keys) = join_key_pairs(props)?;
+            let on = left_keys
+                .iter()
+                .zip(right_keys.iter())
+                .map(|(l, r)| format!("m.{} = r.{}", quote_ident(l), quote_ident(r)))
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            Ok(Some(format!(
+                "SELECT * FROM {l} m WHERE NOT EXISTS (SELECT 1 FROM {r} r WHERE {on})",
+                l = quote_ident(left),
+                r = quote_ident(right),
+            )))
+        }
         "xf.filter" => {
             let upstream = inputs.main().ok_or_else(|| "filter: missing main input".to_string())?;
             let predicate = filter_predicate_sql(props.get("predicate")).unwrap_or_default();

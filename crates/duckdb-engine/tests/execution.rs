@@ -21704,3 +21704,55 @@ fn an_incremental_cursor_in_a_header_reaches_the_request() {
         "the saved mark has to be substituted into the header: {got:?}"
     );
 }
+
+/// An inner join declares a `reject` output port and a
+/// `sendUnmatchedToReject` toggle, and the engine reads neither.
+///
+/// `reject_wired` is threaded into `build_view_sql` and honoured by exactly two
+/// components, `src.csv` and `src.tsv`. `build_join` never receives it and
+/// never sees the prop, so a row that matched nothing is dropped by the JOIN
+/// and there is nowhere for it to go. The operator wires the port precisely to
+/// stop that happening, ticks the box, and loses the rows anyway - in silence.
+#[test]
+fn an_inner_join_sends_its_unmatched_rows_to_the_reject_port() {
+    let engine = engine_or_skip!();
+    let _g = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    // 3 orders, one of which (id 3) has no customer.
+    let orders = write_file(tmp.path(), "orders.csv", "id,cust\n1,a\n2,b\n3,zz\n");
+    let custs = write_file(tmp.path(), "custs.csv", "cust,name\na,Ann\nb,Bob\n");
+    let kept = out_path(tmp.path(), "kept.csv");
+    let lost = out_path(tmp.path(), "lost.csv");
+
+    let d = doc(
+        json!([
+            node("o", "src.csv", json!({ "path": orders, "hasHeader": true })),
+            node("c", "src.csv", json!({ "path": custs, "hasHeader": true })),
+            node("j", "xf.join.inner", json!({
+                "leftKey": "cust",
+                "rightKey": "cust",
+                "sendUnmatchedToReject": true
+            })),
+            node("k", "snk.csv", json!({ "path": kept, "hasHeader": true })),
+            node("r", "snk.csv", json!({ "path": lost, "hasHeader": true })),
+        ]),
+        json!([
+            main_edge("e1", "o", "j"),
+            lookup_edge("e2", "c", "j"),
+            main_edge("e3", "j", "k"),
+            port_edge("e4", "j", "reject", "r"),
+        ]),
+    );
+    let r = engine.execute_pipeline_named(&d, "joinreject");
+    assert!(r.error.is_none(), "run failed: {:?}", r.error);
+
+    let kept_rows = std::fs::read_to_string(&kept).unwrap_or_default();
+    assert!(kept_rows.contains("Ann") && kept_rows.contains("Bob"), "matched rows: {kept_rows}");
+
+    let lost_rows = std::fs::read_to_string(&lost).unwrap_or_default();
+    assert!(
+        lost_rows.contains("zz"),
+        "order 3 matched no customer and the reject port was wired, so it has to arrive there \
+         rather than vanish. Got: {lost_rows:?}"
+    );
+}

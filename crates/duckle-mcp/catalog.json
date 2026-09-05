@@ -20379,12 +20379,6 @@
                     "value": "full"
                   }
                 ]
-              },
-              {
-                "key": "sendUnmatchedToReject",
-                "label": "Send unmatched to reject port",
-                "kind": "bool",
-                "defaultValue": false
               }
             ]
           }
@@ -20520,12 +20514,6 @@
                     "value": "anti"
                   }
                 ]
-              },
-              {
-                "key": "sendUnmatchedToReject",
-                "label": "Send unmatched to reject port",
-                "kind": "bool",
-                "defaultValue": false
               }
             ]
           }
@@ -20810,12 +20798,6 @@
                     "value": "anti"
                   }
                 ]
-              },
-              {
-                "key": "sendUnmatchedToReject",
-                "label": "Send unmatched to reject port",
-                "kind": "bool",
-                "defaultValue": false
               }
             ]
           }
@@ -20951,12 +20933,6 @@
                     "value": "anti"
                   }
                 ]
-              },
-              {
-                "key": "sendUnmatchedToReject",
-                "label": "Send unmatched to reject port",
-                "kind": "bool",
-                "defaultValue": false
               }
             ]
           }
@@ -21092,12 +21068,6 @@
                     "value": "anti"
                   }
                 ]
-              },
-              {
-                "key": "sendUnmatchedToReject",
-                "label": "Send unmatched to reject port",
-                "kind": "bool",
-                "defaultValue": false
               }
             ]
           }

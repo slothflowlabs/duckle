@@ -6178,3 +6178,80 @@ mod graphql_source {
         assert!(err.to_string().contains("query required"), "{err}");
     }
 }
+
+/// The join family declares a `reject` output port and nothing could fill it.
+///
+/// build_reject_sql is a per-component match and the joins were simply not in
+/// it, so wiring the port failed the whole run with
+/// `Table with name <node>__reject does not exist` - an internal name, for a
+/// port the editor offers.
+#[cfg(test)]
+mod join_rejects {
+    use super::*;
+
+    fn reject(component: &str, props: serde_json::Value) -> Option<String> {
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["l".into()]);
+        ni.ports.insert("lookup".into(), vec!["r".into()]);
+        build_reject_sql(component, &props, &ni, None).expect("reject sql")
+    }
+
+    /// An inner join DROPS the unmatched rows, which is exactly why someone
+    /// wires the port: to find out which ones went.
+    #[test]
+    fn an_inner_join_rejects_the_rows_that_matched_nothing() {
+        let sql = reject(
+            "xf.join.inner",
+            serde_json::json!({ "leftKey": "cust", "rightKey": "cust" }),
+        )
+        .expect("an inner join has unmatched rows to reject");
+        assert_eq!(
+            sql,
+            "SELECT * FROM \"l\" m WHERE NOT EXISTS (SELECT 1 FROM \"r\" r WHERE m.\"cust\" = r.\"cust\")"
+        );
+    }
+
+    /// Same question for a lookup and a semi join, which read the same keys.
+    #[test]
+    fn a_lookup_and_a_semi_join_answer_the_same_question() {
+        for id in ["xf.join", "xf.lookup", "xf.lookup.outer", "xf.semi", "xf.semi.join"] {
+            let sql = reject(id, serde_json::json!({ "leftKey": "a", "rightKey": "b" }))
+                .unwrap_or_else(|| panic!("{id} declares a reject port and must fill it"));
+            assert!(sql.contains("NOT EXISTS"), "{id}: {sql}");
+            assert!(sql.contains("m.\"a\" = r.\"b\""), "{id}: {sql}");
+        }
+    }
+
+    /// Composite keys ride the same construction as the join itself.
+    #[test]
+    fn a_composite_key_rejects_on_every_column() {
+        let sql = reject(
+            "xf.join.inner",
+            serde_json::json!({ "leftKey": "a,b", "rightKey": "x,y" }),
+        )
+        .expect("sql");
+        assert!(sql.contains("m.\"a\" = r.\"x\" AND m.\"b\" = r.\"y\""), "{sql}");
+    }
+
+    /// NOT EXISTS rather than NOT IN, for the reason build_semi already gives:
+    /// a single NULL on the right makes `NOT IN` return UNKNOWN and silently
+    /// reject every row. The reject stream is the last place to reintroduce it.
+    #[test]
+    fn the_reject_uses_not_exists_not_not_in() {
+        let sql = reject("xf.join", serde_json::json!({ "leftKey": "a", "rightKey": "b" }))
+            .expect("sql");
+        assert!(!sql.contains("NOT IN"), "{sql}");
+    }
+
+    /// Without keys there is no way to say what "unmatched" means, and the
+    /// message has to say that rather than produce an empty stream.
+    #[test]
+    fn a_join_with_no_keys_says_why_it_cannot_reject() {
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["l".into()]);
+        ni.ports.insert("lookup".into(), vec!["r".into()]);
+        let err = build_reject_sql("xf.join.inner", &serde_json::json!({}), &ni, None)
+            .expect_err("no keys, no answer");
+        assert!(err.contains("key"), "{err}");
+    }
+}

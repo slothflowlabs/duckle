@@ -5547,12 +5547,11 @@ function synthJoinTransform(comp: ComponentDef): ComponentManifest {
                     defaultValue: joinType,
                     options: joinTypeOptions,
                 },
-                {
-                    key: 'sendUnmatchedToReject',
-                    label: 'Send unmatched to reject port',
-                    kind: 'bool',
-                    defaultValue: false,
-                },
+                // `sendUnmatchedToReject` was here and nothing read it. Wiring
+                // the reject port IS the switch - build_reject_sql is only
+                // called when the port has a consumer, the same way src.csv and
+                // xf.filter work. A second control that has to agree with the
+                // wiring is how the two drift apart.
             ],
         },
     ], 'declared');
