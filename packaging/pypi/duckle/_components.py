@@ -98,11 +98,6 @@ COMPONENTS = {
         'summary': 'Per-stage retry already lives in the Advanced tab (Retry attempts + Retry backoff) on every node - no separate component needed. A DAG-scoped retry block (wrap N stages, retry the whole group) still needs the DAG-block refactor; use ctl.try with a recovery fallback for now.',
         'params': [],
     },
-    'ctl.runevents': {
-        'kind': 'control',
-        'summary': 'Rows describing the stages that have already failed in this run: node_id, kind, status, message, category, duration_ms. Wire it into a mail or table sink to report failures. It reports failures the run SURVIVED, so mark the stages that may fail with Continue on failure.',
-        'params': [],
-    },
     'ctl.runjob': {
         'kind': 'control',
         'summary': 'Calls a child pipeline (job) as a side effect, passing parent context variables that are substituted as ${VAR} into the child before it runs. Chain several Run Job nodes to build a Master Job that orchestrates child jobs in sequence. The child runs in its own temp DB; its output is not composed b...',
@@ -1100,6 +1095,11 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'Generic HTTP GET/POST source. Parses JSON response, optionally walks a JSON pointer (responsePath) to find the row array, and follows cursor-style pagination if configured (cursorNextPath + cursorParam).',
         'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
+    },
+    'src.runevents': {
+        'kind': 'source',
+        'summary': 'Rows describing the stages that have already failed in this run: node_id, kind, status, message, category, duration_ms. Wire it into a mail or table sink to report failures. It reports failures the run SURVIVED, so mark the stages that may fail with Continue on failure.',
+        'params': [],
     },
     'src.s3': {
         'kind': 'source',

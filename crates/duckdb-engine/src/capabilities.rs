@@ -264,7 +264,13 @@ mod tests {
         assert!(pg.pushdown, "it declares pushdown");
         assert!(pg.connection_ref, "it takes a saved connection");
         assert!(pg.credentials, "it declares a password");
-        assert!(pg.reject_output, "it has a reject port");
+        // NOT a reject port. portsForComponent's default handed one to nearly
+        // every component, and only 17 ids plus the REST family and ext.* can
+        // produce the `<node>__reject` relation an edge reads -
+        // build_relational_source is not among them, so wiring it failed the
+        // run with "Table with name <node>__reject does not exist". This
+        // assertion was pinning that default in place; the port is gone.
+        assert!(!pg.reject_output, "nothing can fill a relational source's reject port");
     }
 
     /// #330: a component may not OFFER an incremental cursor the engine will

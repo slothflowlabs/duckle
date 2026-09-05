@@ -682,7 +682,16 @@ export const PALETTE: Category[] = [
                     src('inline', 'Inline Rows', 'available', 'Rows you write here rather than read from anywhere: a control row, an audit stamp, a fixed lookup. Give each column a name and a value; rowCount repeats the row. Every other source names an external system, so this was previously a throwaway file.'),
                     src('artifact', 'Artifacts', 'available', 'One row per FILE described the way a pipeline can reason about it: uri, name, media_type, size_bytes, sha256 and modified_at. For PDFs, images, archives, OCR output and model binaries - an artifact is a reference, not the bytes, so it joins, filters and iterates like any other table. Hashing is off by default because it reads every byte; turn it on when you want reproducibility and can pay for it.'),
                     src('filelist', 'File List', 'available', 'One row per file in a directory - file (full path) and filename - so a pipeline can iterate a folder. Set a glob pattern and optionally recurse. Pair it with ForEach to process every file.'),
-                    ctl('runevents', 'Run Events', 'available', 'Rows describing the stages that have already failed in this run: node_id, kind, status, message, category, duration_ms. Wire it into a mail or table sink to report failures. It reports failures the run SURVIVED, so mark the stages that may fail with Continue on failure.'),
+                    // src(), not ctl(): the engine dispatches `src.runevents`
+                    // and only that. Declared with the control helper - while
+                    // sitting between two src() entries in a source group - it
+                    // shipped as `ctl.runevents`, which no arm matches, so
+                    // dragging Run Events onto the canvas produced a node that
+                    // refused with "isn't executable ... it's a preview
+                    // component" while the palette called it available. Its own
+                    // engine comment says it: a log-catcher is a SOURCE of error
+                    // rows, not a sink for them.
+                    src('runevents', 'Run Events', 'available', 'Rows describing the stages that have already failed in this run: node_id, kind, status, message, category, duration_ms. Wire it into a mail or table sink to report failures. It reports failures the run SURVIVED, so mark the stages that may fail with Continue on failure.'),
                     ctl('file', 'File Operation', 'available', 'One typed filesystem operation: copy, move or delete a file. Staging a file between a landing area and a working area is ordinary batch work; before this the only filesystem-capable component ran a shell command, which cannot serve both platforms from one authored pipeline.'),
                     ctl('anchor', 'Sequence Anchor', 'available', 'Does no work itself. It exists so ordering links have something to attach to: wire a trigger out of it to say what runs after, or into it to say what must finish first. Takes no input and produces no rows, so it never joins the data flow.'),
                     ctl('setvar', 'Set Run Variable', 'available', 'Work out a value while the run is under way and let later steps in the same pipeline ask for it as ${name}: the date on the batch just read, the id just written. Wired to rows the expression is read against them; wired to nothing it stands on its own. The static context cannot carry these, because nothing knows them until the run has started.'),

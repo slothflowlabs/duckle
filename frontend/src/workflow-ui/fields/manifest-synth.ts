@@ -725,7 +725,48 @@ const REJECT_OUT: NodePorts['outputs'][number] = {
     type: 'reject',
     optional: true,
 };
+
+// Components that can actually FILL a reject port.
+//
+// The default below is `[MAIN_OUT, REJECT_OUT]`, so nearly every transform,
+// control and quality component advertised one - and only these can produce the
+// `<node>__reject` relation a wired edge reads. Wiring any of the others failed
+// the whole run:
+//
+//     Catalog Error: Table with name t__reject does not exist!
+//
+// measured on a plain xf.distinct. Three producers exist and all three are here:
+// build_reject_sql's own match arms; the REST family, which writes a reject
+// relation when onParentError is "reject" (connectors.rs, the run_rest_source
+// reject_policy branch); and external ext.* components, which get one on the
+// same contract whether or not they wrote to it (#307).
+//
+// The GraphQL trio is deliberately absent even though it rides RestSourceSpec:
+// its arm hardcodes on_parent_error to "fail", so it can never take that path.
+const FILLS_REJECT = new Set([
+    // build_reject_sql
+    'src.csv', 'src.tsv', 'xf.filter',
+    'qa.notnull', 'qa.outlier', 'qa.range', 'qa.refintegrity', 'qa.regex',
+    'qa.schemavalidate', 'qa.unique',
+    'xf.join', 'xf.join.inner', 'xf.join.spatial', 'xf.lookup', 'xf.lookup.outer',
+    'xf.semi', 'xf.semi.join',
+    // REST family: onParentError = reject
+    'src.rest', 'src.github', 'src.gitlab', 'src.airtable', 'src.notion',
+    'src.hubspot', 'src.jira', 'src.stripe', 'src.sendgrid', 'src.mailchimp',
+    'src.pipedrive', 'src.segment', 'src.salesforce', 'src.xero', 'src.quickbooks',
+    'src.zendesk', 'src.shopify', 'src.intercom', 'src.couchdb', 'src.odata',
+    'src.sap', 'src.sap.rfc', 'src.soap', 'src.asana', 'src.trello', 'src.clickup',
+    'src.slack', 'src.discord', 'src.twilio', 'src.telegram', 'src.dhis2',
+]);
+
 export function portsForComponent(comp: ComponentDef): NodePorts {
+    const ports = portsForComponentRaw(comp);
+    if (FILLS_REJECT.has(comp.id) || comp.id.startsWith('ext.')) return ports;
+    const outputs = ports.outputs.filter(o => o.id !== 'reject');
+    return outputs.length === ports.outputs.length ? ports : { ...ports, outputs };
+}
+
+function portsForComponentRaw(comp: ComponentDef): NodePorts {
     const id = comp.id;
 
     // Mapper - 1 main input, up to 3 lookup inputs, main + reject outputs

@@ -3363,7 +3363,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 
 ### Sources
 
-**119 sources available today.**
+**120 sources available today.**
 
 | Group | Connectors | Status |
 |---|---|---|

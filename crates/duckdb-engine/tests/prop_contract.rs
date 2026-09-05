@@ -467,3 +467,146 @@ mod plan_arms {
         );
     }
 }
+
+/// Every component the palette calls `available` has to be one the engine
+/// dispatches.
+///
+/// Run Events was declared with the `ctl()` helper while sitting between two
+/// `src()` entries in a source group, so the palette shipped `ctl.runevents`
+/// and the engine only ever matched `src.runevents`. Dragging it onto the
+/// canvas produced a node that fell through to the final else and refused with
+/// "'ctl.runevents' isn't executable on the DuckDB engine yet - it's a preview
+/// component" - a failed run AND a wrong explanation, since the palette says
+/// available.
+#[test]
+fn every_available_component_is_one_the_engine_dispatches() {
+    const ENGINE_SOURCES: [&str; 10] = [
+        "crates/duckdb-engine/src/plan/builders.rs",
+        "crates/duckdb-engine/src/plan/mod.rs",
+        "crates/duckdb-engine/src/plan/graph.rs",
+        "crates/duckdb-engine/src/lib.rs",
+        "crates/duckdb-engine/src/connectors.rs",
+        "crates/duckdb-engine/src/policy.rs",
+        "crates/duckdb-engine/src/chunking.rs",
+        "crates/duckdb-engine/src/capabilities.rs",
+        "crates/duckdb-engine/src/format.rs",
+        "crates/duckdb-engine/src/props.rs",
+    ];
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let id_lit = regex::Regex::new(r#""((?:src|snk|xf|ctl|code|qa)\.[a-z0-9_.]+)""#).unwrap();
+    let mut named: BTreeSet<String> = BTreeSet::new();
+    for rel in ENGINE_SOURCES {
+        let Ok(src) = std::fs::read_to_string(root.join(rel)) else { continue };
+        named.extend(id_lit.captures_iter(&src).map(|c| c[1].to_string()));
+    }
+    assert!(named.len() > 200, "only {} ids found - the scan is broken", named.len());
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("duckle-mcp")
+        .join("catalog.json");
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("catalog")).expect("json");
+    let mut orphans: Vec<String> = Vec::new();
+    for c in v["components"].as_array().expect("components") {
+        if c["availability"].as_str().unwrap_or("available") != "available" {
+            continue;
+        }
+        let id = c["id"].as_str().unwrap_or_default();
+        if !named.contains(id) {
+            orphans.push(id.to_string());
+        }
+    }
+    assert!(
+        orphans.is_empty(),
+        "the palette offers these as available and no engine source names them, so each \
+         refuses with \"isn't executable ... it's a preview component\": {orphans:?}"
+    );
+}
+
+/// A reject port must be one something can fill.
+///
+/// portsForComponent's default is `[MAIN_OUT, REJECT_OUT]`, so 281 available
+/// components advertised one and 17 ids could produce the `<node>__reject`
+/// relation a wired edge reads. Wiring any of the others failed the whole run -
+/// measured on a plain xf.distinct:
+///
+///     Catalog Error: Table with name t__reject does not exist!
+///
+/// The allowed set is derived from the RUST side here, so adding a port in the
+/// frontend without an engine path behind it fails this test rather than a
+/// user's pipeline.
+#[test]
+fn every_declared_reject_port_is_one_something_can_fill() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let builders = std::fs::read_to_string(root.join("src").join("plan").join("builders.rs"))
+        .expect("builders.rs");
+    let plan = std::fs::read_to_string(root.join("src").join("plan").join("mod.rs"))
+        .expect("plan/mod.rs");
+
+    // 1. build_reject_sql's own match arms.
+    let start = builders.find("pub(crate) fn build_reject_sql").expect("build_reject_sql");
+    let open = builders[start..].find('{').expect("body") + start;
+    let (mut depth, bytes) = (0i32, builders.as_bytes());
+    let mut end = builders.len();
+    for i in open..builders.len() {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let body = &builders[open..end];
+    let lit = regex::Regex::new(r#""([a-z][\w.]*)""#).unwrap();
+    let arm = regex::Regex::new(r#"(?m)^\s{8}((?:"[a-z][\w.]*"\s*\|\s*\n?\s*)*"[a-z][\w.]*")\s*=>"#)
+        .unwrap();
+    let mut fillable: BTreeSet<String> = arm
+        .captures_iter(body)
+        .flat_map(|c| {
+            lit.captures_iter(c.get(1).unwrap().as_str())
+                .map(|m| m[1].to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    // 2. The REST family writes a reject relation when onParentError is
+    //    "reject". The GraphQL arm hardcodes it to "fail", so it cannot.
+    let rest = regex::Regex::new(r"pub fn reads_incremental\(component_id: &str\) -> bool \{(?s:.*?)\n\}")
+        .unwrap()
+        .find(&plan)
+        .expect("reads_incremental");
+    for c in lit.captures_iter(rest.as_str()) {
+        fillable.insert(c[1].to_string());
+    }
+    for graphql in ["src.graphql", "src.linear", "src.monday"] {
+        fillable.remove(graphql);
+    }
+    assert!(fillable.len() > 30, "only {} fillable ids - the scan broke", fillable.len());
+
+    let path = root.join("..").join("duckle-mcp").join("catalog.json");
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("catalog")).expect("json");
+    let mut unfillable: Vec<String> = Vec::new();
+    for c in v["components"].as_array().expect("components") {
+        let id = c["id"].as_str().unwrap_or_default();
+        let has_reject = c["ports"]["outputs"]
+            .as_array()
+            .map(|o| o.iter().any(|p| p["id"] == "reject"))
+            .unwrap_or(false);
+        if has_reject && !fillable.contains(id) && !id.starts_with("ext.") {
+            unfillable.push(id.to_string());
+        }
+    }
+    unfillable.sort();
+    assert!(
+        unfillable.is_empty(),
+        "these declare a reject port and nothing can produce their __reject relation, so \
+         wiring it fails the run: {unfillable:?}"
+    );
+}
