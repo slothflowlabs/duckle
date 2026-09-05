@@ -43640,10 +43640,11 @@
                 "description": "Pick a pipeline from this workspace."
               },
               {
-                "key": "waitForCompletion",
-                "label": "Wait for completion",
+                "key": "returnsRows",
+                "label": "Take the rows the child returns",
                 "kind": "bool",
-                "defaultValue": true
+                "defaultValue": false,
+                "description": "Off, a child runs for its side effects and hands nothing back. On, the parent passes it a handoff file as ${DUCKLE_RETURN} and reads the rows the child writes there. The child always runs to completion either way."
               },
               {
                 "key": "parameters",
@@ -43723,10 +43724,11 @@
                 "description": "Pick a pipeline from this workspace."
               },
               {
-                "key": "waitForCompletion",
-                "label": "Wait for completion",
+                "key": "returnsRows",
+                "label": "Take the rows the child returns",
                 "kind": "bool",
-                "defaultValue": true
+                "defaultValue": false,
+                "description": "Off, a child runs for its side effects and hands nothing back. On, the parent passes it a handoff file as ${DUCKLE_RETURN} and reads the rows the child writes there. The child always runs to completion either way."
               },
               {
                 "key": "parameters",
@@ -43801,10 +43803,11 @@
                 "description": "Pick a pipeline from this workspace."
               },
               {
-                "key": "waitForCompletion",
-                "label": "Wait for completion",
+                "key": "returnsRows",
+                "label": "Take the rows the child returns",
                 "kind": "bool",
-                "defaultValue": true
+                "defaultValue": false,
+                "description": "Off, a child runs for its side effects and hands nothing back. On, the parent passes it a handoff file as ${DUCKLE_RETURN} and reads the rows the child writes there. The child always runs to completion either way."
               },
               {
                 "key": "contextVariables",

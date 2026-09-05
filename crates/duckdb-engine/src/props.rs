@@ -719,6 +719,30 @@ mod tests {
         }
     }
 
+    /// The child-pipeline nodes offered a switch that does nothing and hid the
+    /// one setting that does something.
+    ///
+    /// `waitForCompletion` is read by NOTHING: the arm runs the child as a side
+    /// effect before passing the upstream view through, so the call is always
+    /// synchronous and unticking the box changed nothing. Meanwhile
+    /// `returnsRows` - the handoff that lets a child give its rows back to the
+    /// parent through ${DUCKLE_RETURN} - was read by the engine and declared by
+    /// no form, so the feature could only be reached by hand.
+    #[test]
+    fn a_child_pipeline_node_offers_the_handoff_and_not_the_fiction() {
+        for id in ["ctl.runpipeline", "ctl.runjob", "ctl.trigger"] {
+            let keys = declared().get(id).unwrap_or_else(|| panic!("{id} is not in the catalog"));
+            assert!(
+                keys.contains("returnsRows"),
+                "{id} reads returnsRows and no field offers it"
+            );
+            assert!(
+                !keys.contains("waitForCompletion"),
+                "{id} still offers waitForCompletion, which nothing reads"
+            );
+        }
+    }
+
     #[test]
     fn universal_matches_the_properties_panel() {
         // The drift that caused it: the panel grew universal fields and nothing

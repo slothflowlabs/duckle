@@ -6582,7 +6582,22 @@ function synthPipelineControl(comp: ComponentDef): ComponentManifest {
                 label: isJob ? 'Child job' : 'Pipeline',
                 fields: [
                     { key: 'pipelineRef', label: isJob ? 'Child job / pipeline' : 'Pipeline', kind: 'pipeline-ref', required: true, description: 'Pick a pipeline from this workspace.' },
-                    { key: 'waitForCompletion', label: 'Wait for completion', kind: 'bool', defaultValue: true },
+                    {
+                        // Was `waitForCompletion`, which nothing read. The arm
+                        // runs the child as a side effect before passing the
+                        // upstream view through, so the call is ALWAYS
+                        // synchronous and unticking the box changed nothing.
+                        //
+                        // `returnsRows` is the setting that does exist and had
+                        // no field: the parent names a handoff file, passes it
+                        // to the child as ${DUCKLE_RETURN}, and reads it once
+                        // the child has run.
+                        key: 'returnsRows',
+                        label: 'Take the rows the child returns',
+                        kind: 'bool',
+                        defaultValue: false,
+                        description: 'Off, a child runs for its side effects and hands nothing back. On, the parent passes it a handoff file as ${DUCKLE_RETURN} and reads the rows the child writes there. The child always runs to completion either way.',
+                    },
                     {
                         key: isJob ? 'contextVariables' : 'parameters',
                         label: isJob ? 'Context variables' : 'Parameters',

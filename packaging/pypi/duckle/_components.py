@@ -11,20 +11,17 @@ COMPONENTS = {
     'code.javascript': {
         'kind': 'custom',
         'summary': 'Per-row JS transform via the pure-Rust boa interpreter (sandboxed - no fetch / fs / DOM). Define a `transform(row)` function; the engine calls it per row with the row as a JS object and uses the returned object as the output row. Helpers declared at the top of the script are shared across rows wi...',
-        'params': ['routineRef', 'code'],
-        'unverified': ['language'],
+        'params': ['routineRef', 'language', 'code', 'cacheOutput'],
     },
     'code.python': {
         'kind': 'custom',
-        'summary': 'Per-row transform via a real Python 3 interpreter (full language + installed packages). Define a `process(row)` function that takes the row as a dict and returns the output dict (return None to drop the row); rows go in/out as JSON. Needs Python 3 on PATH or DUCKLE_PYTHON_BIN. Code in the `code` ...',
-        'params': ['routineRef', 'code'],
-        'unverified': ['language'],
+        'summary': 'Transform via a real Python 3 interpreter (full language + installed packages). Define `process(row)` to work a row at a time (a dict in, a dict or None out, JSON both ways), or `transform(table)` to be handed the WHOLE table at once as a pyarrow Table - use that for polars/pandas/PyArrow work, O...',
+        'params': ['routineRef', 'language', 'code', 'cacheOutput'],
     },
     'code.shell': {
         'kind': 'custom',
         'summary': 'Run an arbitrary shell command and emit one row with {stdout, stderr, exit_code, duration_ms}. Defaults to cmd.exe on Windows, /bin/sh on Unix. Optional timeout + workingDir. Cancellation kills the child process.',
-        'params': ['routineRef', 'code'],
-        'unverified': ['language'],
+        'params': ['routineRef', 'language', 'code'],
     },
     'code.sql': {
         'kind': 'custom',
@@ -39,8 +36,13 @@ COMPONENTS = {
     'code.wasm': {
         'kind': 'custom',
         'summary': 'Per-row WASM transform via the pure-Rust wasmi interpreter (sandboxed - no fs / net / env access). Supply the module as `wasmB64` (base64) or `path` to a .wasm file. Module must export `memory` and a function `transform(i32, i32) -> i64` packing (out_ptr << 32) | out_len. Defaults: inputColumn=te...',
-        'params': ['routineRef', 'code', 'reuseInstance'],
-        'unverified': ['language', 'wasmPath'],
+        'params': ['routineRef', 'language', 'code', 'reuseInstance', 'cacheOutput'],
+        'unverified': ['wasmPath'],
+    },
+    'ctl.anchor': {
+        'kind': 'control',
+        'summary': 'Does no work itself. It exists so ordering links have something to attach to: wire a trigger out of it to say what runs after, or into it to say what must finish first. Takes no input and produces no rows, so it never joins the data flow.',
+        'params': [],
     },
     'ctl.checkpoint': {
         'kind': 'control',
@@ -57,10 +59,15 @@ COMPONENTS = {
         'summary': 'Stop the pipeline with an error message. Condition controls when it fires: always, only when the input has rows (guard a reject branch), or only when the input is empty (guard missing data).',
         'params': ['message', 'condition'],
     },
+    'ctl.file': {
+        'kind': 'control',
+        'summary': 'One typed filesystem operation: copy, move or delete a file. Staging a file between a landing area and a working area is ordinary batch work; before this the only filesystem-capable component ran a shell command, which cannot serve both platforms from one authored pipeline.',
+        'params': ['op', 'source', 'destination', 'overwrite', 'failOnError'],
+    },
     'ctl.foreach': {
         'kind': 'control',
         'summary': 'Runs a referenced pipeline once per upstream row. ${ITER_INDEX} + ${ITER_ITEM_<FIELD>} (uppercased) substituted into the sub-pipeline props. Side-effect model.',
-        'params': ['pipelineRef', 'concurrency'],
+        'params': ['pipelineRef', 'itemKey', 'concurrency', 'dispatch', 'maxAttempts', 'retryBackoff', 'retryInitialSeconds', 'retryMaxSeconds'],
     },
     'ctl.iterate': {
         'kind': 'control',
@@ -90,20 +97,28 @@ COMPONENTS = {
     'ctl.retry': {
         'kind': 'control',
         'summary': 'Per-stage retry already lives in the Advanced tab (Retry attempts + Retry backoff) on every node - no separate component needed. A DAG-scoped retry block (wrap N stages, retry the whole group) still needs the DAG-block refactor; use ctl.try with a recovery fallback for now.',
+        'params': ['maxAttempts'],
+        'unverified': ['backoff', 'strategy'],
+    },
+    'ctl.runevents': {
+        'kind': 'control',
+        'summary': 'Rows describing the stages that have already failed in this run: node_id, kind, status, message, category, duration_ms. Wire it into a mail or table sink to report failures. It reports failures the run SURVIVED, so mark the stages that may fail with Continue on failure.',
         'params': [],
-        'unverified': ['maxAttempts', 'backoff', 'strategy'],
     },
     'ctl.runjob': {
         'kind': 'control',
         'summary': 'Calls a child pipeline (job) as a side effect, passing parent context variables that are substituted as ${VAR} into the child before it runs. Chain several Run Job nodes to build a Master Job that orchestrates child jobs in sequence. The child runs in its own temp DB; its output is not composed b...',
-        'params': ['pipelineRef', 'contextVariables'],
-        'unverified': ['waitForCompletion'],
+        'params': ['pipelineRef', 'returnsRows', 'contextVariables'],
     },
     'ctl.runpipeline': {
         'kind': 'control',
         'summary': 'Reads + executes another pipeline file inline as a side effect, then passes the upstream view through unchanged. Useful for triggering helper pipelines (refresh dimension tables, kick off cleanup) without composing their output into the parent.',
-        'params': ['pipelineRef', 'parameters'],
-        'unverified': ['waitForCompletion'],
+        'params': ['pipelineRef', 'returnsRows', 'parameters'],
+    },
+    'ctl.setvar': {
+        'kind': 'control',
+        'summary': 'Work out a value while the run is under way and let later steps in the same pipeline ask for it as ${name}: the date on the batch just read, the id just written. Wired to rows the expression is read against them; wired to nothing it stands on its own. The static context cannot carry these, becaus...',
+        'params': ['name', 'value'],
     },
     'ctl.switch': {
         'kind': 'control',
@@ -119,13 +134,12 @@ COMPONENTS = {
     'ctl.trigger': {
         'kind': 'control',
         'summary': 'Alias of ctl.runpipeline; same executor branch.',
-        'params': ['pipelineRef', 'parameters'],
-        'unverified': ['waitForCompletion'],
+        'params': ['pipelineRef', 'returnsRows', 'parameters'],
     },
     'ctl.try': {
         'kind': 'control',
         'summary': 'Installs a fallback pipeline. If any downstream stage in this execution fails, the fallback runs as a side effect before the original error surfaces - useful for notifications, rollbacks, cleanup. Slice of the DAG-block refactor; true continuation-style try/catch needs the multi-week refactor (se...',
-        'params': [],
+        'params': ['fallbackPipelineRef'],
     },
     'ctl.wait': {
         'kind': 'control',
@@ -136,6 +150,16 @@ COMPONENTS = {
         'kind': 'control',
         'summary': 'Emit a warning log line (does not fail the run), then pass rows through. Same {rows} templating and workspace log output as Log Message.',
         'params': ['message'],
+    },
+    'qa.baseline': {
+        'kind': 'quality',
+        'summary': 'Compare this run against what previous runs looked like. Every row can satisfy the schema and every row-level rule while the dataset is nothing like what normally arrives - 842,114 rows where five million usually come, a null rate that went from 4 percent to 71, a country partition that vanished ...',
+        'params': ['history', 'columns', 'mode', 'rules', 'groupBy', 'requireExistingGroups'],
+    },
+    'qa.block': {
+        'kind': 'quality',
+        'summary': 'Cut an entity-resolution job down to the pairs worth comparing. Every fuzzy match compares pairs, and comparing all of them grows with the product of the row counts, so blocking proposes only records that already agree on something cheap and discriminating (same postcode, same surname). One input...',
+        'params': ['leftId', 'rightId', 'rules', 'carryColumns'],
     },
     'qa.classify': {
         'kind': 'quality',
@@ -210,14 +234,12 @@ COMPONENTS = {
     'qa.notnull': {
         'kind': 'quality',
         'summary': 'Pass rows with no nulls; rest to reject',
-        'params': ['columns'],
-        'unverified': ['onFail'],
+        'params': ['columns', 'onFail'],
     },
     'qa.outlier': {
         'kind': 'quality',
         'summary': 'Pass in-distribution rows; route statistical outliers (IQR or z-score over the chosen numeric column) to the reject port. NULLs and zero-spread data always pass.',
-        'params': ['column', 'method', 'sensitivity'],
-        'unverified': ['onFail'],
+        'params': ['column', 'method', 'sensitivity', 'onFail'],
     },
     'qa.profile': {
         'kind': 'quality',
@@ -232,8 +254,7 @@ COMPONENTS = {
     'qa.range': {
         'kind': 'quality',
         'summary': 'Pass in-range rows; rest to reject',
-        'params': ['column', 'min', 'max', 'inclusive'],
-        'unverified': ['onFail'],
+        'params': ['column', 'min', 'max', 'inclusive', 'onFail'],
     },
     'qa.reconcile': {
         'kind': 'quality',
@@ -248,8 +269,7 @@ COMPONENTS = {
     'qa.regex': {
         'kind': 'quality',
         'summary': 'Pass rows matching a pattern; rest to reject',
-        'params': ['column', 'pattern'],
-        'unverified': ['onFail'],
+        'params': ['column', 'pattern', 'onFail'],
     },
     'qa.sample.adv': {
         'kind': 'quality',
@@ -259,8 +279,7 @@ COMPONENTS = {
     'qa.schemavalidate': {
         'kind': 'quality',
         'summary': 'Reject rows where any expected column is null',
-        'params': ['expectedColumns'],
-        'unverified': ['onFail'],
+        'params': ['expectedColumns', 'onFail'],
     },
     'qa.standardize': {
         'kind': 'quality',
@@ -275,13 +294,12 @@ COMPONENTS = {
     'qa.unique': {
         'kind': 'quality',
         'summary': 'Pass first per key; duplicates to reject',
-        'params': ['columns'],
-        'unverified': ['onFail'],
+        'params': ['columns', 'tieBreak', 'onFail'],
     },
     'snk.avro': {
         'kind': 'sink',
         'summary': "Write rows as an Apache Avro container file via the pure-Rust `apache-avro` crate. Schema is inferred from the first row's column types (long / double / string / boolean) - or supply a JSON Avro schema via the schemaJson field to override. recordName names the inferred record (default `Row`).",
-        'params': ['path', 'mode', 'encoding', 'compression'],
+        'params': ['path', 'mode', 'compression'],
     },
     'snk.azureblob': {
         'kind': 'sink',
@@ -296,7 +314,7 @@ COMPONENTS = {
     'snk.bigquery': {
         'kind': 'sink',
         'summary': 'Write tables to BigQuery via the duckdb-bigquery community extension',
-        'params': ['project', 'dataset', 'schemaName', 'tableName', 'mode', 'credentialsPath'],
+        'params': ['project', 'dataset', 'schemaName', 'tableName', 'mode', 'credentialsPath', 'validateBeforeInsert', 'deadLetterPath', 'deadLetterFormat'],
     },
     'snk.cassandra': {
         'kind': 'sink',
@@ -306,8 +324,8 @@ COMPONENTS = {
     'snk.chroma': {
         'kind': 'sink',
         'summary': '',
-        'params': ['endpoint', 'apiKey', 'collection', 'connectionRef', 'embeddingColumn', 'idColumn', 'dimension', 'mode', 'batchSize'],
-        'unverified': ['metadataColumns', 'metric', 'createIfMissing'],
+        'params': ['endpoint', 'apiKey', 'collection', 'connectionRef', 'embeddingColumn', 'idColumn', 'dimension', 'metric', 'mode', 'batchSize'],
+        'unverified': ['metadataColumns', 'createIfMissing'],
     },
     'snk.clickhouse': {
         'kind': 'sink',
@@ -322,12 +340,17 @@ COMPONENTS = {
     'snk.csv': {
         'kind': 'sink',
         'summary': '',
-        'params': ['path', 'mode', 'delimiter', 'writeHeader', 'encoding'],
+        'params': ['path', 'mode', 'delimiter', 'writeHeader', 'encoding', 'nullValue', 'partitionBy'],
     },
     'snk.databricks': {
         'kind': 'sink',
         'summary': 'INSERT to a Databricks table via the Statement Execution API with PAT Bearer auth. Multi-row INSERTs batched at 1000 rows; sync wait up to 50s.',
         'params': ['workspace', 'pat', 'warehouseId', 'catalog', 'schema', 'tableName', 'batchSize', 'waitTimeoutSeconds', 'mode', 'conflictColumns', 'deleteColumn', 'deleteValue'],
+    },
+    'snk.db2': {
+        'kind': 'sink',
+        'summary': 'Write to IBM DB2 through the IBM Data Server ODBC driver. Creates the table if missing from the upstream column types; Append adds rows, Overwrite clears it first. Booleans land in SMALLINT as 1/0, which DB2 for z/OS also accepts. No upsert.',
+        'params': ['host', 'port', 'database', 'user', 'password', 'useSsl', 'driver', 'dsn', 'connectionString', 'schema', 'tableName', 'mode'],
     },
     'snk.dhis2': {
         'kind': 'sink',
@@ -337,12 +360,12 @@ COMPONENTS = {
     'snk.duckdb': {
         'kind': 'sink',
         'summary': 'Write a table into a DuckDB file',
-        'params': ['database', 'tableName', 'mode', 'conflictColumns', 'deleteColumn', 'deleteValue'],
+        'params': ['database', 'tableName', 'mode', 'conflictColumns', 'deleteColumn', 'deleteValue', 'validateBeforeInsert', 'deadLetterPath', 'deadLetterFormat'],
     },
     'snk.ducklake': {
         'kind': 'sink',
         'summary': 'Write a table into a DuckLake catalog',
-        'params': ['path', 'dataPath', 'schemaName', 'tableName', 'mode', 'conflictColumns'],
+        'params': ['path', 'dataPath', 'metadataSchema', 'attachOptions', 'schemaName', 'tableName', 'publishGroup', 'mode', 'conflictColumns', 'validateBeforeInsert', 'deadLetterPath', 'deadLetterFormat'],
     },
     'snk.elastic': {
         'kind': 'sink',
@@ -353,12 +376,12 @@ COMPONENTS = {
     'snk.email': {
         'kind': 'sink',
         'summary': 'Per-row SMTP send via pure-Rust `lettre` + rustls TLS. Props: host (required), port (default 587), user/password (optional - skip for relay-only servers), fromAddress (required), toColumn (default `to`), subjectColumn (default `subject`), bodyColumn (default `body`). Plain text only for v1; HTML ...',
-        'params': ['url', 'method', 'headers', 'batchMode', 'bodyType', 'bodyTemplate', 'authType', 'authToken', 'authHeader'],
+        'params': ['host', 'port', 'user', 'password', 'fromAddress', 'toColumn', 'subjectColumn', 'bodyColumn', 'to', 'subject', 'body'],
     },
     'snk.excel': {
         'kind': 'sink',
         'summary': 'Write .xlsx via the DuckDB excel extension',
-        'params': ['path', 'mode', 'encoding', 'compression', 'hasHeader'],
+        'params': ['path', 'mode', 'compression', 'hasHeader'],
     },
     'snk.execsource': {
         'kind': 'sink',
@@ -398,14 +421,12 @@ COMPONENTS = {
     'snk.json': {
         'kind': 'sink',
         'summary': '',
-        'params': ['path', 'mode', 'encoding', 'compression', 'format', 'recordsPath'],
-        'unverified': ['flatten'],
+        'params': ['path', 'mode', 'compression', 'format', 'flatten', 'keepParentNames', 'sampleSize', 'recordsPath'],
     },
     'snk.jsonl': {
         'kind': 'sink',
         'summary': '',
-        'params': ['path', 'mode', 'encoding', 'compression', 'format', 'recordsPath'],
-        'unverified': ['flatten'],
+        'params': ['path', 'mode', 'compression', 'format', 'flatten', 'keepParentNames', 'sampleSize', 'recordsPath'],
     },
     'snk.kafka': {
         'kind': 'sink',
@@ -434,6 +455,11 @@ COMPONENTS = {
         'summary': 'Write via S3-compatible endpoint',
         'params': ['bucket', 'key', 'region', 'accessKey', 'secretKey', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'mode', 'compression', 'partitionBy'],
     },
+    'snk.model': {
+        'kind': 'sink',
+        'summary': 'Register a trained model. The card IS the upstream row - the artifact URI your training script wrote, plus whatever metrics, framework and hashes it recorded - written to <path>/<name>/<version>.json with a latest.json pointer beside it. It needs exactly one row and a version column. The write ha...',
+        'params': ['name', 'path'],
+    },
     'snk.mongodb': {
         'kind': 'sink',
         'summary': 'Insert documents into a MongoDB collection via the official driver. Bulk insert_many batched at 1000 docs by default; replace mode drops the collection first.',
@@ -442,7 +468,7 @@ COMPONENTS = {
     'snk.motherduck': {
         'kind': 'sink',
         'summary': 'Write a table into MotherDuck via ATTACH md:',
-        'params': ['database', 'token', 'schemaName', 'tableName', 'mode', 'conflictColumns'],
+        'params': ['database', 'token', 'schemaName', 'tableName', 'mode', 'conflictColumns', 'validateBeforeInsert', 'deadLetterPath', 'deadLetterFormat'],
     },
     'snk.mysql': {
         'kind': 'sink',
@@ -452,8 +478,12 @@ COMPONENTS = {
     'snk.nats': {
         'kind': 'sink',
         'summary': 'Publish each upstream row as one NATS message via the pure-Rust `async-nats` driver. Payload = JSON-stringified row. Optional subjectSuffixColumn appends a per-row suffix (subject.value) for routed multi-tenant publishing.',
-        'params': ['brokers', 'topic', 'format', 'keyColumn'],
-        'unverified': ['acks'],
+        'params': ['urls', 'subject', 'subjectSuffixColumn', 'batchSize'],
+    },
+    'snk.neo4j': {
+        'kind': 'sink',
+        'summary': 'Write rows as Neo4j nodes over the HTTP Query API. Rows ride up as one $rows parameter expanded with UNWIND, so a batch is one round trip. Set mergeKeys to MERGE on those properties (re-running updates the matched nodes) instead of CREATE; or supply your own Cypher that consumes $rows.',
+        'params': ['endpoint', 'database', 'user', 'password', 'label', 'mergeKeys', 'batchSize', 'cypher'],
     },
     'snk.opensearch': {
         'kind': 'sink',
@@ -470,18 +500,23 @@ COMPONENTS = {
     'snk.parquet': {
         'kind': 'sink',
         'summary': '',
-        'params': ['path', 'mode', 'compression', 'compressionLevel', 'parquetVersion', 'rowGroupSize', 'partitionBy', 'maxPartitions'],
+        'params': ['path', 'mode', 'compression', 'compressionLevel', 'parquetVersion', 'rowGroupSize', 'partitionBy', 'maxPartitions', 'hilbertColumn'],
     },
     'snk.pgvector': {
         'kind': 'sink',
         'summary': 'Write embeddings to a Postgres table (server must have CREATE EXTENSION vector)',
-        'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'connectTimeout', 'options', 'connParams', 'schemaName', 'tableName', 'mode', 'conflictColumns'],
+        'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'connectTimeout', 'options', 'connParams', 'schemaName', 'tableName', 'mode', 'conflictColumns', 'validateBeforeInsert', 'deadLetterPath', 'deadLetterFormat'],
     },
     'snk.pinecone': {
         'kind': 'sink',
         'summary': 'Upsert vectors to a Pinecone index via /vectors/upsert with Api-Key auth',
         'params': ['indexHost', 'apiKey'],
         'unverified': ['shapeHint'],
+    },
+    'snk.pixeltable': {
+        'kind': 'sink',
+        'summary': 'Write rows into a Pixeltable table (#223). Duckle COPYs the upstream rows to Parquet and Pixeltable inserts the file directly. Insert appends to an existing table; Create builds one from the incoming rows. Needs a Python with pixeltable installed; the desktop app provisions one on first use.',
+        'params': ['table', 'mode'],
     },
     'snk.postgres': {
         'kind': 'sink',
@@ -491,8 +526,7 @@ COMPONENTS = {
     'snk.pubsub': {
         'kind': 'sink',
         'summary': 'Publish messages via the Pub/Sub REST API (POST /v1/projects/{p}/topics/{t}:publish). Each upstream row -> one base64-encoded message. Auth via OAuth2 Bearer access token. Batched at 100 messages per request (Pub/Sub max).',
-        'params': ['brokers', 'topic', 'format', 'keyColumn'],
-        'unverified': ['acks'],
+        'params': ['project', 'topic', 'accessToken', 'batchSize'],
     },
     'snk.qdrant': {
         'kind': 'sink',
@@ -503,12 +537,12 @@ COMPONENTS = {
     'snk.quack': {
         'kind': 'sink',
         'summary': 'Write a table to a remote DuckDB instance over the Quack protocol (HTTP on port 9494). Supports append / overwrite / truncate / upsert modes via the standard relational sink path.',
-        'params': ['host', 'port', 'token', 'schemaName', 'tableName', 'mode'],
+        'params': ['host', 'port', 'token', 'schemaName', 'tableName', 'mode', 'validateBeforeInsert', 'deadLetterPath', 'deadLetterFormat'],
     },
     'snk.qvd': {
         'kind': 'sink',
         'summary': 'Write rows as a Qlik QVD file (.qvd) via a clean-room pure-Rust encoder (no Qlik runtime). Builds the per-column symbol tables + bit-stuffed index; values are typed per cell (int / double / string), nulls preserved. Round-trips with the QVD source and loads in QlikView / Qlik Sense.',
-        'params': ['path', 'mode', 'encoding', 'compression'],
+        'params': ['path', 'mode', 'compression'],
     },
     'snk.r2': {
         'kind': 'sink',
@@ -518,13 +552,12 @@ COMPONENTS = {
     'snk.rabbit': {
         'kind': 'sink',
         'summary': 'Publish each upstream row as one persistent-delivery-mode AMQP 0.9.1 message via the pure-Rust `lapin` driver. Configurable exchange + routingKey; empty exchange = default direct exchange (route to queue named by routingKey).',
-        'params': ['brokers', 'topic', 'format', 'keyColumn'],
-        'unverified': ['acks'],
+        'params': ['url', 'routingKey', 'exchange', 'batchSize'],
     },
     'snk.redis': {
         'kind': 'sink',
         'summary': "SET each row's keyColumn -> valueColumn into Redis via the sync `redis` Rust client. Optional ttlSeconds adds an EXPIRE. If valueColumn is empty, the whole row is JSON-stringified as the value. Pipelined in chunks (default 1000).",
-        'params': ['connectionString', 'database', 'collection', 'mode', 'idColumn', 'batchSize'],
+        'params': ['connectionString', 'keyColumn', 'valueColumn', 'ttlSeconds', 'batchSize'],
     },
     'snk.redpanda': {
         'kind': 'sink',
@@ -535,7 +568,7 @@ COMPONENTS = {
     'snk.redshift': {
         'kind': 'sink',
         'summary': 'Write Redshift via the postgres ATTACH path (Postgres wire on port 5439); overwrite / append / truncate / upsert all supported via the existing PG sink modes',
-        'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'connectTimeout', 'options', 'connParams', 'schemaName', 'tableName', 'mode', 'conflictColumns'],
+        'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'connectTimeout', 'options', 'connParams', 'schemaName', 'tableName', 'mode', 'conflictColumns', 'validateBeforeInsert', 'deadLetterPath', 'deadLetterFormat'],
     },
     'snk.rest': {
         'kind': 'sink',
@@ -545,7 +578,7 @@ COMPONENTS = {
     'snk.s3': {
         'kind': 'sink',
         'summary': 'Write via DuckDB httpfs',
-        'params': ['path', 'connectionRef', 'format', 'accessKey', 'secretKey', 'region', 'endpoint', 'urlStyle', 'useSsl'],
+        'params': ['path', 'connectionRef', 'format', 'accessKey', 'secretKey', 'region', 'compression', 'compressionLevel', 'parquetVersion', 'rowGroupSize', 'delimiter', 'writeHeader', 'nullValue', 'endpoint', 'urlStyle', 'useSsl'],
     },
     'snk.salesforce': {
         'kind': 'sink',
@@ -570,22 +603,22 @@ COMPONENTS = {
     'snk.spatial': {
         'kind': 'sink',
         'summary': 'Write geospatial files via the spatial extension',
-        'params': ['path', 'driver'],
+        'params': ['path', 'driver', 'encoding'],
     },
     'snk.sqlite': {
         'kind': 'sink',
         'summary': 'Write a table into a SQLite file',
-        'params': ['database', 'tableName', 'mode', 'conflictColumns', 'deleteColumn', 'deleteValue'],
+        'params': ['database', 'tableName', 'mode', 'conflictColumns', 'deleteColumn', 'deleteValue', 'validateBeforeInsert', 'deadLetterPath', 'deadLetterFormat'],
     },
     'snk.sqlserver': {
         'kind': 'sink',
         'summary': 'INSERT to SQL Server via TDS (multi-row VALUES batched at 1000 rows, the SQL Server cap).',
-        'params': ['host', 'port', 'user', 'password', 'database', 'trustCert', 'encrypt', 'bulk', 'schema', 'tableName', 'batchSize', 'mode', 'conflictColumns', 'deleteColumn', 'deleteValue'],
+        'params': ['connectionRef', 'host', 'port', 'user', 'password', 'database', 'trustCert', 'encrypt', 'bulk', 'schema', 'tableName', 'batchSize', 'mode', 'conflictColumns', 'deleteColumn', 'deleteValue', 'validateBeforeInsert', 'deadLetterPath', 'deadLetterFormat'],
     },
     'snk.synapse': {
         'kind': 'sink',
         'summary': 'Azure Synapse rides the SQL Server TDS wire - same connection form as snk.sqlserver.',
-        'params': ['account', 'warehouse', 'role', 'database', 'schema', 'connectionRef', 'username', 'password', 'schemaName', 'tableName', 'mode', 'conflictColumns', 'deleteColumn', 'deleteValue', 'validateBeforeInsert', 'deadLetterPath', 'deadLetterFormat'],
+        'params': ['connectionRef', 'host', 'port', 'user', 'password', 'database', 'trustCert', 'encrypt', 'bulk', 'schema', 'tableName', 'batchSize', 'mode', 'conflictColumns', 'deleteColumn', 'deleteValue', 'validateBeforeInsert', 'deadLetterPath', 'deadLetterFormat'],
     },
     'snk.teradata': {
         'kind': 'sink',
@@ -595,12 +628,17 @@ COMPONENTS = {
     'snk.toml': {
         'kind': 'sink',
         'summary': 'Write the upstream rows as TOML. TOML disallows a top-level array so the engine wraps under a `rows` key: `[[rows]]` per row.',
-        'params': ['path', 'mode', 'encoding', 'compression'],
+        'params': ['path', 'mode', 'compression'],
     },
     'snk.tsv': {
         'kind': 'sink',
         'summary': 'Write tab-separated files',
-        'params': ['path', 'mode', 'encoding', 'compression', 'hasHeader', 'delimiter', 'quoteChar', 'skipLines', 'partitionBy'],
+        'params': ['path', 'mode', 'compression', 'hasHeader', 'delimiter', 'quoteChar', 'skipLines', 'partitionBy'],
+    },
+    'snk.turso': {
+        'kind': 'sink',
+        'summary': 'INSERT rows into a Turso (libSQL) database over the HTTP pipeline API. Creates the table if missing from the upstream column types; Append adds rows, Overwrite clears it first. Values go up as bound parameters, batched (default 500).',
+        'params': ['url', 'authToken', 'tableName', 'mode', 'batchSize'],
     },
     'snk.vortex': {
         'kind': 'sink',
@@ -626,13 +664,12 @@ COMPONENTS = {
     'snk.xml': {
         'kind': 'sink',
         'summary': 'Write rows as XML via `quick-xml`. Default shape: `<root><row><col>val</col>...</row>...</root>`. rootElement / rowElement override the wrapper names. Complex (object/array) cell values are JSON-encoded inside CDATA so the file round-trips back through src.xml losslessly.',
-        'params': ['path', 'mode', 'encoding', 'compression', 'rowPath'],
-        'unverified': ['namespace'],
+        'params': ['path', 'mode', 'compression', 'rowPath', 'namespace'],
     },
     'snk.yaml': {
         'kind': 'sink',
         'summary': 'Write the upstream rows as a top-level YAML array (`- key: value` per row).',
-        'params': ['path', 'mode', 'encoding', 'compression'],
+        'params': ['path', 'mode', 'compression'],
     },
     'src.adbc': {
         'kind': 'source',
@@ -642,30 +679,32 @@ COMPONENTS = {
     'src.airtable': {
         'kind': 'source',
         'summary': 'Airtable REST. Bearer Personal Access Token. Cursor pagination on `offset` (cursorNextPath /offset, cursorParam `offset`). responsePath /records.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
+    },
+    'src.artifact': {
+        'kind': 'source',
+        'summary': 'One row per FILE described the way a pipeline can reason about it: uri, name, media_type, size_bytes, sha256 and modified_at. For PDFs, images, archives, OCR output and model binaries - an artifact is a reference, not the bytes, so it joins, filters and iterates like any other table. Hashing is o...',
+        'params': ['path', 'glob', 'recursive', 'hash'],
     },
     'src.asana': {
         'kind': 'source',
         'summary': 'Asana REST. Bearer Personal Access Token (https://app.asana.com/0/my-apps). Cursor pagination on `next_page.offset` (cursorNextPath /next_page/offset, cursorParam `offset`). responsePath /data. Base URL https://app.asana.com/api/1.0.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.avro': {
         'kind': 'source',
         'summary': "Apache Avro container files (.avro / .ocf) via the pure-Rust `apache-avro` crate. The file carries its own schema; engine doesn't need any schema config. Pairs with Kafka topics that publish Avro-encoded payloads.",
-        'params': ['path', 'encoding'],
-        'unverified': ['glob'],
+        'params': ['path', 'encoding', 'glob'],
     },
     'src.azureblob': {
         'kind': 'source',
         'summary': 'Read via the azure extension',
-        'params': ['bucket', 'key', 'region', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format'],
-        'unverified': ['glob'],
+        'params': ['bucket', 'key', 'region', 'glob', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
     },
     'src.b2': {
         'kind': 'source',
         'summary': 'Read via S3-compatible endpoint',
-        'params': ['bucket', 'key', 'region', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format'],
-        'unverified': ['glob'],
+        'params': ['bucket', 'key', 'region', 'glob', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
     },
     'src.bigquery': {
         'kind': 'source',
@@ -676,6 +715,11 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'Read CQL via the scylla driver (works with both Cassandra and ScyllaDB).',
         'params': ['contactPoints', 'user', 'password', 'keyspace', 'tableName', 'query'],
+    },
+    'src.changed': {
+        'kind': 'source',
+        'summary': 'Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForE...',
+        'params': ['uri', 'listing', 'suffix', 'maxEntries', 'trackState', 'user', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint', 'headers', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl'],
     },
     'src.chroma': {
         'kind': 'source',
@@ -691,7 +735,7 @@ COMPONENTS = {
     'src.clickup': {
         'kind': 'source',
         'summary': 'ClickUp REST. Bearer Personal API token (pk_... from Settings > Apps). Page pagination on `?page=N` (paginationType `page`, pageParam `page`). responsePath /tasks (or whatever resource). Base URL https://api.clickup.com/api/v2.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.clipboard': {
         'kind': 'source',
@@ -702,23 +746,27 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'Read from CockroachDB via the DuckDB postgres extension',
         'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'connectTimeout', 'options', 'connParams', 'mode', 'schemaName', 'tableName', 'sql', 'pushdown', 'readOnly', 'connString'],
-        'unverified': ['incrementalColumn', 'fetchSize'],
+        'unverified': ['fetchSize'],
     },
     'src.couchdb': {
         'kind': 'source',
         'summary': 'Read CouchDB documents via the _all_docs endpoint (include_docs=true). Rides src.rest - Basic auth, responsePath /rows, cursor pagination via `next_key` if configured.',
-        'params': ['connectionString', 'database', 'collection', 'filter', 'projection', 'limit'],
-        'unverified': ['queryMode'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.csv': {
         'kind': 'source',
         'summary': 'Read delimited text files',
-        'params': ['path', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue'],
+        'params': ['path', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions'],
     },
     'src.databricks': {
         'kind': 'source',
         'summary': 'Read Databricks via the SQL Statement Execution API with PAT Bearer auth. Engine materializes inline result sets as a DuckDB table for downstream stages.',
         'params': ['workspace', 'pat', 'warehouseId', 'catalog', 'schema', 'tableName', 'query', 'waitTimeoutSeconds'],
+    },
+    'src.db2': {
+        'kind': 'source',
+        'summary': 'Read IBM DB2 through the IBM Data Server ODBC driver (DB2 ships no DuckDB extension and no native Rust driver). Install the IBM driver, then connect with friendly host / port / database / user / password fields, a DSN, or a full ODBC connection string. Whole-table read or custom SQL; types preser...',
+        'params': ['host', 'port', 'database', 'user', 'password', 'useSsl', 'driver', 'dsn', 'connectionString', 'schema', 'tableName', 'query', 'batchSize'],
     },
     'src.delta': {
         'kind': 'source',
@@ -728,12 +776,12 @@ COMPONENTS = {
     'src.dhis2': {
         'kind': 'source',
         'summary': 'DHIS2 Web API source - thin alias over src.rest. Auth: pick API key, set authHeader to Authorization, and put "ApiToken d2pat_..." (2.37+) or "Basic <user:password>" in the token field; plain Basic works too. Set responsePath per endpoint, since DHIS2 uses a different envelope for each: /api/data...',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.discord': {
         'kind': 'source',
         'summary': 'Discord REST. Bot token in Authorization header (prefix `Bot `). No native pagination on most endpoints; use `?limit=N&before=ID` patterns. responsePath empty (responses are top-level arrays). Base URL https://discord.com/api/v10.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.duckdb': {
         'kind': 'source',
@@ -743,23 +791,27 @@ COMPONENTS = {
     'src.ducklake': {
         'kind': 'source',
         'summary': 'Read tables from a DuckLake catalog (DuckDB native lakehouse)',
-        'params': ['path', 'dataPath', 'mode', 'schemaName', 'tableName', 'sql', 'asOfVersion', 'asOfTimestamp'],
+        'params': ['path', 'dataPath', 'metadataSchema', 'attachOptions', 'mode', 'schemaName', 'tableName', 'sql', 'asOfVersion', 'asOfTimestamp'],
     },
     'src.ducklake.changes': {
         'kind': 'source',
         'summary': 'Change-data-feed source: reads table_changes() since the last consumed snapshot (saved in workspace state), emitting row-level insert / delete / update_preimage / update_postimage with a change_type column. True incremental CDC for DuckLake-managed tables.',
-        'params': ['path', 'dataPath', 'schema', 'table', 'insertsOnly', 'initialSnapshot'],
+        'params': ['path', 'dataPath', 'metadataSchema', 'attachOptions', 'schema', 'table', 'insertsOnly', 'initialSnapshot'],
     },
     'src.ducklake.diff': {
         'kind': 'source',
         'summary': 'Data diff between two snapshots of a DuckLake table: emits the row-level change feed (insert / delete / update_preimage / update_postimage with a change_type column) between a chosen From and To snapshot. Pick snapshots with Browse; wire into a validator to assert expected changes in CI.',
-        'params': ['path', 'dataPath', 'schema', 'table', 'fromVersion', 'toVersion'],
+        'params': ['path', 'dataPath', 'metadataSchema', 'attachOptions', 'schema', 'table', 'fromVersion', 'toVersion'],
+    },
+    'src.ducklake.maintain': {
+        'kind': 'source',
+        'summary': 'Run one of the maintenance operations DuckLake itself provides and emit what it did as ordinary rows. Compact small files, rewrite files heavy with deletes, expire snapshots, clean up files an expired snapshot released, delete orphaned files, flush inlined data, or read per-table storage statisti...',
+        'params': ['path', 'dataPath', 'metadataSchema', 'attachOptions', 'operation', 'dryRun', 'schemaName', 'tableName', 'olderThan', 'versions', 'cleanupAll', 'minFileSize', 'maxFileSize', 'maxCompactedFiles', 'deleteThreshold'],
     },
     'src.dynamodb': {
         'kind': 'source',
         'summary': 'Scan a DynamoDB table via direct HTTP + AWS SigV4 signing (no aws-sdk-rust dep). Auto-unwraps the typed-attribute response shape ({S: x}, {N: 5}, {BOOL: t}, {L: [...]}, {M: {...}}) into plain JSON. Pagination follows LastEvaluatedKey. Props: region, accessKeyId, secretAccessKey, sessionToken (opt...',
-        'params': ['connectionString', 'database', 'collection', 'filter', 'projection', 'limit'],
-        'unverified': ['queryMode'],
+        'params': ['region', 'tableName', 'accessKeyId', 'secretAccessKey', 'sessionToken', 'limitPerPage', 'maxPages'],
     },
     'src.elastic': {
         'kind': 'source',
@@ -769,19 +821,22 @@ COMPONENTS = {
     'src.email': {
         'kind': 'source',
         'summary': 'Fetch the N most recent messages from an IMAP mailbox. TLS via rustls (default port 993). Basic auth (user/password). Each message becomes a row {uid, from, to, subject, date, body_text}. OAuth (gmail / o365) is on the roadmap.',
-        'params': ['host', 'port', 'username', 'password', 'folder', 'filter'],
+        'params': ['host', 'port', 'user', 'password', 'mailbox', 'maxMessages'],
     },
     'src.excel': {
         'kind': 'source',
         'summary': 'Read .xlsx via the DuckDB excel extension',
-        'params': ['path', 'encoding', 'sheet'],
-        'unverified': ['glob', 'range'],
+        'params': ['path', 'encoding', 'glob', 'sheet', 'range'],
+    },
+    'src.filelist': {
+        'kind': 'source',
+        'summary': 'One row per file in a directory - file (full path) and filename - so a pipeline can iterate a folder. Set a glob pattern and optionally recurse. Pair it with ForEach to process every file.',
+        'params': [],
     },
     'src.fixedwidth': {
         'kind': 'source',
         'summary': 'Read positional / fixed-width text files (mainframe / banking exports). Form provides a columns array - {name, start (1-based), width}; engine builds SUBSTR projections. Trailing whitespace stripped by default.',
-        'params': ['path', 'encoding'],
-        'unverified': ['glob', 'columnWidths'],
+        'params': ['path', 'encoding', 'glob', 'columnWidths', 'trim'],
     },
     'src.ftp': {
         'kind': 'source',
@@ -791,8 +846,7 @@ COMPONENTS = {
     'src.gcs': {
         'kind': 'source',
         'summary': 'Read via DuckDB httpfs',
-        'params': ['bucket', 'key', 'region', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format'],
-        'unverified': ['glob'],
+        'params': ['bucket', 'key', 'region', 'glob', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
     },
     'src.gdb': {
         'kind': 'source',
@@ -802,17 +856,17 @@ COMPONENTS = {
     'src.git': {
         'kind': 'source',
         'summary': 'Read commit log or file tree from a local git working copy. Shells out to the system `git` CLI - no extra Rust dep. mode=log emits {hash, short_hash, author_name, author_email, date, subject}; mode=files emits {mode, type, hash, size, path}.',
-        'params': ['url', 'branch', 'path', 'authToken'],
+        'params': ['repo', 'mode', 'revision', 'pathFilter', 'maxRows'],
     },
     'src.github': {
         'kind': 'source',
         'summary': 'GitHub REST. Bearer Personal Access Token. Link header pagination (paginationType `link`). Accept: application/vnd.github+json header recommended; defaults to https://api.github.com.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.gitlab': {
         'kind': 'source',
         'summary': 'GitLab REST. Bearer Personal Access Token. Link header pagination (paginationType `link`). Base URL https://gitlab.com/api/v4 (or self-hosted).',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.gizmosql': {
         'kind': 'source',
@@ -822,17 +876,22 @@ COMPONENTS = {
     'src.graphql': {
         'kind': 'source',
         'summary': 'POST a GraphQL query to an endpoint and walk the response data path. Rides snk.rest/src.rest infrastructure; auth via Bearer / API-Key.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'query', 'variables', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
+    },
+    'src.html': {
+        'kind': 'source',
+        'summary': 'Rows out of an HTML page, by CSS selector. Point it at a local file or an http(s) URL, give a row selector, and either name a column per sub-selector (with an optional attribute, so a link href or a data- value is readable) or leave the columns empty and let a table become a table: the th cells n...',
+        'params': ['path', 'rowSelector', 'columns', 'transportRef', 'authType', 'authToken', 'headers', 'uriColumn', 'carryColumns', 'shaColumn', 'onError', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl', 'user', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint', 'nextPageSelector', 'nextPageAttribute', 'maxPages', 'rawResponseDestination', 'cacheOutput', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.http': {
         'kind': 'source',
         'summary': 'Read CSV / Parquet / JSON from any HTTP(S) URL via httpfs',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
     },
     'src.hubspot': {
         'kind': 'source',
         'summary': 'HubSpot REST. Bearer auth via a Private App access token. Cursor pagination on `paging.next.after` (cursorNextPath /paging/next/after, cursorParam `after`). responsePath /results.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.huggingface': {
         'kind': 'source',
@@ -844,39 +903,40 @@ COMPONENTS = {
         'summary': 'Read Iceberg tables via DuckDB iceberg_scan',
         'params': ['path'],
     },
+    'src.inline': {
+        'kind': 'source',
+        'summary': 'Rows you write here rather than read from anywhere: a control row, an audit stamp, a fixed lookup. Give each column a name and a value; rowCount repeats the row. Every other source names an external system, so this was previously a throwaway file.',
+        'params': [],
+    },
     'src.intercom': {
         'kind': 'source',
         'summary': 'Intercom REST. Bearer auth. Cursor pagination via `pages.next.starting_after` + `starting_after` param. responsePath /data.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.jira': {
         'kind': 'source',
         'summary': 'Jira Cloud REST. Basic auth (email + API token). Offset pagination on `startAt` + `maxResults`. responsePath /issues for /search.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.json': {
         'kind': 'source',
         'summary': 'Read JSON files',
-        'params': ['path', 'format', 'recordsPath', 'ignoreErrors'],
-        'unverified': ['flatten'],
+        'params': ['path', 'format', 'flatten', 'keepParentNames', 'recordsPath', 'ignoreErrors'],
     },
     'src.jsonl': {
         'kind': 'source',
         'summary': 'Read newline-delimited JSON',
-        'params': ['path', 'encoding', 'format', 'recordsPath'],
-        'unverified': ['glob', 'flatten'],
+        'params': ['path', 'encoding', 'glob', 'format', 'flatten', 'keepParentNames', 'sampleSize', 'recordsPath'],
     },
     'src.kafka': {
         'kind': 'source',
         'summary': 'Batch-consume up to maxRecords messages from a single partition via the pure-Rust `rskafka` driver. Emits {offset, key, value, timestamp_ms} rows. startOffset negative = read from earliest available; positive = read from that offset. Batch ETL semantics - continuous streaming is on the roadmap.',
-        'params': ['brokers', 'topic', 'offset', 'format'],
-        'unverified': ['groupId', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'schemaRegistryUrl'],
+        'params': ['brokers', 'topic', 'offset', 'trackOffset', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'format', 'schemaRegistryUrl'],
     },
     'src.kinesis': {
         'kind': 'source',
         'summary': 'Single-shard Kinesis read via direct HTTP + AWS SigV4 (no AWS SDK). Walks ListShards -> GetShardIterator -> GetRecords. Props: region, accessKeyId, secretAccessKey, sessionToken (optional STS), streamName, shardIndex (default 0), iteratorType (TRIM_HORIZON or LATEST), maxRecords. Records with JSO...',
-        'params': ['brokers', 'topic', 'offset', 'format'],
-        'unverified': ['groupId', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'schemaRegistryUrl'],
+        'params': ['region', 'streamName', 'accessKeyId', 'secretAccessKey', 'sessionToken', 'shardIndex', 'iteratorType', 'maxRecords'],
     },
     'src.lancedb': {
         'kind': 'source',
@@ -886,18 +946,18 @@ COMPONENTS = {
     'src.linear': {
         'kind': 'source',
         'summary': 'Linear GraphQL. Rides src.graphql; auth via API key in Authorization header. responsePath walks /data.<query>.<edges> or similar.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'query', 'variables', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.mailchimp': {
         'kind': 'source',
         'summary': 'Mailchimp REST. Bearer API key (the key has a region suffix - the URL is https://{region}.api.mailchimp.com/3.0). Offset pagination via `offset` + `count`. responsePath /lists (or /campaigns / etc).',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.mariadb': {
         'kind': 'source',
         'summary': 'Read from MariaDB via the DuckDB mysql extension',
         'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'mode', 'schemaName', 'tableName', 'sql', 'pushdown', 'readOnly', 'connString'],
-        'unverified': ['incrementalColumn', 'fetchSize'],
+        'unverified': ['fetchSize'],
     },
     'src.milvus': {
         'kind': 'source',
@@ -908,13 +968,17 @@ COMPONENTS = {
     'src.minio': {
         'kind': 'source',
         'summary': 'Read via S3-compatible endpoint',
-        'params': ['bucket', 'key', 'region', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format'],
-        'unverified': ['glob'],
+        'params': ['bucket', 'key', 'region', 'glob', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
+    },
+    'src.model': {
+        'kind': 'source',
+        'summary': 'Read a registered model card back as one row: name, version, the artifact URI the training script wrote, and whatever metrics and hashes it recorded. Address it as name@version, or name@latest to follow the pointer that moves on every successful retrain, so a scoring pipeline stays unedited. The ...',
+        'params': ['model', 'path'],
     },
     'src.monday': {
         'kind': 'source',
         'summary': 'Monday.com GraphQL. Rides src.graphql; auth via Bearer token in Authorization header. POST a GraphQL query as `body`; responsePath /data.<query_name>. Base URL https://api.monday.com/v2.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'query', 'variables', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.mongodb': {
         'kind': 'source',
@@ -930,23 +994,27 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'Read from MySQL via the DuckDB mysql extension',
         'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'mode', 'schemaName', 'tableName', 'sql', 'pushdown', 'readOnly', 'connString'],
-        'unverified': ['incrementalColumn', 'fetchSize'],
+        'unverified': ['fetchSize'],
     },
     'src.nats': {
         'kind': 'source',
         'summary': 'Subscribe-with-timeout collector via the pure-Rust `async-nats` driver. Drains up to maxRecords messages from subject within timeoutMs wall-clock. Emits {subject, payload} rows. Batch ETL semantics - continuous streaming is on the roadmap.',
-        'params': ['brokers', 'topic', 'offset', 'format'],
-        'unverified': ['groupId', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'schemaRegistryUrl'],
+        'params': ['urls', 'subject', 'maxRecords', 'timeoutMs'],
+    },
+    'src.neo4j': {
+        'kind': 'source',
+        'summary': 'Run Cypher against Neo4j over the HTTP Query API (/db/{database}/query/v2) - works with a self-hosted server and with Aura, and needs no Bolt driver. Basic auth; optional Cypher $parameters. Node and relationship values keep their properties as structs.',
+        'params': ['endpoint', 'database', 'user', 'password', 'cypher', 'parameters'],
     },
     'src.notion': {
         'kind': 'source',
         'summary': 'Notion REST. Bearer integration token + Notion-Version header. Cursor pagination on `next_cursor` (cursorNextPath /next_cursor, cursorParam `start_cursor`). responsePath /results.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.odata': {
         'kind': 'source',
         'summary': 'OData v4 source - thin alias over src.rest. Defaults: responsePath /value, pagination follows @odata.nextLink as a complete URL. Set authType (basic / bearer / apikey) on the form. Works with SAP, D365, Microsoft Graph, any OData v4 endpoint.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.opensearch': {
         'kind': 'source',
@@ -956,7 +1024,7 @@ COMPONENTS = {
     'src.oracle': {
         'kind': 'source',
         'summary': "Read Oracle via the official `oracle` Rust crate (ODPI-C). Built into the shipped binary - users need Oracle Instant Client (libclntsh.{so,dll,dylib}) on the library path at RUNTIME; the executor surfaces a clear OCI loader error if it's missing. SQL auth via user / password; EZ Connect string fo...",
-        'params': ['connect', 'user', 'password', 'schema', 'tableName', 'query'],
+        'params': ['connect', 'user', 'password', 'schema', 'tableName', 'query', 'parallelColumn', 'parallelDegree'],
         'unverified': ['oracleRuntimeNote'],
     },
     'src.parquet': {
@@ -964,6 +1032,11 @@ COMPONENTS = {
         'summary': 'Read columnar Parquet files',
         'params': ['path', 'columns'],
         'unverified': ['rowGroupRange'],
+    },
+    'src.pdf': {
+        'kind': 'source',
+        'summary': 'One row per PAGE of a PDF: document_id, page_number, text, has_text_layer, width, height and the document metadata. Point it at a file or a folder. Reads the text layer a document already carries, so filings, accounts and invoices become a table you can filter, join and hand to a Python or AI sta...',
+        'params': ['path', 'recursive', 'uriColumn', 'carryColumns', 'shaColumn', 'onError', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl', 'headers', 'user', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint', 'cacheOutput'],
     },
     'src.pgvector': {
         'kind': 'source',
@@ -979,25 +1052,28 @@ COMPONENTS = {
     'src.pipedrive': {
         'kind': 'source',
         'summary': 'Pipedrive REST. URL ?api_token=... or Bearer auth. Cursor pagination on `additional_data.pagination.next_start` (start parameter). responsePath /data.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
+    },
+    'src.pixeltable': {
+        'kind': 'source',
+        'summary': 'Read a Pixeltable table (#223), the multimodal AI data store. Exchanges through Parquet: Pixeltable exports the table (or a filtered/limited subset) and Duckle ingests it with read_parquet, so no rows cross one at a time. Supports versioned reads via table:N. Needs a Python with pixeltable instal...',
+        'params': ['table', 'columns', 'filter', 'limit'],
     },
     'src.postgres': {
         'kind': 'source',
         'summary': 'Read from PostgreSQL via the DuckDB postgres extension',
         'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'connectTimeout', 'options', 'connParams', 'mode', 'schemaName', 'tableName', 'sql', 'pushdown', 'readOnly', 'connString'],
-        'unverified': ['incrementalColumn', 'fetchSize'],
+        'unverified': ['fetchSize'],
     },
     'src.pubsub': {
         'kind': 'source',
         'summary': 'Pull messages via the Pub/Sub REST API (POST /v1/projects/{p}/subscriptions/{s}:pull) - sidesteps the gRPC build dependency. Auto-acks the batch. Auth via a pre-fetched OAuth2 Bearer access token (mint with `gcloud auth print-access-token`). Emits {message_id, publish_time, data} rows.',
-        'params': ['brokers', 'topic', 'offset', 'format'],
-        'unverified': ['groupId', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'schemaRegistryUrl'],
+        'params': ['project', 'subscription', 'accessToken', 'maxMessages'],
     },
     'src.qdrant': {
         'kind': 'source',
         'summary': 'Scroll all points in a Qdrant collection via /collections/{id}/points/scroll. Cursor pagination on `result.next_page_offset`; emits {id, ...payload[, vector]} rows. apiKey via api-key header.',
-        'params': ['endpoint', 'apiKey', 'collection', 'connectionRef', 'topK', 'filter'],
-        'unverified': ['queryMode', 'queryText'],
+        'params': ['connectionRef', 'clusterUrl', 'collection', 'apiKey', 'pageSize', 'maxPages', 'withVector'],
     },
     'src.quack': {
         'kind': 'source',
@@ -1007,25 +1083,22 @@ COMPONENTS = {
     'src.quickbooks': {
         'kind': 'source',
         'summary': "QuickBooks Online REST. Bearer OAuth token; users assemble the query URL (Intuit's API requires SQL-like queries). responsePath /QueryResponse.",
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.qvd': {
         'kind': 'source',
         'summary': 'Qlik QVD files (.qvd) via a clean-room pure-Rust reader (no Qlik runtime). The QVD header carries its own schema; the symbol table + bit-stuffed index are decoded directly. Move QlikView / Qlik Sense extracts into DuckDB, Parquet or any sink.',
-        'params': ['path', 'encoding'],
-        'unverified': ['glob'],
+        'params': ['path', 'encoding', 'glob'],
     },
     'src.r2': {
         'kind': 'source',
         'summary': 'Read via S3-compatible endpoint',
-        'params': ['bucket', 'key', 'region', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format'],
-        'unverified': ['glob'],
+        'params': ['bucket', 'key', 'region', 'glob', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
     },
     'src.rabbit': {
         'kind': 'source',
         'summary': 'Pull messages from a queue via the pure-Rust `lapin` AMQP 0.9.1 driver. Polls until maxMessages or timeoutMs wall-clock elapses; auto-acks each pulled message. Emits {payload, routing_key, exchange, delivery_tag} rows.',
-        'params': ['brokers', 'topic', 'offset', 'format'],
-        'unverified': ['groupId', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'schemaRegistryUrl'],
+        'params': ['url', 'queue', 'maxMessages', 'timeoutMs'],
     },
     'src.redis': {
         'kind': 'source',
@@ -1036,8 +1109,7 @@ COMPONENTS = {
     'src.redpanda': {
         'kind': 'source',
         'summary': 'Same wire protocol as Kafka - rides the rskafka driver. Use src.kafka semantics: batch-consume up to maxRecords from a single partition.',
-        'params': ['brokers', 'topic', 'offset', 'format'],
-        'unverified': ['groupId', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'schemaRegistryUrl'],
+        'params': ['brokers', 'topic', 'offset', 'trackOffset', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'format', 'schemaRegistryUrl'],
     },
     'src.redshift': {
         'kind': 'source',
@@ -1047,17 +1119,17 @@ COMPONENTS = {
     'src.rest': {
         'kind': 'source',
         'summary': 'Generic HTTP GET/POST source. Parses JSON response, optionally walks a JSON pointer (responsePath) to find the row array, and follows cursor-style pagination if configured (cursorNextPath + cursorParam).',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.s3': {
         'kind': 'source',
         'summary': 'Read via DuckDB httpfs',
-        'params': ['path', 'connectionRef', 'format'],
+        'params': ['path', 'connectionRef', 'format', 'accessKey', 'secretKey', 'region', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
     },
     'src.salesforce': {
         'kind': 'source',
         'summary': 'Salesforce REST. Rides the generic src.rest path with a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app); users typically point url at https://{instance}.my.salesforce.com/services/data/v60.0/query/?q=SELECT+... and walk responsePath /records.',
-        'params': ['url', 'method', 'headers', 'body', 'connectionRef', 'authType', 'authToken', 'authHeader', 'loginUrl', 'clientId', 'clientSecret', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'loginUrl', 'clientId', 'clientSecret', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.salesforce.bulk': {
         'kind': 'source',
@@ -1067,12 +1139,12 @@ COMPONENTS = {
     'src.sap': {
         'kind': 'source',
         'summary': 'SAP S/4HANA & ECC source over OData - covers OData services and CDS views published as OData (@OData.publish). Native HTTP, no SAP GUI or SDK. Set odataVersion (v2 classic Gateway = /d/results with __next paging; v4 RAP = /value with @odata.nextLink), sapClient (mandate, appended as sap-client=NN...',
-        'params': ['odataVersion', 'sapClient', 'url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['odataVersion', 'sapClient', 'url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.sap.rfc': {
         'kind': 'source',
         'summary': 'Call an RFC-enabled function module / BAPI exposed as a SOAP web service (SOAMANAGER, or the generic /sap/bc/soap/rfc endpoint). Native HTTP + XML, no proprietary SAP NW RFC SDK. Set url to the service endpoint, body to the SOAP envelope, responsePath to the element-name walk to the result table,...',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination'],
     },
     'src.scylla': {
         'kind': 'source',
@@ -1082,22 +1154,22 @@ COMPONENTS = {
     'src.segment': {
         'kind': 'source',
         'summary': 'Segment Public API. Bearer access token. Cursor pagination via `pagination.next` + `pagination[cursor]` param. responsePath /data.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.sendgrid': {
         'kind': 'source',
         'summary': 'SendGrid REST. Bearer API key. Offset pagination via `offset` + `limit`. responsePath /result for /v3/marketing/* endpoints.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.shopify': {
         'kind': 'source',
         'summary': 'Shopify Admin API. Bearer auth via X-Shopify-Access-Token. Link header pagination supported by recent Admin API endpoints. responsePath depends on resource (e.g. /products).',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.slack': {
         'kind': 'source',
         'summary': 'Slack Web API. Bearer Bot User OAuth Token (xoxb-...). Cursor pagination via `response_metadata.next_cursor` + `cursor` param. responsePath depends on endpoint (e.g. /messages for conversations.history). Base URL https://slack.com/api.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.snowflake': {
         'kind': 'source',
@@ -1107,13 +1179,17 @@ COMPONENTS = {
     'src.soap': {
         'kind': 'source',
         'summary': 'SOAP / generic XML-API source. Thin alias over src.rest with defaults: POST, Content-Type text/xml; charset=utf-8, responseFormat=xml. Set responsePath to the element-name walk into the body (e.g. Envelope/Body/GetUsersResponse/Users/User), supply the XML envelope in `body`, optionally add a `soa...',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.spatial': {
         'kind': 'source',
-        'summary': 'Read geospatial files via the DuckDB spatial extension (ST_Read)',
-        'params': ['path', 'encoding'],
-        'unverified': ['glob'],
+        'summary': 'Read geospatial files: GeoParquet natively, and GeoJSON / Shapefile / GeoPackage / KML / GPX / GML via the DuckDB spatial extension (ST_Read)',
+        'params': ['path', 'encoding', 'glob'],
+    },
+    'src.spool': {
+        'kind': 'source',
+        'summary': 'Tail an append-only NDJSON file from where the last SUCCESSFUL run stopped, by byte offset. Pairs with `duckle-runner listen`, which keeps a webhook listener up and appends here - so nothing is lost between pipeline runs, unlike src.webhook which only collects while a run is executing. A failed r...',
+        'params': ['path', 'trackOffset', 'maxBytes'],
     },
     'src.sqlite': {
         'kind': 'source',
@@ -1123,23 +1199,22 @@ COMPONENTS = {
     'src.sqlserver': {
         'kind': 'source',
         'summary': 'Read SQL Server via the native TDS protocol (tiberius, pure Rust). SQL auth (user/password); trust_cert option for self-signed dev servers.',
-        'params': ['host', 'port', 'user', 'password', 'database', 'trustCert', 'encrypt', 'schema', 'tableName', 'query'],
+        'params': ['connectionRef', 'host', 'port', 'user', 'password', 'database', 'trustCert', 'encrypt', 'schema', 'tableName', 'query'],
     },
     'src.stripe': {
         'kind': 'source',
         'summary': 'Stripe REST. Bearer auth with the Secret Key (sk_live_... / sk_test_...). Cursor pagination on `data[-1].id` via `starting_after`. responsePath /data.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.synapse': {
         'kind': 'source',
         'summary': 'Azure Synapse rides the SQL Server TDS wire - same connection form as src.sqlserver.',
-        'params': ['account', 'warehouse', 'role', 'database', 'schema', 'connectionRef', 'username', 'password', 'mode', 'schemaName', 'tableName', 'sql'],
-        'unverified': ['incrementalColumn', 'fetchSize'],
+        'params': ['connectionRef', 'host', 'port', 'user', 'password', 'database', 'trustCert', 'encrypt', 'schema', 'tableName', 'query'],
     },
     'src.telegram': {
         'kind': 'source',
         'summary': 'Telegram Bot API. Token in URL path (https://api.telegram.org/bot{token}/getUpdates). Offset pagination via `?offset=N`. responsePath /result. No auth header needed - token is in the URL.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.teradata': {
         'kind': 'source',
@@ -1149,24 +1224,27 @@ COMPONENTS = {
     'src.toml': {
         'kind': 'source',
         'summary': 'Read a TOML file as a table. Top-level TOML doc becomes one row (TOML disallows a top-level array). Suits Cargo / pyproject / Hugo config audits.',
-        'params': ['path', 'encoding'],
-        'unverified': ['glob'],
+        'params': ['path', 'encoding', 'glob'],
     },
     'src.trello': {
         'kind': 'source',
         'summary': 'Trello REST. Anonymous-style auth: append `?key={apiKey}&token={token}` to the URL. No body, no pagination (the API returns full result sets by default). Set responsePath empty since responses are top-level arrays. Base URL https://api.trello.com/1.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.tsv': {
         'kind': 'source',
         'summary': 'Read tab-separated files',
-        'params': ['path', 'encoding', 'hasHeader', 'delimiter', 'quoteChar', 'skipLines', 'dateFormat', 'timestampFormat', 'filename', 'ignoreErrors', 'nullPadding', 'readOptions', 'partitionBy'],
-        'unverified': ['glob'],
+        'params': ['path', 'encoding', 'glob', 'hasHeader', 'delimiter', 'quoteChar', 'skipLines', 'dateFormat', 'timestampFormat', 'filename', 'ignoreErrors', 'nullPadding', 'readOptions', 'partitionBy'],
+    },
+    'src.turso': {
+        'kind': 'source',
+        'summary': 'Read a Turso (libSQL) database over the HTTP pipeline API - no driver install. Paste the libsql:// URL the dashboard gives you (it is normalized to https) plus a database auth token. Whole-table read or custom SQL.',
+        'params': ['url', 'authToken', 'tableName', 'query'],
     },
     'src.twilio': {
         'kind': 'source',
         'summary': 'Twilio REST. Basic auth (Account SID + Auth Token). Page-cursor pagination via `next_page_uri`. responsePath depends on resource (e.g. /messages, /calls). Base URL https://api.twilio.com/2010-04-01/Accounts/{AccountSid}.',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.vortex': {
         'kind': 'source',
@@ -1176,8 +1254,7 @@ COMPONENTS = {
     'src.weaviate': {
         'kind': 'source',
         'summary': "List Weaviate objects via GET /v1/objects?class=&after=. Cursor pagination on the last object's id; emits {id, ...properties[, vector]} rows. apiKey via Bearer.",
-        'params': ['endpoint', 'apiKey', 'collection', 'connectionRef', 'topK', 'filter'],
-        'unverified': ['queryMode', 'queryText'],
+        'params': ['connectionRef', 'endpoint', 'class', 'apiKey', 'pageSize', 'maxPages', 'withVector'],
     },
     'src.webhook': {
         'kind': 'source',
@@ -1192,24 +1269,22 @@ COMPONENTS = {
     'src.xero': {
         'kind': 'source',
         'summary': 'Xero REST. Either paste a Bearer OAuth token, or pick OAuth 2.0 Client Credentials and give the token URL (https://identity.xero.com/connect/token) with HTTP Basic client auth so a fresh token is minted per run - that suits a Xero Custom Connection. Pass Xero-Tenant-Id as a custom header. respons...',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'src.xml': {
         'kind': 'source',
         'summary': 'Read XML files via the pure-Rust `quick-xml` parser. rowPath is a slash-separated element walk (e.g. `library/books/book`); every matching element becomes one row. Attributes prefix with `@`, text content goes to `_text`, nested children nest; repeated same-name siblings collapse to arrays.',
-        'params': ['path', 'encoding', 'rowPath', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint'],
-        'unverified': ['glob', 'namespace'],
+        'params': ['path', 'encoding', 'glob', 'rowPath', 'namespace', 'xsdPath', 'xsdChangePolicy', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint', 'uriColumn', 'carryColumns', 'shaColumn', 'onError', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl', 'headers', 'user', 'cacheOutput'],
     },
     'src.yaml': {
         'kind': 'source',
         'summary': 'Read a YAML file as a table. Top-level YAML arrays become one row per element; non-array docs become a single row. Suits config-data ETL (Helm values, GitHub Actions matrices) not bulk logs.',
-        'params': ['path', 'encoding'],
-        'unverified': ['glob'],
+        'params': ['path', 'encoding', 'glob'],
     },
     'src.zendesk': {
         'kind': 'source',
         'summary': 'Zendesk Support REST. Basic auth (email/token + API token). Cursor pagination via `meta.after_cursor` + `page[after]` param. responsePath /tickets (or whatever resource).',
-        'params': ['url', 'method', 'headers', 'body', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages'],
+        'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'paginationType', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'urlTemplate', 'parentKeyColumn', 'maxRequests', 'incrementalField', 'incrementalInitial', 'concurrency', 'checkpoint', 'onParentError', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
     'xf.addcol': {
         'kind': 'transform',
@@ -1230,32 +1305,31 @@ COMPONENTS = {
     'xf.ai.classify': {
         'kind': 'transform',
         'summary': 'Per-row LLM-backed classification. Props: inputColumn (default `text`), outputColumn (default `category`), categories (required, comma-separated list), model (default `gpt-4o-mini`), apiKey, baseUrl. The model is prompted to pick exactly one category; anything outside the list normalizes to `UNKN...',
-        'params': ['inputColumn', 'categories', 'model', 'apiKey', 'outputColumn', 'baseUrl', 'endpointPath', 'headers'],
+        'params': ['inputColumn', 'categories', 'model', 'apiKey', 'outputColumn', 'baseUrl', 'endpointPath', 'headers', 'concurrency', 'checkpoint', 'checkpointKey', 'checkpointFingerprint', 'maxRetries', 'maxRequests', 'maxInputTokens', 'maxOutputTokens', 'maxEstimatedCostUsd', 'inputUsdPerMillionTokens', 'outputUsdPerMillionTokens'],
         'unverified': ['provider'],
     },
     'xf.ai.dedupe': {
         'kind': 'transform',
         'summary': 'Drop near-duplicate rows by cosine similarity over a pre-computed embedding column (typically from xf.ai.embed upstream). Props: embeddingColumn (default `embedding`), threshold (default 0.95). No API call; pure local math. O(N^2) - chain after xf.rows.head if your dataset is huge.',
-        'params': ['embeddingColumn', 'textColumn', 'threshold', 'keep'],
-        'unverified': ['metric'],
+        'params': ['embeddingColumn', 'textColumn', 'threshold', 'metric', 'keep'],
     },
     'xf.ai.embed': {
         'kind': 'transform',
         'summary': 'Per-row embedding via any OpenAI-compatible /v1/embeddings endpoint. Props: inputColumn (default `text`), outputColumn (default `embedding`), model (default `text-embedding-3-small`), apiKey (required, sent as Bearer), baseUrl (default `https://api.openai.com` - point at Cohere, Voyage, llama.cpp...',
-        'params': ['inputColumn', 'model', 'apiKey', 'outputColumn', 'dimension', 'batchSize', 'baseUrl', 'endpointPath', 'headers'],
+        'params': ['inputColumn', 'model', 'apiKey', 'outputColumn', 'dimension', 'batchSize', 'concurrency', 'checkpoint', 'checkpointKey', 'checkpointFingerprint', 'maxRetries', 'maxRequests', 'maxInputTokens', 'maxOutputTokens', 'maxEstimatedCostUsd', 'inputUsdPerMillionTokens', 'outputUsdPerMillionTokens', 'baseUrl', 'endpointPath', 'headers'],
         'unverified': ['provider'],
     },
     'xf.ai.llm': {
         'kind': 'transform',
         'summary': 'Per-row LLM completion via any OpenAI-compatible /v1/chat/completions endpoint. Props: promptTemplate with `{column}` substitution (or inputColumn for passthrough), outputColumn (default `completion`), model (default `gpt-4o-mini`), apiKey (required), baseUrl, systemPrompt, temperature. One HTTP ...',
-        'params': ['model', 'apiKey', 'baseUrl', 'endpointPath', 'headers', 'promptTemplate', 'outputColumn', 'temperature'],
-        'unverified': ['provider', 'maxTokens'],
+        'params': ['model', 'apiKey', 'baseUrl', 'endpointPath', 'headers', 'promptTemplate', 'outputColumn', 'temperature', 'maxTokens', 'concurrency', 'checkpoint', 'checkpointKey', 'checkpointFingerprint', 'maxRetries', 'maxRequests', 'maxInputTokens', 'maxOutputTokens', 'maxEstimatedCostUsd', 'inputUsdPerMillionTokens', 'outputUsdPerMillionTokens', 'responseFormat', 'jsonSchema', 'schemaName', 'expandColumns', 'onInvalid'],
+        'unverified': ['provider'],
     },
     'xf.ai.pii': {
         'kind': 'transform',
         'summary': 'Regex-based PII redaction (email, phone, SSN, credit card). No API call. Props: inputColumn (default `text`), outputColumn (defaults to input - overwrites in place), types (comma-list subset; empty = all). LLM-backed redaction is a follow-up.',
-        'params': ['columns'],
-        'unverified': ['entities', 'action'],
+        'params': ['columns', 'action'],
+        'unverified': ['entities'],
     },
     'xf.ai.text_search': {
         'kind': 'transform',
@@ -1277,6 +1351,11 @@ COMPONENTS = {
         'kind': 'transform',
         'summary': 'Approximate quantile (median, p95, p99) via t-digest - fixed memory regardless of cardinality',
         'params': ['column', 'quantile', 'groupBy', 'outputColumn'],
+    },
+    'xf.archive.extract': {
+        'kind': 'transform',
+        'summary': 'Turn one archive artifact into one artifact per member. Reads a uri column of archives - ZIP, TAR, TAR.GZ or GZIP - and lands each member at an s3:// prefix or a local directory, emitting archive_uri / member_name / member_index / uri / media_type / compressed_size / size_bytes / sha256 so each m...',
+        'params': ['uriColumn', 'destination', 'include', 'exclude', 'naming', 'ifExists', 'onError', 'maxMembers', 'maxUncompressedGb', 'partSizeMb', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl', 'headers', 'user', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint'],
     },
     'xf.arr.collect': {
         'kind': 'transform',
@@ -1307,6 +1386,11 @@ COMPONENTS = {
         'kind': 'transform',
         'summary': 'Scalar length of a list / array column',
         'params': ['column', 'outputColumn'],
+    },
+    'xf.artifact.copy': {
+        'kind': 'transform',
+        'summary': 'Land the BYTES of the artifacts named upstream somewhere durable, and emit a row per landed copy. Reads a uri column (whatever src.changed, src.artifact or a query produced) and copies from https://, s3://, sftp:// or a local path to an s3:// prefix or a local directory. Streamed and hashed in ON...',
+        'params': ['uriColumn', 'destination', 'naming', 'ifExists', 'partSizeMb', 'headers', 'user', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl'],
     },
     'xf.assert': {
         'kind': 'transform',
@@ -1346,7 +1430,7 @@ COMPONENTS = {
     'xf.cdc.scd3': {
         'kind': 'transform',
         'summary': 'Keep the PREVIOUS value of each tracked attribute in a sibling previous_<col> column. Main input is the current rows; connect the prior snapshot to the previous (lookup) port. Per tracked column, outputs current + previous_<col> joined on the key (NULL for new keys). Optional effective-date stamp.',
-        'params': ['naturalKey', 'compareColumns', 'rejectUnchanged'],
+        'params': ['naturalKey', 'compareColumns', 'effectiveDateColumn'],
     },
     'xf.cdc.upsert': {
         'kind': 'transform',
@@ -1406,7 +1490,7 @@ COMPONENTS = {
     'xf.distinct': {
         'kind': 'transform',
         'summary': 'Drop duplicate rows',
-        'params': ['columns'],
+        'params': ['columns', 'orderBy'],
     },
     'xf.dropcol': {
         'kind': 'transform',
@@ -1797,7 +1881,7 @@ COMPONENTS = {
     'xf.sample': {
         'kind': 'transform',
         'summary': 'Random row sample',
-        'params': ['count'],
+        'params': ['count', 'orderBy'],
     },
     'xf.semi': {
         'kind': 'transform',
@@ -1813,16 +1897,16 @@ COMPONENTS = {
     'xf.skip': {
         'kind': 'transform',
         'summary': 'Drop the first N rows',
-        'params': ['count'],
+        'params': ['count', 'orderBy'],
     },
     'xf.sort': {
         'kind': 'transform',
         'summary': 'Order rows',
-        'params': ['sortColumn', 'direction', 'nullsLast'],
+        'params': ['orderBy'],
     },
     'xf.split': {
         'kind': 'transform',
-        'summary': '',
+        'summary': 'Split a column into a LIST in one column - use Text to Columns for separate columns',
         'params': ['column', 'pattern', 'replacement', 'outputColumn'],
     },
     'xf.substring': {
@@ -1880,10 +1964,15 @@ COMPONENTS = {
         'summary': 'Remove HTML tags from a column (regex-based, keeps the text content)',
         'params': ['column', 'outputColumn'],
     },
+    'xf.text.tocolumns': {
+        'kind': 'transform',
+        'summary': 'Split a delimited column into separate named columns (split_part), e.g. "31.21 30.24" into latitude and longitude',
+        'params': ['column', 'delimiter', 'outputColumns', 'dropSource'],
+    },
     'xf.topn': {
         'kind': 'transform',
         'summary': 'Keep the first N rows',
-        'params': ['count'],
+        'params': ['count', 'orderBy'],
     },
     'xf.transpose': {
         'kind': 'transform',
@@ -1894,6 +1983,11 @@ COMPONENTS = {
         'kind': 'transform',
         'summary': '',
         'params': ['column', 'pattern', 'replacement', 'outputColumn'],
+    },
+    'xf.tumble': {
+        'kind': 'transform',
+        'summary': 'Event-time tumbling windows that survive across runs. Rows are held until their window CLOSES, decided by a watermark (the greatest event time seen so far) rather than the wall clock - so replaying old data produces the windows that data belongs to instead of closing them all at once. Adds window...',
+        'params': ['timeColumn', 'size', 'allowedLateness'],
     },
     'xf.union': {
         'kind': 'transform',
