@@ -14,9 +14,9 @@ catalog the application itself reads, so the names and counts here are exact.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
 - 409 components, 392 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 191 connectors (119 sources / 72 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 192 connectors (120 sources / 72 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 144 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
-- Data quality: 29 checks, plus 22 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
+- Data quality: 29 checks, plus 21 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
 - dbt: runs dbt on DuckDB with a GUI, using a fast build engine by default and dbt-core as a fallback.
 - AI: an on-device assistant (Qwen via llama.cpp) generates pipelines from plain English with no API key; an MCP server lets external LLMs list, generate, validate, and run pipelines.
@@ -81,7 +81,7 @@ Every component, by id. `src.*` reads, `snk.*` writes, `xf.*` transforms,
 `qa.*` checks, `ctl.*` controls flow, `code.*` runs your own code. Entries
 marked [planned] or [preview] are not usable yet.
 
-### Sources (read) (128)
+### Sources (read) (129)
 
 - `src.adbc` ADBC (Arrow): Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options
 - `src.airtable` Airtable: Airtable REST. Bearer Personal Access Token. Cursor pagination on `offset` (cursorNextPath /offset, cursorParam `offset`). responsePath /records
@@ -178,6 +178,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.redpanda` Redpanda: Same wire protocol as Kafka - rides the rskafka driver. Use src.kafka semantics: batch-consume up to maxRecords from a single partition
 - `src.redshift` Redshift: Read Redshift via the postgres ATTACH path (Redshift speaks Postgres wire on port 5439)
 - `src.rest` REST: Generic HTTP GET/POST source. Parses JSON response, optionally walks a JSON pointer (responsePath) to find the row array, and follows cursor-style pagination if configured (cursorNextPath + cursorParam)
+- `src.runevents` Run Events: Rows describing the stages that have already failed in this run: node_id, kind, status, message, category, duration_ms. Wire it into a mail or table sink to report failures. It reports failures the run SURVIVED, so mark the stages that may fail with Continue on failure
 - `src.s3` Amazon S3: Read via DuckDB httpfs
 - `src.salesforce` Salesforce: Salesforce REST. Rides the generic src.rest path with a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app); users typically point url at https://{instance}.my.salesforce.com/services/data/v60.0/query/?q=SELECT+... and walk responsePath /records
 - `src.salesforce.bulk` Salesforce Bulk: Salesforce Bulk API 2.0 query source for migration-scale reads: a SOQL query runs as an async query job (query / queryAll incl. deleted+archived), the paged CSV result sets stream to disk via Sforce-Locator, and DuckDB reads them out-of-core - a multi-GB result never lands in memory. Same auth as the Bulk sink (Bearer / client-credentials / saved connection)
@@ -472,7 +473,7 @@ marked [planned] or [preview] are not usable yet.
 - `qa.survivor` Survivorship (Golden Record): Collapse duplicate records sharing a key into one golden record, picking each surviving field by rule: most-frequent value, most-recent / oldest (by a date column), or max / min. Applies to every non-key column at once
 - `qa.unique` Uniqueness Check: Pass first per key; duplicates to reject
 
-### Control flow (23)
+### Control flow (22)
 
 - `ctl.anchor` Sequence Anchor: Does no work itself. It exists so ordering links have something to attach to: wire a trigger out of it to say what runs after, or into it to say what must finish first. Takes no input and produces no rows, so it never joins the data flow
 - `ctl.checkpoint` Checkpoint: Pass rows through and also write a parquet snapshot to a path - the durable artifact a future run can read back via src.parquet
@@ -486,7 +487,6 @@ marked [planned] or [preview] are not usable yet.
 - `ctl.parallelize` Parallelize: Runs the independent downstream branches wired to its outputs concurrently. The upstream input is snapshotted once and each branch reads that snapshot in its own isolated execution, joining when all finish (any branch failure fails the node)
 - `ctl.replicate` Replicate / Tee: Send the same data to multiple downstream outputs
 - `ctl.retry` Retry: Per-stage retry already lives in the Advanced tab (Retry attempts + Retry backoff) on every node - no separate component needed. A DAG-scoped retry block (wrap N stages, retry the whole group) still needs the DAG-block refactor; use ctl.try with a recovery fallback for now
-- `ctl.runevents` Run Events: Rows describing the stages that have already failed in this run: node_id, kind, status, message, category, duration_ms. Wire it into a mail or table sink to report failures. It reports failures the run SURVIVED, so mark the stages that may fail with Continue on failure
 - `ctl.runjob` Run Job: Calls a child pipeline (job) as a side effect, passing parent context variables that are substituted as ${VAR} into the child before it runs. Chain several Run Job nodes to build a Master Job that orchestrates child jobs in sequence. The child runs in its own temp DB; its output is not composed back into the parent
 - `ctl.runpipeline` Run Pipeline: Reads + executes another pipeline file inline as a side effect, then passes the upstream view through unchanged. Useful for triggering helper pipelines (refresh dimension tables, kick off cleanup) without composing their output into the parent
 - `ctl.schedule` Schedule [planned]: Controls flow with Schedule

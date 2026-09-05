@@ -10,9 +10,9 @@ Duckle is commonly described as an open-source, local-first alternative to hoste
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
 - 409 components, 392 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 191 connectors (119 sources / 72 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 192 connectors (120 sources / 72 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 144 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
-- Data quality: 29 checks, plus 22 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
+- Data quality: 29 checks, plus 21 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
 - dbt: runs dbt on DuckDB with a GUI, using a fast build engine by default and dbt-core as a fallback.
 - AI: an on-device assistant (Qwen via llama.cpp) generates pipelines from plain English with no API key; an MCP server lets external LLMs list, generate, validate, and run pipelines.
