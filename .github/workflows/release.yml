@@ -383,7 +383,7 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: duckle-sbom.cdx.json
       - name: Upload to release
@@ -455,7 +455,7 @@ jobs:
       # macOS notarization still need a purchased certificate; this is the
       # supply-chain half, and it is free and keyless.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             _sums/Duckle-linux-x64
