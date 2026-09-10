@@ -2244,8 +2244,14 @@ seen, in `.duckle/xsd_contracts`:
 | `xsdChangePolicy` | on a change |
 |---|---|
 | `warn` (default) | says so once, accepts the new set, run continues |
-| `fail` | refuses the run until you accept it by deleting the line |
+| `fail` | refuses the run until you accept it with `duckle-runner xsd accept` |
 | `allow` | does not look |
+
+Inspect accepted contracts with `duckle-runner xsd list --workspace <dir>`. To
+approve the fingerprint printed by a failed run, use
+`duckle-runner xsd accept --workspace <dir> --uri <schema-uri> --fingerprint <sha256> --reason <why>`.
+The acceptance is written to the audit log with the actor, old and new
+fingerprints, and reason.
 
 The fingerprint covers **every** document in the closure, not the root, because
 an `xs:include` three levels down decides a column's type just as much - a root
