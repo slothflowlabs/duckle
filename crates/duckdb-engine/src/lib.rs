@@ -547,6 +547,14 @@ impl DuckdbEngine {
     /// stdout. Cancellation-aware: polls the child and kills it if a
     /// cancel was requested.
     fn run(&self, db: Option<&Path>, sql: &str, json: bool) -> Result<String, EngineError> {
+        if crate::policy::duckdb_external_io_denied()
+            && crate::policy::contains_explicit_install(sql)
+        {
+            return Err(EngineError::Query(
+                "policy: DuckDB INSTALL is disabled in restricted-network mode; pre-install the extension and use LOAD"
+                    .into(),
+            ));
+        }
         if !self.bin.exists() {
             return Err(EngineError::Config(format!(
                 "DuckDB engine isn't installed (expected at {}). Open Setup to install it.",
@@ -1276,7 +1284,7 @@ impl DuckdbEngine {
             p.push(' ');
         }
         if format == "azureblob" {
-            p.push_str("INSTALL azure; LOAD azure; ");
+            p.push_str(&crate::policy::duckdb_extension_prelude("azure", false));
         }
         // What the RUN path loads for this component, asked OF the run path
         // rather than kept as a second list here.
@@ -7940,7 +7948,7 @@ mod oracle_insert_all_tests {
 
 #[cfg(test)]
 mod resource_pragma_tests {
-    use super::resource_pragmas;
+    use super::{resource_pragmas, DuckdbEngine};
 
     fn guard() -> std::sync::MutexGuard<'static, ()> {
         static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -7982,7 +7990,6 @@ network:
 
         let p = resource_pragmas(None, None);
 
-        std::env::remove_var("DUCKLE_POLICY_FILE");
         assert!(
             p.contains("disabled_filesystems"),
             "DuckDB could still read https:// itself, outside the allowlist: {p}"
@@ -7991,6 +7998,18 @@ network:
             p.contains("allow_community_extensions=false"),
             "an extension carrying its own network code would still load: {p}"
         );
+
+        assert_eq!(
+            crate::policy::duckdb_extension_prelude("httpfs", false),
+            "LOAD httpfs; ",
+            "restricted runs must never emit an extension download"
+        );
+        let err = DuckdbEngine::new("missing-duckdb".into())
+            .run(None, "INSTALL httpfs;", false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("INSTALL is disabled"), "raw install escaped: {err}");
+        std::env::remove_var("DUCKLE_POLICY_FILE");
     }
 
     /// And an environment with no policy is not hardened, so an ordinary local

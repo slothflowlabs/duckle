@@ -5841,14 +5841,14 @@ pub(crate) fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
         let auto = string_prop(props, "sql").map(|s| references_spatial(&s)).unwrap_or(false);
         let want_spatial = opt_in || auto;
         if want_spatial {
-            prelude.push_str("INSTALL spatial; LOAD spatial; ");
+            prelude.push_str(&crate::policy::duckdb_extension_prelude("spatial", false));
         }
         for ext in parse_extension_names(props.get("loadExtensions")) {
             // spatial may already be queued above; don't load it twice.
             if ext == "spatial" && want_spatial {
                 continue;
             }
-            prelude.push_str(&format!("INSTALL {ext}; LOAD {ext}; "));
+            prelude.push_str(&crate::policy::duckdb_extension_prelude(&ext, false));
         }
         return prelude;
     }
@@ -5900,7 +5900,7 @@ pub(crate) fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
         // is_secret_prop_key and resolved from ${ENV:...} at run time, like every
         // other connector secret.
         "src.huggingface" => {
-            let mut prelude = String::from("INSTALL httpfs; LOAD httpfs; ");
+            let mut prelude = crate::policy::duckdb_extension_prelude("httpfs", false);
             if let Some(token) = string_prop(props, "token").filter(|s| !s.trim().is_empty()) {
                 prelude.push_str(&format!(
                     "CREATE OR REPLACE SECRET duckle_hf (TYPE HUGGINGFACE, TOKEN '{}'); ",
@@ -5937,7 +5937,10 @@ pub(crate) fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
         // Create Geometry (#190) builds points/geoms and pins lon/lat order so
         // ST_Point(x, y) reads x as longitude, matching the GeoParquet default.
         | "xf.geo.create" => {
-            return "INSTALL spatial; LOAD spatial; SET geometry_always_xy = true; ".into();
+            return format!(
+                "{}SET geometry_always_xy = true; ",
+                crate::policy::duckdb_extension_prelude("spatial", false)
+            );
         }
         "src.spatial"
         | "src.gdb"
@@ -5954,12 +5957,12 @@ pub(crate) fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
         | "qa.geomvalidate"
         | "qa.geomrepair"
         | "qa.geomempty" => {
-            return "INSTALL spatial; LOAD spatial; ".into();
+            return crate::policy::duckdb_extension_prelude("spatial", false);
         }
         // inet is a small built-in extension. INSTALL is a no-op once
         // the extension is bundled, but keeping it explicit means a
         // fresh CLI cache still works without the first-launch fetch.
-        "xf.ip.parse" => return "INSTALL inet; LOAD inet; ".into(),
+        "xf.ip.parse" => return crate::policy::duckdb_extension_prelude("inet", false),
         _ => {}
     }
     let db = match string_prop(props, "database").filter(|s| !s.is_empty()) {
@@ -6030,7 +6033,8 @@ fn mssql_attach(props: &JsonValue) -> String {
         .map(|n| n.min(1000))
         .unwrap_or(1000);
     format!(
-        "INSTALL mssql FROM community; LOAD mssql; SET mssql_insert_batch_size = {}; ATTACH '{}' AS duckle_dst (TYPE mssql); ",
+        "{}SET mssql_insert_batch_size = {}; ATTACH '{}' AS duckle_dst (TYPE mssql); ",
+        crate::policy::duckdb_extension_prelude("mssql", true),
         batch,
         sql_escape(&connstr)
     )
@@ -6669,7 +6673,8 @@ pub(crate) fn ducklake_attach(props: &JsonValue, read_only: bool) -> String {
         format!(" ({})", opts.join(", "))
     };
     format!(
-        "INSTALL ducklake; LOAD ducklake; ATTACH 'ducklake:{}' AS {}{}; ",
+        "{}ATTACH 'ducklake:{}' AS {}{}; ",
+        crate::policy::duckdb_extension_prelude("ducklake", false),
         sql_escape(&path),
         alias,
         tail
@@ -6705,7 +6710,8 @@ pub(crate) fn bigquery_attach(props: &JsonValue, read_only: bool) -> String {
     // INSTALL/LOAD the community extension. The community: tag tells
     // DuckDB to fetch from the community-extensions repo.
     format!(
-        "INSTALL bigquery FROM community; LOAD bigquery; ATTACH '{}' AS {} (TYPE bigquery{}); ",
+        "{}ATTACH '{}' AS {} (TYPE bigquery{}); ",
+        crate::policy::duckdb_extension_prelude("bigquery", true),
         sql_escape(&attach_target), alias, mode
     )
 }
@@ -6728,7 +6734,8 @@ pub(crate) fn md_attach(props: &JsonValue, read_only: bool) -> String {
     // MotherDuck falls back to the MOTHERDUCK_TOKEN environment variable.
     match token {
         Some(t) => format!(
-            "INSTALL motherduck; LOAD motherduck; SET motherduck_token='{}'; ATTACH 'md:{}' AS {}{}; ",
+            "{}SET motherduck_token='{}'; ATTACH 'md:{}' AS {}{}; ",
+            crate::policy::duckdb_extension_prelude("motherduck", false),
             sql_escape(&t),
             sql_escape(&db),
             alias,
@@ -6857,7 +6864,8 @@ pub(crate) fn build_spatial_sink(props: &JsonValue, from_view: &str) -> String {
                 // loads it: a GEOMETRY read back from a plain Parquet file does not
                 // taint this stage, and ST_Hilbert would then fail at write time,
                 // after the whole pipeline had already run.
-                "INSTALL spatial; LOAD spatial; COPY (SELECT * FROM {} {}) TO '{}' (FORMAT PARQUET)",
+                "{}COPY (SELECT * FROM {} {}) TO '{}' (FORMAT PARQUET)",
+                crate::policy::duckdb_extension_prelude("spatial", false),
                 quote_ident(from_view),
                 order_by,
                 sql_escape(&path)
@@ -9879,7 +9887,8 @@ pub(crate) fn build_parquet_sink(props: &JsonValue, from_view: &str) -> String {
             // taints this stage, but a GEOMETRY read back from a plain Parquet
             // file does not, and ST_Hilbert would then fail at write time -
             // after the whole pipeline had already run.
-            "INSTALL spatial; LOAD spatial; COPY (SELECT * FROM ({}) {}) TO '{}' ({})",
+            "{}COPY (SELECT * FROM ({}) {}) TO '{}' ({})",
+            crate::policy::duckdb_extension_prelude("spatial", false),
             source,
             order_by,
             sql_escape(&path),

@@ -462,16 +462,93 @@ fn network_allowlist() -> Option<BTreeSet<String>> {
 ///   extensions that are already on disk, and turning it off breaks ordinary
 ///   local queries.
 ///
-/// Known residual: an explicit `INSTALL` of a core extension still succeeds,
-/// because extension download does not go through the disabled filesystems.
-/// Naming that extension's filesystem above is what keeps it from reaching
-/// anything.
+/// Explicit `INSTALL` is handled separately: generated preludes become
+/// `LOAD`-only and the execution boundary rejects raw `INSTALL` SQL.
 pub const DUCKDB_OFF_NETWORK: &str = concat!(
     "SET disabled_filesystems=",
     "'HTTPFileSystem,S3FileSystem,AzureBlobStorageFileSystem,GCSFileSystem';\n",
     "SET allow_community_extensions=false;\n",
     "SET autoinstall_known_extensions=false;\n",
 );
+
+/// Load an extension without allowing a restricted run to download it.
+pub fn duckdb_extension_prelude(name: &str, community: bool) -> String {
+    if duckdb_external_io_denied() {
+        return format!("LOAD {name}; ");
+    }
+    if community {
+        format!("INSTALL {name} FROM community; LOAD {name}; ")
+    } else {
+        format!("INSTALL {name}; LOAD {name}; ")
+    }
+}
+
+/// Detect the SQL command that can download an extension, ignoring quoted
+/// strings and comments. A restricted run must reject it at the one boundary
+/// shared by stage, probe, and batched execution.
+pub fn contains_explicit_install(sql: &str) -> bool {
+    let bytes = sql.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\'' => {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\'' {
+                        i += 1;
+                        if i < bytes.len() && bytes[i] == b'\'' {
+                            i += 1;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b'"' => {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'"' {
+                        i += 1;
+                        if i < bytes.len() && bytes[i] == b'"' {
+                            i += 1;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b'-' if bytes.get(i + 1) == Some(&b'-') => {
+                i += 2;
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(bytes.len());
+            }
+            c if c.is_ascii_alphabetic() || c == b'_' => {
+                let start = i;
+                i += 1;
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                    i += 1;
+                }
+                if bytes[start..i].eq_ignore_ascii_case(b"install") {
+                    return true;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    false
+}
 
 /// Must DuckDB be taken off the network for this run?
 ///
@@ -832,6 +909,15 @@ mod tests {
         }
         p.narrow_with(layer, "test");
         p
+    }
+
+    #[test]
+    fn install_detector_ignores_text_and_comments() {
+        assert!(contains_explicit_install("SET x=1; INSTALL httpfs;"));
+        assert!(contains_explicit_install("/* generated */\nInStAlL spatial;"));
+        assert!(!contains_explicit_install("SELECT 'INSTALL httpfs';"));
+        assert!(!contains_explicit_install("-- INSTALL httpfs;\nSELECT 1;"));
+        assert!(!contains_explicit_install("SELECT installer FROM users;"));
     }
 
     /// The headline case: an agent writes a pipeline that would write to

@@ -12250,7 +12250,10 @@ impl DuckdbEngine {
         *ANSWER.get_or_init(|| {
             self.run(
                 None,
-                "INSTALL arrow FROM community; LOAD arrow; SELECT 1;",
+                &format!(
+                    "{}SELECT 1;",
+                    crate::policy::duckdb_extension_prelude("arrow", true)
+                ),
                 true,
             )
             .is_ok()
@@ -16557,7 +16560,8 @@ impl DuckdbEngine {
             .map(|d| format!(", DATA_PATH '{}'", d.replace('\\', "/").replace('\'', "''")))
             .unwrap_or_default();
         let attach = format!(
-            "INSTALL ducklake; LOAD ducklake; ATTACH 'ducklake:{}' AS duckle_src (READ_ONLY{}); ",
+            "{}ATTACH 'ducklake:{}' AS duckle_src (READ_ONLY{}); ",
+            crate::policy::duckdb_extension_prelude("ducklake", false),
             path, data_path
         );
         let node_q = plan::quote_ident(&spec.node_id);
@@ -17260,10 +17264,11 @@ impl DuckdbEngine {
         // Phase 1: stage upstream into a named table that the next CLI
         // invocation will see.
         let stage_sql = format!(
-            "{secret}INSTALL fts; LOAD fts; \
+            "{secret}{fts} \
              DROP TABLE IF EXISTS {staging}; \
              CREATE TABLE {staging} AS SELECT * FROM {upstream};",
             secret = secret_prefix,
+            fts = crate::policy::duckdb_extension_prelude("fts", false),
             staging = staging,
             upstream = upstream,
         );
@@ -17289,12 +17294,13 @@ impl DuckdbEngine {
             None => String::new(),
         };
         let index_sql = format!(
-            "{secret}INSTALL fts; LOAD fts; \
+            "{secret}{fts} \
              PRAGMA create_fts_index('{staging_raw}', '{id_col}', {text_args}); \
              CREATE OR REPLACE TABLE {node} AS \
                SELECT *, {match_expr} AS {output_q} FROM {staging} \
                WHERE {match_expr} IS NOT NULL{order_limit};",
             secret = secret_prefix,
+            fts = crate::policy::duckdb_extension_prelude("fts", false),
             staging_raw = spec.staging_table.replace('\'', "''"),
             id_col = spec.id_col.replace('\'', "''"),
             text_args = text_args,
