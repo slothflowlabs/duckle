@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 # remote = LanceDB Cloud (db:// + api_key/region); aws/gcs/azure = object-store
 # backends so s3:// / gs:// / az:// Lance datasets work too.
-lancedb = { version = "0.30", default-features = false, features = ["remote", "aws", "gcs", "azure"] }
+lancedb = { version = "0.38", default-features = false, features = ["remote", "aws", "gcs", "azure"] }
 # Vortex columnar file format (#111). Uses arrow 58 too (unifies with lancedb +
 # the parquet bridge), needs no protoc, pulls no DataFusion in its file-IO path.
 #
