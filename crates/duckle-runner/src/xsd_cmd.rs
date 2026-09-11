@@ -79,6 +79,17 @@ pub fn run() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // A workspace that is not there is a typo, not an empty workspace. Without
+    // this, `list` reported a clean bill of health for a directory that does not
+    // exist, and `accept` CREATED one - writing a contract into a fresh
+    // `.duckle/` that no run will ever read, and reporting success for it.
+    if !args.workspace.is_dir() {
+        eprintln!(
+            "duckle-runner xsd: {} is not a directory. Name the workspace with --workspace.",
+            args.workspace.display()
+        );
+        return ExitCode::from(2);
+    }
     let path = duckle_duckdb_engine::xsd_contract::path(&args.workspace);
     match args.verb.as_str() {
         "list" => match duckle_duckdb_engine::xsd_contract::list(&path) {
@@ -112,14 +123,15 @@ pub fn run() -> ExitCode {
             }
         },
         "accept" => {
-            let Some(uri) = args
-                .uri
-                .as_deref()
-                .filter(|v| !v.is_empty() && !v.chars().any(char::is_whitespace))
-            else {
-                eprintln!(
-                    "duckle-runner xsd accept: --uri is required and may not contain whitespace"
-                );
+            // Whitespace is allowed. The store keys on the whole line up to its
+            // LAST space because the fingerprint is a SHA-256 and cannot contain
+            // one, so `C:/my schemas/order.xsd` round-trips - and a path with a
+            // space is the case that most needs an audited acceptance, not the
+            // one to refuse. Refusing it here left exactly those schemas with no
+            // way to accept a change except editing the file by hand, which is
+            // what this command exists to replace.
+            let Some(uri) = args.uri.as_deref().map(str::trim).filter(|v| !v.is_empty()) else {
+                eprintln!("duckle-runner xsd accept: --uri is required");
                 return ExitCode::from(2);
             };
             let Some(fingerprint) = args.fingerprint.as_deref().filter(|v| valid_fingerprint(v))
@@ -164,10 +176,21 @@ pub fn run() -> ExitCode {
                 );
             } else {
                 println!("{uri}: accepted {fingerprint}");
-                println!(
-                    "Recorded the acceptance in {}",
-                    duckle_duckdb_engine::audit::audit_path(&args.workspace).display()
-                );
+                // The audit append is best-effort by design - it must not fail a
+                // command that has already changed the store - but saying it was
+                // recorded when it was not is a false claim about the one thing
+                // an AUDITED acceptance promises. So the line is earned rather
+                // than assumed.
+                let audit = duckle_duckdb_engine::audit::audit_path(&args.workspace);
+                match audit.is_file() {
+                    true => println!("Recorded the acceptance in {}", audit.display()),
+                    false => eprintln!(
+                        "warning: the contract was accepted, but nothing could be written to the \
+                         audit log at {}. The change is in the store and is NOT in the audit \
+                         trail.",
+                        audit.display()
+                    ),
+                }
             }
             ExitCode::from(0)
         }

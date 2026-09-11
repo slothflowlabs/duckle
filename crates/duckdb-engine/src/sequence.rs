@@ -974,11 +974,24 @@ pub fn ledger_states(
             // supersedes an earlier one - but a success anywhere stands: the
             // work was done, and a re-plan that has not run yet must not
             // un-apply it.
-            match out.get(&p.key) {
-                Some(crate::backfill::State::Succeeded) => {}
-                _ => {
-                    out.insert(p.key, p.state);
-                }
+            //
+            // Both halves have to be said, and only the second one was. Taking
+            // "not a success yet" as licence to overwrite let each OLDER ledger
+            // replace what a newer one had recorded, so `plan` then `apply`
+            // ended on the plan's `Requested` and a link the apply run had
+            // FAILED read as merely waiting - a dead chain that `sequence
+            // status` exits 0 on.
+            let keep_what_we_have = match (out.get(&p.key), p.state) {
+                // Nothing recorded yet: the newest ledger to mention this key.
+                (None, _) => false,
+                // A success stands, whichever ledger it came from.
+                (Some(crate::backfill::State::Succeeded), _) => true,
+                (Some(_), crate::backfill::State::Succeeded) => false,
+                // Otherwise the newer ledger already spoke.
+                (Some(_), _) => true,
+            };
+            if !keep_what_we_have {
+                out.insert(p.key, p.state);
             }
         }
     }
@@ -1756,6 +1769,130 @@ mod tests {
             active.epoch.as_deref(),
             Some("2026-09-04"),
             "an unapplied later snapshot must not rebase the chain past data nobody has loaded",
+        );
+    }
+
+    /// `plan` writes a ledger and `apply` writes another, so a chain routinely
+    /// has two for one epoch. The newer one is what happened; the older is what
+    /// was intended.
+    ///
+    /// The merge had it backwards for every state except success: ledgers arrive
+    /// newest-first and each older one OVERWROTE what the newer had recorded, so
+    /// a link the apply run had FAILED came back as the plan's `Requested`. The
+    /// verdict then reads "published, not applied yet" instead of "blocked", and
+    /// `sequence status` exits 0 on a chain that is dead.
+    #[test]
+    fn the_newest_ledger_decides_and_a_success_still_stands() {
+        use crate::backfill::{Backfill, Kind, PartitionRun, State};
+
+        let ws = tempfile::tempdir().unwrap();
+        let run = |key: &str, state: State| PartitionRun {
+            occurrence: None,
+            key: key.into(),
+            state,
+            run_id: None,
+            attempts: 0,
+            error: None,
+            finished_at: None,
+            params: Default::default(),
+            predicate: None,
+            artifact: None,
+            requires: None,
+            source_uri: None,
+        };
+        let ledger = |id: &str, created_at: &str, partitions: Vec<PartitionRun>| Backfill {
+            id: id.into(),
+            pipeline: "feed".into(),
+            pipeline_path: "feed.json".into(),
+            created_at: created_at.into(),
+            release_id: None,
+            max_concurrent: 1,
+            pid: None,
+            kind: Kind::Sequence,
+            chunk_node: None,
+            staging: None,
+            epoch: Some("2026-08-31".into()),
+            partitions,
+        };
+
+        // The plan, then the apply that failed one link and succeeded another.
+        crate::backfill::save(
+            ws.path(),
+            &ledger(
+                "feed-seq-plan",
+                "2026-09-01T00:00:00Z",
+                vec![run("2026-09-01", State::Requested), run("2026-09-02", State::Requested)],
+            ),
+        )
+        .unwrap();
+        crate::backfill::save(
+            ws.path(),
+            &ledger(
+                "feed-seq-apply",
+                "2026-09-02T00:00:00Z",
+                vec![run("2026-09-01", State::Succeeded), run("2026-09-02", State::Failed)],
+            ),
+        )
+        .unwrap();
+
+        let states = ledger_states(ws.path(), "feed", Some("2026-08-31"));
+        assert_eq!(
+            states.get("2026-09-02"),
+            Some(&State::Failed),
+            "the older plan's Requested overwrote what the apply run actually did, so a dead \
+             chain reports as merely waiting"
+        );
+        assert_eq!(
+            states.get("2026-09-01"),
+            Some(&State::Succeeded),
+            "a success anywhere must still stand"
+        );
+    }
+
+    /// The half that must not regress: a success in an OLDER ledger survives a
+    /// newer re-plan that has not run yet, or re-planning would un-apply work
+    /// that was already done.
+    #[test]
+    fn a_replan_does_not_un_apply_what_already_succeeded() {
+        use crate::backfill::{Backfill, Kind, PartitionRun, State};
+
+        let ws = tempfile::tempdir().unwrap();
+        let one = |id: &str, created_at: &str, state: State| Backfill {
+            id: id.into(),
+            pipeline: "feed".into(),
+            pipeline_path: "feed.json".into(),
+            created_at: created_at.into(),
+            release_id: None,
+            max_concurrent: 1,
+            pid: None,
+            kind: Kind::Sequence,
+            chunk_node: None,
+            staging: None,
+            epoch: Some("2026-08-31".into()),
+            partitions: vec![PartitionRun {
+                occurrence: None,
+                key: "2026-09-01".into(),
+                state,
+                run_id: None,
+                attempts: 0,
+                error: None,
+                finished_at: None,
+                params: Default::default(),
+                predicate: None,
+                artifact: None,
+                requires: None,
+                source_uri: None,
+            }],
+        };
+        crate::backfill::save(ws.path(), &one("old-apply", "2026-09-01T00:00:00Z", State::Succeeded))
+            .unwrap();
+        crate::backfill::save(ws.path(), &one("new-plan", "2026-09-03T00:00:00Z", State::Requested))
+            .unwrap();
+
+        assert_eq!(
+            ledger_states(ws.path(), "feed", Some("2026-08-31")).get("2026-09-01"),
+            Some(&State::Succeeded),
+            "a re-plan that has not run must not un-apply a completed link"
         );
     }
 }
