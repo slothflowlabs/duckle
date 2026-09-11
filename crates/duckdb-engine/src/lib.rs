@@ -84,6 +84,7 @@ pub mod trust;
 pub mod tls;
 pub mod watermark;
 pub mod xsd;
+pub mod xsd_contract;
 mod connectors;
 pub use connectors::remote_fingerprint;
 mod run_log;

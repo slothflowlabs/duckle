@@ -20743,7 +20743,7 @@ pub(crate) fn xsd_contract_fingerprint(docs: &[(String, String)]) -> String {
 /// behaviour rather than refusing every run.
 pub(crate) fn xsd_contracts_path() -> Option<std::path::PathBuf> {
     let ws = std::env::var("DUCKLE_WORKSPACE").ok().filter(|s| !s.is_empty())?;
-    Some(std::path::Path::new(&ws).join(".duckle").join("xsd_contracts"))
+    Some(crate::xsd_contract::path(std::path::Path::new(&ws)))
 }
 
 /// The contract already accepted for this schema root, if any.
@@ -20752,40 +20752,14 @@ pub(crate) fn xsd_contracts_path() -> Option<std::path::PathBuf> {
 /// can be deleted by hand - which is the whole escape hatch when a publisher
 /// legitimately reissues a schema.
 pub(crate) fn read_xsd_contract(path: &std::path::Path, uri: &str) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    text.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .find_map(|l| {
-            let (u, fp) = l.split_once(char::is_whitespace)?;
-            (u == uri).then(|| fp.trim().to_string())
-        })
+    crate::xsd_contract::accepted(path, uri)
 }
 
 /// Accept a contract. Best-effort: a workspace that cannot be written still
 /// runs, because failing a run over bookkeeping would be a worse failure than
 /// the one being prevented.
 fn record_xsd_contract(path: &std::path::Path, uri: &str, fingerprint: &str) {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let existing = std::fs::read_to_string(path).unwrap_or_default();
-    // Replace any line for this uri rather than appending a second one: unlike
-    // a host behind a load balancer, a schema root has exactly one accepted
-    // contract at a time, and two lines would make "which one held?" ambiguous.
-    let mut out: Vec<String> = existing
-        .lines()
-        .filter(|l| {
-            let t = l.trim();
-            if t.is_empty() || t.starts_with('#') {
-                return true;
-            }
-            t.split_once(char::is_whitespace).map(|(u, _)| u != uri).unwrap_or(true)
-        })
-        .map(str::to_string)
-        .collect();
-    out.push(format!("{uri} {fingerprint}"));
-    let _ = std::fs::write(path, out.join("\n") + "\n");
+    let _ = crate::xsd_contract::accept(path, uri, fingerprint);
 }
 
 /// #315: hold the parser contract still, or say plainly that it moved.
