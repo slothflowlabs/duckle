@@ -548,6 +548,7 @@ impl DuckdbEngine {
     /// stdout. Cancellation-aware: polls the child and kills it if a
     /// cancel was requested.
     fn run(&self, db: Option<&Path>, sql: &str, json: bool) -> Result<String, EngineError> {
+        crate::policy::refuse_install_if_restricted(sql).map_err(EngineError::Query)?;
         if !self.bin.exists() {
             return Err(EngineError::Config(format!(
                 "DuckDB engine isn't installed (expected at {}). Open Setup to install it.",
@@ -1277,7 +1278,7 @@ impl DuckdbEngine {
             p.push(' ');
         }
         if format == "azureblob" {
-            p.push_str("INSTALL azure; LOAD azure; ");
+            p.push_str(&crate::policy::duckdb_extension_prelude("azure", false));
         }
         // What the RUN path loads for this component, asked OF the run path
         // rather than kept as a second list here.
@@ -3219,6 +3220,15 @@ impl DuckdbEngine {
             }
         }
 
+        // The batched executor is its own CLI entry point: it never calls
+        // `run()`, so the guard there covered the per-stage path and left the
+        // DEFAULT one open. A pure-SQL stage carries its body verbatim, so an
+        // INSTALL in one really did download an extension under an enforcing
+        // policy until this line existed.
+        if let Err(e) = crate::policy::refuse_install_if_restricted(&batched_sql) {
+            return RunResult::failed(total_start, e);
+        }
+
         let mut cmd = std::process::Command::new(&self.bin);
         cmd.arg(db_path);
         // Same as run(): open the throwaway run-db at v1.5.0 so GEOMETRY CRS
@@ -4965,6 +4975,9 @@ pub(crate) fn write_arrayrows_to(
 /// the process env is empty (tests, embedded hosts).
 pub(crate) fn apply_duckdb_sql(bin: &Path, db: &Path, sql: &str) -> Result<(), EngineError> {
     use std::process::Command;
+    // The third CLI entry point, reached from the connectors and the output
+    // cache. Same reason as the other two.
+    crate::policy::refuse_install_if_restricted(sql).map_err(EngineError::Query)?;
     let mut cmd = Command::new(bin);
     #[cfg(windows)]
     {
@@ -7941,7 +7954,7 @@ mod oracle_insert_all_tests {
 
 #[cfg(test)]
 mod resource_pragma_tests {
-    use super::resource_pragmas;
+    use super::{resource_pragmas, DuckdbEngine};
 
     fn guard() -> std::sync::MutexGuard<'static, ()> {
         static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -7990,17 +8003,36 @@ network:
         .unwrap();
         std::env::set_var("DUCKLE_POLICY_FILE", &pol);
 
-        let p = resource_pragmas(None, None);
-
+        // Everything that reads the policy happens here, and the variable is
+        // cleared before a single assertion runs.
+        //
+        // Not for tidiness: `assert!` panics, so a removal placed after the
+        // assertions is SKIPPED by the first one that fails, and
+        // DUCKLE_POLICY_FILE then stays set for the rest of the process. This
+        // module's mutex does not help, because the other two thousand tests
+        // are not holding it. One failing assertion here would turn into
+        // unrelated failures elsewhere, which is a bad way to find out.
+        let pragmas = resource_pragmas(None, None);
+        let prelude = crate::policy::duckdb_extension_prelude("httpfs", false);
+        let refusal = DuckdbEngine::new("missing-duckdb".into())
+            .run(None, "INSTALL httpfs;", false)
+            .unwrap_err()
+            .to_string();
         std::env::remove_var("DUCKLE_POLICY_FILE");
+
         assert!(
-            p.contains("disabled_filesystems"),
-            "DuckDB could still read https:// itself, outside the allowlist: {p}"
+            pragmas.contains("disabled_filesystems"),
+            "DuckDB could still read https:// itself, outside the allowlist: {pragmas}"
         );
         assert!(
-            p.contains("allow_community_extensions=false"),
-            "an extension carrying its own network code would still load: {p}"
+            pragmas.contains("allow_community_extensions=false"),
+            "an extension carrying its own network code would still load: {pragmas}"
         );
+        assert_eq!(
+            prelude, "LOAD httpfs; ",
+            "restricted runs must never emit an extension download"
+        );
+        assert!(refusal.contains("INSTALL is disabled"), "raw install escaped: {refusal}");
     }
 
     /// And an environment with no policy is not hardened, so an ordinary local

@@ -1398,7 +1398,10 @@ fn compile_impl(pipeline: &PipelineDoc, allow_view_upgrade: bool) -> Result<Comp
         }
         for s in stages.iter_mut() {
             if geom_tainted.contains(&s.node_id) && !s.sql.contains("LOAD spatial") {
-                s.sql.insert_str(0, "INSTALL spatial; LOAD spatial; ");
+                s.sql.insert_str(
+                    0,
+                    &crate::policy::duckdb_extension_prelude("spatial", false),
+                );
             }
         }
     }
