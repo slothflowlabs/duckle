@@ -209,24 +209,57 @@ pub fn plan_ledgers(
     workspace: &Path,
     policy: &Policy,
 ) -> (Vec<LedgerPrune>, std::collections::BTreeSet<String>) {
+    let d = decide(workspace, policy);
+    let mut out = Vec::new();
+    if let Some(days) = policy.deliveries_days {
+        out.push(LedgerPrune {
+            category: "deliveries".into(),
+            records: d.dropped_deliveries,
+            kept: d.kept_deliveries.len(),
+            reason: format!(
+                "delivered more than {days} days ago; pending and failed are kept, and so is                  anything whose publication is still on the log"
+            ),
+        });
+    }
+    if let Some(days) = policy.materializations_days {
+        out.push(LedgerPrune {
+            category: "materializations".into(),
+            records: d.dropped_events,
+            kept: d.kept_events.len(),
+            reason: format!(
+                "published more than {days} days ago, unreferenced, and superseded; a subscription can only replay what is still here, and the last publication of each asset is kept so freshness can still see it"
+            ),
+        });
+    }
+    (
+        out,
+        duckle_duckdb_engine::materialize::referenced_runs(&d.kept_events, &d.kept_deliveries),
+    )
+}
+
+/// What a prune would leave behind, computed ONCE.
+///
+/// `plan_ledgers` turns this into a report and `apply_ledgers` writes it. They
+/// used to work it out separately, which is the one thing a dry run must never
+/// do - and it had already drifted: a rule added to the planner was absent from
+/// the writer, so the preview and the prune disagreed about what survived.
+struct Decision {
+    kept_deliveries: Vec<duckle_duckdb_engine::subscribe::Delivery>,
+    kept_events: Vec<duckle_duckdb_engine::materialize::Event>,
+    dropped_deliveries: usize,
+    dropped_events: usize,
+}
+
+fn decide(workspace: &Path, policy: &Policy) -> Decision {
     use duckle_duckdb_engine::{materialize, subscribe};
     let all_deliveries = subscribe::deliveries(workspace);
     let all_events = materialize::read(workspace);
-    let mut out = Vec::new();
 
     // Deliveries first: what survives here decides what protects an event.
     let (kept_deliveries, dropped_deliveries) = match policy.deliveries_days {
         Some(days) => subscribe::retain(&all_deliveries, &horizon(days)),
         None => (all_deliveries.values().cloned().collect(), Vec::new()),
     };
-    if let Some(days) = policy.deliveries_days {
-        out.push(LedgerPrune {
-            category: "deliveries".into(),
-            records: dropped_deliveries.len(),
-            kept: kept_deliveries.len(),
-            reason: format!("delivered more than {days} days ago; pending and failed are kept"),
-        });
-    }
 
     let owners = duckle_duckdb_engine::catalog::load_owners(workspace).unwrap_or_default();
     let protected = protected_events(&all_events, &kept_deliveries, &owners);
@@ -234,18 +267,37 @@ pub fn plan_ledgers(
         Some(days) => materialize::retain(&all_events, &horizon(days), &protected),
         None => (all_events.clone(), Vec::new()),
     };
-    if let Some(days) = policy.materializations_days {
-        out.push(LedgerPrune {
-            category: "materializations".into(),
-            records: dropped_events.len(),
-            kept: kept_events.len(),
-            reason: format!(
-                "published more than {days} days ago, unreferenced, and superseded; a subscription can only replay what is still here, and the last publication of each asset is kept so freshness can still see it"
-            ),
-        });
-    }
 
-    (out, materialize::referenced_runs(&kept_events, &kept_deliveries))
+    // And the same rule the other way round, which was missing.
+    //
+    // A delivered record is the ONLY thing that says a publication has already
+    // been consumed: `subscribe::pending` derives what is owed as
+    // (subscription x event) minus the recorded deliveries. Prune the record
+    // while its event is still on the log and the pump hands the consumer the
+    // same publication again - the pipeline runs a second time and appends its
+    // rows a second time.
+    //
+    // Not an exotic configuration. The two horizons are independent flags, and
+    // keeping publication history longer than delivery noise is the natural
+    // setting. It also happens at EQUAL horizons, because the freshness rule
+    // deliberately holds an SLA'd asset's last publication back past its own
+    // horizon while the delivery ages out on schedule - and that case repeats
+    // every prune, on exactly the stalled asset the SLA is watching.
+    //
+    // Re-adding a delivery cannot change which events are kept: its event is
+    // already among them, so there is no second round to compute.
+    let kept_event_ids: std::collections::BTreeSet<&str> =
+        kept_events.iter().map(|e| e.event_id.as_str()).collect();
+    let (readded, dropped_deliveries): (Vec<_>, Vec<_>) = dropped_deliveries
+        .into_iter()
+        .partition(|d| kept_event_ids.contains(d.event_id.as_str()));
+
+    Decision {
+        kept_deliveries: kept_deliveries.into_iter().chain(readded).collect(),
+        dropped_deliveries: dropped_deliveries.len(),
+        dropped_events: dropped_events.len(),
+        kept_events,
+    }
 }
 
 /// Carry out a ledger prune by rewriting each ledger to what survived.
@@ -255,20 +307,16 @@ pub fn apply_ledgers(workspace: &Path, policy: &Policy) -> Vec<LedgerPrune> {
     if planned.iter().all(|p| p.records == 0) {
         return planned;
     }
-    let all_deliveries = subscribe::deliveries(workspace);
-    let (kept_deliveries, _) = match policy.deliveries_days {
-        Some(days) => subscribe::retain(&all_deliveries, &horizon(days)),
-        None => (all_deliveries.values().cloned().collect(), Vec::new()),
-    };
+    // The SAME decision the plan reported, not a second one worked out here.
+    // Recomputing is how the two drifted: a rule added to the planner was not
+    // added to the writer, so the dry run and the prune disagreed about what
+    // survived - the one thing a dry run must never do.
+    let d = decide(workspace, policy);
     if policy.deliveries_days.is_some() {
-        let _ = subscribe::keep_only(workspace, &kept_deliveries);
+        let _ = subscribe::keep_only(workspace, &d.kept_deliveries);
     }
-    if let Some(days) = policy.materializations_days {
-        let all_events = materialize::read(workspace);
-        let owners = duckle_duckdb_engine::catalog::load_owners(workspace).unwrap_or_default();
-        let protected = protected_events(&all_events, &kept_deliveries, &owners);
-        let (kept, _) = materialize::retain(&all_events, &horizon(days), &protected);
-        let _ = materialize::keep_only(workspace, &kept);
+    if policy.materializations_days.is_some() {
+        let _ = materialize::keep_only(workspace, &d.kept_events);
     }
     // AC5: a prune is auditable, and that has to cover the ledgers too. Records
     // removed without a trace are exactly the ones an operator would later have
@@ -889,5 +937,123 @@ mod reference_aware {
         let kept: Vec<String> =
             materialize::read(ws.path()).into_iter().map(|e| e.event_id).collect();
         assert_eq!(kept, ["newest"], "the superseded publications are history");
+    }
+
+    /// The protection was one-way, and the missing direction re-runs work.
+    ///
+    /// An event a retained delivery names is protected. Nothing protected a
+    /// DELIVERY whose event is retained - and `subscribe::pending` derives what
+    /// is owed as (subscription x event) MINUS the recorded deliveries, so the
+    /// delivered record is the only thing saying "this publication has already
+    /// been consumed". Prune it while its event is still on the log and the pump
+    /// hands the consumer pipeline the same publication a second time.
+    ///
+    /// The horizons are independent flags, so this is not an exotic setting:
+    /// keeping publication history longer than delivery noise is the natural
+    /// one. It also happens at EQUAL horizons, because the freshness rule
+    /// deliberately holds an SLA'd asset's last publication back past its own.
+    #[test]
+    fn a_delivery_is_kept_while_the_event_it_consumed_is() {
+        let ws = tempfile::tempdir().unwrap();
+        let old = "2026-01-01T00:00:00Z";
+        materialize::keep_only(
+            ws.path(),
+            &[materialize::Event {
+                event_id: "mat-1".into(),
+                pipeline_id: "producer".into(),
+                run_id: Some("run-1".into()),
+                release_id: None,
+                partition_key: None,
+                trigger: "scheduled".into(),
+                committed_at: old.into(),
+                assets: vec!["/data/a.parquet".into()],
+            }],
+        )
+        .unwrap();
+        let mut ledger = std::collections::BTreeMap::new();
+        ledger.insert(
+            "dlv-1".to_string(),
+            subscribe::Delivery {
+                delivery_id: "dlv-1".into(),
+                subscription_id: "s1".into(),
+                event_id: "mat-1".into(),
+                pipeline_id: "consumer".into(),
+                state: subscribe::DeliveryState::Delivered,
+                attempts: 1,
+                last_error: None,
+                run_id: Some("run-c".into()),
+                at: old.into(),
+                parameters: Default::default(),
+                parameter_error: None,
+            },
+        );
+        subscribe::save_deliveries(ws.path(), &ledger).unwrap();
+
+        // Deliveries have a horizon; publications do not, so the event stays.
+        apply_ledgers(ws.path(), &Policy { deliveries_days: Some(1), ..Default::default() });
+
+        assert_eq!(
+            materialize::read(ws.path()).len(),
+            1,
+            "precondition: the publication is still on the log"
+        );
+        assert_eq!(
+            subscribe::deliveries(ws.path()).len(),
+            1,
+            "the record saying this publication was already consumed was pruned, so the pump \
+             owes it again and the consumer pipeline runs a second time on the same data"
+        );
+    }
+
+    /// And the other side, so "keep it" does not become "keep everything": once
+    /// the event is gone too, the delivered record is history and goes with it.
+    #[test]
+    fn a_delivery_whose_event_has_gone_is_history() {
+        let ws = tempfile::tempdir().unwrap();
+        let old = "2026-01-01T00:00:00Z";
+        materialize::keep_only(
+            ws.path(),
+            &[materialize::Event {
+                event_id: "mat-1".into(),
+                pipeline_id: "producer".into(),
+                run_id: None,
+                release_id: None,
+                partition_key: None,
+                trigger: "scheduled".into(),
+                committed_at: old.into(),
+                assets: vec!["/data/a.parquet".into()],
+            }],
+        )
+        .unwrap();
+        let mut ledger = std::collections::BTreeMap::new();
+        ledger.insert(
+            "dlv-1".to_string(),
+            subscribe::Delivery {
+                delivery_id: "dlv-1".into(),
+                subscription_id: "s1".into(),
+                event_id: "mat-1".into(),
+                pipeline_id: "consumer".into(),
+                state: subscribe::DeliveryState::Delivered,
+                attempts: 1,
+                last_error: None,
+                run_id: Some("run-c".into()),
+                at: old.into(),
+                parameters: Default::default(),
+                parameter_error: None,
+            },
+        );
+        subscribe::save_deliveries(ws.path(), &ledger).unwrap();
+
+        // No owners.json, so no freshness SLA holds the event back either.
+        apply_ledgers(
+            ws.path(),
+            &Policy { deliveries_days: Some(1), materializations_days: Some(1), ..Default::default() },
+        );
+
+        assert!(materialize::read(ws.path()).is_empty(), "the publication aged out");
+        assert!(
+            subscribe::deliveries(ws.path()).is_empty(),
+            "and its delivery is history with it"
+        );
     }
 }
