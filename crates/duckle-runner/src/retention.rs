@@ -464,6 +464,15 @@ pub fn plan(workspace: &Path, policy: &Policy) -> Vec<Removal> {
             if referenced.contains(&run_id) {
                 continue;
             }
+            // Nor one whose run has not finished. A receipt is written at
+            // `begin` and not rewritten until `finish`, so a long backfill has
+            // an OLD mtime for hours while it is still in flight, and a prune
+            // ordered by mtime reaches it first - deleting exactly the record
+            // that says a run is happening. `retry::prune` has always skipped
+            // these; this copy of the rule did not.
+            if duckle_duckdb_engine::retry::is_in_flight(workspace, &run_id) {
+                continue;
+            }
             out.push(Removal {
                 path: p.display().to_string(),
                 category: "receipts".into(),

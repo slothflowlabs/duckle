@@ -511,8 +511,17 @@ pub fn write(workspace: &Path, receipt: &RunReceipt) -> std::io::Result<()> {
     std::fs::create_dir_all(&d)?;
     let text = serde_json::to_string_pretty(receipt).unwrap_or_default();
     std::fs::write(path_for(workspace, &receipt.run_id), text)?;
-    prune(&d);
+    prune(workspace, &d);
     Ok(())
+}
+
+/// Is the run behind this id still in flight?
+///
+/// The same question [`prune`] asks, exposed because retention prunes receipts
+/// too and had no way to ask it - so its count-based sweep could delete the
+/// receipt of a run that was still going.
+pub fn is_in_flight(workspace: &Path, run_id: &str) -> bool {
+    is_running(&path_for(workspace, run_id))
 }
 
 /// Is this receipt for a run that has not finished?
@@ -527,9 +536,23 @@ fn is_running(path: &Path) -> bool {
         .is_some_and(|r| r.state == RUNNING)
 }
 
-/// Keep the newest [`MAX_RECEIPTS`] FINISHED receipts. Best-effort: failing to
-/// prune must never fail a run.
-fn prune(d: &Path) {
+/// Keep the newest [`MAX_RECEIPTS`] FINISHED receipts, and anything a durable
+/// record still names. Best-effort: failing to prune must never fail a run.
+///
+/// The second half was missing, and it quietly undid the first half of someone
+/// else's rule. `retention` deliberately spares a receipt that a retained
+/// publication or delivery names, "however old it is", so that "which run
+/// produced this" stays answerable for a record still on the log. This runs on
+/// EVERY receipt write, so the next pipeline to run took it away again - the
+/// protection lasted until the next run, which is to say it did not hold.
+fn prune(workspace: &Path, d: &Path) {
+    // What the ledgers still point at. Read here rather than passed in, because
+    // every caller of `write` would otherwise have to remember to compute it,
+    // and the one that forgot would be the bug again.
+    let referenced = crate::materialize::referenced_runs(
+        &crate::materialize::read(workspace),
+        &crate::subscribe::deliveries(workspace).values().cloned().collect::<Vec<_>>(),
+    );
     let mut entries: Vec<(std::time::SystemTime, PathBuf)> = match std::fs::read_dir(d) {
         Ok(rd) => rd
             .filter_map(|e| e.ok())
@@ -544,6 +567,11 @@ fn prune(d: &Path) {
             // multi-hour backfill losing exactly the in-flight record this
             // exists to keep.
             .filter(|(_, p)| !is_running(p))
+            // And not one a publication or delivery still names.
+            .filter(|(_, p)| {
+                let id = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                !referenced.contains(&id)
+            })
             .collect(),
         Err(_) => return,
     };
@@ -1728,6 +1756,52 @@ mod parameters_must_match {
             p.bindings.is_empty(),
             "but nothing computed under the old values may be bound: {:?}",
             p.bindings
+        );
+    }
+
+    /// Retention spares a receipt that a retained publication or delivery names,
+    /// "however old it is", because "which run produced this" has to stay
+    /// answerable for a record deliberately still on the log.
+    ///
+    /// `prune` runs on EVERY receipt write and knew nothing about that, so the
+    /// next run undid it. The protection lasted until the next pipeline ran.
+    #[test]
+    fn a_receipt_a_publication_still_names_outlives_the_count() {
+        let ws = tempfile::tempdir().unwrap();
+        let d = dir(ws.path());
+        std::fs::create_dir_all(&d).unwrap();
+
+        // One publication naming the run we must not lose.
+        crate::materialize::keep_only(
+            ws.path(),
+            &[crate::materialize::Event {
+                event_id: "mat-1".into(),
+                pipeline_id: "producer".into(),
+                run_id: Some("keep-me".into()),
+                release_id: None,
+                partition_key: None,
+                trigger: "scheduled".into(),
+                committed_at: "2026-01-01T00:00:00Z".into(),
+                assets: vec!["/data/a.parquet".into()],
+            }],
+        )
+        .unwrap();
+
+        // The named receipt is the OLDEST, so a count-only prune takes it first.
+        let finished = |id: &str| {
+            let mut r = tests::receipt("ok", "h", &[]);
+            r.run_id = id.into();
+            r
+        };
+        write(ws.path(), &finished("keep-me")).unwrap();
+        for i in 0..MAX_RECEIPTS + 5 {
+            write(ws.path(), &finished(&format!("filler-{i:04}"))).unwrap();
+        }
+
+        assert!(
+            path_for(ws.path(), "keep-me").is_file(),
+            "the publication still names this run, so the receipt that says what produced it \
+             must outlive the count"
         );
     }
 }
