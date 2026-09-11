@@ -8003,28 +8003,36 @@ network:
         .unwrap();
         std::env::set_var("DUCKLE_POLICY_FILE", &pol);
 
-        let p = resource_pragmas(None, None);
-
-        assert!(
-            p.contains("disabled_filesystems"),
-            "DuckDB could still read https:// itself, outside the allowlist: {p}"
-        );
-        assert!(
-            p.contains("allow_community_extensions=false"),
-            "an extension carrying its own network code would still load: {p}"
-        );
-
-        assert_eq!(
-            crate::policy::duckdb_extension_prelude("httpfs", false),
-            "LOAD httpfs; ",
-            "restricted runs must never emit an extension download"
-        );
-        let err = DuckdbEngine::new("missing-duckdb".into())
+        // Everything that reads the policy happens here, and the variable is
+        // cleared before a single assertion runs.
+        //
+        // Not for tidiness: `assert!` panics, so a removal placed after the
+        // assertions is SKIPPED by the first one that fails, and
+        // DUCKLE_POLICY_FILE then stays set for the rest of the process. This
+        // module's mutex does not help, because the other two thousand tests
+        // are not holding it. One failing assertion here would turn into
+        // unrelated failures elsewhere, which is a bad way to find out.
+        let pragmas = resource_pragmas(None, None);
+        let prelude = crate::policy::duckdb_extension_prelude("httpfs", false);
+        let refusal = DuckdbEngine::new("missing-duckdb".into())
             .run(None, "INSTALL httpfs;", false)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("INSTALL is disabled"), "raw install escaped: {err}");
         std::env::remove_var("DUCKLE_POLICY_FILE");
+
+        assert!(
+            pragmas.contains("disabled_filesystems"),
+            "DuckDB could still read https:// itself, outside the allowlist: {pragmas}"
+        );
+        assert!(
+            pragmas.contains("allow_community_extensions=false"),
+            "an extension carrying its own network code would still load: {pragmas}"
+        );
+        assert_eq!(
+            prelude, "LOAD httpfs; ",
+            "restricted runs must never emit an extension download"
+        );
+        assert!(refusal.contains("INSTALL is disabled"), "raw install escaped: {refusal}");
     }
 
     /// And an environment with no policy is not hardened, so an ordinary local
