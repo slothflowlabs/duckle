@@ -582,8 +582,26 @@ impl DuckdbEngine {
         if allow_unsigned_extensions() {
             cmd.arg("-unsigned");
         }
-        cmd.arg("-bail").arg("-c").arg(sql);
-        cmd.stdin(Stdio::null())
+        // The SQL goes in on STDIN, not as `-c <sql>`.
+        //
+        // It carries the secret preamble - `CREATE SECRET ... (KEY_ID '...',
+        // SECRET '...')` for S3, Azure and every ATTACH that needs a password -
+        // and an argv is not private. On Linux any local user can read
+        // /proc/<pid>/cmdline while the child runs, and `ps` shows it on most
+        // systems. `execute_batched` has always fed its script through stdin
+        // for this reason; this path did not, so the per-stage executor put on
+        // the command line exactly what the batched one took care to keep off
+        // it.
+        //
+        // Safe here specifically because stdout and stderr are already drained
+        // by the threads below. The known hazard with a piped stdin is that the
+        // CLI then fully buffers stdout and flushes only at exit, which breaks
+        // reading it incrementally - a sentinel-framed persistent session. This
+        // reads to EOF and waits for exit, so buffering until exit costs
+        // nothing. Measured on the pinned 1.5.4: `-json` output arrives intact,
+        // a failing statement still exits 1, and a clean one exits 0.
+        cmd.arg("-bail");
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         // No console flash on Windows for the per-stage spawns.
@@ -626,6 +644,16 @@ impl DuckdbEngine {
             let _ = stderr_pipe.read_to_end(&mut buf);
             buf
         });
+
+        // Written only once both readers are running, so a script larger than a
+        // pipe buffer cannot stall against a child that is blocked writing
+        // output nobody is taking. Dropped straight after, because the CLI
+        // reads to EOF and the handle staying open would hold it there.
+        if let Some(mut stdin_pipe) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin_pipe.write_all(sql.as_bytes());
+            let _ = stdin_pipe.flush();
+        }
 
         let status = loop {
             match child.try_wait() {
