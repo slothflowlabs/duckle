@@ -547,14 +547,7 @@ impl DuckdbEngine {
     /// stdout. Cancellation-aware: polls the child and kills it if a
     /// cancel was requested.
     fn run(&self, db: Option<&Path>, sql: &str, json: bool) -> Result<String, EngineError> {
-        if crate::policy::duckdb_external_io_denied()
-            && crate::policy::contains_explicit_install(sql)
-        {
-            return Err(EngineError::Query(
-                "policy: DuckDB INSTALL is disabled in restricted-network mode; pre-install the extension and use LOAD"
-                    .into(),
-            ));
-        }
+        crate::policy::refuse_install_if_restricted(sql).map_err(EngineError::Query)?;
         if !self.bin.exists() {
             return Err(EngineError::Config(format!(
                 "DuckDB engine isn't installed (expected at {}). Open Setup to install it.",
@@ -3226,6 +3219,15 @@ impl DuckdbEngine {
             }
         }
 
+        // The batched executor is its own CLI entry point: it never calls
+        // `run()`, so the guard there covered the per-stage path and left the
+        // DEFAULT one open. A pure-SQL stage carries its body verbatim, so an
+        // INSTALL in one really did download an extension under an enforcing
+        // policy until this line existed.
+        if let Err(e) = crate::policy::refuse_install_if_restricted(&batched_sql) {
+            return RunResult::failed(total_start, e);
+        }
+
         let mut cmd = std::process::Command::new(&self.bin);
         cmd.arg(db_path);
         // Same as run(): open the throwaway run-db at v1.5.0 so GEOMETRY CRS
@@ -4972,6 +4974,9 @@ pub(crate) fn write_arrayrows_to(
 /// the process env is empty (tests, embedded hosts).
 pub(crate) fn apply_duckdb_sql(bin: &Path, db: &Path, sql: &str) -> Result<(), EngineError> {
     use std::process::Command;
+    // The third CLI entry point, reached from the connectors and the output
+    // cache. Same reason as the other two.
+    crate::policy::refuse_install_if_restricted(sql).map_err(EngineError::Query)?;
     let mut cmd = Command::new(bin);
     #[cfg(windows)]
     {
