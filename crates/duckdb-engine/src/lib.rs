@@ -7951,6 +7951,15 @@ mod resource_pragma_tests {
             "DUCKLE_THREADS",
             "DUCKLE_TEMP_DIR",
             "DUCKLE_MAX_TEMP_DIR_SIZE",
+            // The policy pair is cleared here too, because this mutex only
+            // serialises THIS module: the rest of the suite runs beside it, and
+            // a leaked DUCKLE_POLICY_FILE makes an unrelated test think it is in
+            // a restricted-network run. That reaches further than it looks -
+            // the policy decides prelude text and is consulted wherever SQL
+            // meets the CLI - so a leak is cleared on the way in rather than
+            // relied on being cleared on the way out.
+            "DUCKLE_POLICY_FILE",
+            "DUCKLE_WORKSPACE",
         ] {
             std::env::remove_var(k);
         }
