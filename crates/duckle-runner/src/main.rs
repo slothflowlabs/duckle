@@ -54,6 +54,7 @@ mod python;
 mod selfextract;
 mod work;
 mod sequence_cmd;
+mod xsd_cmd;
 mod serve;
 
 const USAGE: &str = "\
@@ -69,6 +70,7 @@ USAGE:
     duckle-runner sequence <status|plan|apply> <file.json>
     duckle-runner deliveries <status|retry>  (#325 subscription pump ledger)
     duckle-runner python <check|prepare>   (the workspace's Python environment)
+    duckle-runner xsd <list|accept>       (accepted XML parser contracts)
 
 TEST:
     Run a pipeline against a fixed input and assert the rows out of one node.
@@ -2128,6 +2130,10 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         };
+    }
+    // `xsd` -> inspect and explicitly accept a changed parser contract (#315).
+    if std::env::args().nth(1).as_deref() == Some("xsd") {
+        return xsd_cmd::run();
     }
     // `cache` -> see and drop the stage outputs kept for reuse. Separate from
     // `checkpoint` because the two hold different things: a cached output can

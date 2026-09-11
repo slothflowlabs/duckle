@@ -33,8 +33,46 @@ updates:
     # Drop this entry when pdf-extract moves - then bump both together. Until
     # then a future lopdf advisory reaches us through the cargo-audit job
     # rather than through a dependabot PR.
+    # arrow is not ours to choose either, for the same reason lopdf is not: it
+    # has to agree with what else is in the binary. duckle-lance hands
+    # RecordBatches between lancedb and its own arrow, and lancedb 0.38 declares
+    # arrow-array 58.0 while vortex declares 58.3. Taking arrow 59 puts two
+    # arrow majors in one binary and the handoff stops type-checking:
+    #
+    #   error[E0308]: expected `arrow_schema::schema::Schema`,
+    #                    found `lancedb::arrow::arrow_schema::Schema`
+    #
+    # So arrow tracks lancedb and vortex rather than "latest". Patches inside
+    # the current major still arrive; only the major is withheld. Drop these
+    # four entries when lancedb and vortex both declare the next arrow.
+    #
+    # This is not hypothetical: the same grouped bump has now been proposed and
+    # withdrawn twice (#337, #339). The LanceDB sidecar workflow catches it, but
+    # a gate that fires every month on a change nobody can take is noise, and
+    # the point of an ignore is to stop proposing what cannot be merged.
     ignore:
       - dependency-name: "lopdf"
+      - dependency-name: "arrow-array"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "arrow-schema"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "arrow-select"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "parquet"
+        update-types: ["version-update:semver-major"]
+      # vortex 0.85 is a measured RUNTIME regression, not a compile problem.
+      # Once the arrow bridge is repointed it builds, and then refuses to write:
+      # "Extension DType vortex.date not permitted by enabled editions", and
+      # with the date column removed, "struct column writer finished before all
+      # chunks were sent". 0.85 introduced editions and reworked the write path.
+      # 0.75 round-trips with zero differing rows.
+      #
+      # Withheld entirely rather than by version, because which future release
+      # fixes editions is not knowable from here. Revisit by hand: take the
+      # bump, run `cargo test -p duckle-lance`, and keep it only if the
+      # round-trip test passes. A vortex advisory would reach us through the
+      # cargo-audit job meanwhile, as with lopdf.
+      - dependency-name: "vortex"
     groups:
       cargo-safe:
         patterns: ["*"]

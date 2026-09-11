@@ -2025,7 +2025,7 @@ function fileFormatSection(comp: ComponentDef): FormSection[] {
                             { label: 'Fail the run', value: 'fail' },
                             { label: 'Ignore', value: 'allow' },
                         ],
-                        description: 'The whole resolved schema set, including anything it imports, is remembered the first time it is read. If it later changes, the columns this feed is parsed into may change with it. Warn accepts the new set and says so once. Fail refuses the run until you accept the change by deleting the line from .duckle/xsd_contracts. Ignore does not look.',
+                        description: 'The whole resolved schema set, including anything it imports, is remembered the first time it is read. If it later changes, the columns this feed is parsed into may change with it. Warn accepts the new set and says so once. Fail refuses the run until you accept it with duckle-runner xsd accept. Ignore does not look.',
                     },
                 ],
             });
