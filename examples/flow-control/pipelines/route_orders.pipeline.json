@@ -1,0 +1,89 @@
+{
+  "formatVersion": 1,
+  "name": "Route rows + guard rejects (switch / die / log / warn)",
+  "nodes": [
+    {
+      "id": "src",
+      "type": "source",
+      "position": { "x": 0, "y": 120 },
+      "data": {
+        "label": "Orders",
+        "componentId": "src.csv",
+        "properties": { "path": "${workspace}/data/orders.csv", "hasHeader": true }
+      }
+    },
+    {
+      "id": "sw",
+      "type": "transform",
+      "position": { "x": 240, "y": 120 },
+      "data": {
+        "label": "Route by amount",
+        "componentId": "ctl.switch",
+        "properties": {
+          "branches": { "reject": "amount < 0", "large": "amount >= 500" }
+        }
+      }
+    },
+    {
+      "id": "guard",
+      "type": "transform",
+      "position": { "x": 480, "y": 0 },
+      "data": {
+        "label": "Fail on rejects",
+        "componentId": "ctl.die",
+        "properties": {
+          "message": "Rejected rows present - {rows} negative amounts",
+          "condition": "has-rows"
+        }
+      }
+    },
+    {
+      "id": "log_large",
+      "type": "transform",
+      "position": { "x": 480, "y": 120 },
+      "data": {
+        "label": "Note large",
+        "componentId": "ctl.log",
+        "properties": { "message": "Processed {rows} large orders" }
+      }
+    },
+    {
+      "id": "warn_mid",
+      "type": "transform",
+      "position": { "x": 480, "y": 240 },
+      "data": {
+        "label": "Note standard",
+        "componentId": "ctl.warn",
+        "properties": { "message": "{rows} standard orders - below the large threshold" }
+      }
+    },
+    {
+      "id": "snk_large",
+      "type": "sink",
+      "position": { "x": 720, "y": 120 },
+      "data": {
+        "label": "Large orders",
+        "componentId": "snk.csv",
+        "properties": { "path": "${workspace}/output/large_orders.csv", "writeHeader": true }
+      }
+    },
+    {
+      "id": "snk_std",
+      "type": "sink",
+      "position": { "x": 720, "y": 240 },
+      "data": {
+        "label": "Standard orders",
+        "componentId": "snk.csv",
+        "properties": { "path": "${workspace}/output/standard_orders.csv", "writeHeader": true }
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "src", "target": "sw", "sourceHandle": "main", "targetHandle": "main", "data": { "connectionType": "main" } },
+    { "id": "e2", "source": "sw", "target": "guard", "sourceHandle": "case_1", "targetHandle": "main", "data": { "connectionType": "main" } },
+    { "id": "e3", "source": "sw", "target": "log_large", "sourceHandle": "case_2", "targetHandle": "main", "data": { "connectionType": "main" } },
+    { "id": "e4", "source": "sw", "target": "warn_mid", "sourceHandle": "default", "targetHandle": "main", "data": { "connectionType": "main" } },
+    { "id": "e5", "source": "log_large", "target": "snk_large", "sourceHandle": "main", "targetHandle": "main", "data": { "connectionType": "main" } },
+    { "id": "e6", "source": "warn_mid", "target": "snk_std", "sourceHandle": "main", "targetHandle": "main", "data": { "connectionType": "main" } }
+  ]
+}

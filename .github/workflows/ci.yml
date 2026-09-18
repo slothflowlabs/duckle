@@ -166,6 +166,45 @@ jobs:
             cp target/debug/duckle-mcp apps/desktop/bin/duckle-mcp
           fi
 
+      # #90: the samples under examples/ are runnable workspaces, not
+      # screenshots - validate compiles every pipeline on every OS, and the
+      # Linux leg (which has the runner and a DuckDB binary) runs each
+      # top-level pipeline so a broken sample fails CI instead of a user's
+      # first run. Children (the _-prefixed pipelineRef targets) run through
+      # their parents.
+      - name: Validate the example workspaces compile
+        shell: bash
+        run: |
+          set -e
+          runner=target/debug/duckle-runner
+          [ "$RUNNER_OS" = "Windows" ] && runner=target/debug/duckle-runner.exe
+          for ws in examples/*/; do
+            [ -d "$ws/pipelines" ] || continue
+            "$runner" validate "$ws"pipelines/*.pipeline.json
+          done
+
+      - name: Run the example workspaces
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          for ws in examples/*/; do
+            # starter-workspace's inputs are generated, not committed.
+            if [ -f "$ws/gen_samples.sql" ]; then
+              mkdir -p "$ws/data"
+              sed "s|\${workspace}|$PWD/${ws%/}|g" "$ws/gen_samples.sql" | "$DUCKLE_DUCKDB_BIN" :memory:
+            fi
+            [ -d "$ws/pipelines" ] || continue
+            for p in "$ws"pipelines/*.pipeline.json; do
+              case "$(basename "$p")" in _*) continue ;; esac
+              echo "== $p"
+              target/debug/duckle-runner --pipeline "$p" --workspace "${ws%/}" --log-dir "$RUNNER_TEMP/duckle-logs"
+            done
+          done
+          # A sink that reports rows but writes nowhere would pass the loop
+          # above - check a known output actually landed on disk.
+          test -s examples/flow-control/output/by_region/North.csv
+
       - name: Test
         # Exclude duckle-lance: the LanceDB sidecar pulls lancedb + DataFusion and
         # needs protoc to build. It is built separately (with protoc) in the

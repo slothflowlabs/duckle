@@ -1,0 +1,9 @@
+[
+  { "id": "root", "name": "Flow Control Samples", "type": "project" },
+  { "id": "samples", "name": "Sample Pipelines", "type": "folder", "parentId": "root" },
+  { "id": "route_orders", "name": "1. Route rows + guard rejects", "type": "pipeline", "parentId": "samples" },
+  { "id": "foreach_region", "name": "2. For-each region export", "type": "pipeline", "parentId": "samples" },
+  { "id": "try_fallback", "name": "3. Try with a fallback", "type": "pipeline", "parentId": "samples" },
+  { "id": "_region_export", "name": "(child) export one region", "type": "pipeline", "parentId": "samples" },
+  { "id": "_notify_error", "name": "(child) notify on failure", "type": "pipeline", "parentId": "samples" }
+]

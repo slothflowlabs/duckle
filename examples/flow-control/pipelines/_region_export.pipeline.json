@@ -1,0 +1,40 @@
+{
+  "formatVersion": 1,
+  "name": "(child) export one region",
+  "nodes": [
+    {
+      "id": "src",
+      "type": "source",
+      "position": { "x": 0, "y": 0 },
+      "data": {
+        "label": "Orders",
+        "componentId": "src.csv",
+        "properties": { "path": "${workspace}/data/orders.csv", "hasHeader": true }
+      }
+    },
+    {
+      "id": "flt",
+      "type": "transform",
+      "position": { "x": 240, "y": 0 },
+      "data": {
+        "label": "This region",
+        "componentId": "xf.filter",
+        "properties": { "predicate": "region = '${ITER_ITEM_REGION}'" }
+      }
+    },
+    {
+      "id": "snk",
+      "type": "sink",
+      "position": { "x": 480, "y": 0 },
+      "data": {
+        "label": "Region file",
+        "componentId": "snk.csv",
+        "properties": { "path": "${workspace}/output/by_region/${ITER_ITEM_REGION}.csv", "writeHeader": true }
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "src", "target": "flt", "sourceHandle": "main", "targetHandle": "main", "data": { "connectionType": "main" } },
+    { "id": "e2", "source": "flt", "target": "snk", "sourceHandle": "main", "targetHandle": "main", "data": { "connectionType": "main" } }
+  ]
+}

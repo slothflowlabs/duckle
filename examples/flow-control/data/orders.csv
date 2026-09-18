@@ -1,0 +1,13 @@
+order_id,customer,status,amount,region,created_at
+1001,cust_1,paid,540.00,North,2024-01-03
+1002,cust_2,paid,75.50,South,2024-01-05
+1003,cust_3,pending,1200.00,East,2024-01-07
+1004,cust_4,paid,42.00,West,2024-01-09
+1005,cust_5,refunded,899.99,North,2024-01-11
+1006,cust_6,paid,310.25,South,2024-01-12
+1007,cust_7,paid,95.00,East,2024-01-15
+1008,cust_8,pending,260.00,West,2024-01-18
+1009,cust_1,paid,1500.00,North,2024-01-20
+1010,cust_2,paid,68.75,South,2024-01-22
+1011,cust_3,paid,430.00,East,2024-01-24
+1012,cust_4,refunded,55.00,West,2024-01-25

@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "engine": "duckdb",
+  "jobs": [
+    { "id": "route_orders", "name": "1. Route rows + guard rejects", "dirty": false }
+  ],
+  "activeJobId": "route_orders"
+}

@@ -1,0 +1,29 @@
+{
+  "formatVersion": 1,
+  "name": "(child) notify on failure",
+  "nodes": [
+    {
+      "id": "note",
+      "type": "source",
+      "position": { "x": 0, "y": 0 },
+      "data": {
+        "label": "Marker",
+        "componentId": "code.sql",
+        "properties": { "sql": "SELECT 'try_fallback failed' AS message, now()::VARCHAR AS at" }
+      }
+    },
+    {
+      "id": "snk",
+      "type": "sink",
+      "position": { "x": 240, "y": 0 },
+      "data": {
+        "label": "Failure marker file",
+        "componentId": "snk.csv",
+        "properties": { "path": "${workspace}/output/pipeline_failed.csv", "writeHeader": true }
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "note", "target": "snk", "sourceHandle": "main", "targetHandle": "main", "data": { "connectionType": "main" } }
+  ]
+}
