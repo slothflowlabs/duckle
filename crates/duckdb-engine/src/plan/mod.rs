@@ -58,6 +58,13 @@ pub struct Stage {
     pub component_id: String,
     pub label: String,
     pub sql: String,
+    /// A statement the executor runs before `sql`, kept out of `sql` itself:
+    /// `analyze_node_sql` and column lineage both refuse a stage whose SQL
+    /// does not start with CREATE, so a prepended probe would turn off node
+    /// analysis and degrade lineage for the components that carry one
+    /// (#118's Explode/Normalize type guard). The executor prepends it on
+    /// both paths; everything that reads `sql` sees the CREATE first.
+    pub pre_sql: Option<String>,
     pub kind: StageKind,
     /// For sinks: the upstream object name they read from, so the
     /// executor can report a row count.
@@ -7069,6 +7076,7 @@ fn build_stage(
         component_id: component_id.to_string(),
         label: node.data.label.clone(),
         sql,
+        pre_sql: builders::list_column_guard(inputs, &props, component_id),
         kind,
         from,
         publish_group: if component_id == "snk.ducklake" {

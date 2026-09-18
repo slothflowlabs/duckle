@@ -2565,6 +2565,105 @@
         );
     }
 
+    /// #118: unnesting a STRUCT died in the binder on `length(STRUCT)` - the
+    /// name of an internal guard, not the column or the fix. The stage now
+    /// runs a one-row DESCRIBE check first that fails with the real type and
+    /// points at Flatten. The check is a statement, not an expression: the
+    /// binder types every CASE branch, so nothing inside the SELECT can
+    /// survive a non-list column.
+    #[test]
+    fn explode_carries_a_type_guard_that_names_the_column() {
+        use crate::plan::builders::list_column_guard;
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["up".into()]);
+
+        let g = list_column_guard(
+            &ni,
+            &serde_json::json!({ "column": "items" }),
+            "xf.arr.explode",
+        )
+        .expect("explode gets a guard");
+        assert!(g.contains("DESCRIBE SELECT * FROM \"up\""), "{g}");
+        assert!(g.contains("column_name = 'items'"), "{g}");
+        assert!(g.contains("column_type NOT LIKE '%]'"), "{g}");
+        assert!(g.contains("Flatten"), "{g}");
+
+        // Normalize only needs the check when it explodes an already-array
+        // column (empty separator); with one it casts to VARCHAR and splits.
+        assert!(
+            list_column_guard(
+                &ni,
+                &serde_json::json!({ "column": "tags", "separator": "" }),
+                "xf.norm"
+            )
+            .is_some(),
+            "empty separator means already-an-array"
+        );
+        // An absent separator is NOT an empty one: the body defaults the key
+        // to "," and the panel never writes a prop left at its default, so a
+        // plain {"column": ...} Normalize splits on a comma.
+        assert!(
+            list_column_guard(&ni, &serde_json::json!({ "column": "tags" }), "xf.norm").is_none(),
+            "absent separator defaults to a comma, not to explode"
+        );
+        assert!(
+            list_column_guard(
+                &ni,
+                &serde_json::json!({ "column": "tags", "separator": "," }),
+                "xf.norm"
+            )
+            .is_none(),
+            "a separator means any type splits"
+        );
+        assert!(
+            list_column_guard(
+                &ni,
+                &serde_json::json!({ "column": "s" }),
+                "xf.json.flatten"
+            )
+            .is_none(),
+            "only the exploding components get it"
+        );
+
+        // The guard travels in its own field, not inside `sql`: node analysis
+        // and lineage both refuse a stage whose SQL does not open with the
+        // CREATE, so the stage text must stay CREATE-first.
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{"label":"src","componentId":"src.csv","properties":{"path":"/tmp/s.csv","hasHeader":true}}},
+                {"id":"x","position":{"x":0,"y":0},"data":{"label":"Explode","componentId":"xf.arr.explode","properties":{"column":"items"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"out","componentId":"snk.csv","properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges":[
+                {"id":"e1","source":"s","target":"x","data":{"connectionType":"main"}},
+                {"id":"e2","source":"x","target":"k","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let stage = compile(&doc)
+            .unwrap()
+            .stages
+            .into_iter()
+            .find(|s| s.node_id == "x")
+            .unwrap();
+        let sql = stage.sql.clone();
+        let pre = stage.pre_sql.expect("explode stage carries its guard");
+        assert!(pre.contains("LIMIT 1;"), "the guard statement: {pre}");
+        assert!(
+            !sql.contains("DESCRIBE"),
+            "the probe stays out of stage.sql: {sql}"
+        );
+        assert!(
+            sql.trim_start().starts_with("CREATE OR REPLACE"),
+            "stage.sql opens with the CREATE so node analysis still runs: {sql}"
+        );
+        assert!(
+            sql.contains("unnest(CASE WHEN \"items\" IS NULL"),
+            "the body is unchanged: {sql}"
+        );
+    }
+
     #[test]
     fn json_flatten_is_a_setting_and_repeated_keys_can_keep_their_parent() {
         // #238. Two things, reported together.
