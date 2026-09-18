@@ -8370,28 +8370,51 @@ impl DuckdbEngine {
                 Some(t) => crate::tls::http_agent_with(t),
                 None => crate::tls::http_agent(),
             };
-            let mut req = agent.get(uri);
-            for (k, v) in &spec.headers {
-                req = req.set(k, v);
-            }
-            match req.call() {
-                Ok(r) => r
-                    .into_string()
-                    .map_err(|e| EngineError::Query(format!("html: read {}: {}", uri, e)))?,
-                Err(ureq::Error::Status(code, r)) => {
-                    let body = r.into_string().unwrap_or_default();
-                    return Err(EngineError::Query(format!(
-                        "html: HTTP {} from {}: {}",
-                        code,
-                        uri,
-                        body.chars().take(300).collect::<String>()
-                    )));
+            // #256: the same transport retry policy src.rest follows - a 429
+            // or 5xx is waited out per Retry-After, everything else fails as
+            // fast as it always did. The request is rebuilt per attempt
+            // because ureq consumes it on send.
+            let max_retries = spec
+                .transport
+                .as_ref()
+                .and_then(|t| t.max_retries)
+                .unwrap_or(3);
+            let mut attempt = 0u32;
+            loop {
+                self.check_cancelled()?;
+                let mut req = agent.get(uri);
+                for (k, v) in &spec.headers {
+                    req = req.set(k, v);
                 }
-                Err(e) => {
-                    return Err(EngineError::Query(format!(
-                        "html: HTTP transport to {}: {}",
-                        uri, e
-                    )))
+                match req.call() {
+                    Ok(r) => {
+                        break r
+                            .into_string()
+                            .map_err(|e| EngineError::Query(format!("html: read {}: {}", uri, e)))?
+                    }
+                    Err(ureq::Error::Status(code, r)) => {
+                        let retryable = code == 429 || (500..600).contains(&code);
+                        if retryable && attempt < max_retries {
+                            let wait =
+                                crate::tls::retry_wait_ms(r.header("Retry-After"), attempt);
+                            self.ai_sleep_cancellable(wait)?;
+                            attempt += 1;
+                            continue;
+                        }
+                        let body = r.into_string().unwrap_or_default();
+                        return Err(EngineError::Query(format!(
+                            "html: HTTP {} from {}: {}",
+                            code,
+                            uri,
+                            body.chars().take(300).collect::<String>()
+                        )));
+                    }
+                    Err(e) => {
+                        return Err(EngineError::Query(format!(
+                            "html: HTTP transport to {}: {}",
+                            uri, e
+                        )))
+                    }
                 }
             }
         } else {
@@ -10860,10 +10883,7 @@ impl DuckdbEngine {
     /// earns another 429. Without one the wait doubles from 500ms, capped so a
     /// stalled provider cannot park a stage for an unbounded time.
     pub(crate) fn ai_retry_wait_ms(retry_after: Option<&str>, attempt: u32) -> u64 {
-        if let Some(secs) = retry_after.and_then(|v| v.trim().parse::<u64>().ok()) {
-            return (secs * 1000).min(300_000);
-        }
-        (500u64 << attempt.min(6)).min(30_000)
+        crate::tls::retry_wait_ms(retry_after, attempt)
     }
 
     /// #258: sleep, but notice a cancelled run instead of sitting out a rate
@@ -15604,39 +15624,77 @@ impl DuckdbEngine {
                 let sep = if url.contains('?') { '&' } else { '?' };
                 url = format!("{}{}{}={}", url, sep, page_param, start_page);
             }
+            // #256: the transport's retry policy, the same rule the AI stages
+            // follow - a 429 or 5xx is retried honouring `Retry-After`, and
+            // everything else fails as fast as it always did. `httpMaxRetries`
+            // sets the count, 0 disables it, and unset leaves the default of
+            // three chances before the stage gives up on the whole dataset.
+            let configured_retries = spec.transport.as_ref().and_then(|t| t.max_retries);
+            let max_retries = configured_retries.unwrap_or(3);
             loop {
                 self.check_cancelled()?;
                 // Build request
-                let mut req = agent.request(&spec.method, &url);
                 let has_ct = eff_headers
                     .iter()
                     .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
-                for (k, v) in &eff_headers {
-                    req = req.set(k, v);
-                }
-                if spec.body.is_some() && !has_ct {
-                    req = req.set("content-type", "application/json");
-                }
-                let resp_result = match &spec.body {
-                    Some(b) => req.send_string(b),
-                    None => req.call(),
-                };
-                let response_raw = match resp_result {
-                    Ok(r) => r,
-                    Err(ureq::Error::Status(code, r)) => {
-                        let body = r.into_string().unwrap_or_default();
-                        return Err(EngineError::Query(format!(
-                            "REST HTTP {} from {}: {}",
-                            code,
-                            url,
-                            body.chars().take(300).collect::<String>()
-                        )));
-                    }
-                    Err(e) => {
-                        return Err(EngineError::Query(format!(
-                            "REST HTTP transport to {}: {}",
-                            url, e
-                        )));
+                // Rebuilt per attempt: ureq consumes the Request when it is
+                // sent, so a retry needs a fresh one with the same headers.
+                let response_raw = {
+                    let mut attempt = 0u32;
+                    loop {
+                        self.check_cancelled()?;
+                        let mut req = agent.request(&spec.method, &url);
+                        for (k, v) in &eff_headers {
+                            req = req.set(k, v);
+                        }
+                        if spec.body.is_some() && !has_ct {
+                            req = req.set("content-type", "application/json");
+                        }
+                        let resp_result = match &spec.body {
+                            Some(b) => req.send_string(b),
+                            None => req.call(),
+                        };
+                        match resp_result {
+                            Ok(r) => break r,
+                            Err(ureq::Error::Status(code, r)) => {
+                                // A 429 means nothing was processed, so any
+                                // method can retry it. A 5xx on a non-idempotent
+                                // method is not retried by default: the backend
+                                // may have committed (a SOAP order create, a
+                                // GraphQL mutation, an RFC post) before the
+                                // gateway failed, and re-sending the same body
+                                // would submit it twice. An operator who wants
+                                // a POST retried anyway opts in by setting
+                                // httpMaxRetries explicitly.
+                                let idempotent = matches!(
+                                    spec.method.to_ascii_uppercase().as_str(),
+                                    "" | "GET" | "HEAD" | "OPTIONS"
+                                );
+                                let retryable = code == 429
+                                    || ((500..600).contains(&code)
+                                        && (idempotent || configured_retries.is_some()));
+                                if retryable && attempt < max_retries {
+                                    let wait =
+                                        crate::tls::retry_wait_ms(r.header("Retry-After"), attempt);
+                                    self.ai_sleep_cancellable(wait)?;
+                                    attempt += 1;
+                                    continue;
+                                }
+                                let body = r.into_string().unwrap_or_default();
+                                return Err(EngineError::Query(format!(
+                                    "REST HTTP {} from {}: {}",
+                                    code,
+                                    url,
+                                    body.chars().take(300).collect::<String>()
+                                )));
+                            }
+                            Err(e) => {
+                                return Err(EngineError::Query(format!(
+                                    "REST HTTP transport to {}: {}",
+                                    url, e
+                                )));
+                            }
+                        }
                     }
                 };
                 // Capture Link header before consuming the response body.

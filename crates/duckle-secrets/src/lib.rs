@@ -453,7 +453,7 @@ pub fn resolve_connection_ref_props(
 /// #256: flatten a saved `http` transport connection onto a node.
 ///
 /// Proxies, timeouts and a User-Agent are transport, not credentials, and every
-/// HTTP-backed component wants the same four. Keeping them on a saved connection
+/// HTTP-backed component wants the same five. Keeping them on a saved connection
 /// means setting a corporate proxy once rather than on every node, and the node
 /// still wins where it set a value itself - the same policy a saved REST
 /// connection already uses for url and auth.
@@ -488,6 +488,7 @@ fn resolve_transport_ref(workspace: &Path, props: &mut JsonValue) -> Result<(), 
         ("readTimeoutSecs", "httpReadTimeoutSecs"),
         ("connectTimeoutSecs", "httpConnectTimeoutSecs"),
         ("userAgent", "httpUserAgent"),
+        ("maxRetries", "httpMaxRetries"),
     ] {
         let filled = |v: Option<&JsonValue>| -> bool {
             !matches!(v, None | Some(JsonValue::Null)) && v.and_then(|x| x.as_str()) != Some("")

@@ -5252,6 +5252,160 @@ fn src_rest_paginates_via_offset() {
 }
 
 #[test]
+fn src_rest_retries_a_429_and_obeys_http_max_retries() {
+    // #256: the transport-level policy the AI stages already had - a rate
+    // limit is waited out per Retry-After rather than failing the stage, and
+    // httpMaxRetries: 0 says do not retry at all.
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let req_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let rc = req_count.clone();
+
+    // First request: 429 with Retry-After. Second: the data. Retry-After: 0
+    // keeps the test instant while still proving the header was read (an
+    // unread header would have waited out the 500ms backoff instead).
+    let handle = std::thread::spawn(move || {
+        for stream in incoming_bounded(&listener, 2) {
+            let mut stream = match stream { Ok(s) => s, Err(_) => break };
+            stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
+            stream.set_nodelay(true).ok();
+            drain_http_request(&mut stream);
+            let idx = rc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let (status, body) = match idx {
+                0 => ("429 Too Many Requests\r\nRetry-After: 0", ""),
+                _ => ("200 OK", r#"[{"id":1}]"#),
+            };
+            let resp = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status, body.len(), body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let url = format!("http://127.0.0.1:{}/items", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("r", "src.rest", json!({ "url": url })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "r", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "429-then-200 should succeed: {:?}", r.error);
+    assert_eq!(req_count.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 1);
+
+    // Same endpoint, retries explicitly off: the 429 is the answer, and the
+    // stub must see exactly ONE request - a "did not retry" assertion has to
+    // count requests, since a retried-into-a-dead-socket failure looks the
+    // same from the outside.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let req_count2 = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let rc2 = req_count2.clone();
+    let handle = std::thread::spawn(move || {
+        for stream in incoming_bounded(&listener, 1) {
+            let mut stream = match stream { Ok(s) => s, Err(_) => break };
+            stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
+            drain_http_request(&mut stream);
+            rc2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = stream.write_all(
+                b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            let _ = stream.flush();
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+    let url = format!("http://127.0.0.1:{}/items", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("r", "src.rest", json!({ "url": url, "httpMaxRetries": 0 })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "r", "k")]),
+    ));
+    let _ = handle.join();
+    assert_ne!(r.status, "ok", "httpMaxRetries 0 must not retry the 429");
+    assert_eq!(
+        req_count2.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "exactly one request reached the stub"
+    );
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("429"), "the error names the refusal: {err}");
+}
+
+/// #256: src.html follows the same transport policy as src.rest - a 5xx on a
+/// GET is waited out and retried instead of ending the stage.
+#[test]
+fn src_html_retries_a_5xx_then_reads_the_table() {
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let req_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let rc = req_count.clone();
+    let handle = std::thread::spawn(move || {
+        for stream in incoming_bounded(&listener, 2) {
+            let mut stream = match stream { Ok(s) => s, Err(_) => break };
+            stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
+            drain_http_request(&mut stream);
+            let idx = rc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let (status, body) = match idx {
+                0 => ("503 Service Unavailable\r\nRetry-After: 0", ""),
+                _ => (
+                    "200 OK",
+                    "<html><body><table id=t><tr><th>Name</th></tr><tr><td>Acme</td></tr></table></body></html>",
+                ),
+            };
+            let resp = format!(
+                "HTTP/1.1 {}\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status, body.len(), body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let url = format!("http://127.0.0.1:{}/page", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.html", json!({ "path": url, "rowSelector": "table#t" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "503-then-200 should succeed: {:?}", r.error);
+    assert_eq!(
+        req_count.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the 503 was retried once"
+    );
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 1);
+}
+
+#[test]
 fn src_rest_errors_when_maxpages_truncates() {
     // Every page is full (2 rows), so the source never ends on its own;
     // maxPages=2 stops it. That stop must surface as an ERROR, not a
@@ -15704,6 +15858,9 @@ fn a_cursor_does_not_advance_past_a_parent_that_failed() {
                     "onParentError": "skip",
                     "incrementalField": "updated_at",
                     "incrementalInitial": "1970-01-01",
+                    // One request per parent: the retry default would re-ask
+                    // the 500 and break the request-count arithmetic below.
+                    "httpMaxRetries": 0,
                 })),
                 node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
             ]),
@@ -16138,6 +16295,10 @@ fn a_failed_parent_becomes_a_reject_row_instead_of_ending_the_run() {
                 "responsePath": "/results",
                 "parentKeyColumn": "id",
                 "onParentError": "reject",
+                // The stub is bounded to one request per parent; retrying the
+                // 500 would exhaust its accepts and turn parent 3's answer
+                // into a connection refusal instead.
+                "httpMaxRetries": 0,
             })),
             node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
             node("kr", "snk.csv", json!({ "path": rej, "hasHeader": true })),
@@ -16442,6 +16603,9 @@ fn a_pagination_walk_cut_short_by_a_failure_is_incomplete() {
                 "nextPageSelector": "a.next",
                 "onError": "skip",
                 "maxPages": 10,
+                // One request per page: the retry default would re-ask the
+                // failed page and break the served-count arithmetic.
+                "httpMaxRetries": 0,
             })),
             node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
         ]),

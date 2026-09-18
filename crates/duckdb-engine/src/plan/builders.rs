@@ -10161,6 +10161,9 @@ pub(crate) fn http_transport_from_props(props: &JsonValue) -> Option<crate::tls:
         read_timeout_secs: secs("httpReadTimeoutSecs"),
         connect_timeout_secs: secs("httpConnectTimeoutSecs"),
         user_agent: string_prop(props, "httpUserAgent").filter(|s| !s.trim().is_empty()),
+        // u64-as-0 is kept on purpose: it is how a node says "do not retry at
+        // all", which None would read as "use the caller's default".
+        max_retries: props.get("httpMaxRetries").and_then(|v| v.as_u64()).map(|n| n as u32),
     };
     if t == crate::tls::HttpTransport::default() {
         None
