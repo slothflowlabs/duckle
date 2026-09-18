@@ -1880,15 +1880,20 @@ whether the deletion runs, so the two cannot disagree about what would go.
 
 ### Reports CI already understands (`--format`)
 
-`validate` emits the shapes CI systems and agents actually consume, so nothing
-has to scrape console text:
+`validate`, `test` and `review` emit the shapes CI systems and agents actually
+consume, so nothing has to scrape console text:
 
 ```bash
 duckle-runner validate --format json    # versioned envelope
 duckle-runner validate --format junit   # every CI renders this as a test report
 duckle-runner validate --format sarif   # GitHub Code Scanning, and most editors
 duckle-runner test     --format junit   # the same three, from the same module
+duckle-runner review --before old.json --after new.json --format junit
 ```
+
+For `review` the gate is the after side: a `--before` version that does not
+compile or run is reported as an informational finding, not a failure, because
+a broken old version is the ordinary shape of a fix.
 
 `duckle test` names each case by its assertion and the node it asserts on, so a
 JUnit report is navigable rather than a list of file names:
@@ -1917,9 +1922,11 @@ told from one where only two things ran.
 on `2`, because `2` means the gate never actually ran, and treating that as a
 pass is how a broken gate goes unnoticed for a month.
 
-`--json` is unchanged and is the same document as `--format json`: the versioned
-envelope carries the old `results` array alongside the new `findings`, so an
-existing consumer keeps working and a new one gets `schemaVersion`.
+For `validate` and `test`, `--json` is unchanged and is the same document as
+`--format json`: the versioned envelope carries the old `results` array
+alongside the new `findings`, so an existing consumer keeps working and a new
+one gets `schemaVersion`. `review` is the exception: its `--json` is the older
+review document, while `--format json` emits the shared findings envelope.
 
 ### Retry a failed run (`retry`)
 

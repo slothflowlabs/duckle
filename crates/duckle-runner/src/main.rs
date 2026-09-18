@@ -1041,6 +1041,10 @@ USAGE:
 
 OPTIONS:
     --json                 Emit the full report as JSON.
+    --format <fmt>         Machine-readable report: json, junit or sarif.
+                           json is the --json document plus a versioned
+                           findings envelope; junit/sarif are what CI systems
+                           and Code Scanning read directly.
     --data                 Also run both versions and diff the data (per-node
                            row counts). Sinks are stripped before running, so no
                            destination is written; sources are read and
@@ -1795,6 +1799,9 @@ fn run_review() -> Result<i32, String> {
     let mut as_json = false;
     let mut as_data = false;
     let mut as_drift = false;
+    // #312: the same three shapes validate/test/contracts emit, from the same
+    // report module, so a CI job reads one format across every gate.
+    let mut format = String::new();
     let mut duckdb_arg: Option<PathBuf> = None;
     let mut workspace_arg: Option<PathBuf> = None;
     let mut it = std::env::args().skip(2); // skip the exe and the "review" verb
@@ -1803,6 +1810,17 @@ fn run_review() -> Result<i32, String> {
             "--before" => before = Some(PathBuf::from(it.next().ok_or("--before needs a value")?)),
             "--after" => after = Some(PathBuf::from(it.next().ok_or("--after needs a value")?)),
             "--json" => as_json = true,
+            "--format" => match it.next().as_deref() {
+                Some(f @ ("json" | "junit" | "sarif")) => format = f.to_string(),
+                Some(other) => {
+                    return Err(format!(
+                        "duckle-runner review: unknown --format {other}. Use json, junit or sarif."
+                    ))
+                }
+                None => {
+                    return Err("duckle-runner review: --format needs json, junit or sarif".into())
+                }
+            },
             "--data" => as_data = true,
             "--drift" => as_drift = true,
             "--duckdb" => duckdb_arg = Some(PathBuf::from(it.next().ok_or("--duckdb needs a value")?)),
@@ -1910,18 +1928,40 @@ fn run_review() -> Result<i32, String> {
         }
     }
 
-    if as_json {
-        let out = serde_json::json!({
-            "before": { "path": before.display().to_string(),
-                "compiles": before_compiles.is_ok(),
-                "error": before_compiles.as_ref().err() },
-            "after": { "path": after.display().to_string(),
-                "compiles": after_compiles.is_ok(),
-                "error": after_compiles.as_ref().err() },
-            "diff": report,
-            "dataDiff": data_section,
-            "schemaDrift": drift_section,
-        });
+    // #312: translate the review into the shared findings model so
+    // --format json/junit/sarif emits the same shapes as validate/test and
+    // contracts check. After-side compile, run and drift failures gate;
+    // before-side failures, node diffs and row-count changes are
+    // informational passes (see review_findings).
+    let after_file = after.display().to_string();
+    let before_file = before.display().to_string();
+    let out = serde_json::json!({
+        "before": { "path": before_file,
+            "compiles": before_compiles.is_ok(),
+            "error": before_compiles.as_ref().err() },
+        "after": { "path": after_file,
+            "compiles": after_compiles.is_ok(),
+            "error": after_compiles.as_ref().err() },
+        "diff": report.clone(),
+        "dataDiff": data_section.clone(),
+        "schemaDrift": drift_section.clone(),
+    });
+    if !format.is_empty() {
+        let findings = review_findings(
+            &before_file,
+            &after_file,
+            &before_compiles,
+            &after_compiles,
+            &report,
+            data_section.as_ref(),
+            drift_section.as_ref(),
+        );
+        match format.as_str() {
+            "json" => println!("{}", report::json("review", &findings, out)),
+            "junit" => println!("{}", report::junit("review", &findings)),
+            _ => println!("{}", report::sarif("review", &findings)),
+        }
+    } else if as_json {
         println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
     } else {
         let yn = |r: &Result<(), String>| if r.is_ok() { "yes" } else { "no" };
@@ -2046,6 +2086,168 @@ fn run_review() -> Result<i32, String> {
             0
         },
     )
+}
+
+/// #312: translate a review into the shared findings model so
+/// --format json/junit/sarif emits the same shapes as validate/test and
+/// contracts check. Only the after side gates, so before-side failures are
+/// reported as informational passes: a review whose before version does not
+/// compile is usually a fix, and a red finding plus exit 0 would tell the CI
+/// job two opposite stories about the same run.
+fn review_findings(
+    before_file: &str,
+    after_file: &str,
+    before_compiles: &Result<(), String>,
+    after_compiles: &Result<(), String>,
+    report: &serde_json::Value,
+    data_section: Option<&serde_json::Value>,
+    drift_section: Option<&serde_json::Value>,
+) -> Vec<report::Finding> {
+    let mut findings: Vec<report::Finding> = Vec::new();
+    findings.push(match before_compiles {
+        Ok(()) => report::Finding::pass(before_file, "compile", "compiles".into()),
+        Err(e) => {
+            report::Finding::pass(before_file, "compile-before", format!("before does not compile: {e}"))
+        }
+    });
+    findings.push(match after_compiles {
+        Ok(()) => report::Finding::pass(after_file, "compile", "compiles".into()),
+        Err(e) => report::Finding::fail(after_file, "compile", e.clone()),
+    });
+    for (key, file, rule) in [
+        ("added", after_file, "node-added"),
+        ("removed", before_file, "node-removed"),
+        ("changed", after_file, "node-changed"),
+    ] {
+        for e in report["nodes"][key].as_array().into_iter().flatten() {
+            findings.push(report::Finding {
+                node: e["node"].as_str().map(str::to_string),
+                ..report::Finding::pass(
+                    file,
+                    rule,
+                    format!("{} ({})", rule, e["componentId"].as_str().unwrap_or("?")),
+                )
+            });
+        }
+    }
+    if let Some(d) = data_section {
+        for (file, side) in [(before_file, "before"), (after_file, "after")] {
+            let e = &d[side];
+            findings.push(if e["ok"] == serde_json::json!(true) {
+                report::Finding::pass(file, "data-run", format!("{side} ran"))
+            } else if side == "before" {
+                report::Finding::pass(
+                    file,
+                    "data-run-before",
+                    format!("before failed to run: {}", e["error"].as_str().unwrap_or("?")),
+                )
+            } else {
+                report::Finding::fail(
+                    file,
+                    "data-run",
+                    format!("after failed to run: {}", e["error"].as_str().unwrap_or("?")),
+                )
+            });
+        }
+        for r in d["changedRows"].as_array().into_iter().flatten() {
+            findings.push(report::Finding {
+                node: r["node"].as_str().map(str::to_string),
+                ..report::Finding::pass(
+                    after_file,
+                    "row-count",
+                    format!("rows {} -> {}", r["beforeRows"], r["afterRows"]),
+                )
+            });
+        }
+    }
+    if let Some(d) = drift_section {
+        if d["ok"] == serde_json::json!(false) {
+            findings.push(report::Finding::fail(
+                after_file,
+                "schema-drift",
+                format!("drift check failed: {}", d["error"].as_str().unwrap_or("")),
+            ));
+        } else {
+            for s in d["sources"].as_array().into_iter().flatten() {
+                let file = s["path"].as_str().unwrap_or(after_file);
+                let node = s["nodeId"].as_str().map(str::to_string);
+                let f = match s["status"].as_str() {
+                    Some("drift") if s["breaking"] == serde_json::json!(true) => {
+                        report::Finding::fail(
+                            file,
+                            "schema-drift",
+                            format!(
+                                "breaking drift - missing: {}, type changes: {}",
+                                s["missingColumns"], s["typeChanges"]
+                            ),
+                        )
+                    }
+                    Some("drift") => report::Finding::pass(
+                        file,
+                        "schema-drift",
+                        format!("additive drift - added: {}", s["addedColumns"]),
+                    ),
+                    Some("match") => {
+                        report::Finding::pass(file, "schema-drift", "schema matches".into())
+                    }
+                    Some(other) => {
+                        report::Finding::pass(file, "schema-drift", format!("not checked ({other})"))
+                    }
+                    None => report::Finding::pass(file, "schema-drift", "not checked".into()),
+                };
+                findings.push(report::Finding { node, ..f });
+            }
+        }
+    }
+    findings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A before version that does not compile is the ordinary shape of a fix
+    /// review, and the gate exits 0 on it - so it must not produce a failing
+    /// finding, or JUnit/SARIF would report red on a green run.
+    #[test]
+    fn review_findings_reports_a_before_compile_failure_as_information() {
+        let findings = review_findings(
+            "old.json",
+            "new.json",
+            &Err("broken".into()),
+            &Ok(()),
+            &serde_json::json!({ "nodes": {} }),
+            None,
+            None,
+        );
+        assert!(
+            findings.iter().all(|f| f.ok),
+            "a before-only failure cannot fail the report: {findings:?}"
+        );
+        let before = findings.iter().find(|f| f.rule == "compile-before").unwrap();
+        assert!(before.message.contains("broken"), "{before:?}");
+    }
+
+    /// A changed node carries its id onto the finding, so a SARIF viewer can
+    /// group the diff by node rather than by prose.
+    #[test]
+    fn review_findings_names_the_changed_node() {
+        let report = serde_json::json!({
+            "nodes": { "changed": [{ "node": "n1", "componentId": "xf.filter" }] }
+        });
+        let findings = review_findings(
+            "old.json",
+            "new.json",
+            &Ok(()),
+            &Ok(()),
+            &report,
+            None,
+            None,
+        );
+        let f = findings.iter().find(|f| f.rule == "node-changed").unwrap();
+        assert_eq!(f.node.as_deref(), Some("n1"));
+        assert!(f.message.contains("xf.filter"), "{f:?}");
+    }
 }
 
 fn main() -> ExitCode {
