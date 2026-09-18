@@ -1853,6 +1853,7 @@ impl DuckdbEngine {
                     NodeRunStatus {
                         status: "ok".into(),
                         kind: Some("sink".into()),
+                        component: Some(stage.component_id.clone()),
                         note: None,
                         rows,
                         duration_ms: Some(0),
@@ -2202,6 +2203,7 @@ impl DuckdbEngine {
                                         NodeRunStatus {
                                             status: st.status.clone(),
                                             kind: st.kind.clone(),
+                                            component: st.component.clone(),
                                             note: None,
                                             rows: st.rows,
                                             duration_ms: st.duration_ms,
@@ -2738,6 +2740,7 @@ impl DuckdbEngine {
                         NodeRunStatus {
                             status: if stage_unchanged { "unchanged" } else { "ok" }.into(),
                             kind: Some(kind_label.into()),
+                            component: Some(stage.component_id.clone()),
                             note: stage_note.clone(),
                             rows: rows_opt,
                             duration_ms: Some(elapsed_ms),
@@ -2804,6 +2807,7 @@ impl DuckdbEngine {
                         NodeRunStatus {
                             status: "error".into(),
                             kind: Some(kind_label.into()),
+                            component: Some(stage.component_id.clone()),
                             note: None,
                             rows: None,
                             duration_ms: Some(elapsed_ms),
@@ -2873,6 +2877,7 @@ impl DuckdbEngine {
                     NodeRunStatus {
                         status: "skipped".into(),
                         kind: None,
+                        component: Some(stage.component_id.clone()),
                         note: Some("not run: an earlier stage stopped at its budget".into()),
                         rows: None,
                         duration_ms: None,
@@ -3477,6 +3482,7 @@ impl DuckdbEngine {
                     NodeRunStatus {
                         status: "error".into(),
                         kind: Some(kind.into()),
+                        component: Some(stage.component_id.clone()),
                         note: None,
                         rows: None,
                         duration_ms: Some(elapsed),
@@ -4260,6 +4266,7 @@ fn drain_batched_markers(
             NodeRunStatus {
                 status: "ok".into(),
                 kind: Some(kind.into()),
+                component: Some(stage.component_id.clone()),
                 note: None,
                 rows,
                 duration_ms: Some(elapsed),
@@ -7015,6 +7022,11 @@ pub struct NodeRunStatus {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// The node's component id (`src.rest`, `xf.filter`, ...), so metrics and
+    /// diffs can group by WHAT ran rather than only by node id. Absent for
+    /// stages back-filled without a component.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<String>,
     /// What the node reported on SUCCESS, when it had something to say.
     ///
     /// Driver connectors already return a sentence describing what they did -

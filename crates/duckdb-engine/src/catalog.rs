@@ -1797,6 +1797,7 @@ mod tests {
             incomplete: false,
             incomplete_reason: None,
             assets: vec![AssetTouch { id: asset.into(), direction: dir.into(), rows }],
+            nodes: Vec::new(),
             run_id: None,
             unchanged: false,
         };
@@ -2604,6 +2605,7 @@ mod freshness_and_the_history_window {
             incomplete_reason: None,
             category: None,
             assets: vec![AssetTouch { id: asset.into(), direction: "write".into(), rows: Some(1) }],
+            nodes: Vec::new(),
         }
     }
 

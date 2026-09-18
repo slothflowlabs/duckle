@@ -72,6 +72,32 @@ pub struct RunRecord {
     /// Defaulted, so every run record written before this still parses.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assets: Vec<AssetTouch>,
+    /// What each node did, for the metrics document (#300): per-node duration
+    /// and row counts are the difference between "the run got slower" and
+    /// "the parse stage got slower".
+    ///
+    /// Defaulted and omitted when empty, so records written before this still
+    /// parse and a run with no node detail records nothing extra.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<NodeMetric>,
+}
+
+/// One node's contribution to a run, in the shape metrics need.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeMetric {
+    pub node: String,
+    /// The component that ran (`src.rest`, `xf.filter`). Bounded - it comes
+    /// from the component registry, not from user text - so it is a safe
+    /// Prometheus label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<String>,
+    /// Absent is not zero: a node the run never reached took no time, and
+    /// emitting 0 would report an instant stage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u64>,
 }
 
 /// One asset a run touched.
@@ -113,6 +139,17 @@ impl RunRecord {
             error: result.error.clone(),
             category: result.category.clone(),
             assets: Vec::new(),
+            // BTreeMap order, so the record is deterministic.
+            nodes: result
+                .nodes
+                .iter()
+                .map(|(id, n)| NodeMetric {
+                    node: id.clone(),
+                    component: n.component.clone(),
+                    duration_ms: n.duration_ms,
+                    rows: n.rows,
+                })
+                .collect(),
         }
     }
 
@@ -179,8 +216,18 @@ pub fn append_run_record(
     let publication = record.clone();
     records.push(record);
     let start = records.len().saturating_sub(MAX_RECORDS);
-    let trimmed = &records[start..];
-    let json = serde_json::to_string_pretty(trimmed)
+    let trimmed = &mut records[start..];
+    // Per-node detail is read off the newest record only (render_metrics
+    // looks at `last.nodes`), so keeping it on every retained record would
+    // multiply the file by the node count - a 200-node pipeline would append
+    // ~1.3MiB and rewrite it on every run. Strip it from the older records
+    // at trim time; the records still say the run happened, just not how
+    // each stage did.
+    let newest = trimmed.len().saturating_sub(1);
+    for r in trimmed.iter_mut().take(newest) {
+        r.nodes.clear();
+    }
+    let json = serde_json::to_string_pretty(&*trimmed)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     std::fs::write(&path, json)?;
     // The record is durable now, so the event can be indexed from it. Reported
@@ -249,6 +296,8 @@ pub fn render_metrics(workspace: &Path) -> std::io::Result<String> {
     let mut last_ts = String::new();
     let mut last_unchanged = String::new();
     let mut window_runs = String::new();
+    let mut node_duration = String::new();
+    let mut node_rows = String::new();
 
     let entries = std::fs::read_dir(&runs_dir)?;
     let mut files: Vec<_> = entries
@@ -329,6 +378,32 @@ pub fn render_metrics(workspace: &Path) -> std::io::Result<String> {
             label,
             records.iter().filter(|r| r.unchanged).count()
         ));
+        // Per-node detail from the most recent run only. `node` is bounded
+        // (a pipeline's own ids) and `component` is bounded (the registry), so
+        // the pair stays inside the same label budget as the pipeline itself.
+        // Absent values emit nothing: a node the run never reached is not a
+        // zero-duration stage.
+        for n in &last.nodes {
+            let labels = format!(
+                "pipeline=\"{}\",node=\"{}\"{}",
+                label,
+                escape_label(&n.node),
+                n.component
+                    .as_deref()
+                    .map(|c| format!(",component=\"{}\"", escape_label(c)))
+                    .unwrap_or_default()
+            );
+            if let Some(ms) = n.duration_ms {
+                node_duration.push_str(&format!(
+                    "duckle_node_last_duration_seconds{{{}}} {}\n",
+                    labels,
+                    ms as f64 / 1000.0
+                ));
+            }
+            if let Some(rows) = n.rows {
+                node_rows.push_str(&format!("duckle_node_last_rows{{{}}} {}\n", labels, rows));
+            }
+        }
     }
 
     out.push_str(&last_status);
@@ -344,6 +419,10 @@ pub fn render_metrics(workspace: &Path) -> std::io::Result<String> {
     out.push_str(&last_ts);
     out.push_str("# HELP duckle_runs_window Runs by status within the retained history window (not a lifetime counter).\n# TYPE duckle_runs_window gauge\n");
     out.push_str(&window_runs);
+    out.push_str("# HELP duckle_node_last_duration_seconds Per-node duration of the most recent run, by component. \"The run got slower\" answered by which stage, not by polling the UI.\n# TYPE duckle_node_last_duration_seconds gauge\n");
+    out.push_str(&node_duration);
+    out.push_str("# HELP duckle_node_last_rows Rows each node reported in the most recent run. Absent is not zero: a node the run never reached emits nothing.\n# TYPE duckle_node_last_rows gauge\n");
+    out.push_str(&node_rows);
     // One push per line. A `\` continuation inside a string literal keeps the
     // indentation of the next source line, and Prometheus requires every line
     // to begin in column zero.
@@ -447,6 +526,7 @@ mod tests {
             error: (status == "error").then(|| "Binder Error: column gone".into()),
             category: (status == "error").then(|| "schema".into()),
             assets: Vec::new(),
+            nodes: Vec::new(),
             unchanged: false,
             incomplete: false,
             incomplete_reason: None,
@@ -488,12 +568,131 @@ mod tests {
     }
 
     #[test]
+    fn the_last_run_breaks_down_by_node_and_component() {
+        // #300: "the run got slower" has to answer "which stage", and a stage
+        // the run never reached is absent rather than a zero that never
+        // happened.
+        let ws = tempfile::tempdir().unwrap();
+        let mut rec = record("ok", 1500, 42);
+        rec.nodes = vec![
+            NodeMetric {
+                node: "extract".into(),
+                component: Some("src.rest".into()),
+                duration_ms: Some(900),
+                rows: Some(100),
+            },
+            NodeMetric {
+                node: "load".into(),
+                component: Some("snk.parquet".into()),
+                duration_ms: Some(600),
+                rows: Some(42),
+            },
+            // Never reached: no duration, no rows, emits nothing.
+            NodeMetric { node: "audit".into(), component: Some("snk.audit".into()), duration_ms: None, rows: None },
+        ];
+        append_run_record(ws.path(), "nightly", rec).unwrap();
+
+        let out = render_metrics(ws.path()).unwrap();
+        assert!(
+            out.contains(
+                "duckle_node_last_duration_seconds{pipeline=\"nightly\",node=\"extract\",component=\"src.rest\"} 0.9"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "duckle_node_last_rows{pipeline=\"nightly\",node=\"load\",component=\"snk.parquet\"} 42"
+            ),
+            "{out}"
+        );
+        assert!(!out.contains("audit"), "a node that never ran emits nothing: {out}");
+
+        // A record from before nodes existed still renders: it emits no node
+        // lines and breaks nothing.
+        append_run_record(ws.path(), "old", record("ok", 10, 1)).unwrap();
+        let out = render_metrics(ws.path()).unwrap();
+        assert!(!out.contains("pipeline=\"old\",node="), "old pipelines keep working: {out}");
+    }
+
+    #[test]
     fn run_record_carries_error_category() {
         let ws = tempfile::tempdir().unwrap();
         append_run_record(ws.path(), "p", record("error", 10, 0)).unwrap();
         let loaded = load_run_history(ws.path(), "p");
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].category.as_deref(), Some("schema"));
+    }
+
+    /// #300: the nodes list is built by `from_result`, not written by hand -
+    /// the test proves the mapping, the BTreeMap ordering, and that
+    /// `component` survives, none of which a hand-built NodeMetric pins.
+    #[test]
+    fn from_result_maps_nodes_in_order_with_their_components() {
+        let mut nodes: std::collections::BTreeMap<String, crate::NodeRunStatus> =
+            Default::default();
+        let entry = |component: &str, ms: u64, rows: u64| crate::NodeRunStatus {
+            status: "ok".into(),
+            kind: None,
+            component: Some(component.into()),
+            note: None,
+            rows: Some(rows),
+            duration_ms: Some(ms),
+            error: None,
+            category: None,
+            sql: None,
+        };
+        // Inserted out of order on purpose: the record must be BTreeMap-sorted
+        // so two runs of the same pipeline serialize identically.
+        nodes.insert("zeta".into(), entry("snk.csv", 50, 9));
+        nodes.insert("alpha".into(), entry("src.csv", 100, 9));
+        let result = RunResult {
+            cache_keys: Default::default(),
+            status: "ok".into(),
+            duration_ms: 150,
+            nodes,
+            preview: Vec::new(),
+            error: None,
+            category: None,
+            unchanged: false,
+            incomplete: false,
+            incomplete_reason: None,
+            artifacts: Vec::new(),
+            artifacts_truncated: false,
+        };
+        let rec = RunRecord::from_result(&result, "manual");
+        let ids: Vec<&str> = rec.nodes.iter().map(|n| n.node.as_str()).collect();
+        assert_eq!(ids, ["alpha", "zeta"], "node order is the map's, not insertion order");
+        assert_eq!(rec.nodes[0].component.as_deref(), Some("src.csv"));
+        assert_eq!(rec.nodes[0].duration_ms, Some(100));
+        assert_eq!(rec.nodes[1].rows, Some(9));
+    }
+
+    /// The per-node list is unbounded input (node count) inside a file that is
+    /// rewritten whole on every run - so it is kept on the newest record only,
+    /// which is the only record render_metrics reads it from.
+    #[test]
+    fn node_detail_is_kept_on_the_newest_record_only() {
+        let ws = tempfile::tempdir().unwrap();
+        let with_nodes = |run: &str| {
+            let mut r = record("ok", 10, 1);
+            r.run_id = Some(run.into());
+            r.nodes = vec![NodeMetric {
+                node: "a".into(),
+                component: Some("src.csv".into()),
+                duration_ms: Some(1),
+                rows: Some(1),
+            }];
+            r
+        };
+        append_run_record(ws.path(), "nightly", with_nodes("run-1")).unwrap();
+        append_run_record(ws.path(), "nightly", with_nodes("run-2")).unwrap();
+        let loaded = load_run_history(ws.path(), "nightly");
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded[0].nodes.is_empty(), "older records shed node detail");
+        assert_eq!(loaded[1].nodes.len(), 1, "the newest record keeps it");
+        // And the metrics still emit the newest run's node series.
+        let out = render_metrics(ws.path()).unwrap();
+        assert!(out.contains("duckle_node_last_rows{pipeline=\"nightly\",node=\"a\",component=\"src.csv\"} 1"), "{out}");
     }
 }
 
@@ -549,6 +748,7 @@ mod unchanged_persistence_tests {
             incomplete: false,
             incomplete_reason: None,
             assets: Vec::new(),
+            nodes: Vec::new(),
         }
     }
 

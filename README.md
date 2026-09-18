@@ -789,6 +789,8 @@ curl http://console:8080/readyz      # no credential; so does /healthz
 ```text
 duckle_run_last_status{pipeline="nightly"} 0
 duckle_run_last_duration_seconds{pipeline="nightly"} 12.4
+duckle_node_last_duration_seconds{pipeline="nightly",node="extract",component="src.rest"} 9.1
+duckle_node_last_rows{pipeline="nightly",node="load",component="snk.parquet"} 4200
 duckle_runs_window{pipeline="nightly",status="error"} 3
 duckle_run_permits_total 4
 duckle_run_permits_free 0

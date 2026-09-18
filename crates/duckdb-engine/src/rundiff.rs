@@ -448,6 +448,7 @@ mod tests {
             incomplete_reason: None,
             category: None,
             assets: vec![],
+            nodes: Vec::new(),
         }
     }
 

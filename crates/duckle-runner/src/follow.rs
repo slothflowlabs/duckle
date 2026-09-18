@@ -452,6 +452,7 @@ mod tests {
             status: "ok".into(),
                     note: None,
             kind: Some(kind.to_string()),
+            component: None,
             rows,
             duration_ms: None,
             error: None,

@@ -723,6 +723,7 @@ mod reference_aware {
                     direction: "write".into(),
                     rows: Some(5),
                 }],
+                nodes: Vec::new(),
             },
         )
         .unwrap();

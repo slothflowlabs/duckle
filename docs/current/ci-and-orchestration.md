@@ -212,6 +212,8 @@ It is written atomically, so a scrape never reads a half-written file. Point nod
 | `duckle_run_last_duration_seconds` | gauge | how long the most recent run took |
 | `duckle_run_last_rows` | gauge | rows the most recent run wrote |
 | `duckle_run_last_timestamp_seconds` | gauge | when the most recent run finished |
+| `duckle_node_last_duration_seconds` | gauge | how long each node of the most recent run took, labelled by `node` and `component` (`src.rest`, `xf.filter`, ...) - this is what turns "the run got slower" into "the extract stage got slower" |
+| `duckle_node_last_rows` | gauge | rows each node of the most recent run reported, same labels. A node the run never reached emits nothing - absent is not zero |
 | `duckle_runs_window` | gauge | how many runs are in the retained window |
 
 > **These are windowed, not lifetime, counters.** All series are derived from the retained run history, which is a rolling window per pipeline, so `duckle_runs_window` is a count of what is retained rather than everything that has ever run. The metric names say so deliberately.

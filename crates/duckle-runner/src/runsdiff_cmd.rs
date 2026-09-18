@@ -218,6 +218,7 @@ mod tests {
             incomplete_reason: None,
             category: None,
             assets: vec![],
+            nodes: Vec::new(),
         };
         append_run_record(&ws, "nightly", rec.clone());
         // A record for a DIFFERENT run must not be picked up.

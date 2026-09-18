@@ -294,6 +294,7 @@ mod tests {
             incomplete_reason: None,
             category: None,
             assets: Vec::new(),
+            nodes: Vec::new(),
         };
         r.assets = writes
             .iter()
@@ -394,6 +395,7 @@ mod emitted_once {
                 direction: "write".into(),
                 rows: Some(5),
             }],
+            nodes: Vec::new(),
         }
     }
 
@@ -559,6 +561,7 @@ mod needs_a_catalog {
             incomplete_reason: None,
             category: None,
             assets: Vec::new(),
+            nodes: Vec::new(),
         };
         assert!(
             event_of(None, "p", &no_assets).is_none(),
@@ -600,6 +603,7 @@ mod survives_a_pruned_receipt {
                 direction: "write".into(),
                 rows: Some(5),
             }],
+            nodes: Vec::new(),
         }
     }
 

@@ -744,6 +744,7 @@ mod tests {
                 direction: "write".into(),
                 rows: Some(1),
             }],
+            nodes: Vec::new(),
         }
     }
 }
@@ -1047,6 +1048,7 @@ mod parameter_binding {
                 direction: "write".into(),
                 rows: Some(5),
             }],
+            nodes: Vec::new(),
         };
         crate::materialize::append(tmp, "source.accounts", &record).unwrap();
     }
@@ -1361,6 +1363,7 @@ mod failed_deliveries_can_be_retried {
                     direction: "write".into(),
                     rows: Some(5),
                 }],
+                nodes: Vec::new(),
             },
         )
         .unwrap();
