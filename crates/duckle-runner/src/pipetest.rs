@@ -897,8 +897,37 @@ pub fn run(duckdb: PathBuf) -> ExitCode {
     // #312: the same three shapes `validate` emits, from the same module, so a
     // CI job reads one format across both gates.
     let mut format = String::new();
+    // #308: `--affected --base <rev>` keeps only the suites whose pipeline the
+    // change reaches - the same selection `affected` prints and
+    // `validate --affected` gates on, so the three can never disagree.
+    let mut affected_base: Option<String> = None;
+    let mut affected_head = String::new();
+    let mut affected_workspace = PathBuf::from(".");
+    let mut include_uncertain = false;
     let mut args = std::env::args().skip(2);
     while let Some(arg) = args.next() {
+        if arg == "--affected" {
+            affected_base = affected_base.or(Some(String::new()));
+            continue;
+        }
+        if arg == "--base" {
+            affected_base = Some(args.next().unwrap_or_default());
+            continue;
+        }
+        if arg == "--head" {
+            affected_head = args.next().unwrap_or_default();
+            continue;
+        }
+        if arg == "--workspace" {
+            if let Some(w) = args.next() {
+                affected_workspace = PathBuf::from(w);
+            }
+            continue;
+        }
+        if arg == "--include-uncertain" {
+            include_uncertain = true;
+            continue;
+        }
         if arg == "--json" {
             json_out = true;
             continue;
@@ -925,6 +954,28 @@ pub fn run(duckdb: PathBuf) -> ExitCode {
         }
         paths.push(PathBuf::from(arg));
     }
+    // Argument guards before suite discovery, so a refused flag is reported
+    // as itself even from a directory with no tests/ under it.
+    if affected_base.is_none() && !affected_head.trim().is_empty() {
+        eprintln!("duckle-runner test: --head only makes sense with --affected --base <rev>");
+        return ExitCode::from(2);
+    }
+    if let Some(base) = &affected_base {
+        if base.trim().is_empty() {
+            eprintln!("duckle-runner test --affected: --base <rev> is required");
+            return ExitCode::from(2);
+        }
+        // A committed --head has no files on disk to point at: select returns
+        // an empty path map for it, so the only outcomes would be "could not
+        // be located" or "nothing affected". Refuse it up front rather than
+        // letting a gate read either as an answer.
+        if !affected_head.trim().is_empty() {
+            eprintln!(
+                "duckle-runner test --affected: --head names a committed revision, which has no files to run suites against. Check it out and pass --base only."
+            );
+            return ExitCode::from(2);
+        }
+    }
     // Nothing named: every suite under ./tests, which is where a workspace keeps them.
     if paths.is_empty() {
         if let Ok(entries) = std::fs::read_dir("tests") {
@@ -939,6 +990,139 @@ pub fn run(duckdb: PathBuf) -> ExitCode {
         if paths.is_empty() {
             eprintln!("duckle-runner test: nothing given and no *.test.json under ./tests");
             return ExitCode::from(2);
+        }
+    }
+
+    // Selection chatter goes to stderr: under --format the only thing on
+    // stdout is the report, the way the ok/FAIL lines are kept off it.
+    let quiet = json_out || !format.is_empty();
+    if let Some(base) = affected_base {
+        let affected = match crate::affected_cmd::select(
+            &affected_workspace,
+            &base,
+            &affected_head,
+            include_uncertain,
+        ) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("duckle-runner test --affected: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        // The selected pipelines as real paths. A suite names its pipeline
+        // relative to the test file, so the comparison has to be on where the
+        // files actually are, not on the string each used to get there.
+        // `affected.paths` comes from the workspace walk, so each entry already
+        // carries the workspace prefix - joining it again double-prefixes a
+        // relative --workspace.
+        let selected: std::collections::HashSet<PathBuf> = affected
+            .selection
+            .selected
+            .iter()
+            .filter_map(|s| affected.paths.get(&s.pipeline))
+            .filter_map(|p| std::fs::canonicalize(p).ok())
+            .collect();
+        // Changed files the selection did not model. A test suite's own file
+        // lands here, and a changed suite is the one change whose test must
+        // run even when no pipeline changed.
+        let changed_unmodelled: std::collections::HashSet<PathBuf> = affected
+            .unclassified
+            .iter()
+            .filter_map(|rel| std::fs::canonicalize(affected_workspace.join(rel)).ok())
+            .collect();
+        // Belt and braces: with --head refused above every selected id has a
+        // located path, so this block is unreachable - kept for the day the
+        // guard moves.
+        let unlocated: Vec<&str> = affected
+            .selection
+            .selected
+            .iter()
+            .map(|s| s.pipeline.as_str())
+            .filter(|id| !affected.paths.contains_key(*id))
+            .collect();
+        if !unlocated.is_empty() {
+            eprintln!(
+                "duckle-runner test --affected: selected but could not be located: {}. \
+Refusing rather than reporting a clean run.",
+                unlocated.join(", ")
+            );
+            return ExitCode::from(2);
+        }
+        // A changed suite file is unclassified in the model sense - no pipeline
+        // names it as an input - but it is not an unmodelled change: the retain
+        // below runs exactly that suite. What fails open is a file the model
+        // cannot tie to anything, including a fixture that is not a suite.
+        let suite_paths: std::collections::HashSet<PathBuf> = paths
+            .iter()
+            .filter_map(|p| std::fs::canonicalize(p).ok())
+            .collect();
+        let stray: Vec<&String> = affected
+            .unclassified
+            .iter()
+            .filter(|rel| {
+                std::fs::canonicalize(affected_workspace.join(rel))
+                    .map(|p| !suite_paths.contains(&p))
+                    .unwrap_or(true)
+            })
+            .collect();
+        if !stray.is_empty() {
+            // Files the model does not cover changed. Reported either way;
+            // stderr, so a machine format stays the only thing on stdout.
+            eprintln!("changed, and not modelled as an input to any pipeline:");
+            for f in &stray {
+                eprintln!("  {f}");
+            }
+        }
+        if !stray.is_empty() && selected.is_empty() {
+            // Only when the selection produced nothing does an unmodelled
+            // change make "nothing affected" a guess rather than an answer,
+            // and only then does the gate fail open - the cost is minutes,
+            // never a missed run. When pipelines WERE selected the normal
+            // retain applies: an unmodelled README beside a real change must
+            // not switch the feature off for ordinary pull requests.
+            eprintln!("running every suite - the selection cannot say these change nothing");
+        } else {
+            let mut skipped = Vec::new();
+            paths.retain(|path| {
+                // A suite whose own file changed runs: it is the one change
+                // whose test must run even when no pipeline did.
+                if std::fs::canonicalize(path)
+                    .map(|p| changed_unmodelled.contains(&p))
+                    .unwrap_or(false)
+                {
+                    return true;
+                }
+                // A suite that cannot be read or names no pipeline stays in: the
+                // ordinary error below reports it, and dropping it would hide a
+                // broken suite behind "not affected". The same goes for a suite
+                // whose pipeline path no longer resolves.
+                let keep = std::fs::read_to_string(path)
+                    .ok()
+                    .and_then(|text| parse(path, &text).ok())
+                    .map(|(pipeline_path, _)| match std::fs::canonicalize(&pipeline_path) {
+                        Ok(p) => selected.contains(&p),
+                        Err(_) => true,
+                    });
+                match keep {
+                    Some(true) => true,
+                    Some(false) => {
+                        skipped.push(path.display().to_string());
+                        false
+                    }
+                    None => true,
+                }
+            });
+            if !quiet {
+                for s in &skipped {
+                    println!("skip  {s}  (pipeline not affected)");
+                }
+            }
+            if paths.is_empty() {
+                if !quiet {
+                    println!("nothing affected against {base}");
+                }
+                return ExitCode::from(0);
+            }
         }
     }
 

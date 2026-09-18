@@ -227,6 +227,10 @@ pub fn select(
     let unclassified: Vec<String> = changed
         .iter()
         .filter(|rel| !modelled.contains(&rel.as_str()))
+        // A context file `shared_changes` examined and cleared IS modelled:
+        // an empty key diff is the answer "reaches nothing", and reporting it
+        // as unclassified would call a decision the model made a gap in it.
+        .filter(|rel| !(rel.starts_with("contexts/") && rel.ends_with(".json")))
         .filter(|rel| {
             let stem = Path::new(rel)
                 .file_stem()

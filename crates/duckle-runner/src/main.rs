@@ -84,6 +84,12 @@ TEST:
     With no path, every *.test.json under ./tests. Exit 1 on a failed
     assertion, the same code a failed run uses.
 
+    --affected --base <rev> [--workspace DIR]
+        Run only the suites whose pipeline the change reaches - the same
+        selection `affected` prints and `validate --affected` gates on.
+        [--include-uncertain] also runs suites whose pipeline has a
+        dependency that cannot be resolved ahead of the run.
+
 EXIT CODES (stable, safe to gate CI on):
     0    success
     1    the work ran and reported failure (a pipeline failed, or a
@@ -101,6 +107,10 @@ VALIDATE:
     to compile.
     It does NOT yet catch every missing required property value, so a
     clean validate is not proof that a run will succeed.
+
+    --affected --base <rev> [--workspace DIR]
+        Validate only the pipelines the base..head change reaches - the
+        same selection `affected` prints and `test --affected` runs.
 
 OPTIONS:
     --pipeline <path>    Pipeline JSON to execute (required)
