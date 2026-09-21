@@ -1975,7 +1975,13 @@ impl DuckdbEngine {
                     }
                 }
             }
-            let sql = format!("{}{}{}", secret_prefix, memory_pragma, stage_sql);
+            let sql = format!(
+                "{}{}{}{}",
+                secret_prefix,
+                memory_pragma,
+                stage.pre_sql.as_deref().unwrap_or(""),
+                stage_sql
+            );
             // Retry loop: retry_attempts >= 1; with the default of 1 we
             // call run() exactly once. Retries sleep retry_backoff_ms
             // (linearly scaled by attempt index) between attempts.
@@ -3196,6 +3202,15 @@ impl DuckdbEngine {
         for (i, stage) in stages.iter().enumerate() {
             if group_span.map(|(first, _)| i == first).unwrap_or(false) {
                 batched_sql.push_str("BEGIN TRANSACTION;\n");
+            }
+            // A stage's pre-statement (e.g. the #118 Explode type guard)
+            // runs ahead of its CREATE, inside the same session.
+            if let Some(pre) = &stage.pre_sql {
+                batched_sql.push_str(pre);
+                if !pre.trim_end().ends_with(';') {
+                    batched_sql.push(';');
+                }
+                batched_sql.push('\n');
             }
             batched_sql.push_str(&stage.sql);
             // Planner does not always terminate stage.sql with ';' -
@@ -7372,6 +7387,20 @@ pub fn compile_pipeline_sql_opts(
             } else {
                 redact_secret_values(&s.sql, &secrets)
             };
+            // A stage's pre-statement runs ahead of its CREATE inside the
+            // same session (see the executor); the export shows it too, or a
+            // copied-out script omits a statement the run executes - and the
+            // guard's error, which names the column and the component, is the
+            // better failure a pasted script can produce.
+            let sql = match &s.pre_sql {
+                Some(pre) => format!(
+                    "{}{}\n{}",
+                    pre,
+                    if pre.trim_end().ends_with(';') { "" } else { ";" },
+                    sql
+                ),
+                None => sql,
+            };
             let sql = match group_span {
                 Some((first, last)) if i == first && i == last => {
                     format!("BEGIN TRANSACTION;\n{}\nCOMMIT; DETACH duckle_dst;", sql)
@@ -7638,6 +7667,7 @@ mod tests {
             component_id: component_id.into(),
             label: node_id.into(),
             sql: String::new(),
+            pre_sql: None,
             kind,
             from: None,
             publish_group: None,

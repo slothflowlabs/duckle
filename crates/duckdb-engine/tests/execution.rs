@@ -2056,6 +2056,38 @@ fn export_includes_control_flow_steps() {
 }
 
 #[test]
+fn export_includes_a_stage_pre_statement() {
+    // #118: the Explode type guard travels in `pre_sql` so stage.sql stays
+    // CREATE-first for node analysis - but that also kept it out of the
+    // export, so a copied-out script was missing a statement the run
+    // executes and failed with a bare length(STRUCT) error instead of the
+    // guard's named column. (Pure compilation - no engine needed.)
+    use duckle_duckdb_engine::compile_pipeline_sql_opts;
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "items\nx\n");
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("x", "xf.arr.explode", json!({ "column": "items" })),
+            node("k", "snk.csv", json!({ "path": out_path(tmp.path(), "out.csv"), "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "x"), main_edge("e2", "x", "k")]),
+    );
+    let stages = compile_pipeline_sql_opts(&d, false).expect("compile");
+    let stage = stages.iter().find(|s| s.node_id == "x").expect("explode stage");
+    assert!(
+        stage.sql.contains("column_name = 'items'"),
+        "the export carries the guard the executor prepends: {}",
+        stage.sql
+    );
+    assert!(
+        stage.sql.contains("CREATE OR REPLACE"),
+        "and the stage body still follows it: {}",
+        stage.sql
+    );
+}
+
+#[test]
 fn compiled_sql_maps_username_to_attach_user() {
     // The UI writes DB login names as `username`, while DuckDB's
     // Postgres/MySQL connection string expects `user=...`.
@@ -2808,6 +2840,108 @@ fn normalize_explodes_delimited_column() {
     assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
     // 2 + 1 = 3 rows after the explode.
     assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3);
+}
+
+/// #118: exploding a STRUCT column used to surface `length(STRUCT)` - the
+/// name of an internal guard the user never wrote. The stage now checks the
+/// column's declared type first and fails with the real type and the right
+/// component (Flatten).
+#[test]
+fn explode_on_a_struct_column_fails_with_a_clear_message() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("s1", "code.sql", json!({ "sql": "SELECT 1 AS id, {'v1':'a','v2':'b'} AS s" })),
+            node("x1", "xf.arr.explode", json!({ "column": "s" })),
+            node("k1", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s1", "x1"), main_edge("e2", "x1", "k1")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "error", "a struct must fail, not explode");
+    let err = result.error.unwrap_or_default();
+    assert!(err.contains("list/array"), "names what it needs: {err}");
+    assert!(err.contains("STRUCT"), "names what it got: {err}");
+    assert!(err.contains("Flatten"), "points at the right component: {err}");
+    assert!(!err.contains("length("), "no internal helper names: {err}");
+}
+
+/// #118: a list column still explodes - the guard is a type check, not a
+/// behaviour change.
+#[test]
+fn explode_on_a_list_column_still_explodes() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node(
+                "s1",
+                "code.sql",
+                json!({ "sql": "SELECT 1 AS id, [10,20] AS items UNION ALL SELECT 2, [] UNION ALL SELECT 3, NULL" }),
+            ),
+            node("x1", "xf.arr.explode", json!({ "column": "items" })),
+            node("k1", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s1", "x1"), main_edge("e2", "x1", "k1")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
+    // 2 elements + 1 empty + 1 NULL = 4 rows, NULLs kept by the outer guard.
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 4);
+}
+
+/// #118: a fixed-size ARRAY (DESCRIBE renders it `INTEGER[3]`, not
+/// `INTEGER[]`) is an array column too - the guard must let it through.
+#[test]
+fn explode_on_a_fixed_size_array_column_still_explodes() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node(
+                "s1",
+                "code.sql",
+                json!({ "sql": "SELECT 1 AS id, [10,20,30]::INTEGER[3] AS items" }),
+            ),
+            node("x1", "xf.arr.explode", json!({ "column": "items" })),
+            node("k1", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s1", "x1"), main_edge("e2", "x1", "k1")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3);
+}
+
+/// #118: the guard runs on the per-stage executor too, not only the batched
+/// path. A memory limit makes the stage unbatchable, which forces the
+/// one-process-per-stage path.
+#[test]
+fn explode_on_a_struct_column_fails_on_the_per_stage_path() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("s1", "code.sql", json!({ "sql": "SELECT 1 AS id, {'v1':'a','v2':'b'} AS s" })),
+            node(
+                "x1",
+                "xf.arr.explode",
+                json!({ "column": "s", "memoryLimitMb": 128 }),
+            ),
+            node("k1", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s1", "x1"), main_edge("e2", "x1", "k1")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "error", "a struct must fail, not explode");
+    let err = result.error.unwrap_or_default();
+    assert!(err.contains("STRUCT"), "names what it got: {err}");
+    assert!(err.contains("Flatten"), "points at the right component: {err}");
 }
 
 #[test]

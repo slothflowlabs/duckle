@@ -1723,6 +1723,51 @@ pub(crate) fn build_array(inputs: &NodeInputs, props: &JsonValue, component_id: 
     Ok(apply_col_expr(upstream, &column, expr, string_prop(props, "outputColumn")))
 }
 
+/// #118: Explode (and Normalize with an empty separator, which explodes a
+/// column that is already an array) guard NULL/empty inputs with
+/// `length(col)`, which DuckDB only binds on list/array columns. On a
+/// STRUCT the binder rejects the whole stage before the CASE runs, and the
+/// error names `length` - an internal helper - instead of the column.
+/// This one-row statement runs before the CREATE and fails the stage with
+/// a message that names the column, its real type, and Flatten, the
+/// component that expands a struct into columns. DESCRIBE reports the type
+/// even when the upstream relation is empty.
+pub(crate) fn list_column_guard(
+    inputs: &NodeInputs,
+    props: &JsonValue,
+    component_id: &str,
+) -> Option<String> {
+    let wants = match component_id {
+        "xf.arr.explode" => true,
+        // With a separator the column is cast to VARCHAR and split, so any
+        // type goes. Empty means the column must already be an array.
+        // Only a separator that is present AND empty: an absent key defaults
+        // to "," in the body below, and the properties panel writes no key
+        // for a field left at its default, so "absent" cannot mean "empty".
+        "xf.norm" => matches!(string_prop(props, "separator").as_deref(), Some("")),
+        _ => false,
+    };
+    if !wants {
+        return None;
+    }
+    let upstream = inputs.main()?;
+    let column = string_prop(props, "column").filter(|s| !s.trim().is_empty())?;
+    let label = if component_id == "xf.norm" {
+        "Normalize"
+    } else {
+        "Explode"
+    };
+    Some(format!(
+        "SELECT error('{label} needs a list/array column; \"' || column_name || '\" is ' || column_type || \
+         CASE WHEN column_type LIKE 'STRUCT%' THEN ' - use Flatten to expand the struct into columns' ELSE '' END) \
+         FROM (DESCRIBE SELECT * FROM {up}) \
+         WHERE column_name = '{col}' AND column_type NOT LIKE '%]' LIMIT 1; ",
+        label = label,
+        col = sql_escape(&column),
+        up = quote_ident(upstream),
+    ))
+}
+
 pub(crate) fn build_reorder(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
     let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.reorder"))?;
     let cols = columns_list(props, "columns");
