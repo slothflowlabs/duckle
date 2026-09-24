@@ -638,6 +638,14 @@ const httpTransportFields = (): Field[] => [
         description:
             'How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving.',
     },
+    {
+        key: 'httpMaxRetries',
+        label: 'Max retries',
+        kind: 'integer',
+        placeholder: '3',
+        description:
+            'Times a 429 or 5xx response is retried before the stage fails. Retry-After is honoured when the server sends it; 0 disables retrying. Methods that are not idempotent (POST and friends) are only retried when this is set explicitly - setting it opts them in.',
+    },
 ];
 
 // Appended rather than spliced next to a named field: these sources have no one

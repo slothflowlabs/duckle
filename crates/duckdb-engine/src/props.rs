@@ -495,10 +495,15 @@ mod tests {
 
     #[test]
     fn every_http_backed_source_offers_the_whole_transport() {
-        // Declaring three of the four is worse than declaring none: the form
+        // Declaring four of the five is worse than declaring none: the form
         // looks complete and the missing one still fails validation.
-        const TRANSPORT: [&str; 4] =
-            ["httpProxy", "httpUserAgent", "httpConnectTimeoutSecs", "httpReadTimeoutSecs"];
+        const TRANSPORT: [&str; 5] = [
+            "httpProxy",
+            "httpUserAgent",
+            "httpConnectTimeoutSecs",
+            "httpReadTimeoutSecs",
+            "httpMaxRetries",
+        ];
         let offering: Vec<&String> = declared()
             .iter()
             .filter(|(_, keys)| TRANSPORT.iter().any(|k| keys.contains(*k)))

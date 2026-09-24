@@ -40,11 +40,13 @@ export type ConnectionPayload = {
     kind: ConnectionKind;
     // #256: HTTP transport (kind: 'http'). Flattened onto a node's
     // httpProxy / httpReadTimeoutSecs / httpConnectTimeoutSecs / httpUserAgent
-    // at run time, with anything the node set itself left alone.
+    // / httpMaxRetries at run time, with anything the node set itself left
+    // alone.
     proxy?: string;
     readTimeoutSecs?: number;
     connectTimeoutSecs?: number;
     userAgent?: string;
+    maxRetries?: number;
     host?: string;
     port?: number;
     database?: string;

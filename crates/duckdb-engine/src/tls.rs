@@ -132,6 +132,27 @@ pub struct HttpTransport {
     /// User-Agent sent on every request. Some public sites answer 403 to the
     /// default one.
     pub user_agent: Option<String>,
+    /// Times a rate-limited or server-error response is retried before the
+    /// stage gives up. `Some(0)` disables retrying; `None` leaves the caller's
+    /// default. It is transport config, not agent config - the agent this
+    /// struct builds sends one request the same way either way - so it is
+    /// normalized out of the cache key in `http_agent_with`.
+    pub max_retries: Option<u32>,
+}
+
+/// How long to wait before retry `attempt` (0-based), shared by every caller
+/// that honours `Retry-After` (#258 for the AI stages, #256 for the HTTP
+/// transports).
+///
+/// A `Retry-After` given in whole seconds is obeyed exactly - that is the
+/// server saying when it will serve again, and guessing shorter just earns
+/// another 429. Without one the wait doubles from 500ms, capped so a stalled
+/// endpoint cannot park a stage for an unbounded time.
+pub fn retry_wait_ms(retry_after: Option<&str>, attempt: u32) -> u64 {
+    if let Some(secs) = retry_after.and_then(|v| v.trim().parse::<u64>().ok()) {
+        return (secs * 1000).min(300_000);
+    }
+    (500u64 << attempt.min(6)).min(30_000)
 }
 
 /// A read that has delivered nothing for this long is stalled, not slow. Set
@@ -253,6 +274,9 @@ pub fn http_agent_with(transport: &HttpTransport) -> ureq::Agent {
                 .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS),
         ),
         user_agent: transport.user_agent.clone(),
+        // A retry count changes nothing about how the agent connects, so it
+        // stays out of the key rather than splitting the pool over it.
+        max_retries: None,
     };
     {
         let cache = AGENT_CACHE.lock().unwrap();
