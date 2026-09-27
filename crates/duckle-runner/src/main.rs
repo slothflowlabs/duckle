@@ -55,6 +55,7 @@ mod python;
 mod selfextract;
 mod work;
 mod sequence_cmd;
+mod openlineage_cmd;
 mod xsd_cmd;
 mod serve;
 
@@ -72,6 +73,7 @@ USAGE:
     duckle-runner deliveries <status|retry>  (#325 subscription pump ledger)
     duckle-runner python <check|prepare>   (the workspace's Python environment)
     duckle-runner xsd <list|accept>       (accepted XML parser contracts)
+    duckle-runner openlineage flush       (drain the lineage event buffer)
 
 TEST:
     Run a pipeline against a fixed input and assert the rows out of one node.
@@ -2513,6 +2515,11 @@ fn main() -> ExitCode {
     }
     if std::env::args().nth(1).as_deref() == Some("mcp") {
         return run_mcp();
+    }
+    // `openlineage flush` -> drain the buffered lineage events to the
+    // collector, on demand rather than on the next run's path (#311).
+    if std::env::args().nth(1).as_deref() == Some("openlineage") {
+        return openlineage_cmd::run();
     }
     // `quickstart` -> scaffold a working pipeline, run it, show the rows.
     if std::env::args().nth(1).as_deref() == Some("quickstart") {

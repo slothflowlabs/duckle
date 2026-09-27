@@ -226,6 +226,17 @@ fn datasets(
             continue;
         }
         let mut entry = json!({ "namespace": ds.namespace, "name": ds.name });
+        // Which system the dataset lives in, so a collector can group
+        // "orders in postgres://warehouse" apart from "orders in s3://lake".
+        // The namespace is already the URI form and already credential-free;
+        // `name` repeats it because the facet wants a display name and a uri
+        // and there is no friendlier name recorded.
+        entry["facets"]["dataSource"] = json!({
+            "_producer": PRODUCER,
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-0/DatasourceDatasetFacet.json",
+            "name": ds.namespace,
+            "uri": ds.namespace,
+        });
         // The columns the pipelines declare for this asset, which the catalog
         // already unions across every node that touches it. Emitted only when
         // there are some: an empty field list would read as "this dataset has
@@ -381,7 +392,12 @@ pub fn emit(workspace: &Path, cfg: &Config, event: &Value) {
         // One write, and a torn tail terminated first: `ndjson` does both, so two
         // runs in one workspace cannot interleave and a killed one cannot take
         // the next event down with it.
-        let _ = crate::ndjson::append_records(&dir.join("openlineage.ndjson"), &line);
+        let path = dir.join("openlineage.ndjson");
+        let _ = crate::ndjson::append_records(&path, &line);
+        // The bound is enforced where events arrive, not where the drain
+        // rewrites: a collector down for weeks must not grow the file without
+        // limit, and enforcing it here keeps that true for the whole outage.
+        enforce_buffer_bound(&path);
     }
     let Some(endpoint) = cfg.endpoint.as_deref().filter(|e| !e.trim().is_empty()) else {
         return;
@@ -396,17 +412,295 @@ pub fn emit(workspace: &Path, cfg: &Config, event: &Value) {
         );
         return;
     }
+    // One pass over the buffer rather than a POST for just this event: the
+    // event just written is the newest line in the file, so draining sends it
+    // AND whatever a down collector missed earlier - the shipper #311 asked
+    // for, on the path of the run that produces the events. Capped per emit:
+    // a collector coming back after a week owes thousands of events, and
+    // draining them serially from inside a run that has already written its
+    // receipt would hold the process open for minutes. `openlineage flush`
+    // is the unbounded path an operator or a timer reaches for.
+    let outcome = flush_bounded(workspace, cfg, EMIT_DRAIN_CAP);
+    if outcome.kept > 0 {
+        eprintln!(
+            "duckle: lineage export to {endpoint}: {} event(s) kept in logs/openlineage.ndjson",
+            outcome.kept
+        );
+    }
+}
+
+/// Most events one `emit` drains in a pass. A collector that comes back after
+/// a week still gets its backlog, in slices, across the runs that produce it;
+/// `openlineage flush` is the unbounded path for draining it at once.
+const EMIT_DRAIN_CAP: usize = 100;
+
+/// Most lines the buffer holds. A collector down for weeks must not grow a
+/// run's log file without bound: past this the oldest events are moved to
+/// `logs/openlineage.dropped.ndjson` with one log line, which beats both a
+/// full disk and a gap nobody can account for. Enforced in `emit`, where
+/// events arrive.
+const BUFFER_CAP_LINES: usize = 10_000;
+
+/// Keep the buffer at most `BUFFER_CAP_LINES` lines, shedding the oldest.
+///
+/// Runs on every `emit` so the bound holds for the entire outage rather than
+/// only when the collector comes back. The count costs one read of the file
+/// and no parsing; the rewrite only happens while the file is over the cap.
+/// The buffer is moved aside before the rewrite so an event appended by a
+/// concurrent run lands in the fresh file and is kept, and what the bound
+/// sheds is appended to `openlineage.dropped.ndjson` rather than deleted, so
+/// an operator can still tell which events never reached the collector.
+fn enforce_buffer_bound(path: &Path) {
+    let Ok(bytes) = std::fs::read(path) else {
+        return;
+    };
+    if bytes.iter().filter(|&&b| b == b'\n').count() <= BUFFER_CAP_LINES {
+        return;
+    }
+    // Move the file aside before rewriting: a concurrent emit appends to the
+    // fresh buffer, so no event in flight is lost to the trim.
+    static TRIM_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = TRIM_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let trimming = path.with_extension(format!("ndjson.sending.{}.{seq}", std::process::id()));
+    if std::fs::rename(path, &trimming).is_err() {
+        return;
+    }
+    // Read the moved file rather than trusting the earlier snapshot: a line
+    // appended between that read and the rename only exists inside `trimming`.
+    let Ok(bytes) = std::fs::read(&trimming) else {
+        let _ = std::fs::rename(&trimming, path);
+        return;
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.len() <= BUFFER_CAP_LINES {
+        // Another writer trimmed first; put this copy back through the
+        // appender so nothing it holds is lost.
+        if crate::ndjson::append_records(path, &text).is_ok() {
+            let _ = std::fs::remove_file(&trimming);
+        }
+        return;
+    }
+    let dropped = &lines[..lines.len() - BUFFER_CAP_LINES];
+    let kept = &lines[lines.len() - BUFFER_CAP_LINES..];
+    eprintln!(
+        "duckle: lineage buffer over {BUFFER_CAP_LINES} events; moved the {} oldest to logs/openlineage.dropped.ndjson",
+        dropped.len()
+    );
+    let dropped_path = path.with_file_name("openlineage.dropped.ndjson");
+    let _ = crate::ndjson::append_records(&dropped_path, &dropped.join("\n"));
+    if crate::ndjson::append_records(path, &kept.join("\n")).is_ok() {
+        let _ = std::fs::remove_file(&trimming);
+    }
+}
+
+/// What one POST told the drain about this line.
+enum Post {
+    /// Accepted.
+    Sent,
+    /// A transport error, a 5xx, or a transient 4xx (429, 408, auth refused
+    /// mid-recovery): worth keeping for the next pass, and the lines after it
+    /// are very likely refused the same way, so the pass stops.
+    Retry(String),
+    /// A status that says the event itself is malformed - 400, 413, 422: the
+    /// collector will never take it. Keeping it would stop the queue at the
+    /// same poison line on every pass, so it is quarantined and the pass goes
+    /// on. Other 4xx are transient states (rate limits, auth), not verdicts
+    /// on the event, and are retried rather than quarantined.
+    Rejected(u16),
+}
+
+/// One POST to the collector.
+fn post(endpoint: &str, timeout_secs: u64, line: &str) -> Post {
     let agent = crate::tls::http_agent_with(&crate::tls::HttpTransport {
-        read_timeout_secs: Some(cfg.timeout_secs),
-        connect_timeout_secs: Some(cfg.timeout_secs),
+        read_timeout_secs: Some(timeout_secs),
+        connect_timeout_secs: Some(timeout_secs),
         ..Default::default()
     });
-    // One attempt. A retry on the path of a run finishing buys little - the
-    // event is already on disk - and costs another timeout, twice, every time
-    // a collector is down.
-    if let Err(e) = agent.post(endpoint).set("Content-Type", "application/json").send_string(&line)
+    match agent
+        .post(endpoint)
+        .set("Content-Type", "application/json")
+        .send_string(line)
     {
-        eprintln!("duckle: lineage export to {endpoint} failed, event kept in logs/openlineage.ndjson: {e}");
+        Ok(_) => Post::Sent,
+        Err(ureq::Error::Status(code, _)) if matches!(code, 400 | 413 | 422) => {
+            Post::Rejected(code)
+        }
+        Err(e) => Post::Retry(e.to_string()),
+    }
+}
+
+/// The runId a buffered event carries, for the one log line a quarantined or
+/// dropped event gets. Events always carry it under the duckle facet; absent,
+/// the event itself cannot be named and that is worth saying too.
+fn run_id_of(line: &str) -> String {
+    serde_json::from_str::<Value>(line)
+        .ok()
+        .and_then(|v| {
+            v["run"]["facets"]["duckle"]["runId"]
+                .as_str()
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "<unknown>".into())
+}
+
+/// What a `flush` pass did, for the caller to report.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct FlushOutcome {
+    /// Events accepted by the collector this pass.
+    pub sent: usize,
+    /// Events still in the buffer - refused, or never attempted after an
+    /// earlier failure in the same pass.
+    pub kept: usize,
+    /// Events the collector rejected outright (4xx), quarantined to
+    /// `logs/openlineage.rejected.ndjson` rather than kept.
+    pub rejected: usize,
+}
+
+/// Drain `logs/openlineage.ndjson` to the configured collector (#311).
+///
+/// The NDJSON file is the buffer `emit` writes before it ever tries the
+/// network, so it accumulates every event a down collector missed. This sends
+/// each buffered line once; what the collector refuses stays for the next
+/// pass. Called from `emit` with a per-pass cap, and from the
+/// `openlineage flush` command with none, for an operator or a scheduler that
+/// wants the backlog drained without waiting for a run.
+///
+/// The pass moves the buffer aside with one atomic rename before reading it.
+/// A concurrent `emit` then simply starts a fresh buffer, so no append can be
+/// lost between a read and a rewrite, no partially written append can be
+/// spliced into the rebuilt file, and two flushes cannot write through one
+/// shared temp name (the race `alerts.rs` already paid for). Events carry
+/// their own `eventTime`, so sending the moved file while newer events land
+/// in the fresh buffer reorders nothing a collector can see.
+///
+/// Best effort like everything in this module: it returns what it did rather
+/// than an error a run could trip on, and it is gated by `export_permitted`
+/// because draining is the same egress `emit` gates.
+pub fn flush(workspace: &Path, cfg: &Config) -> FlushOutcome {
+    flush_bounded(workspace, cfg, usize::MAX)
+}
+
+fn flush_bounded(workspace: &Path, cfg: &Config, cap: usize) -> FlushOutcome {
+    let mut outcome = FlushOutcome::default();
+    let path = workspace.join("logs").join("openlineage.ndjson");
+    // Recovery is not gated on the collector still being configured: an
+    // interrupted pass leaves the only copy of undelivered events under the
+    // `sending` name, and they belong back in the buffer whatever happens next.
+    adopt_stranded_buffers(&path);
+    let Some(endpoint) = cfg.endpoint.as_deref().filter(|e| !e.trim().is_empty()) else {
+        return outcome;
+    };
+    if !export_permitted(workspace) {
+        return outcome;
+    }
+    // A temp name of this writer's own: two flushes in one workspace (serve
+    // plus the scheduler, or a flush on a timer) must never share one.
+    static SEND_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let sending = path.with_extension(format!("ndjson.sending.{}.{seq}", std::process::id()));
+    if std::fs::rename(&path, &sending).is_err() {
+        // No buffer, or a platform that cannot move it: either way there is
+        // nothing this pass can honestly claim to have drained.
+        return outcome;
+    }
+    let Ok(snapshot) = std::fs::read(&sending) else {
+        // Leave it under the `sending` name: a later pass adopts it once this
+        // process is gone, which beats guessing at contents it cannot read.
+        return outcome;
+    };
+    // Lines stay raw: a partially written tail is kept in the buffer for the
+    // next pass rather than filtered out of the file it was torn in.
+    let mut kept: Vec<String> = Vec::new();
+    let mut lines = String::from_utf8_lossy(&snapshot)
+        .into_owned()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect::<Vec<_>>()
+        .into_iter();
+    let mut rejected_lines: Vec<String> = Vec::new();
+    for line in lines.by_ref() {
+        if outcome.sent + outcome.rejected >= cap {
+            // The emit cap: keep the rest unattempted. The command passes
+            // usize::MAX and drains everything.
+            kept.push(line);
+            kept.extend(lines);
+            break;
+        }
+        if serde_json::from_str::<Value>(&line).is_err() {
+            // Not an event the collector can take - most likely a torn tail
+            // from a killed writer. It stays buffered, never posted.
+            kept.push(line);
+            continue;
+        }
+        match post(endpoint, cfg.timeout_secs, &line) {
+            Post::Sent => outcome.sent += 1,
+            Post::Rejected(code) => {
+                outcome.rejected += 1;
+                eprintln!(
+                    "duckle: lineage export: collector refused an event (HTTP {code}, runId {}); quarantined to logs/openlineage.rejected.ndjson",
+                    run_id_of(&line)
+                );
+                rejected_lines.push(line);
+            }
+            Post::Retry(e) => {
+                // A collector that has gone down again will refuse the rest
+                // too, and a timeout apiece is the cost of asking. Keep this
+                // line and everything after it for the next pass.
+                eprintln!("duckle: lineage export to {endpoint} failed: {e}");
+                kept.push(line);
+                kept.extend(lines);
+                break;
+            }
+        }
+    }
+    outcome.kept = kept.len();
+    if !rejected_lines.is_empty() {
+        let rejected = workspace.join("logs").join("openlineage.rejected.ndjson");
+        let _ = crate::ndjson::append_records(&rejected, &rejected_lines.join("\n"));
+    }
+    // Kept lines go back through the appender even when nothing changed:
+    // renaming `sending` over a buffer a concurrent emit just started would
+    // lose its events, which is the race the move-aside exists to prevent.
+    // `sending` is removed only once its contents are safely back - a failed
+    // re-append must not delete the only copy of undelivered events.
+    if kept.is_empty() || crate::ndjson::append_records(&path, &kept.join("\n")).is_ok() {
+        let _ = std::fs::remove_file(&sending);
+    }
+    outcome
+}
+
+/// Fold orphaned `openlineage.ndjson.sending.<pid>.<seq>` files back into the
+/// buffer. An interrupted pass - Ctrl-C on a long recovery flush, a reboot -
+/// leaves the moved-aside buffer under a name nothing reads while the next
+/// `emit` starts a fresh file and the command reports nothing buffered. Only
+/// files whose writer is no longer live are taken; a pass still running keeps
+/// its own.
+fn adopt_stranded_buffers(path: &Path) {
+    let Some(dir) = path.parent() else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let prefix = "openlineage.ndjson.sending.";
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(rest) = name.strip_prefix(prefix) else { continue };
+        let Some(pid) = rest.split('.').next().and_then(|p| p.parse::<u32>().ok()) else {
+            continue;
+        };
+        if crate::runlock::process_alive(pid) {
+            continue;
+        }
+        let Ok(content) = std::fs::read(entry.path()) else { continue };
+        if content.is_empty() {
+            let _ = std::fs::remove_file(entry.path());
+            continue;
+        }
+        eprintln!("duckle: recovering a lineage buffer stranded by an interrupted flush ({name})");
+        if crate::ndjson::append_records(path, &String::from_utf8_lossy(&content)).is_ok() {
+            let _ = std::fs::remove_file(entry.path());
+        }
     }
 }
 
@@ -783,5 +1077,353 @@ mod tests {
         emit(tmp.path(), &cfg, &json!({ "eventType": "START" }));
         let log = std::fs::read_to_string(tmp.path().join("logs/openlineage.ndjson")).unwrap();
         assert!(log.contains("START"), "{log}");
+    }
+
+    #[test]
+    fn the_datasource_facet_names_the_system() {
+        let e = event(&Config::default(), EventType::Complete, &receipt("ok"), &catalog(), "nightly");
+        assert_eq!(e["outputs"][0]["facets"]["dataSource"]["uri"], "s3://lake");
+        assert_eq!(e["inputs"][0]["facets"]["dataSource"]["name"], "s3://lake");
+    }
+
+    /// A collector stub: one connection per POST, the next status per accept.
+    /// Returns the endpoint and every body it received.
+    fn stub_collector(
+        statuses: Vec<u16>,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let g = got.clone();
+        std::thread::spawn(move || {
+            for status in statuses {
+                let Ok((stream, _)) = listener.accept() else { break };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut len = 0usize;
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).is_err() || h.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0u8; len];
+                let _ = reader.read_exact(&mut body);
+                g.lock().unwrap().push(String::from_utf8_lossy(&body).into_owned());
+                let _ = stream.try_clone().unwrap().write_all(
+                    format!("HTTP/1.1 {status} X\r\nContent-Length: 0\r\n\r\n").as_bytes(),
+                );
+            }
+        });
+        (format!("http://127.0.0.1:{port}/api/v1/lineage"), got)
+    }
+
+    fn buffered(ws: &Path, events: &[&str]) {
+        let dir = ws.join("logs");
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::ndjson::append_records(&dir.join("openlineage.ndjson"), &events.join("\n")).unwrap();
+    }
+
+    #[test]
+    fn flush_sends_the_backlog_and_keeps_what_is_refused() {
+        // A collector that was down accumulates events; when it comes back the
+        // buffer drains in order and only the refused lines stay.
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        let (endpoint, got) = stub_collector(vec![200, 500]);
+        let cfg = Config { endpoint: Some(endpoint), ..Config::default() };
+        buffered(ws, &[r#"{"eventType":"START","n":1}"#, r#"{"eventType":"COMPLETE","n":2}"#]);
+
+        let out = flush(ws, &cfg);
+        assert_eq!(out, FlushOutcome { sent: 1, kept: 1, rejected: 0 });
+        let left = std::fs::read_to_string(ws.join("logs/openlineage.ndjson")).unwrap();
+        assert!(!left.contains("\"n\":1"), "delivered events leave the buffer: {left}");
+        assert!(left.contains("\"n\":2"), "a refused event stays for the next pass: {left}");
+        assert_eq!(got.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_successful_flush_empties_the_buffer_and_a_dead_collector_keeps_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        let (endpoint, got) = stub_collector(vec![200, 200]);
+        let cfg = Config { endpoint: Some(endpoint), ..Config::default() };
+        buffered(ws, &[r#"{"eventType":"START"}"#, r#"{"eventType":"COMPLETE"}"#]);
+        assert_eq!(flush(ws, &cfg), FlushOutcome { sent: 2, kept: 0, rejected: 0 });
+        assert_eq!(
+            std::fs::read_to_string(ws.join("logs/openlineage.ndjson")).unwrap_or_default(),
+            "",
+            "a fully drained buffer leaves nothing owed"
+        );
+        assert_eq!(got.lock().unwrap().len(), 2);
+
+        // Nothing listening: the events stay buffered rather than being lost,
+        // and the buffer comes back byte-identical - a pass that changed
+        // nothing must not pay a parse and a rewrite.
+        buffered(ws, &[r#"{"eventType":"START"}"#]);
+        let before = std::fs::read_to_string(ws.join("logs/openlineage.ndjson")).unwrap();
+        let cfg = Config {
+            endpoint: Some("http://127.0.0.1:9/none".into()),
+            timeout_secs: 1,
+            ..Config::default()
+        };
+        assert_eq!(flush(ws, &cfg), FlushOutcome { sent: 0, kept: 1, rejected: 0 });
+        assert_eq!(std::fs::read_to_string(ws.join("logs/openlineage.ndjson")).unwrap(), before);
+    }
+
+    /// A 4xx is a poison event, not a retryable one: keeping it would wedge
+    /// the queue at the same line on every pass. It is quarantined, logged,
+    /// and the pass goes on to the events behind it.
+    #[test]
+    fn a_4xx_is_quarantined_and_the_queue_moves_on() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        let (endpoint, got) = stub_collector(vec![422, 200]);
+        let cfg = Config { endpoint: Some(endpoint), ..Config::default() };
+        buffered(ws, &[r#"{"eventType":"START","n":1}"#, r#"{"eventType":"COMPLETE","n":2}"#]);
+
+        let out = flush(ws, &cfg);
+        assert_eq!(out, FlushOutcome { sent: 1, kept: 0, rejected: 1 });
+        assert_eq!(got.lock().unwrap().len(), 2, "the pass continues past the poison line");
+        let quarantined =
+            std::fs::read_to_string(ws.join("logs/openlineage.rejected.ndjson")).unwrap();
+        assert!(quarantined.contains("\"n\":1"), "{quarantined}");
+        assert!(!quarantined.contains("\"n\":2"), "{quarantined}");
+    }
+
+    /// `emit` drains a slice, not the whole backlog: a collector returning
+    /// after a long outage must not hold a finished run open for one POST per
+    /// buffered event. The `openlineage flush` command is the unbounded path.
+    #[test]
+    fn a_bounded_pass_sends_at_most_the_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        let (endpoint, got) = stub_collector(vec![200, 200, 200]);
+        let cfg = Config { endpoint: Some(endpoint), ..Config::default() };
+        buffered(
+            ws,
+            &[r#"{"eventType":"START","n":1}"#, r#"{"eventType":"COMPLETE","n":2}"#, r#"{"eventType":"COMPLETE","n":3}"#],
+        );
+
+        let out = flush_bounded(ws, &cfg, 1);
+        assert_eq!(out, FlushOutcome { sent: 1, kept: 2, rejected: 0 });
+        assert_eq!(got.lock().unwrap().len(), 1);
+        let left = std::fs::read_to_string(ws.join("logs/openlineage.ndjson")).unwrap();
+        assert!(!left.contains("\"n\":1"), "{left}");
+        assert!(left.contains("\"n\":2") && left.contains("\"n\":3"), "{left}");
+    }
+
+    #[test]
+    fn flush_without_an_endpoint_or_policy_is_a_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        buffered(ws, &[r#"{"eventType":"START"}"#]);
+        assert_eq!(flush(ws, &Config::default()), FlushOutcome::default());
+        assert!(std::fs::read_to_string(ws.join("logs/openlineage.ndjson")).unwrap().contains("START"));
+
+        std::fs::create_dir_all(ws.join(".duckle")).unwrap();
+        std::fs::write(ws.join(".duckle/policy.yaml"), "network:\n  allowLineageExport: false\n")
+            .unwrap();
+        let cfg = Config {
+            endpoint: Some("http://127.0.0.1:9/none".into()),
+            ..Config::default()
+        };
+        assert_eq!(flush(ws, &cfg), FlushOutcome::default(), "draining is the same egress emit gates");
+    }
+
+    /// The buffer bound is enforced where events arrive: a dead collector
+    /// means every pass refuses, so a bound that only lives in the drain path
+    /// never fires while the file grows. `emit` sheds the oldest over
+    /// BUFFER_CAP_LINES to `openlineage.dropped.ndjson` instead.
+    #[test]
+    fn the_buffer_stops_growing_while_the_collector_is_down() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        std::fs::create_dir_all(ws.join(".duckle")).unwrap();
+        std::fs::write(ws.join(".duckle/policy.yaml"), "network:\n  allowLineageExport: true\n")
+            .unwrap();
+        let cfg = Config {
+            endpoint: Some("http://127.0.0.1:9/none".into()),
+            timeout_secs: 1,
+            ..Config::default()
+        };
+        let events: Vec<String> = (0..BUFFER_CAP_LINES + 5)
+            .map(|n| format!(r#"{{"eventType":"START","n":{n}}}"#))
+            .collect();
+        buffered(ws, &events.iter().map(String::as_str).collect::<Vec<_>>());
+
+        emit(ws, &cfg, &serde_json::json!({"eventType":"COMPLETE","n":99999}));
+
+        let left = std::fs::read_to_string(ws.join("logs/openlineage.ndjson")).unwrap();
+        assert_eq!(
+            left.lines().count(),
+            BUFFER_CAP_LINES,
+            "the buffer holds at most the cap through the whole outage"
+        );
+        assert!(!left.contains("\"n\":0"), "the oldest events are the ones shed");
+        assert!(left.contains("\"n\":99999"), "the event just emitted is kept");
+        let dropped = std::fs::read_to_string(ws.join("logs/openlineage.dropped.ndjson")).unwrap();
+        assert!(dropped.contains("\"n\":0"), "shed events are accounted for, not deleted");
+    }
+
+    /// A 429 is a rate limit on the pass, not a verdict on the event: the
+    /// line stays buffered, the pass stops, and nothing is quarantined.
+    #[test]
+    fn a_429_stops_the_pass_without_quarantining() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        let (endpoint, got) = stub_collector(vec![429, 200]);
+        let cfg = Config { endpoint: Some(endpoint), ..Config::default() };
+        buffered(ws, &[r#"{"eventType":"START","n":1}"#, r#"{"eventType":"COMPLETE","n":2}"#]);
+
+        let out = flush(ws, &cfg);
+        assert_eq!(out, FlushOutcome { sent: 0, kept: 2, rejected: 0 });
+        assert_eq!(got.lock().unwrap().len(), 1, "the pass stops at the rate limit");
+        assert!(
+            std::fs::read_to_string(ws.join("logs/openlineage.rejected.ndjson")).is_err(),
+            "a rate-limited event is not a poison event"
+        );
+        let left = std::fs::read_to_string(ws.join("logs/openlineage.ndjson")).unwrap();
+        assert!(left.contains("\"n\":1") && left.contains("\"n\":2"), "{left}");
+    }
+
+    /// A pass killed mid-drain leaves its moved-aside buffer behind; the next
+    /// pass folds it back rather than reporting the workspace drained while
+    /// the only copy sits under a name nothing reads.
+    #[test]
+    fn a_stranded_sending_buffer_is_adopted_by_the_next_pass() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        let dir = ws.join("logs");
+        std::fs::create_dir_all(&dir).unwrap();
+        // A pid that cannot be alive: one above any real pid_max.
+        std::fs::write(
+            dir.join("openlineage.ndjson.sending.4000000.0"),
+            "{\"eventType\":\"START\",\"n\":1}\n",
+        )
+        .unwrap();
+        let (endpoint, got) = stub_collector(vec![200]);
+        let cfg = Config { endpoint: Some(endpoint), ..Config::default() };
+
+        let out = flush(ws, &cfg);
+        assert_eq!(out, FlushOutcome { sent: 1, kept: 0, rejected: 0 });
+        assert_eq!(got.lock().unwrap().len(), 1);
+        assert!(
+            std::fs::read_dir(&dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().contains("sending")),
+            "the stranded file is folded back, not left behind"
+        );
+    }
+
+    /// A torn tail is not an event, but it is not dropped either: it stays in
+    /// the buffer while the valid lines around it drain.
+    #[test]
+    fn an_unparseable_line_is_kept_not_posted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        let (endpoint, got) = stub_collector(vec![200]);
+        let cfg = Config { endpoint: Some(endpoint), ..Config::default() };
+        buffered(ws, &[r#"{"eventType":"START","n":1}"#, r#"{"eventType":"STA"#]);
+
+        let out = flush(ws, &cfg);
+        assert_eq!(out, FlushOutcome { sent: 1, kept: 1, rejected: 0 });
+        assert_eq!(got.lock().unwrap().len(), 1);
+        let left = std::fs::read_to_string(ws.join("logs/openlineage.ndjson")).unwrap();
+        assert!(left.contains(r#"{"eventType":"STA"#), "the torn line stays buffered: {left}");
+    }
+
+    /// A stub that runs `on_body` after reading each POST, before answering:
+    /// a deterministic way to land an append inside the drain window.
+    fn stub_collector_touching(
+        statuses: Vec<u16>,
+        on_body: impl Fn() + Send + Sync + 'static,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let g = got.clone();
+        let on_body = std::sync::Arc::new(on_body);
+        std::thread::spawn(move || {
+            for status in statuses {
+                let Ok((stream, _)) = listener.accept() else { break };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut len = 0usize;
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).is_err() || h.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0u8; len];
+                let _ = reader.read_exact(&mut body);
+                g.lock().unwrap().push(String::from_utf8_lossy(&body).into_owned());
+                on_body();
+                let _ = stream.try_clone().unwrap().write_all(
+                    format!("HTTP/1.1 {status} X\r\nContent-Length: 0\r\n\r\n").as_bytes(),
+                );
+            }
+        });
+        (format!("http://127.0.0.1:{port}/api/v1/lineage"), got)
+    }
+
+    /// An emit that lands while a drain holds the buffer aside must not be
+    /// lost: it goes to a fresh `openlineage.ndjson`, and the drain touching
+    /// only its moved-aside copy never sees it to delete it.
+    #[test]
+    fn an_append_during_the_drain_survives_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        let buffer = ws.join("logs").join("openlineage.ndjson");
+        let b = buffer.clone();
+        let (endpoint, got) = stub_collector_touching(vec![200], move || {
+            // Inside the drain window: the buffer is renamed away and this
+            // append starts the fresh file a concurrent emit would write.
+            crate::ndjson::append_records(&b, r#"{"eventType":"COMPLETE","n":2}"#).unwrap();
+        });
+        let cfg = Config { endpoint: Some(endpoint), ..Config::default() };
+        buffered(ws, &[r#"{"eventType":"START","n":1}"#]);
+
+        let out = flush(ws, &cfg);
+        assert_eq!(out, FlushOutcome { sent: 1, kept: 0, rejected: 0 });
+        assert_eq!(got.lock().unwrap().len(), 1);
+        let left = std::fs::read_to_string(&buffer).unwrap();
+        assert_eq!(left.trim(), r#"{"eventType":"COMPLETE","n":2}"#, "{left}");
+    }
+
+    /// Two drains in one workspace cannot collide: the loser's rename fails on
+    /// the missing buffer and it reports having drained nothing, while the
+    /// winner delivers every line exactly once.
+    #[test]
+    fn two_concurrent_drains_do_not_collide() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        let (endpoint, got) = stub_collector(vec![200, 200]);
+        let cfg = Config { endpoint: Some(endpoint), ..Config::default() };
+        buffered(ws, &[r#"{"eventType":"START","n":1}"#, r#"{"eventType":"COMPLETE","n":2}"#]);
+
+        let cfg2 = cfg.clone();
+        let ws2 = ws.to_path_buf();
+        let other = std::thread::spawn(move || flush(&ws2, &cfg2));
+        let mine = flush(ws, &cfg);
+        let theirs = other.join().unwrap();
+
+        assert_eq!(mine.sent + theirs.sent, 2, "each event delivered exactly once");
+        assert_eq!(got.lock().unwrap().len(), 2, "no event is POSTed twice");
+        assert_eq!(
+            std::fs::read_to_string(ws.join("logs/openlineage.ndjson")).unwrap_or_default(),
+            "",
+        );
+        assert!(
+            std::fs::read_dir(ws.join("logs"))
+                .unwrap()
+                .all(|e| !e.unwrap().file_name().to_string_lossy().contains("sending")),
+            "the drained-away file is not stranded"
+        );
     }
 }
