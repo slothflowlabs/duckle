@@ -68,7 +68,7 @@ tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-t
 # SQL Server + Synapse via the pure-Rust TDS driver. Async; wrapped
 # in tokio block_on like mongo. compat feature adapts a tokio
 # TcpStream to the AsyncRead/Write that tiberius wants.
-tiberius = { version = "0.12", default-features = false, features = ["tds73", "rustls", "chrono"] }
+tiberius = { version = "0.13", default-features = false, features = ["tds73", "rustls", "chrono"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # Cassandra / ScyllaDB via the pure-Rust scylla driver (also speaks
@@ -156,7 +156,7 @@ lapin = { version = "4", default-features = false, features = ["rustls", "defaul
 # FTP / FTPS client. Pure Rust, synchronous API (fits the per-stage
 # blocking model - no block_on dance). Rustls-backed TLS keeps the
 # build self-contained on every OS.
-suppaftp = { version = "11", default-features = false, features = ["rustls-ring"] }
+suppaftp = { version = "12", default-features = false, features = ["rustls-ring"] }
 # SFTP (SSH-based) source, src.sftp. russh + russh-sftp on the `ring`
 # crypto backend (default-features=false drops aws-lc-rs, so NO NASM and
 # NO C toolchain - the same ring 0.17 stack the rest of our TLS already
@@ -226,7 +226,7 @@ parquet = { workspace = true }
 # build against chrono >= 0.4.42, which russh-sftp pins us above). arrow-flight 53
 # unifies with the workspace arrow pins; do_get RecordBatches stream to a Parquet
 # temp file + materialize via DuckDB read_parquet, like the ADBC source.
-arrow-flight = "59"
+arrow-flight = "60"
 tonic = { version = "0.14", features = ["transport", "tls-ring", "tls-native-roots"] }
 prost = "0.14"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
