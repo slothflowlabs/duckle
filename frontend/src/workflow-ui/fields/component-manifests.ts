@@ -98,9 +98,14 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                     {
                         key: 'hasHeader',
                         label: 'First row is header',
-                        kind: 'bool',
-                        defaultValue: true,
-                        placeholder: 'Use the first row as column names',
+                        kind: 'select',
+                        defaultValue: 'true',
+                        options: [
+                            { label: 'Yes', value: 'true' },
+                            { label: 'No', value: 'false' },
+                            { label: 'Detect from the file', value: 'detect' },
+                        ],
+                        description: 'Detect lets DuckDB decide by reading the file.',
                     },
                     // Shared with the synthesized readers rather than listed
                     // again here. This manifest is hand-written, so getManifest

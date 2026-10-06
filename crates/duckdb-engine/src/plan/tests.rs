@@ -1066,6 +1066,20 @@
         assert!(pq.contains("COMPRESSION 'zstd'"), "{pq}");
     }
 
+    /// The source form stores "First row is header" as text; a hand-written
+    /// pipeline or an import as a boolean. Every CSV source reads both the same.
+    #[test]
+    fn a_header_choice_reads_the_same_as_text_or_boolean() {
+        use builders::{header_row, HeaderRow};
+        let row = |v: serde_json::Value| header_row(&serde_json::json!({ "hasHeader": v }));
+        assert_eq!(row(serde_json::json!(true)), HeaderRow::Yes);
+        assert_eq!(row(serde_json::json!(false)), HeaderRow::No);
+        assert_eq!(row(serde_json::json!("true")), HeaderRow::Yes);
+        assert_eq!(row(serde_json::json!("false")), HeaderRow::No);
+        assert_eq!(row(serde_json::json!(" Detect ")), HeaderRow::Detect);
+        assert_eq!(header_row(&serde_json::json!({})), HeaderRow::Yes, "absent is yes, as it was");
+    }
+
     /// A CSV sink's records are counted outside DuckDB's reader, by the line
     /// breaks outside quotes (lib.rs, count_csv_records). A delimiter or null
     /// string holding a quote or a line break throws that off, so such a sink

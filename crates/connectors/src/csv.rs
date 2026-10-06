@@ -22,7 +22,7 @@ const MAX_INSPECT_BYTES: u64 = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CsvOptions {
     pub path: String,
-    #[serde(default = "default_has_header", alias = "hasHeader")]
+    #[serde(default = "default_has_header", alias = "hasHeader", deserialize_with = "header_flag")]
     pub has_header: bool,
     #[serde(default = "default_delimiter")]
     pub delimiter: String,
@@ -40,6 +40,23 @@ pub struct CsvOptions {
 
 fn default_has_header() -> bool {
     true
+}
+
+/// The source form stores its header choice as text ("true", "false",
+/// "detect"), a hand-written pipeline as a boolean. This inspector is the
+/// fallback when DuckDB's cannot run and it cannot detect, so Detect reads the
+/// first line as names, the common case.
+fn header_flag<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Flag {
+        Bool(bool),
+        Text(String),
+    }
+    Ok(match Flag::deserialize(d)? {
+        Flag::Bool(b) => b,
+        Flag::Text(t) => !matches!(t.trim().to_ascii_lowercase().as_str(), "false" | "no"),
+    })
 }
 fn default_delimiter() -> String {
     ",".into()
@@ -524,6 +541,24 @@ mod tests {
         assert_eq!(inspection.schema[2].data_type, DataType::Float64);
         // The first row must still be sampled (not consumed as a header).
         assert_eq!(inspection.sample_rows.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_forms_text_choices_for_a_header_are_read() {
+        // The source form stores "true", "false" or "detect" as text, and a
+        // boolean-only field refused all three. This fallback cannot detect, so
+        // Detect reads the first line as names, the common case.
+        let names = |cfg: serde_json::Value| async move {
+            let inspection = CsvConnector.inspect(cfg).await.unwrap();
+            inspection.schema.iter().map(|c| c.name.clone()).collect::<Vec<_>>()
+        };
+        let bare = write_csv("1,alice\n2,bob\n");
+        let path = bare.path().to_str().unwrap();
+        assert_eq!(names(serde_json::json!({ "path": path, "hasHeader": "false" })).await, ["col_1", "col_2"]);
+        let named = write_csv("id,name\n1,alice\n");
+        let path = named.path().to_str().unwrap();
+        assert_eq!(names(serde_json::json!({ "path": path, "hasHeader": "detect" })).await, ["id", "name"]);
+        assert_eq!(names(serde_json::json!({ "path": path, "hasHeader": "true" })).await, ["id", "name"]);
     }
 
     #[tokio::test]

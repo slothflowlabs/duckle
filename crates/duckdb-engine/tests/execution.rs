@@ -11391,6 +11391,42 @@ fn snk_avro_writes_container_file_with_inferred_schema() {
 }
 
 #[test]
+fn a_csv_source_can_leave_the_header_to_detection() {
+    // "First row is header" was yes or no, and yes was sent even when nobody
+    // chose it, so DuckDB never got to look: a file without a header lost its
+    // first row to column names. Detect leaves the question to DuckDB's sniffer.
+    // The form stores its choice as text, so "false" has to mean no as well.
+    let tmp = tempfile::tempdir().unwrap();
+    let headerless = write_file(tmp.path(), "bare.csv", "1,2024-01-15,4.5\n2,2024-01-16,5.5\n");
+    let headed = write_file(tmp.path(), "named.csv", "id,day,price\n1,2024-01-15,4.5\n2,2024-01-16,5.5\n");
+    let engine = engine_or_skip!();
+    let load = |path: &str, header: serde_json::Value, out: &str| {
+        let out = out_path(tmp.path(), out);
+        let r = engine.execute_pipeline(&doc(
+            json!([
+                node("s", "src.csv", json!({ "path": path, "hasHeader": header })),
+                node("k", "snk.parquet", json!({ "path": out })),
+            ]),
+            json!([main_edge("e1", "s", "k")]),
+        ));
+        assert_eq!(r.status, "ok", "{header}: {:?}", r.error);
+        let names: Vec<String> = duckdb_json(&format!("DESCRIBE SELECT * FROM read_parquet('{}')", out))
+            .iter()
+            .filter_map(|c| c.get("column_name").and_then(Value::as_str).map(str::to_string))
+            .collect();
+        (count(&format!("read_parquet('{}')", out)), names)
+    };
+    let (rows, names) = load(&headerless, json!("detect"), "a.parquet");
+    assert_eq!(rows, 2, "no header detected, so no row taken for names: {names:?}");
+    let (rows, names) = load(&headed, json!("detect"), "b.parquet");
+    assert_eq!((rows, names), (2, vec!["id".to_string(), "day".into(), "price".into()]));
+    let (rows, _) = load(&headerless, json!("false"), "c.parquet");
+    assert_eq!(rows, 2, "the text \"false\" means no header");
+    let (rows, _) = load(&headed, json!(true), "d.parquet");
+    assert_eq!(rows, 2, "yes is still yes");
+}
+
+#[test]
 fn src_avro_types_each_column_as_its_schema_declares() {
     // The records used to be loaded as JSON and their types re-guessed: a text
     // date came back as DATE, an Avro date as a number, a decimal as a list of

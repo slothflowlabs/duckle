@@ -60,9 +60,23 @@
               {
                 "key": "hasHeader",
                 "label": "First row is header",
-                "kind": "bool",
-                "defaultValue": true,
-                "placeholder": "Use the first row as column names"
+                "kind": "select",
+                "defaultValue": "true",
+                "options": [
+                  {
+                    "label": "Yes",
+                    "value": "true"
+                  },
+                  {
+                    "label": "No",
+                    "value": "false"
+                  },
+                  {
+                    "label": "Detect from the file",
+                    "value": "detect"
+                  }
+                ],
+                "description": "Detect lets DuckDB decide by reading the file."
               },
               {
                 "key": "delimiter",

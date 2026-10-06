@@ -151,10 +151,12 @@ export function SelectField({ field, value, onChange }: Props<string>) {
             </>
         );
     }
+    // A field that was a checkbox before it offered a third choice still holds
+    // a boolean in older pipelines; shown as text it matches its option.
     return (
         <select
             className="field-input field-select"
-            value={value ?? ''}
+            value={value == null ? '' : String(value)}
             onChange={e => onChange(e.target.value)}
         >
             {field.options?.map(o => (

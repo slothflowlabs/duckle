@@ -5261,6 +5261,30 @@ pub(crate) fn build_semi(inputs: &NodeInputs, props: &JsonValue, anti: bool) -> 
 
 // ---- Sources ------------------------------------------------------------
 
+/// What a CSV source's "First row is header" says.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum HeaderRow {
+    Yes,
+    No,
+    /// Left to DuckDB's sniffer, which reads the file to decide.
+    Detect,
+}
+
+/// `hasHeader` as every CSV source reader takes it. The form stores its choice
+/// as text ("true", "false", "detect"), a pipeline written by hand or an import
+/// as a boolean, and both mean the same. Absent is yes, as it always was.
+pub(crate) fn header_row(props: &JsonValue) -> HeaderRow {
+    match props.get("hasHeader") {
+        Some(JsonValue::Bool(false)) => HeaderRow::No,
+        Some(JsonValue::String(s)) => match s.trim().to_ascii_lowercase().as_str() {
+            "false" | "no" => HeaderRow::No,
+            "detect" => HeaderRow::Detect,
+            _ => HeaderRow::Yes,
+        },
+        _ => HeaderRow::Yes,
+    }
+}
+
 /// The read_csv_auto arguments common to the main read and the reject read:
 /// path + header / delimiter / quote / null-sentinel / skip / encoding.
 /// The typed bits (`dateformat`, `types`, `all_varchar`) are appended by the
@@ -5268,15 +5292,16 @@ pub(crate) fn build_semi(inputs: &NodeInputs, props: &JsonValue, anti: bool) -> 
 /// raw text.
 fn csv_read_args_base(props: &JsonValue) -> Vec<String> {
     let path = string_prop(props, "path").unwrap_or_default();
-    let has_header = props
-        .get("hasHeader")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(true);
     let delim = string_prop(props, "delimiter");
     let quote = string_prop(props, "quoteChar");
     let null_val = string_prop(props, "nullValue");
     let mut args = vec![format!("'{}'", sql_escape(&path))];
-    args.push(format!("header={}", has_header));
+    // Detect sends nothing, which is how DuckDB's sniffer gets to decide.
+    match header_row(props) {
+        HeaderRow::Yes => args.push("header=true".to_string()),
+        HeaderRow::No => args.push("header=false".to_string()),
+        HeaderRow::Detect => {}
+    }
     if let Some(d) = delim.as_deref().filter(|s| !s.is_empty()) {
         args.push(format!("delim='{}'", sql_escape(d)));
     }
@@ -5337,7 +5362,7 @@ fn csv_read_args_base(props: &JsonValue) -> Vec<String> {
 /// Best-effort read of a local CSV file's HEADER column names, used only to
 /// reconcile a declared schema against the actual file (#133). Returns Some
 /// ONLY when the header can be read confidently: a local, existing, non-glob
-/// `path`, `hasHeader` not false, and no non-UTF-8 `encoding` declared. Any
+/// `path`, a header row the form says is there, and no non-UTF-8 `encoding` declared. Any
 /// other case (glob, missing file, headerless, custom encoding, read error)
 /// returns None, which keeps build_csv_source's original behavior verbatim so
 /// issue #3 and the SQL-export / MCP-validate paths are never weakened.
@@ -5347,8 +5372,9 @@ fn csv_header_names(props: &JsonValue) -> Option<std::collections::HashSet<Strin
     if path.contains('*') || path.contains('?') || path.contains('[') {
         return None;
     }
-    // Headerless files expose no names to reconcile against.
-    if !props.get("hasHeader").and_then(JsonValue::as_bool).unwrap_or(true) {
+    // Headerless files expose no names to reconcile against, and with Detect
+    // nothing here knows whether the first line is names or data.
+    if header_row(props) != HeaderRow::Yes {
         return None;
     }
     // A non-UTF-8 encoding means our byte-level split may misread the names.
@@ -5472,10 +5498,8 @@ pub(crate) fn build_csv_source(props: &JsonValue, declared: Option<&[duckle_meta
         // not even raise - the read just quietly produced the wrong names.
         // `columns=` supplies name AND type together, which is what a
         // headerless declared schema means, and it needs the sniffer off.
-        let headerless = !props
-            .get("hasHeader")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(true);
+        // Detect with declared columns reads them by name, as a header would.
+        let headerless = header_row(props) == HeaderRow::No;
         if headerless {
             args.push(format!("columns = {{{}}}", pairs.join(", ")));
             args.push("auto_detect=false".to_string());
