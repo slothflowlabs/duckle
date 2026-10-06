@@ -1295,8 +1295,11 @@ fn compile_impl(pipeline: &PipelineDoc, allow_view_upgrade: bool) -> Result<Comp
         // (which only ever sees the first edge), so a second edge wired
         // into the same `main` port is silently dropped - real data loss.
         // Union / intersect / except legitimately take multiple `main`
-        // edges (all_main_ports), so they're exempt.
-        if !is_multi_main_component(component_id) {
+        // edges (all_main_ports), so they're exempt, as is raw / pure SQL,
+        // which names every upstream itself.
+        if !is_multi_main_component(component_id)
+            && !sql_names_its_inputs(component_id, node.data.properties.as_ref())
+        {
             if let Some(mains) = node_inputs.ports.get("main") {
                 if mains.len() > 1 {
                     return Err(EngineError::Config(format!(

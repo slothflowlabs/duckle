@@ -8781,6 +8781,68 @@ fn fan_in_to_single_input_port_fails_loud() {
 }
 
 #[test]
+fn raw_sql_reads_every_upstream_wired_into_it() {
+    // Raw and Pure SQL emit the user's SQL verbatim and it names each upstream
+    // by node id, which is what the node's own help says to do. The fan-in
+    // guard refused a second input anyway, so a join of two sources in one SQL
+    // node could only be ordered by trigger links, never wired. The ordinary
+    // mode still reads one `input` and still refuses a second.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let orders = write_file(tmp.path(), "orders.csv", "id,cust\n1,10\n2,20\n3,10\n");
+    let custs = write_file(tmp.path(), "custs.csv", "cust,name\n10,ann\n20,bob\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let sql = "SELECT o.id, c.name FROM \"o\" o JOIN \"c\" c USING (cust) ORDER BY o.id";
+    let wired = |mode: &str, comp: &str| {
+        let mut props = json!({ "sql": sql });
+        if !mode.is_empty() {
+            props[mode] = json!(true);
+        }
+        doc(
+            json!([
+                node("o", "src.csv", json!({ "path": orders, "hasHeader": true })),
+                node("c", "src.csv", json!({ "path": custs, "hasHeader": true })),
+                node("q", comp, props),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "o", "q"), main_edge("e2", "c", "q"), main_edge("e3", "q", "k")]),
+        )
+    };
+    for comp in ["code.sql", "code.sqltemplate"] {
+        let res = engine.execute_pipeline(&wired("rawSql", comp));
+        assert_eq!(res.status, "ok", "{comp}: raw mode with two inputs: {:?}", res.error);
+        let names = scalar_string(&format!(
+            "SELECT string_agg(name, ',' ORDER BY id) FROM read_csv_auto('{}')",
+            out
+        ));
+        assert_eq!(names, "ann,bob,ann", "{comp}: both upstreams read");
+    }
+    // Pure mode is raw mode without the CREATE wrapper: a statement in its own
+    // right, here one that writes the join itself.
+    let pure_out = out_path(tmp.path(), "pure.csv");
+    let res = engine.execute_pipeline(&doc(
+        json!([
+            node("o", "src.csv", json!({ "path": orders, "hasHeader": true })),
+            node("c", "src.csv", json!({ "path": custs, "hasHeader": true })),
+            node("q", "code.sql", json!({
+                "pureSql": true,
+                "sql": format!("COPY ({}) TO '{}' (HEADER)", sql, pure_out)
+            })),
+        ]),
+        json!([main_edge("e1", "o", "q"), main_edge("e2", "c", "q")]),
+    ));
+    assert_eq!(res.status, "ok", "pure mode with two inputs: {:?}", res.error);
+    let names = scalar_string(&format!(
+        "SELECT string_agg(name, ',' ORDER BY id) FROM read_csv_auto('{}')",
+        pure_out
+    ));
+    assert_eq!(names, "ann,bob,ann", "pure mode: both upstreams read");
+    let res = engine.execute_pipeline(&wired("", "code.sql"));
+    assert_eq!(res.status, "error", "the wrapped mode reads one input and must still refuse two");
+    assert!(res.error.unwrap_or_default().contains("single input"));
+}
+
+#[test]
 fn anti_join_is_null_safe_on_right_keys() {
     // Regression for the NOT IN/NULL gotcha: anti-join used to silently
     // drop every left row when the right side had a single NULL in the

@@ -3641,7 +3641,7 @@ Validators split their input: passing rows continue on the main port, failures r
 
 | Capability | What it does |
 |---|---|
-| **Inline SQL** | Write a `SELECT`; the upstream node is exposed as `input`, result runs as a real materialized stage. A **raw SQL** mode runs verbatim SQL (a leading `WITH` / multiple CTEs / UNIONs) with no input-CTE wrapper |
+| **Inline SQL** | Write a `SELECT`; the upstream node is exposed as `input`, result runs as a real materialized stage. A **raw SQL** mode runs verbatim SQL (a leading `WITH` / multiple CTEs / UNIONs) with no input-CTE wrapper, and takes any number of wired inputs, each named by its node id |
 | **SQL Template** | Parameterized SQL with `${context.var}` substitution |
 | **SQL Routines** | Reusable, named SQL saved in the workspace |
 | **dbt** | Run a dbt project (or one inline model) as a node, against the pipeline's DuckDB. Wire several upstream sources in and the project reads them all via dbt `sources`, so one project models across Postgres, MySQL, files, and lakes at once. Powered by the dbt Fusion engine, fetched free at first launch (Apache dbt-core fallback); no Python setup. |

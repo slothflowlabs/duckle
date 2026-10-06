@@ -611,6 +611,18 @@ pub(crate) fn is_multi_main_component(component_id: &str) -> bool {
     )
 }
 
+/// Inline SQL in raw or pure mode emits the user's SQL verbatim, with no
+/// `input` CTE: it names each upstream by node id, so every input wired into it
+/// is read and none is dropped. build_custom_sql reads the same two flags.
+pub(crate) fn sql_names_its_inputs(component_id: &str, props: Option<&JsonValue>) -> bool {
+    matches!(component_id, "code.sql" | "code.sqltemplate")
+        && props.map_or(false, |p| {
+            ["rawSql", "pureSql"]
+                .iter()
+                .any(|k| p.get(*k).and_then(JsonValue::as_bool).unwrap_or(false))
+        })
+}
+
 /// xf.map (tMap) is the only component that reads several lookup ports (its
 /// configured `lookups` list). Every other join / diff / scd / upsert reads a
 /// single lookup via first_lookup(), so a second lookup edge would be silently
