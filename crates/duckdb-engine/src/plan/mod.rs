@@ -95,6 +95,12 @@ pub struct Stage {
     /// the source's Parquet writer does not compress as well as DuckDB's, so
     /// the file can be several times larger.
     pub sink_direct: bool,
+    /// For a DuckDB file sink every one of whose upstream rows lands in its
+    /// table: the database file and the table name, so the executor can count
+    /// the table rather than re-run the upstream. None when a dead-letter split
+    /// sends some rows elsewhere. The write mode is checked where the count is
+    /// chosen, beside the Parquet sink's.
+    pub sink_table: Option<(String, String)>,
     /// Single runtime action this stage performs beyond plain DuckDB SQL:
     /// a driver source/sink, an HTTP/AI/code transform, or a control-flow
     /// side effect. None means the stage is pure SQL. Replacing the former
@@ -1936,6 +1942,7 @@ fn build_stage(
     let mut staged_header = false;
     let mut sink_compression: Option<String> = None;
     let mut sink_direct = false;
+    let mut sink_table: Option<(String, String)> = None;
     let mut sink_mode: Option<String> = None;
     let mut upsert: Option<UpsertSpec> = None;
     let mut text_search: Option<TextSearchSpec> = None;
@@ -3704,6 +3711,23 @@ fn build_stage(
                     .or_else(|| v.as_str().map(|t| t.eq_ignore_ascii_case("true")))
             })
             .unwrap_or(false);
+        // The same database and table build_db_sink writes, and the same test
+        // dead_letter_prelude makes for splitting rows off.
+        if component_id == "snk.duckdb"
+            && !props
+                .get("validateBeforeInsert")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false)
+        {
+            sink_table = string_prop(&props, "database")
+                .filter(|s| !s.is_empty())
+                .map(|db| {
+                    let table = string_prop(&props, "tableName")
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "output".into());
+                    (db, table)
+                });
+        }
         // Relational DB upsert is the only sink mode whose SQL the
         // planner can't fully generate up front: the SET clause needs
         // the upstream's non-key column list, which the executor reads
@@ -7430,6 +7454,7 @@ fn build_stage(
         staged_header,
         sink_compression,
         sink_direct,
+        sink_table,
         runtime,
         wait_ms,
         retry_attempts,

@@ -471,6 +471,180 @@ fn parquet_sink_counts_its_own_file_not_a_glob_sibling() {
     assert_eq!(filt.rows, Some(2), "filter should report 2 rows");
 }
 
+/// The StageFinished row counts a run announced for one node, in order.
+fn announced_rows(
+    engine: &duckle_duckdb_engine::DuckdbEngine,
+    d: &PipelineDoc,
+    target: Option<&str>,
+    node_id: &str,
+) -> (duckle_duckdb_engine::RunResult, Vec<Option<u64>>) {
+    let mut finished: Vec<(String, Option<u64>)> = Vec::new();
+    let result = engine.execute_pipeline_with_events(d, target, None, |ev| {
+        if let duckle_duckdb_engine::PipelineEvent::StageFinished { node_id, rows, .. } = ev {
+            finished.push((node_id.clone(), rows));
+        }
+    });
+    let rows = finished
+        .iter()
+        .filter(|(id, _)| id == node_id)
+        .map(|(_, r)| *r)
+        .collect();
+    (result, rows)
+}
+
+#[test]
+fn duckdb_sink_counts_its_table_so_its_source_is_read_once() {
+    // A source is a VIEW, so its own COUNT(*) reads the whole file again.
+    // Loading 80M taxi rows into a DuckDB file spent 84 s of 209 s on that
+    // count alone, for the same number the load then produced. A DuckDB sink
+    // that replaces its table can count it from metadata, so the source takes
+    // the sink's figure: it finishes with no count and is back-filled. Both
+    // execution paths: naming a target forces the per-stage one.
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,a\n2,b\n3,c\n");
+    let engine = engine_or_skip!();
+    for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+        let dbfile = out_path(tmp.path(), &format!("{}.duckdb", path_name));
+        // Five rows already there: an overwrite must report the three it wrote,
+        // never the table as it stood before.
+        duckdb_exec(
+            &dbfile,
+            "CREATE TABLE people AS SELECT range AS id, 'old' AS name FROM range(5)",
+        );
+        let d = doc(
+            json!([
+                node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                node("k1", "snk.duckdb", json!({ "database": dbfile, "tableName": "people" })),
+            ]),
+            json!([main_edge("e1", "s1", "k1")]),
+        );
+        let (result, s1) = announced_rows(&engine, &d, target, "s1");
+        assert_eq!(result.status, "ok", "{path_name}: run failed: {:?}", result.error);
+        assert_eq!(
+            s1,
+            vec![None, Some(3)],
+            "{path_name}: the source should take the sink's figure, not count itself"
+        );
+        assert_eq!(result.nodes.get("s1").and_then(|n| n.rows), Some(3), "{path_name}");
+        assert_eq!(result.nodes.get("k1").and_then(|n| n.rows), Some(3), "{path_name}");
+        let n = scalar_string(&format!(
+            "ATTACH '{}' AS d (READ_ONLY); SELECT CAST(count(*) AS VARCHAR) AS n FROM d.people",
+            dbfile
+        ));
+        assert_eq!(n, "3", "{path_name}: table rows");
+    }
+}
+
+#[test]
+fn a_duckdb_sink_reports_what_its_table_holds() {
+    // The figure must come from the table, not from evaluating the upstream
+    // again. A source whose every read returns a different number of rows tells
+    // the two apart: only the table agrees with itself. On the per-stage path a
+    // failed table count falls back to re-counting the source, which is right
+    // for a deterministic source - so no other test would notice it broken.
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = engine_or_skip!();
+    for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+        let dbfile = out_path(tmp.path(), &format!("{}.duckdb", path_name));
+        let d = doc(
+            json!([
+                node("s1", "code.sql", json!({
+                    "sql": "SELECT range AS id FROM range(100000) WHERE random() < 0.5"
+                })),
+                node("k1", "snk.duckdb", json!({ "database": dbfile, "tableName": "t" })),
+            ]),
+            json!([main_edge("e1", "s1", "k1")]),
+        );
+        let (result, _) = announced_rows(&engine, &d, target, "s1");
+        assert_eq!(result.status, "ok", "{path_name}: run failed: {:?}", result.error);
+        let held: u64 = scalar_string(&format!(
+            "ATTACH '{}' AS d (READ_ONLY); SELECT CAST(count(*) AS VARCHAR) AS n FROM d.t",
+            dbfile
+        ))
+        .parse()
+        .expect("table count");
+        assert_eq!(result.nodes.get("k1").and_then(|n| n.rows), Some(held), "{path_name}: sink");
+        assert_eq!(result.nodes.get("s1").and_then(|n| n.rows), Some(held), "{path_name}: source");
+    }
+}
+
+#[test]
+fn duckdb_sink_in_append_mode_reports_the_rows_it_added() {
+    // An appended table holds yesterday's rows too, so counting it would report
+    // the table, not the run. Only a replace may lend its count upstream.
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,a\n2,b\n3,c\n");
+    let engine = engine_or_skip!();
+    for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+        let dbfile = out_path(tmp.path(), &format!("{}.duckdb", path_name));
+        duckdb_exec(
+            &dbfile,
+            "CREATE TABLE people AS SELECT range::VARCHAR AS id, 'old' AS name FROM range(5)",
+        );
+        let d = doc(
+            json!([
+                node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                node("k1", "snk.duckdb", json!({
+                    "database": dbfile, "tableName": "people", "mode": "append"
+                })),
+            ]),
+            json!([main_edge("e1", "s1", "k1")]),
+        );
+        let (result, _) = announced_rows(&engine, &d, target, "s1");
+        assert_eq!(result.status, "ok", "{path_name}: run failed: {:?}", result.error);
+        assert_eq!(result.nodes.get("s1").and_then(|n| n.rows), Some(3), "{path_name}");
+        assert_eq!(
+            result.nodes.get("k1").and_then(|n| n.rows),
+            Some(3),
+            "{path_name}: the sink added 3 rows to a table that now holds 8"
+        );
+    }
+}
+
+#[test]
+fn a_dead_letter_sink_does_not_lend_its_count_to_the_source() {
+    // validateBeforeInsert sends rows that will not cast to a dead-letter file
+    // and inserts the rest, so the table holds FEWER rows than the source
+    // produced. Its count says nothing about the source, which keeps its own.
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,a\n2,b\nx,c\n");
+    let engine = engine_or_skip!();
+    for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+        let dbfile = out_path(tmp.path(), &format!("{}.duckdb", path_name));
+        let dlq = out_path(tmp.path(), &format!("{}_rejects.parquet", path_name));
+        let sink = json!({
+            "id": "k1",
+            "position": { "x": 0, "y": 0 },
+            "data": {
+                "label": "k1",
+                "componentId": "snk.duckdb",
+                "properties": {
+                    "database": dbfile, "tableName": "people",
+                    "validateBeforeInsert": true, "deadLetterPath": dlq
+                },
+                "schema": [
+                    { "name": "id", "type": "int64" },
+                    { "name": "name", "type": "string" }
+                ]
+            }
+        });
+        let d = doc(
+            json!([node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })), sink]),
+            json!([main_edge("e1", "s1", "k1")]),
+        );
+        let (result, s1) = announced_rows(&engine, &d, target, "s1");
+        assert_eq!(result.status, "ok", "{path_name}: run failed: {:?}", result.error);
+        // The dead-letter path really ran: one row out, two rows in.
+        assert_eq!(count(&format!("read_parquet('{}')", dlq)), 1, "{path_name}: rejects");
+        let n = scalar_string(&format!(
+            "ATTACH '{}' AS d (READ_ONLY); SELECT CAST(count(*) AS VARCHAR) AS n FROM d.people",
+            dbfile
+        ));
+        assert_eq!(n, "2", "{path_name}: table rows");
+        assert_eq!(s1, vec![Some(3)], "{path_name}: the source counts its own 3 rows");
+    }
+}
+
 #[test]
 fn csv_filter_parquet_end_to_end() {
     let tmp = tempfile::tempdir().unwrap();

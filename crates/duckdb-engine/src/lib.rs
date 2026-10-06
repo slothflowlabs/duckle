@@ -3548,23 +3548,42 @@ impl DuckdbEngine {
             // else counts its relation, but only the first time this batch
             // names it: a sink's target is normally the view the preceding
             // stage has just counted.
-            let count_from: Option<String> = if let Some(f) = sink_self_count(stage) {
-                Some(f)
+            let count_of = |from: &str| {
+                format!(
+                    "SELECT COUNT(*) AS _duckle_r{} FROM {}",
+                    Self::count_projection(counts_need_every_column),
+                    from
+                )
+            };
+            let count_select: Option<String> = if let Some(sc) = sink_self_count(stage) {
+                if sc.attach.is_some() {
+                    // Counted while attached and the figure kept, so the file is
+                    // detached again before the marker: the marker stays the
+                    // stage's last statement, and a later stage writing the same
+                    // file finds it free.
+                    batched_sql.push_str(&format!(
+                        "{}CREATE OR REPLACE TEMP TABLE duckle_cnt_rows AS SELECT COUNT(*) AS n FROM {}; DETACH duckle_cnt;\n",
+                        sc.prelude(),
+                        sc.from,
+                    ));
+                    Some("SELECT n AS _duckle_r FROM duckle_cnt_rows".to_string())
+                } else {
+                    Some(count_of(&sc.from))
+                }
             } else if matches!(stage.kind, plan::StageKind::View)
                 && counted_by_sink.contains(stage.node_id.as_str())
             {
                 None
             } else {
                 match count_target {
-                    Some(t) if counted.insert(t.to_string()) => Some(plan::quote_ident(t)),
+                    Some(t) if counted.insert(t.to_string()) => Some(count_of(&plan::quote_ident(t))),
                     _ => None,
                 }
             };
-            match count_from {
-                Some(t) => batched_sql.push_str(&format!(
-                    "COPY (SELECT COUNT(*) AS _duckle_r{} FROM {}) TO '{}' (FORMAT 'json', ARRAY false);\n",
-                    Self::count_projection(counts_need_every_column),
-                    t,
+            match count_select {
+                Some(select) => batched_sql.push_str(&format!(
+                    "COPY ({}) TO '{}' (FORMAT 'json', ARRAY false);\n",
+                    select,
                     path_to_sql(&marker),
                 )),
                 None => batched_sql.push_str(&format!(
@@ -3891,7 +3910,7 @@ impl DuckdbEngine {
         &self,
         db: &Path,
         from: Option<&str>,
-        self_count: Option<String>,
+        self_count: Option<SelfCount>,
         nodes: &std::collections::BTreeMap<String, NodeRunStatus>,
     ) -> Option<u64> {
         // Order is by cost. A figure the upstream already recorded is free; the
@@ -3901,8 +3920,8 @@ impl DuckdbEngine {
         if let Some(rows) = from.and_then(|f| nodes.get(f)).and_then(|n| n.rows) {
             return Some(rows);
         }
-        if let Some(expr) = self_count {
-            if let Ok(n) = self.count_from_expr(db, &expr) {
+        if let Some(sc) = self_count {
+            if let Ok(n) = self.count_from_expr(db, &sc.prelude(), &sc.from) {
                 return Some(n);
             }
             // Reading the file back can fail where counting the relation would
@@ -3937,14 +3956,14 @@ fn count_projection(every_column: bool) -> &'static str {
 }
 
     fn count_rows(&self, db: &Path, name: &str) -> Result<u64, EngineError> {
-        self.count_from_expr(db, &plan::quote_ident(name))
+        self.count_from_expr(db, "", &plan::quote_ident(name))
     }
 
     /// COUNT(*) over an arbitrary FROM-expression, not just a quoted relation.
     /// `sink_self_count` hands back `read_parquet('...')`, which `count_rows`
-    /// would quote into an identifier.
-    fn count_from_expr(&self, db: &Path, from: &str) -> Result<u64, EngineError> {
-        let sql = format!("SELECT COUNT(*) AS n FROM {};", from);
+    /// would quote into an identifier, or a table that `prelude` attaches.
+    fn count_from_expr(&self, db: &Path, prelude: &str, from: &str) -> Result<u64, EngineError> {
+        let sql = format!("{}SELECT COUNT(*) AS n FROM {};", prelude, from);
         let rows = self.run_rows(Some(db), &sql)?;
         let n = rows
             .first()
@@ -6698,7 +6717,29 @@ fn append_staged(staged: &str, dest: &str, header: bool) -> Result<(), String> {
     std::fs::remove_file(staged).map_err(|e| format!("removing {}: {}", staged, e))
 }
 
-fn sink_self_count(stage: &plan::Stage) -> Option<String> {
+/// What a sink counts in place of its upstream: the rows it has just written,
+/// read back from where they landed.
+struct SelfCount {
+    /// A DuckDB file to attach read-only, as `duckle_cnt`, before counting.
+    attach: Option<String>,
+    /// The FROM-expression the count reads.
+    from: String,
+}
+
+impl SelfCount {
+    /// The statements that make `from` readable, run ahead of the count.
+    fn prelude(&self) -> String {
+        match &self.attach {
+            Some(db) => format!("ATTACH '{}' AS duckle_cnt (READ_ONLY); ", sql_escape(db)),
+            None => String::new(),
+        }
+    }
+}
+
+fn sink_self_count(stage: &plan::Stage) -> Option<SelfCount> {
+    if stage.component_id == "snk.duckdb" {
+        return duckdb_sink_self_count(stage);
+    }
     if stage.component_id != "snk.parquet" {
         return None;
     }
@@ -6722,10 +6763,45 @@ fn sink_self_count(stage: &plan::Stage) -> Option<String> {
     if !is_local_path(path) || path.contains(['*', '?', '[', '{']) {
         return None;
     }
-    Some(format!(
-        "read_parquet('{}')",
-        path.replace(std::path::MAIN_SEPARATOR, "/").replace('\'', "''")
-    ))
+    Some(SelfCount {
+        attach: None,
+        from: format!(
+            "read_parquet('{}')",
+            path.replace(std::path::MAIN_SEPARATOR, "/").replace('\'', "''")
+        ),
+    })
+}
+
+/// A DuckDB file sink that replaced its table holds exactly this run's rows,
+/// and DuckDB counts a table from its row-group metadata: 0.2 ms for 6M rows,
+/// where a CSV source counting itself reads the whole file again - 84 s of a
+/// 209 s load of 80M taxi rows. The sink's own SQL detaches the file when it
+/// finishes, so the count attaches it again, read-only.
+fn duckdb_sink_self_count(stage: &plan::Stage) -> Option<SelfCount> {
+    // Absent means overwrite, as in build_db_sink. Every other mode leaves rows
+    // in the table that this run did not write.
+    if !matches!(stage.sink_mode.as_deref(), None | Some("overwrite")) {
+        return None;
+    }
+    // A publish group keeps its attachment open across stages, and a runtime
+    // spec writes some other way than the SQL whose table is counted here.
+    if stage.publish_group.is_some() || stage.runtime.is_some() {
+        return None;
+    }
+    let (db, table) = stage.sink_table.as_ref()?;
+    // Re-opening is only safe for a file. `:memory:` is gone once the sink
+    // detaches it, and `md:` or `s3://` would be a remote connection made for a
+    // number - which, under the batched path's -bail, fails a run whose write
+    // had already succeeded. A one-letter prefix is a Windows drive.
+    let d = db.trim();
+    let scheme = d.split_once(':').map_or(false, |(s, _)| s.len() > 1);
+    if d.is_empty() || d.starts_with(':') || scheme {
+        return None;
+    }
+    Some(SelfCount {
+        attach: Some(db.clone()),
+        from: format!("duckle_cnt.{}", plan::quote_ident(table)),
+    })
 }
 
 /// Views whose row count a downstream sink will supply for free, so counting
@@ -8273,6 +8349,7 @@ mod tests {
             sink_mode: None,
             sink_compression: None,
             sink_direct: false,
+            sink_table: None,
             runtime: None,
             wait_ms: None,
             retry_attempts: 0,
