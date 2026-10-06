@@ -57,6 +57,17 @@ fn is_zero(v: &u32) -> bool {
     *v == 0
 }
 
+/// See [`Stage::sink_count`].
+#[derive(Debug)]
+pub enum SinkCount {
+    /// A DuckDB file sink every one of whose upstream rows lands in its table.
+    /// None of it when a dead-letter split sends some rows elsewhere.
+    Table { database: String, table: String },
+    /// A CSV file written with DuckDB's own quoting, whose records can be
+    /// counted without its reader. `header`: a header line leads the file.
+    CsvRecords { header: bool },
+}
+
 #[derive(Debug)]
 pub struct Stage {
     pub node_id: String,
@@ -95,12 +106,11 @@ pub struct Stage {
     /// the source's Parquet writer does not compress as well as DuckDB's, so
     /// the file can be several times larger.
     pub sink_direct: bool,
-    /// For a DuckDB file sink every one of whose upstream rows lands in its
-    /// table: the database file and the table name, so the executor can count
-    /// the table rather than re-run the upstream. None when a dead-letter split
-    /// sends some rows elsewhere. The write mode is checked where the count is
-    /// chosen, beside the Parquet sink's.
-    pub sink_table: Option<(String, String)>,
+    /// What this sink's own output can tell the executor about how many rows it
+    /// wrote, so its upstream need not be re-run to count them. The write mode,
+    /// staging and path are checked where the count is chosen (lib.rs,
+    /// sink_self_count), beside the Parquet sink's footer count.
+    pub sink_count: Option<SinkCount>,
     /// Single runtime action this stage performs beyond plain DuckDB SQL:
     /// a driver source/sink, an HTTP/AI/code transform, or a control-flow
     /// side effect. None means the stage is pure SQL. Replacing the former
@@ -1945,7 +1955,7 @@ fn build_stage(
     let mut staged_header = false;
     let mut sink_compression: Option<String> = None;
     let mut sink_direct = false;
-    let mut sink_table: Option<(String, String)> = None;
+    let mut sink_count: Option<SinkCount> = None;
     let mut sink_mode: Option<String> = None;
     let mut upsert: Option<UpsertSpec> = None;
     let mut text_search: Option<TextSearchSpec> = None;
@@ -3722,14 +3732,28 @@ fn build_stage(
                 .and_then(JsonValue::as_bool)
                 .unwrap_or(false)
         {
-            sink_table = string_prop(&props, "database")
+            sink_count = string_prop(&props, "database")
                 .filter(|s| !s.is_empty())
-                .map(|db| {
-                    let table = string_prop(&props, "tableName")
+                .map(|db| SinkCount::Table {
+                    database: db,
+                    table: string_prop(&props, "tableName")
                         .filter(|s| !s.is_empty())
-                        .unwrap_or_else(|| "output".into());
-                    (db, table)
+                        .unwrap_or_else(|| "output".into()),
                 });
+        }
+        // build_csv_sink leaves the quote and the escape at DuckDB's default,
+        // the double quote, which is what lets the records be counted outside
+        // the reader. A delimiter or null string holding a quote or a line
+        // break would throw that count off, so such a sink is not offered one.
+        if matches!(component_id, "snk.csv" | "snk.tsv") {
+            let plain = |key: &str| {
+                string_prop(&props, key).map_or(true, |s| !s.contains(['"', '\n', '\r']))
+            };
+            if (component_id == "snk.tsv" || plain("delimiter")) && plain("nullValue") {
+                sink_count = Some(SinkCount::CsvRecords {
+                    header: builders::csv_writes_header(&props),
+                });
+            }
         }
         // Relational DB upsert is the only sink mode whose SQL the
         // planner can't fully generate up front: the SET clause needs
@@ -7457,7 +7481,7 @@ fn build_stage(
         staged_header,
         sink_compression,
         sink_direct,
-        sink_table,
+        sink_count,
         runtime,
         wait_ms,
         retry_attempts,

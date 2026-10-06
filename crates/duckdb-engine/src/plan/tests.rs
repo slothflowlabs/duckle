@@ -1066,6 +1066,39 @@
         assert!(pq.contains("COMPRESSION 'zstd'"), "{pq}");
     }
 
+    /// A CSV sink's records are counted outside DuckDB's reader, by the line
+    /// breaks outside quotes (lib.rs, count_csv_records). A delimiter or null
+    /// string holding a quote or a line break throws that off, so such a sink
+    /// is not offered the count and its upstream counts itself, as before.
+    #[test]
+    fn a_csv_sink_is_offered_a_record_count_only_with_plain_separators() {
+        let offered = |comp: &str, props: serde_json::Value| {
+            let doc = pipeline_from_json(
+                &serde_json::json!({
+                    "nodes": [
+                        {"id":"s","position":{"x":0,"y":0},"data":{
+                            "label":"S","componentId":"src.csv","properties":{"path":"/tmp/a.csv"}}},
+                        {"id":"k","position":{"x":0,"y":0},"data":{
+                            "label":"K","componentId":comp,"properties":props}}
+                    ],
+                    "edges":[{"id":"e","source":"s","target":"k","data":{"connectionType":"main"}}]
+                })
+                .to_string(),
+            );
+            let stage = compile(&doc).unwrap().stages.into_iter().find(|s| s.node_id == "k").unwrap();
+            match stage.sink_count {
+                Some(SinkCount::CsvRecords { header }) => Some(header),
+                _ => None,
+            }
+        };
+        use serde_json::json;
+        assert_eq!(offered("snk.csv", json!({"path":"/tmp/o.csv"})), Some(true));
+        assert_eq!(offered("snk.csv", json!({"path":"/tmp/o.csv","writeHeader":false})), Some(false));
+        assert_eq!(offered("snk.tsv", json!({"path":"/tmp/o.tsv"})), Some(true));
+        assert_eq!(offered("snk.csv", json!({"path":"/tmp/o.csv","delimiter":"\""})), None);
+        assert_eq!(offered("snk.csv", json!({"path":"/tmp/o.csv","nullValue":"\n"})), None);
+    }
+
     /// #367: a line-oriented file sink appends; where adding lines to the end
     /// of the file would not add rows to it, the append is refused, as before,
     /// rather than replacing the file.

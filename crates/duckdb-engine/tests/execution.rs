@@ -596,6 +596,88 @@ fn a_parquet_sink_reports_what_its_file_holds() {
 }
 
 #[test]
+fn a_csv_sink_reports_what_its_file_holds() {
+    // A CSV sink counts the records in the file it wrote, so the step whose
+    // rows it writes need not run again to count itself. A source that returns
+    // a different number of rows on every read proves the figure is the file's.
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = engine_or_skip!();
+    for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+        let out = out_path(tmp.path(), &format!("{}.csv", path_name));
+        let d = doc(
+            json!([
+                node("s1", "code.sql", json!({
+                    "sql": "SELECT range AS id FROM range(100000) WHERE random() < 0.5"
+                })),
+                node("k1", "snk.csv", json!({ "path": out })),
+            ]),
+            json!([main_edge("e1", "s1", "k1")]),
+        );
+        let (result, _) = announced_rows(&engine, &d, target, "s1");
+        assert_eq!(result.status, "ok", "{path_name}: run failed: {:?}", result.error);
+        let held = count(&format!("read_csv_auto('{}')", out)) as u64;
+        assert_eq!(result.nodes.get("k1").and_then(|n| n.rows), Some(held), "{path_name}: sink");
+        assert_eq!(result.nodes.get("s1").and_then(|n| n.rows), Some(held), "{path_name}: source");
+    }
+}
+
+#[test]
+fn a_csv_sink_lends_its_count_to_the_step_it_writes() {
+    // TPC-H over CSV read every table three times: once to count the source,
+    // once to count the query, once to write the result. The query's own count
+    // is the one a CSV sink can stand in for.
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(
+        tmp.path(),
+        "orders.csv",
+        "order_id,status\n1,paid\n2,pending\n3,paid\n4,refunded\n",
+    );
+    let engine = engine_or_skip!();
+    for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+        let out = out_path(tmp.path(), &format!("{}.csv", path_name));
+        let d = doc(
+            json!([
+                node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                node("f1", "xf.filter", json!({ "predicate": "status = 'paid'" })),
+                node("k1", "snk.csv", json!({ "path": out })),
+            ]),
+            json!([main_edge("e1", "s1", "f1"), main_edge("e2", "f1", "k1")]),
+        );
+        let (result, f1) = announced_rows(&engine, &d, target, "f1");
+        assert_eq!(result.status, "ok", "{path_name}: run failed: {:?}", result.error);
+        assert_eq!(f1, vec![None, Some(2)], "{path_name}: the filter should take the sink's figure");
+        assert_eq!(result.nodes.get("k1").and_then(|n| n.rows), Some(2), "{path_name}");
+    }
+}
+
+#[test]
+fn a_csv_sink_counts_quoted_line_breaks_and_gzip_exactly() {
+    // The records are counted outside DuckDB's reader, by line breaks outside
+    // quotes. A value holding a line break, a quote, the delimiter or nothing at
+    // all is where that could go wrong, and a .gz file has to be decoded first.
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = engine_or_skip!();
+    let rows = "SELECT * FROM (VALUES (1, 'plain'), (2, 'has \"quote\"'), (3, E'two\\nlines'), \
+                (4, ''), (5, NULL), (6, 'a,b'), (7, E'tab\\there')) t(id, s)";
+    for (sink, name) in [("snk.csv", "out.csv.gz"), ("snk.tsv", "out.tsv")] {
+        for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+            let out = out_path(tmp.path(), &format!("{}_{}", path_name, name));
+            let d = doc(
+                json!([
+                    node("s1", "code.sql", json!({ "sql": rows })),
+                    node("k1", sink, json!({ "path": out })),
+                ]),
+                json!([main_edge("e1", "s1", "k1")]),
+            );
+            let (result, s1) = announced_rows(&engine, &d, target, "s1");
+            assert_eq!(result.status, "ok", "{sink} {path_name}: {:?}", result.error);
+            assert_eq!(s1, vec![None, Some(7)], "{sink} {path_name}: counted from the file");
+            assert_eq!(result.nodes.get("k1").and_then(|n| n.rows), Some(7), "{sink} {path_name}");
+        }
+    }
+}
+
+#[test]
 fn duckdb_sink_in_append_mode_reports_the_rows_it_added() {
     // An appended table holds yesterday's rows too, so counting it would report
     // the table, not the run. Only a replace may lend its count upstream.
