@@ -2970,7 +2970,7 @@ impl DuckdbEngine {
                             self.sink_rows(
                                 &db_path,
                                 stage.from.as_deref(),
-                                sink_self_count(stage),
+                                sink_self_count(stage, true),
                                 &nodes,
                             ),
                             None,
@@ -3407,7 +3407,7 @@ impl DuckdbEngine {
         // sink reports (see drain_batched_markers).
         let counted_by_sink: std::collections::HashSet<&str> = stages
             .iter()
-            .filter(|s| sink_self_count(s).is_some())
+            .filter(|s| sink_self_count(s, false).is_some())
             .filter_map(|s| s.from.as_deref())
             .collect();
         // The span a publish group's transaction covers: from the first grouped
@@ -3555,7 +3555,7 @@ impl DuckdbEngine {
                     from
                 )
             };
-            let count_select: Option<String> = if let Some(sc) = sink_self_count(stage) {
+            let count_select: Option<String> = if let Some(sc) = sink_self_count(stage, false) {
                 if sc.attach.is_some() {
                     // Counted while attached and the figure kept, so the file is
                     // detached again before the marker: the marker stays the
@@ -6736,7 +6736,10 @@ impl SelfCount {
     }
 }
 
-fn sink_self_count(stage: &plan::Stage) -> Option<SelfCount> {
+/// `published`: the staged file has already been renamed onto its destination.
+/// The per-stage path publishes a stage before it counts it; the batched path
+/// counts inside its own script, before the publish.
+fn sink_self_count(stage: &plan::Stage, published: bool) -> Option<SelfCount> {
     if stage.component_id == "snk.duckdb" {
         return duckdb_sink_self_count(stage);
     }
@@ -6750,9 +6753,13 @@ fn sink_self_count(stage: &plan::Stage) -> Option<SelfCount> {
     if stage.sql.contains("PARTITION_BY") {
         return None;
     }
-    // The staged file when this sink stages: in the batched path this COUNT is a
-    // statement in the same script, so it runs before the publish.
-    let path = stage.staged_write.as_deref().or(stage.sink_path.as_deref())?;
+    // The staged file until it is published, the destination after. Counting
+    // the staged name once it had been renamed found nothing, and the per-stage
+    // path then re-ran the whole upstream to count instead.
+    let path = match published {
+        false => stage.staged_write.as_deref().or(stage.sink_path.as_deref()),
+        true => stage.sink_path.as_deref(),
+    }?;
     // read_parquet globs, and the sink wrote ONE literal file. Measured against
     // DuckDB 1.5.4: `o[12].parquet` expands and counts files this sink never
     // wrote, and `o{1,2}.parquet` raises "No files found that match the
@@ -6826,7 +6833,7 @@ fn views_counted_by_sink<'a>(
 ) -> std::collections::HashSet<&'a str> {
     stages
         .iter()
-        .filter(|s| sink_self_count(s).is_some())
+        .filter(|s| sink_self_count(s, true).is_some())
         .filter_map(|s| s.from.as_deref())
         .filter(|f| !direct_sink_sources.contains(f))
         .filter(|f| stages.iter().filter(|o| o.from.as_deref() == Some(*f)).count() == 1)

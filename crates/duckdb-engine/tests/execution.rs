@@ -569,6 +569,33 @@ fn a_duckdb_sink_reports_what_its_table_holds() {
 }
 
 #[test]
+fn a_parquet_sink_reports_what_its_file_holds() {
+    // The same proof for the Parquet footer count. The per-stage path publishes
+    // a staged file before it counts, so a count of the staged name finds
+    // nothing and falls back to re-running the upstream - right for a
+    // deterministic source, which is why the back-fill test cannot see it.
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = engine_or_skip!();
+    for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+        let out = out_path(tmp.path(), &format!("{}.parquet", path_name));
+        let d = doc(
+            json!([
+                node("s1", "code.sql", json!({
+                    "sql": "SELECT range AS id FROM range(100000) WHERE random() < 0.5"
+                })),
+                node("k1", "snk.parquet", json!({ "path": out })),
+            ]),
+            json!([main_edge("e1", "s1", "k1")]),
+        );
+        let (result, _) = announced_rows(&engine, &d, target, "s1");
+        assert_eq!(result.status, "ok", "{path_name}: run failed: {:?}", result.error);
+        let held = count(&format!("read_parquet('{}')", out)) as u64;
+        assert_eq!(result.nodes.get("k1").and_then(|n| n.rows), Some(held), "{path_name}: sink");
+        assert_eq!(result.nodes.get("s1").and_then(|n| n.rows), Some(held), "{path_name}: source");
+    }
+}
+
+#[test]
 fn duckdb_sink_in_append_mode_reports_the_rows_it_added() {
     // An appended table holds yesterday's rows too, so counting it would report
     // the table, not the run. Only a replace may lend its count upstream.
