@@ -8428,6 +8428,10 @@ impl DuckdbEngine {
             .map_err(|e| EngineError::Query(format!("avro: open {}: {}", spec.path, e)))?;
         let reader = apache_avro::Reader::new(file)
             .map_err(|e| EngineError::Query(format!("avro: open container {}: {}", spec.path, e)))?;
+        // Typed from the file's own schema when it is a record, as a file with
+        // columns is; anything else is loaded and typed by the JSON reader.
+        let schema = reader.writer_schema().clone();
+        let typed = crate::util::AvroLoad::new(&schema);
         // Each record goes to disk as it is decoded. Collecting them first held
         // every record as a JSON tree: 3.75 GB resident for a 156 MB file of
         // 1.5M rows.
@@ -8437,12 +8441,20 @@ impl DuckdbEngine {
             self.check_cancelled()?;
             let v = value
                 .map_err(|e| EngineError::Query(format!("avro: read record: {}", e)))?;
-            let j: JsonValue = apache_avro::from_value(&v)
-                .map_err(|e| EngineError::Query(format!("avro: value -> json: {}", e)))?;
+            let j: JsonValue = match &typed {
+                Some(load) => load.row(&v),
+                None => apache_avro::from_value(&v)
+                    .map_err(|e| EngineError::Query(format!("avro: value -> json: {}", e)))?,
+            };
             writer.write_row(&j)?;
             count += 1;
         }
-        writer.finalize_into_table(&self.bin, db, &spec.node_id)?;
+        match &typed {
+            Some(load) => {
+                writer.finalize_typed(&self.bin, db, &spec.node_id, &load.columns, &load.select)?;
+            }
+            None => writer.finalize_into_table(&self.bin, db, &spec.node_id)?,
+        }
         Ok(format!(
             "avro: materialized {} records into {}",
             count, spec.node_id

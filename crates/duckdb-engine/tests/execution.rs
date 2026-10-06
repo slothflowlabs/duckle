@@ -11391,6 +11391,115 @@ fn snk_avro_writes_container_file_with_inferred_schema() {
 }
 
 #[test]
+fn src_avro_types_each_column_as_its_schema_declares() {
+    // The records used to be loaded as JSON and their types re-guessed: a text
+    // date came back as DATE, an Avro date as a number, a decimal as a list of
+    // bytes. The file declares every type, so each column now gets that type.
+    use apache_avro::{types::Value, Decimal, Schema, Writer};
+
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let avro_path = format!("{}/typed.avro", tmp.path().display());
+    let schema = Schema::parse_str(
+        r#"{"type": "record", "name": "Order", "fields": [
+            {"name": "id", "type": "int"},
+            {"name": "total", "type": "long"},
+            {"name": "ratio", "type": "float"},
+            {"name": "price", "type": "double"},
+            {"name": "paid", "type": "boolean"},
+            {"name": "orderdate", "type": "string"},
+            {"name": "shipped", "type": {"type": "int", "logicalType": "date"}},
+            {"name": "at", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+            {"name": "amount", "type": {"type": "bytes", "logicalType": "decimal", "precision": 10, "scale": 2}},
+            {"name": "raw", "type": "bytes"},
+            {"name": "status", "type": {"type": "enum", "name": "Status", "symbols": ["open", "closed"]}},
+            {"name": "tags", "type": {"type": "array", "items": "string"}},
+            {"name": "note", "type": ["null", "string"]},
+            {"name": "addr", "type": {"type": "record", "name": "Addr", "fields": [
+                {"name": "city", "type": "string"}, {"name": "zip", "type": "int"}]}}
+        ]}"#,
+    )
+    .expect("schema parse");
+    let record = |id: i32, amount: &[u8], note: Value| {
+        Value::Record(vec![
+            ("id".into(), Value::Int(id)),
+            ("total".into(), Value::Long(10_000_000_000)),
+            ("ratio".into(), Value::Float(0.5)),
+            ("price".into(), Value::Double(19.99)),
+            ("paid".into(), Value::Boolean(true)),
+            ("orderdate".into(), Value::String("1992-01-01".into())),
+            ("shipped".into(), Value::Date(19_737)), // 2024-01-15
+            ("at".into(), Value::TimestampMillis(1_705_314_600_000)), // 2024-01-15 10:30:00 UTC
+            ("amount".into(), Value::Decimal(Decimal::from(amount.to_vec()))),
+            ("raw".into(), Value::Bytes(vec![0x00, 0x41, 0xFF])),
+            ("status".into(), Value::Enum(1, "closed".into())),
+            ("tags".into(), Value::Array(vec![Value::String("a".into()), Value::String("b".into())])),
+            ("note".into(), note),
+            ("addr".into(), Value::Record(vec![
+                ("city".into(), Value::String("Oslo".into())),
+                ("zip".into(), Value::Int(150)),
+            ])),
+        ])
+    };
+    {
+        let file = std::fs::File::create(&avro_path).expect("create avro file");
+        let mut writer = Writer::new(&schema, file).expect("open avro writer");
+        // 123.45 and -5.00, unscaled big-endian two's complement.
+        writer.append(record(1, &[0x30, 0x39], Value::Union(1, Box::new(Value::String("hi".into())))))
+            .expect("append");
+        writer.append(record(2, &[0xFE, 0x0C], Value::Union(0, Box::new(Value::Null))))
+            .expect("append");
+        writer.flush().expect("flush avro");
+    }
+
+    let db = out_path(tmp.path(), "typed.duckdb");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("a", "src.avro", json!({ "path": &avro_path })),
+            node("k", "snk.duckdb", json!({ "database": db, "tableName": "t" })),
+        ]),
+        json!([main_edge("e1", "a", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "src.avro failed: {:?}", r.error);
+
+    let types: std::collections::BTreeMap<String, String> =
+        duckdb_json(&format!("ATTACH '{}' AS d (READ_ONLY); DESCRIBE d.t", db))
+            .iter()
+            .map(|c| {
+                let s = |k: &str| c.get(k).and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+                (s("column_name"), s("column_type"))
+            })
+            .collect();
+    for (col, ty) in [
+        ("id", "INTEGER"),
+        ("total", "BIGINT"),
+        ("ratio", "FLOAT"),
+        ("price", "DOUBLE"),
+        ("paid", "BOOLEAN"),
+        ("orderdate", "VARCHAR"),
+        ("shipped", "DATE"),
+        ("at", "TIMESTAMP"),
+        ("amount", "DECIMAL(10,2)"),
+        ("raw", "BLOB"),
+        ("status", "VARCHAR"),
+        ("tags", "VARCHAR[]"),
+        ("note", "VARCHAR"),
+        ("addr", "STRUCT(city VARCHAR, zip INTEGER)"),
+    ] {
+        assert_eq!(types.get(col).map(String::as_str), Some(ty), "{col}: all types {types:?}");
+    }
+    let row = |id: i32| {
+        scalar_string(&format!(
+            "ATTACH '{}' AS d (READ_ONLY); SELECT concat_ws('|', shipped, \"at\", amount, hex(raw), \
+             status, tags[2], coalesce(note, 'NULL'), addr.city, addr.zip, orderdate) FROM d.t WHERE id = {}",
+            db, id
+        ))
+    };
+    assert_eq!(row(1), "2024-01-15|2024-01-15 10:30:00|123.45|0041FF|closed|b|hi|Oslo|150|1992-01-01");
+    assert_eq!(row(2), "2024-01-15|2024-01-15 10:30:00|-5.00|0041FF|closed|b|NULL|Oslo|150|1992-01-01");
+}
+
+#[test]
 fn src_avro_reads_container_file_records() {
     // Write a small Avro container file (3 records) using the
     // apache-avro crate itself, then verify the engine reads them

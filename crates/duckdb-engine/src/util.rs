@@ -783,6 +783,262 @@ pub(crate) fn infer_avro_nullable_field(rows: &[JsonValue], name: &str) -> JsonV
     JsonValue::Array(branches.into_iter().map(|s| JsonValue::String(s.into())).collect())
 }
 
+/// How src.avro loads a container file: each field of its record schema as the
+/// DuckDB type the schema declares. Loading the records as plain JSON re-guessed
+/// every type - a text date came back as DATE, an Avro date as a number - and
+/// could not read a decimal or bytes field at all. Each value is written as the
+/// JSON that DuckDB's reader parses into exactly the declared type.
+pub(crate) struct AvroLoad<'s> {
+    schema: &'s apache_avro::Schema,
+    names: apache_avro::schema::NamesRef<'s>,
+    /// The body of read_json's `columns={...}`.
+    pub(crate) columns: String,
+    /// The projection over it. DuckDB's JSON reader copies a string into a BLOB
+    /// byte for byte, so a bytes field arrives as hex and is decoded here; one
+    /// nested inside a record, list or map stays hex text.
+    pub(crate) select: String,
+}
+
+impl<'s> AvroLoad<'s> {
+    /// None unless the schema is a record, the shape of a file with columns;
+    /// anything else is loaded as before.
+    pub(crate) fn new(schema: &'s apache_avro::Schema) -> Option<Self> {
+        let apache_avro::Schema::Record(record) = schema else {
+            return None;
+        };
+        let names = apache_avro::schema::ResolvedSchema::try_from(schema).ok()?.get_names().clone();
+        let mut load = AvroLoad { schema, names, columns: String::new(), select: String::new() };
+        let (mut columns, mut select) = (Vec::new(), Vec::new());
+        for f in &record.fields {
+            let name = crate::plan::quote_ident(&f.name);
+            columns.push(format!("'{}': '{}'", f.name.replace('\'', "''"), load.duck_type(&f.schema, 0)));
+            let bytes = matches!(
+                load.unwrap_nullable(&f.schema),
+                apache_avro::Schema::Bytes | apache_avro::Schema::Fixed(_)
+            );
+            select.push(if bytes { format!("unhex({name}) AS {name}") } else { name });
+        }
+        load.columns = columns.join(", ");
+        load.select = select.join(", ");
+        Some(load)
+    }
+
+    /// One record as the JSON its columns are read from.
+    pub(crate) fn row(&self, value: &apache_avro::types::Value) -> JsonValue {
+        self.render(value, self.schema, 0)
+    }
+
+    /// A named type's definition in place of its name.
+    fn resolve(&self, mut s: &'s apache_avro::Schema) -> &'s apache_avro::Schema {
+        for _ in 0..32 {
+            match s {
+                apache_avro::Schema::Ref { name } => match self.names.get(name) {
+                    Some(def) => s = *def,
+                    None => break,
+                },
+                _ => break,
+            }
+        }
+        s
+    }
+
+    /// A field that may be null is its one other type.
+    fn unwrap_nullable(&self, s: &'s apache_avro::Schema) -> &'s apache_avro::Schema {
+        let s = self.resolve(s);
+        if let apache_avro::Schema::Union(u) = s {
+            let mut others = u.variants().iter().filter(|v| !matches!(v, apache_avro::Schema::Null));
+            if let (Some(only), None) = (others.next(), others.next()) {
+                return self.resolve(only);
+            }
+        }
+        s
+    }
+
+    fn duck_type(&self, s: &'s apache_avro::Schema, depth: usize) -> String {
+        use apache_avro::Schema as S;
+        // A named type that contains itself has no fixed shape.
+        if depth > 32 {
+            return "JSON".into();
+        }
+        match self.unwrap_nullable(s) {
+            S::Null | S::String | S::Enum(_) | S::Bytes | S::Fixed(_) | S::BigDecimal => "VARCHAR".into(),
+            S::Boolean => "BOOLEAN".into(),
+            S::Int => "INTEGER".into(),
+            S::Long => "BIGINT".into(),
+            S::Float => "FLOAT".into(),
+            S::Double => "DOUBLE".into(),
+            S::Uuid(_) => "UUID".into(),
+            S::Date => "DATE".into(),
+            S::TimeMillis | S::TimeMicros => "TIME".into(),
+            S::TimestampMillis
+            | S::TimestampMicros
+            | S::LocalTimestampMillis
+            | S::LocalTimestampMicros => "TIMESTAMP".into(),
+            S::TimestampNanos | S::LocalTimestampNanos => "TIMESTAMP_NS".into(),
+            S::Decimal(d) if d.precision <= 38 => format!("DECIMAL({},{})", d.precision, d.scale),
+            S::Decimal(_) => "VARCHAR".into(),
+            S::Duration(_) => "INTERVAL".into(),
+            S::Array(a) => format!("{}[]", self.duck_type(&a.items, depth + 1)),
+            S::Map(m) => format!("MAP(VARCHAR, {})", self.duck_type(&m.types, depth + 1)),
+            S::Record(r) => format!(
+                "STRUCT({})",
+                r.fields
+                    .iter()
+                    .map(|f| format!("{} {}", crate::plan::quote_ident(&f.name), self.duck_type(&f.schema, depth + 1)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            // Several types in one field, or a name nothing defines.
+            S::Union(_) | S::Ref { .. } => "JSON".into(),
+        }
+    }
+
+    fn render(&self, v: &apache_avro::types::Value, s: &'s apache_avro::Schema, depth: usize) -> JsonValue {
+        use apache_avro::{types::Value as V, Schema as S};
+        let s = self.resolve(s);
+        match v {
+            V::Null => JsonValue::Null,
+            V::Boolean(b) => JsonValue::Bool(*b),
+            V::Int(i) => (*i).into(),
+            V::Long(l) => (*l).into(),
+            V::Float(f) => float_json(f64::from(*f)),
+            V::Double(d) => float_json(*d),
+            V::Bytes(b) | V::Fixed(_, b) => b.iter().map(|x| format!("{x:02X}")).collect::<String>().into(),
+            V::String(t) | V::Enum(_, t) => t.clone().into(),
+            V::Uuid(u) => u.to_string().into(),
+            V::Date(days) => chrono::NaiveDate::from_num_days_from_ce_opt(days + 719_163)
+                .map_or(JsonValue::Null, |d| d.format("%Y-%m-%d").to_string().into()),
+            V::TimeMillis(ms) => time_json(i64::from(*ms) * 1_000),
+            V::TimeMicros(us) => time_json(*us),
+            V::TimestampMillis(t) | V::LocalTimestampMillis(t) => timestamp_json(*t, 1_000),
+            V::TimestampMicros(t) | V::LocalTimestampMicros(t) => timestamp_json(*t, 1_000_000),
+            V::TimestampNanos(t) | V::LocalTimestampNanos(t) => timestamp_json(*t, 1_000_000_000),
+            V::Decimal(d) => {
+                let scale = match s {
+                    S::Decimal(ds) => ds.scale,
+                    _ => 0,
+                };
+                <Vec<u8>>::try_from(d).map_or(JsonValue::Null, |b| decimal_text(&b, scale).into())
+            }
+            V::BigDecimal(b) => b.to_string().into(),
+            V::Duration(d) => format!(
+                "{} months {} days {} milliseconds",
+                u32::from(d.months()),
+                u32::from(d.days()),
+                u32::from(d.millis())
+            )
+            .into(),
+            V::Union(i, inner) => {
+                let variant = match s {
+                    S::Union(u) => u.variants().get(*i as usize).unwrap_or(s),
+                    _ => s,
+                };
+                self.render(inner, variant, depth + 1)
+            }
+            V::Array(items) => {
+                let item = match s {
+                    S::Array(a) => &*a.items,
+                    _ => s,
+                };
+                items.iter().map(|x| self.render(x, item, depth + 1)).collect::<Vec<_>>().into()
+            }
+            V::Map(entries) => {
+                let value = match s {
+                    S::Map(m) => &*m.types,
+                    _ => s,
+                };
+                JsonValue::Object(
+                    entries.iter().map(|(k, x)| (k.clone(), self.render(x, value, depth + 1))).collect(),
+                )
+            }
+            V::Record(fields) => {
+                let declared: &[apache_avro::schema::RecordField] = match s {
+                    S::Record(r) => &r.fields,
+                    _ => &[],
+                };
+                JsonValue::Object(
+                    fields
+                        .iter()
+                        .map(|(k, x)| {
+                            let f = declared.iter().find(|f| f.name == *k).map_or(s, |f| &f.schema);
+                            (k.clone(), self.render(x, f, depth + 1))
+                        })
+                        .collect(),
+                )
+            }
+        }
+    }
+}
+
+/// A double as JSON, with NaN and the infinities as the text DuckDB casts back.
+fn float_json(f: f64) -> JsonValue {
+    serde_json::Number::from_f64(f).map_or_else(
+        || {
+            let text = if f.is_nan() { "NaN" } else if f > 0.0 { "Infinity" } else { "-Infinity" };
+            JsonValue::String(text.into())
+        },
+        JsonValue::Number,
+    )
+}
+
+/// Microseconds since midnight as a TIME.
+fn time_json(us: i64) -> JsonValue {
+    let secs = u32::try_from(us.div_euclid(1_000_000)).ok();
+    let nanos = (us.rem_euclid(1_000_000) * 1_000) as u32;
+    secs.and_then(|s| chrono::NaiveTime::from_num_seconds_from_midnight_opt(s, nanos))
+        .map_or(JsonValue::Null, |t| t.format("%H:%M:%S%.6f").to_string().into())
+}
+
+/// A count of `per_sec` units since the epoch as a TIMESTAMP, nanoseconds kept
+/// for a TIMESTAMP_NS. An Avro timestamp is an instant in UTC and a local one is
+/// a wall clock; both are written as the wall clock with no zone, so neither
+/// moves with the session's time zone.
+fn timestamp_json(units: i64, per_sec: i64) -> JsonValue {
+    let secs = units.div_euclid(per_sec);
+    let nanos = (units.rem_euclid(per_sec) * (1_000_000_000 / per_sec)) as u32;
+    let format = if per_sec == 1_000_000_000 { "%Y-%m-%d %H:%M:%S%.9f" } else { "%Y-%m-%d %H:%M:%S%.6f" };
+    chrono::DateTime::from_timestamp(secs, nanos)
+        .map_or(JsonValue::Null, |t| t.naive_utc().format(format).to_string().into())
+}
+
+/// An Avro decimal's unscaled big-endian two's complement bytes as decimal
+/// text, `scale` digits after the point. Any length: a precision past DuckDB's
+/// 38 digits is kept as this text.
+fn decimal_text(bytes: &[u8], scale: usize) -> String {
+    let negative = bytes.first().is_some_and(|b| b & 0x80 != 0);
+    let mut magnitude = bytes.to_vec();
+    if negative {
+        for b in magnitude.iter_mut() {
+            *b = !*b;
+        }
+        for b in magnitude.iter_mut().rev() {
+            let (sum, carry) = b.overflowing_add(1);
+            *b = sum;
+            if !carry {
+                break;
+            }
+        }
+    }
+    let mut digits = Vec::new();
+    while magnitude.iter().any(|&b| b != 0) {
+        let mut rem = 0u32;
+        for b in magnitude.iter_mut() {
+            let cur = (rem << 8) | u32::from(*b);
+            *b = (cur / 10) as u8;
+            rem = cur % 10;
+        }
+        digits.push(b'0' + rem as u8);
+    }
+    while digits.len() <= scale {
+        digits.push(b'0');
+    }
+    digits.reverse();
+    let text = String::from_utf8(digits).unwrap_or_default();
+    let (whole, frac) = text.split_at(text.len() - scale);
+    let body = if scale == 0 { whole.to_string() } else { format!("{whole}.{frac}") };
+    if negative { format!("-{body}") } else { body }
+}
+
 /// Parse `git log -z --pretty=format:%H%x09%h%x09%an%x09%ae%x09%ad%x09%s`
 /// output. Records are NUL-separated; fields are TAB-separated. Subjects
 /// may contain anything except NUL.
@@ -1689,6 +1945,63 @@ mod tests {
         );
         // Objects/arrays are JSON-stringified on write, so they map to string.
         assert_eq!(infer_avro_nullable_field(&rows, "obj"), json!(["null", "string"]));
+    }
+}
+
+#[cfg(test)]
+mod avro_load_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_decimal_reads_as_twos_complement_at_any_length() {
+        assert_eq!(decimal_text(&[0x30, 0x39], 2), "123.45");
+        assert_eq!(decimal_text(&[0xFE, 0x0C], 2), "-5.00");
+        assert_eq!(decimal_text(&[0xFF], 0), "-1");
+        assert_eq!(decimal_text(&[0x05], 3), "0.005");
+        assert_eq!(decimal_text(&[0x00], 2), "0.00");
+        assert_eq!(decimal_text(&[], 0), "0");
+        // 2^136: past an i128 and past DuckDB's 38 digits.
+        let mut big = vec![0x01];
+        big.extend([0u8; 17]);
+        assert_eq!(decimal_text(&big, 0), "87112285931760246646623899502532662132736");
+    }
+
+    #[test]
+    fn times_keep_their_fraction_on_either_side_of_the_epoch() {
+        // One millisecond before 1970 is .999 of the second before, not .001.
+        assert_eq!(timestamp_json(-1, 1_000), json!("1969-12-31 23:59:59.999000"));
+        assert_eq!(
+            timestamp_json(1_705_314_600_123_456_789, 1_000_000_000),
+            json!("2024-01-15 10:30:00.123456789")
+        );
+        assert_eq!(time_json(37_800_123_456), json!("10:30:00.123456"));
+        assert_eq!(float_json(f64::NAN), json!("NaN"));
+        assert_eq!(float_json(f64::NEG_INFINITY), json!("-Infinity"));
+        assert_eq!(float_json(0.5), json!(0.5));
+    }
+
+    #[test]
+    fn a_reused_named_type_and_a_mixed_union_get_columns() {
+        let schema = apache_avro::Schema::parse_str(
+            r#"{"type": "record", "name": "R", "fields": [
+                {"name": "home", "type": {"type": "record", "name": "Addr",
+                    "fields": [{"name": "zip", "type": "int"}]}},
+                {"name": "work", "type": "Addr"},
+                {"name": "either", "type": ["null", "int", "string"]},
+                {"name": "blob", "type": ["null", "bytes"]},
+                {"name": "at", "type": {"type": "long", "logicalType": "timestamp-nanos"}}
+            ]}"#,
+        )
+        .unwrap();
+        let load = AvroLoad::new(&schema).expect("a record schema");
+        assert_eq!(
+            load.columns,
+            r#"'home': 'STRUCT("zip" INTEGER)', 'work': 'STRUCT("zip" INTEGER)', 'either': 'JSON', 'blob': 'VARCHAR', 'at': 'TIMESTAMP_NS'"#
+        );
+        assert_eq!(load.select, r#""home", "work", "either", unhex("blob") AS "blob", "at""#);
+        // Not a record: loaded as before.
+        assert!(AvroLoad::new(&apache_avro::Schema::String).is_none());
     }
 }
 
