@@ -161,7 +161,7 @@ pub fn contract_problems(workspace: &Path, plan: &Plan) -> Vec<String> {
             if values.is_empty() {
                 continue;
             }
-            let file = workspace.join(step_pipeline_file(named));
+            let file = workspace.join(step_pipeline_path(workspace, named));
             let doc = std::fs::read_to_string(&file)
                 .map_err(|e| e.to_string())
                 .and_then(|text| {
@@ -268,6 +268,23 @@ pub fn step_pipeline_id(step: &str) -> &str {
 /// Derived from [`step_pipeline_id`] so the two can never disagree about what a step means.
 pub fn step_pipeline_file(step: &str) -> String {
     format!("pipelines/{}.json", step_pipeline_id(step))
+}
+
+/// The workspace-relative file a plan step runs, in this workspace.
+///
+/// A step names a file the console's plan form offered (`report.json`,
+/// `pipelines/report.json`) or a bare id the desktop editor wrote (`report`, meaning
+/// `pipelines/report.json`). Sending every spelling to `pipelines/` sent a step naming a
+/// pipeline anywhere else - which is where a deploy puts it - to a file that does not
+/// exist. A named file inside the workspace is run as named; anything else keeps the
+/// [`step_pipeline_file`] meaning.
+pub fn step_pipeline_path(workspace: &Path, step: &str) -> String {
+    let named = step.trim().replace('\\', "/");
+    let inside = Path::new(&named).components().all(|c| matches!(c, std::path::Component::Normal(_)));
+    if inside && named.ends_with(".json") && workspace.join(&named).is_file() {
+        return named;
+    }
+    step_pipeline_file(step)
 }
 
 /// What became of one pipeline in a plan.
@@ -728,6 +745,25 @@ mod tests {
         // and a trailing extension are structure, the rest is somebody's pipeline name.
         assert_eq!(step_pipeline_id("pipelines-archive"), "pipelines-archive");
         assert_eq!(step_pipeline_id("orders.json.json"), "orders.json");
+    }
+
+    /// A deploy puts a pipeline at the workspace root, and the console's form offers it by
+    /// that file; sent to `pipelines/`, no plan could run it. Every other spelling keeps the
+    /// meaning it had.
+    #[test]
+    fn a_step_naming_a_file_in_the_workspace_runs_that_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::write(ws.join("report.json"), "{}").unwrap();
+        std::fs::write(tmp.path().join("outside.json"), "{}").unwrap();
+
+        assert_eq!(step_pipeline_path(&ws, "report.json"), "report.json", "deployed to the root");
+        for spelling in ["orders", "orders.json", "pipelines/orders.json"] {
+            assert_eq!(step_pipeline_path(&ws, spelling), "pipelines/orders.json", "spelled {spelling}");
+        }
+        assert_eq!(step_pipeline_path(&ws, "report"), "pipelines/report.json", "a bare id still means pipelines/");
+        assert_ne!(step_pipeline_path(&ws, "../outside.json"), "../outside.json", "a step never names a file outside");
     }
 
     /// An older store written before a field existed must still load, or upgrading breaks

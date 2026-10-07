@@ -2784,7 +2784,7 @@ fn dispatch_console(req: &Request, state: &Arc<State>, who: console_auth::Identi
                     // A step may be spelled as a bare id by the desktop editor; the run
                     // takes a workspace-relative file. Normalised so one plans.json means
                     // the same thing in both products.
-                    &duckle_duckdb_engine::plans::step_pipeline_file(pipeline),
+                    &duckle_duckdb_engine::plans::step_pipeline_path(&state.workspace, pipeline),
                     "plan",
                     &supplied,
                     None,
@@ -3467,7 +3467,11 @@ fn deploy_into(workspace: &Path, body: &Value) -> Result<Value, String> {
     let scheduled = match body.get("schedule") {
         Some(sched) if !sched.is_null() => {
             let mut s = sched.clone();
-            s["id"] = json!(name);
+            // Under the id the scheduler and the console know the pipeline by, its file
+            // stem. The whole name filed `nightly/orders` under an id no pipeline has, so a
+            // schedule deployed into a folder never fired and was never shown.
+            let id = target.file_stem().map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());
+            s["id"] = json!(id);
             s["enabled"] = json!(false);
             save_schedule_at(workspace, &s)?;
             json!({ "saved": true, "enabled": false })
@@ -4865,7 +4869,7 @@ fn fire_plan(state: &State, plan_id: &str) {
         // #317: each pipeline is given the values its step binds for it.
         plan_step_outcome(execute_one_with(
             state,
-            &duckle_duckdb_engine::plans::step_pipeline_file(pipeline),
+            &duckle_duckdb_engine::plans::step_pipeline_path(&state.workspace, pipeline),
             "schedule",
             &sourced(values, "plan step"),
             None,
@@ -5392,6 +5396,31 @@ mod tests {
         assert!(!saved[0].enabled, "it must arrive switched off");
     }
 
+    /// A deployment may name a folder, and the pipeline lands in it. Its schedule was filed
+    /// under the whole name while the scheduler and the console know a pipeline by its file
+    /// stem, so a schedule deployed as `nightly/orders` never fired and was never shown.
+    #[test]
+    fn a_schedule_deployed_into_a_folder_is_one_the_scheduler_can_find() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+
+        deploy_into(ws, &serde_json::json!({
+            "name": "nightly/orders",
+            "pipeline": pipeline(),
+            "schedule": { "intervalSeconds": 60 },
+        }))
+        .expect("deploys");
+
+        let known: Vec<String> = super::discover_pipelines(ws).into_iter().map(|(_, id, _)| id).collect();
+        let saved = schedules::load(ws).expect("store readable");
+        assert_eq!(saved.len(), 1, "the schedule should travel");
+        assert!(
+            known.contains(&saved[0].pipeline_id),
+            "the schedule is for {:?}, and the scheduler knows only {known:?}",
+            saved[0].pipeline_id
+        );
+    }
+
     /// Deploying again is an update, and saying so is the difference between a deploy and
     /// an accident.
     #[test]
@@ -5632,6 +5661,57 @@ mod tests {
         super::fire_plan(&state, "nightly");
         assert!(ws.join("out").join("us.csv").exists(), "the step's value did not reach the run");
         assert!(!ws.join("out").join("eu.csv").exists(), "the run fell back to the default");
+    }
+
+    /// A deploy lands a pipeline at the workspace root, and the console's plan form offers
+    /// it by that file. Every step was sent to `pipelines/<id>.json`, so a plan could never
+    /// run a deployed pipeline: "not found: pipelines/report.json".
+    #[test]
+    fn a_plan_runs_a_pipeline_deployed_to_the_workspace_root() {
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN").ok().filter(|b| std::path::Path::new(b).exists())
+        else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(ws.join("out")).unwrap();
+        std::fs::write(ws.join("in.csv"), "id\n1\n").unwrap();
+        deploy_into(&ws, &serde_json::json!({ "name": "report", "pipeline": serde_json::json!({
+            "nodes": [{"id":"s","position":{"x":0,"y":0},"data":{"label":"s","componentId":"src.csv","properties":{"path":"${workspace}/in.csv","hasHeader":true}}},
+                      {"id":"k","position":{"x":0,"y":0},"data":{"label":"k","componentId":"snk.csv","properties":{"path":"${workspace}/out/report.csv"}}}],
+            "edges": [{"id":"e","source":"s","target":"k"}]}) }))
+        .expect("deploys");
+        // spelled as the console's plan form spells it: the file /api/pipelines lists
+        let offered: Vec<String> = super::discover_pipelines(&ws).into_iter().map(|(p, _, _)| super::rel(&ws, &p)).collect();
+        assert_eq!(offered, ["report.json"], "the pipeline the form offers");
+        duckle_duckdb_engine::plans::update(&ws, |list| {
+            list.push(duckle_duckdb_engine::plans::Plan {
+                id: "nightly".into(),
+                name: String::new(),
+                stop_on_failure: true,
+                steps: vec![duckle_duckdb_engine::plans::Step {
+                    name: "Report".into(),
+                    pipelines: offered.clone(),
+                    continue_on_failure: None,
+                    params: None,
+                }],
+            })
+        })
+        .unwrap();
+
+        let state = local_state_using(&ws, std::path::PathBuf::from(bin));
+        super::fire_plan(&state, "nightly");
+        assert!(ws.join("out").join("report.csv").exists(), "the scheduled plan did not run the deployed pipeline");
+
+        // and the same plan from the console's Run now, which resolves its steps separately
+        std::fs::remove_file(ws.join("out").join("report.csv")).unwrap();
+        let mut req = request("POST", "/api/plans/run", None);
+        req.body = serde_json::to_vec(&serde_json::json!({ "id": "nightly" })).unwrap();
+        let reply = route_console(&req, &state);
+        let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(body["status"], "ok", "{body}");
+        assert!(ws.join("out").join("report.csv").exists(), "Run now did not run the deployed pipeline");
     }
 
     #[test]
