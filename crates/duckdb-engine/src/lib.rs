@@ -385,6 +385,33 @@ pub(crate) fn duckdb_missing_message(bin: &std::path::Path) -> String {
     )
 }
 
+/// Whether the DuckDB CLI an engine was handed can be started.
+///
+/// A path is a file to look for. A bare name is what `Command` looks up on
+/// PATH, and the runner hands one over when PATH is where it found DuckDB;
+/// checked with `exists()` alone, the name was read against the working
+/// directory, so a DuckDB installed on PATH failed every run as "not found".
+pub(crate) fn cli_present(bin: &std::path::Path) -> bool {
+    cli_present_on(bin, std::env::var_os("PATH").as_deref())
+}
+
+fn cli_present_on(bin: &std::path::Path, path: Option<&std::ffi::OsStr>) -> bool {
+    if bin.exists() {
+        return true;
+    }
+    let mut parts = bin.components();
+    let bare = matches!((parts.next(), parts.next()), (Some(std::path::Component::Normal(_)), None));
+    if !bare {
+        return false;
+    }
+    // What `Command` also tries on Windows for a name without an extension.
+    let exe = (cfg!(windows) && bin.extension().is_none()).then(|| bin.with_extension("exe"));
+    path.is_some_and(|p| {
+        std::env::split_paths(p)
+            .any(|dir| dir.join(bin).is_file() || exe.as_ref().is_some_and(|e| dir.join(e).is_file()))
+    })
+}
+
 impl DuckdbEngine {
     /// Construct an engine pointing at a DuckDB CLI binary. The binary
     /// need not exist yet - calls fail with a clear error if it's
@@ -551,7 +578,7 @@ impl DuckdbEngine {
     }
 
     pub fn is_available(&self) -> bool {
-        self.bin.exists()
+        cli_present(&self.bin)
     }
 
     /// Signal any in-flight run to stop. The polling loop in `run` sees
@@ -593,7 +620,7 @@ impl DuckdbEngine {
     /// cancel was requested.
     fn run(&self, db: Option<&Path>, sql: &str, json: bool) -> Result<String, EngineError> {
         crate::policy::refuse_unsafe_sql(sql).map_err(EngineError::Query)?;
-        if !self.bin.exists() {
+        if !cli_present(&self.bin) {
             return Err(EngineError::Config(format!(
                 "DuckDB engine isn't installed (expected at {}). Open Setup to install it.",
                 self.bin.display()
@@ -1586,7 +1613,7 @@ impl DuckdbEngine {
             return RunResult::failed(total_start, e.to_string());
         }
 
-        if !self.bin.exists() {
+        if !cli_present(&self.bin) {
             return RunResult::failed(total_start, duckdb_missing_message(&self.bin));
         }
 

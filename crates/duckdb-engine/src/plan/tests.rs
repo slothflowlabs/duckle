@@ -7248,6 +7248,25 @@ fn the_missing_duckdb_message_helps_a_reader_with_no_desktop_app() {
     );
 }
 
+/// The runner hands over a bare `duckdb` when PATH is where it found one, for
+/// `Command` to look up. Read as a file in the working directory, it was never
+/// there, and that message was the answer to every run.
+#[test]
+fn a_bare_duckdb_name_is_looked_up_on_path_and_a_path_is_not() {
+    let tmp = tempfile::tempdir().unwrap();
+    let name = if cfg!(windows) { "duckdb.exe" } else { "duckdb" };
+    std::fs::write(tmp.path().join(name), "").unwrap();
+    let path = Some(tmp.path().as_os_str());
+
+    assert!(crate::cli_present_on(std::path::Path::new("duckdb"), path), "on PATH is present");
+    let empty = tempfile::tempdir().unwrap();
+    assert!(!crate::cli_present_on(std::path::Path::new("duckdb"), Some(empty.path().as_os_str())), "nowhere is missing");
+    assert!(
+        !crate::cli_present_on(std::path::Path::new("bin/duckdb"), path),
+        "a path names one place to look, not a name to search for"
+    );
+}
+
 /// #335: a SQLite source with no table produced `sqlite_scan(db, '')`, and
 /// DuckDB answered with an internal assertion:
 ///
