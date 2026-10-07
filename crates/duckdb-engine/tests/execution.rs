@@ -2627,6 +2627,65 @@ fn run_errors_redact_secrets() {
 }
 
 #[test]
+fn the_plan_labels_a_stage_by_what_it_creates() {
+    // The Plan tab's badge read VIEW for every stage that is not a sink, though
+    // a source two steps read is created as a TABLE so it is read once. The
+    // label follows the statement. (Pure compilation - no engine needed.)
+    use duckle_duckdb_engine::compile_pipeline_sql_opts;
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n");
+    let out = |n: &str| out_path(tmp.path(), n);
+    let d = doc(
+        json!([
+            node("shared", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("single", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k1", "snk.csv", json!({ "path": out("a.csv") })),
+            node("k2", "snk.csv", json!({ "path": out("b.csv") })),
+            node("k3", "snk.csv", json!({ "path": out("c.csv") })),
+        ]),
+        json!([
+            main_edge("e1", "shared", "k1"),
+            main_edge("e2", "shared", "k2"),
+            main_edge("e3", "single", "k3"),
+        ]),
+    );
+    let stages = compile_pipeline_sql_opts(&d, false).expect("compile");
+    let kind = |id: &str| {
+        let s = stages.iter().find(|s| s.node_id == id).unwrap();
+        (s.kind.clone(), s.sql.clone())
+    };
+    let (k, sql) = kind("shared");
+    assert_eq!(k, "table", "{sql}");
+    let (k, sql) = kind("single");
+    assert_eq!(k, "view", "{sql}");
+    assert_eq!(kind("k1").0, "sink");
+}
+
+#[test]
+fn a_table_stage_is_not_described_as_a_sink() {
+    // The column check refused every stage not labelled "view" with the note
+    // for a sink, which says it produces no relation. Once the Plan labels a
+    // stage created as a TABLE "table", that note would land on transforms.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n");
+    let out = |n: &str| out_path(tmp.path(), n);
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("f", "xf.filter", json!({ "predicate": "id > 0" })),
+            node("k1", "snk.csv", json!({ "path": out("a.csv") })),
+            node("k2", "snk.csv", json!({ "path": out("b.csv") })),
+        ]),
+        json!([main_edge("e1", "s", "f"), main_edge("e2", "f", "k1"), main_edge("e3", "f", "k2")]),
+    );
+    let note = engine.analyze_node_sql(&d, "f", &[]).unwrap().note.unwrap_or_default();
+    assert!(!note.contains("produces no relation"), "{note}");
+    let sink = engine.analyze_node_sql(&d, "k1", &[]).unwrap().note.unwrap_or_default();
+    assert!(sink.contains("produces no relation"), "a sink keeps its own note: {sink}");
+}
+
+#[test]
 fn export_includes_control_flow_steps() {
     // Issue #7: ctl.* control-flow nodes carry a non-empty pass-through view,
     // so the export used to omit their orchestration side effect (only empty-SQL

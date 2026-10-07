@@ -4317,7 +4317,7 @@ fn count_projection(every_column: bool) -> &'static str {
         //
         // Guarded here rather than in the caller: this is the code that holds
         // the loaded gun, and a sink has no output columns to describe anyway.
-        if stage.kind != "view" {
+        if stage.kind == "sink" {
             analysis.note = Some(format!(
                 "node {node_id:?} is a {} stage, which produces no relation to describe - and running it to find out would perform its writes",
                 stage.kind
@@ -8090,6 +8090,15 @@ pub struct StageSql {
     pub sql: String,
 }
 
+/// Whether a stage creates its node's relation as a TABLE rather than a VIEW.
+/// The planner decides per stage (two readers, a reject split, a source that
+/// has to be read once) and the statement is the only place it says so. The
+/// closing quote of the name keeps `"a"` from matching `"a__reject"`.
+fn creates_table(sql: &str, node_id: &str) -> bool {
+    let table = format!("TABLE {}", plan::quote_ident(node_id));
+    sql.contains(&format!("CREATE OR REPLACE {table}")) || sql.contains(&format!("CREATE {table}"))
+}
+
 pub fn compile_pipeline_sql(doc: &PipelineDoc) -> Result<Vec<StageSql>, EngineError> {
     // By default the exported / displayed SQL has its secret values
     // replaced with named placeholders. Setting DUCKLE_EXPORT_INCLUDE_SECRETS
@@ -8186,13 +8195,15 @@ pub fn compile_pipeline_sql_opts(
                 }
                 _ => sql,
             };
+            let kind = match s.kind {
+                StageKind::Sink => "sink",
+                StageKind::View if creates_table(&s.sql, &s.node_id) => "table",
+                StageKind::View => "view",
+            };
             StageSql {
                 node_id: s.node_id,
                 label: s.label,
-                kind: match s.kind {
-                    StageKind::Sink => "sink".into(),
-                    StageKind::View => "view".into(),
-                },
+                kind: kind.into(),
                 sql,
             }
         })

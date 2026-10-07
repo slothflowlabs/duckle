@@ -851,7 +851,7 @@ export async function cancelPipeline(): Promise<void> {
 export type StageSql = {
     node_id: string;
     label: string;
-    kind: 'view' | 'sink';
+    kind: 'view' | 'table' | 'sink';
     sql: string;
 };
 
