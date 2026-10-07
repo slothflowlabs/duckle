@@ -815,7 +815,9 @@ finished.
 `${...}` does not address a single dataset, and it is emitted with
 `unresolved: true` rather than silently joining to the wrong thing in someone's
 graph. Datasets come from the catalog joined to the receipt **by node id**, so a
-node the run never reached is not reported as touched: absent is not zero.
+node the run never reached is not reported as touched: absent is not zero. A run
+that finds the catalog missing or out of date builds it, so a new workspace needs
+no `catalog build` before its events name anything.
 
 **Telemetry cannot fail a run.** Events are appended to
 `logs/openlineage.ndjson` first and only then POSTed, so a collector that is

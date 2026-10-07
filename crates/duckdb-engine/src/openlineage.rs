@@ -617,9 +617,10 @@ mod tests {
         assert_eq!(events[0]["run"]["runId"], events[1]["run"]["runId"]);
         assert_eq!(events[0]["job"]["namespace"], "prod");
         assert_eq!(events[0]["job"]["name"], "nightly");
-        // No catalog in this workspace: the empty dataset lists are UNKNOWN,
-        // not empty, and the event says which.
-        assert_eq!(events[1]["run"]["facets"]["duckle"]["catalogAvailable"], false);
+        // No catalog had been built: one is built on demand, so the empty
+        // dataset lists are known to be empty rather than unknown.
+        assert_eq!(events[1]["run"]["facets"]["duckle"]["catalogAvailable"], true);
+        assert!(crate::catalog::load(ws).unwrap().is_some(), "the catalog the event used was saved");
     }
 
     #[test]

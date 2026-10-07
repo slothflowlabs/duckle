@@ -345,14 +345,15 @@ pub fn begin(
 /// Every step is best effort. Nothing here may end a run.
 fn export_lineage(workspace: &Path, receipt: &RunReceipt, kind: crate::openlineage::EventType) {
     let Some(cfg) = crate::openlineage::load(workspace) else { return };
-    // The catalog names what each node touches. `load` reads the SAVED graph
-    // and does not rebuild: rebuilding scans every pipeline in the workspace,
-    // and paying that on the path of every run start to decorate a telemetry
-    // event is the wrong trade. A workspace with no catalog yet still gets the
-    // run's identity, timing and outcome - with `catalogAvailable` false, so a
-    // consumer can see that the empty dataset lists are unknown rather than
-    // empty.
-    let catalog = crate::catalog::load(workspace).ok().flatten();
+    // The catalog names what each node touches. Reading only the SAVED graph
+    // left every event without datasets until someone ran `catalog build`, and
+    // a lineage feed nobody can draw is the failure it exists to prevent.
+    // `load_or_rebuild` rescans only when the graph is missing or its
+    // stat-only fingerprint says the pipelines changed, and only for a
+    // workspace that asked for these events. If even that fails, the run's
+    // identity, timing and outcome still go out with `catalogAvailable`
+    // false, so a consumer can tell unknown datasets from none.
+    let catalog = crate::catalog::load_or_rebuild(workspace).ok();
     let pipeline_id = Path::new(&receipt.pipeline_path)
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
