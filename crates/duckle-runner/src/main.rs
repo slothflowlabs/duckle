@@ -148,7 +148,8 @@ under --workspace (or the pipeline's parent):
     --set-snapshot <node=id>     Set a DuckLake CDC snapshot id; repeatable
     --clear-watermark <node>     Delete a node's saved state (forces full reload); repeatable
 
-    -h, --help           Print this help";
+    -h, --help           Print this help
+    -V, --version        Print the Duckle release this runner was built from";
 
 struct Args {
     pipeline: Option<PathBuf>,
@@ -306,6 +307,10 @@ fn parse_args() -> Result<Args, String> {
             }
             "-h" | "--help" => {
                 println!("{}", usage_for_invocation());
+                std::process::exit(0);
+            }
+            "-V" | "--version" => {
+                println!("duckle-runner {}", duckle_duckdb_engine::VERSION);
                 std::process::exit(0);
             }
             // Allow a bare pipeline path as the first positional argument.

@@ -181,7 +181,7 @@ pub fn write_manifest(
         "outputs": outputs_json,
         "pipelineHash": pipeline_hash,
         "compiledPlanHash": compiled_hash,
-        "duckleVersion": env!("CARGO_PKG_VERSION"),
+        "duckleVersion": duckle_duckdb_engine::VERSION,
         "duckdbVersion": DUCKDB_VERSION,
         "lineageResolved": lineage_json.is_some(),
         "artifacts": artifacts_json,
@@ -279,6 +279,21 @@ mod tests {
         m["body"]["outputs"][0]["rows"] = json!(99999);
         std::fs::write(&path, serde_json::to_vec(&m).unwrap()).unwrap();
         assert!(!verify_manifest(&path).unwrap(), "tampered manifest must fail");
+    }
+
+    #[test]
+    fn a_manifest_names_the_release_that_wrote_it() {
+        // It recorded the crates' placeholder, so every .ducklock said 0.0.1
+        // whatever release wrote it. The release version is the one
+        // apps/desktop/tauri.conf.json carries.
+        let conf = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/tauri.conf.json");
+        let conf: Value = serde_json::from_str(&std::fs::read_to_string(conf).unwrap()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let doc: PipelineDoc = serde_json::from_str(r#"{"nodes":[],"edges":[]}"#).unwrap();
+        let path = write_manifest(dir.path(), "demo", &doc, "ok", 1, 1_700_000_000_000, None, &[], &[], &[], false)
+            .unwrap();
+        let m: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(m["body"]["duckleVersion"], conf["version"]);
     }
 
     #[test]

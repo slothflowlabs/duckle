@@ -74,7 +74,7 @@ fn dispatch(method: &str, params: Value) -> Result<Value, (i64, String)> {
         "initialize" => Ok(json!({
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": { "tools": {}, "resources": {}, "prompts": {} },
-            "serverInfo": { "name": "duckle-mcp", "version": env!("CARGO_PKG_VERSION") },
+            "serverInfo": { "name": "duckle-mcp", "version": duckle_duckdb_engine::VERSION },
             "instructions": tools::INSTRUCTIONS
         })),
         "ping" => Ok(json!({})),

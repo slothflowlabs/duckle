@@ -100,6 +100,10 @@ pub(crate) use util::*;
 pub use util::{is_secret_prop_key, literal_secrets, SECRET_NEEDLES};
 pub use history::{append_run_record, load_run_history, record_run, RunRecord};
 pub use plan::{CompiledPipeline, PipelineDoc, Stage, StageKind};
+
+/// The Duckle release this was built from, as apps/desktop/tauri.conf.json
+/// names it (build.rs). The crates' own version is a 0.0.1 placeholder.
+pub const VERSION: &str = env!("DUCKLE_VERSION");
 pub use connection_test::ConnectionTest;
 use plan::{
     quote_ident, AiChunkSpec, AiClassifySpec, AiDedupeSpec, AiEmbedSpec, AiLlmSpec, AiOnInvalid,
