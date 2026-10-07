@@ -2699,6 +2699,30 @@ fn the_plan_labels_a_stage_by_what_it_creates() {
 }
 
 #[test]
+fn lineage_of_a_star_names_every_column_not_col1() {
+    // Through DuckDB's own SQL serializer: a filter is SELECT * ... WHERE, and
+    // its lineage named the star `col1`, traced to a source column `col1` that
+    // a six-column CSV does not have.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "a,b,c,d,e,f\n1,2,3,4,5,6\n");
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("f", "xf.filter", json!({ "predicate": "a > 0" })),
+            node("k", "snk.csv", json!({ "path": out_path(tmp.path(), "out.csv") })),
+        ]),
+        json!([main_edge("e1", "s", "f"), main_edge("e2", "f", "k")]),
+    );
+    let lineage = engine.pipeline_column_lineage(&d).expect("lineage");
+    let sink: Vec<(String, Vec<(String, String)>)> = lineage["k"]
+        .iter()
+        .map(|(name, roots)| (name.clone(), roots.iter().map(|r| (r.node.clone(), r.column.clone())).collect()))
+        .collect();
+    assert_eq!(sink, vec![("*".to_string(), vec![("s".to_string(), "*".to_string())])]);
+}
+
+#[test]
 fn a_table_stage_is_not_described_as_a_sink() {
     // The column check refused every stage not labelled "view" with the note
     // for a sink, which says it produces no relation. Once the Plan labels a

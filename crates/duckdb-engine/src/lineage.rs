@@ -60,11 +60,16 @@ fn select_node_lineage(node: &JsonValue) -> Vec<OutputColumn> {
 }
 
 /// The name an item projects under: its explicit alias, else (for a bare column
-/// reference) the column's own name, else a positional fallback.
+/// reference) the column's own name, else a positional fallback. A star stands
+/// for every column of its input, which the SQL alone cannot list, so it stays
+/// `*` and traces to the `*` of its upstream rather than to a made-up `col1`.
 fn output_name(item: &JsonValue, sources: &[ColumnSource], idx: usize) -> String {
     let alias = item.get("alias").and_then(|a| a.as_str()).unwrap_or("");
     if !alias.is_empty() {
         return alias.to_string();
+    }
+    if item.get("type").and_then(|t| t.as_str()) == Some("STAR") {
+        return "*".to_string();
     }
     if item.get("type").and_then(|t| t.as_str()) == Some("COLUMN_REF") {
         if let Some(c) = sources.first() {
@@ -287,6 +292,22 @@ mod tests {
             lin[2].sources,
             vec![ColumnSource { table: Some("c".into()), column: "name".into() }]
         );
+    }
+
+    #[test]
+    fn a_star_is_every_column_not_one_called_col1() {
+        // SELECT * cannot list the columns it stands for from the SQL alone.
+        // Named col1, it traced a column that does not exist back to a source
+        // column of the same false name, in a signed run manifest.
+        let lin = lineage_from_serialized_sql(&ast(json!([
+            {"type":"STAR","alias":"","relation_name":"","exclude_list":[]}
+        ])));
+        assert_eq!(lin.len(), 1);
+        assert_eq!(lin[0].name, "*");
+        let mut g: HashMap<String, NodeLineage> = HashMap::new();
+        g.insert("s".into(), NodeLineage { outputs: vec![], upstreams: vec![] });
+        g.insert("t".into(), NodeLineage { outputs: lin, upstreams: vec!["s".into()] });
+        assert_eq!(resolve_roots("t", "*", &g), vec![RootColumn { node: "s".into(), column: "*".into() }]);
     }
 
     #[test]
