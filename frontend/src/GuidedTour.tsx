@@ -192,7 +192,7 @@ const ALL_STEPS: Step[] = [
         sel: '[data-tour="trust"]',
         chapter: 'Govern',
         title: 'Trust report',
-        body: 'A signed run manifest, hashes of the inputs, and schema-drift detection that flags when an upstream source changes its columns or types since the last signed run. Use it to mark a pipeline review-ready.',
+        body: 'A 0-100 score where every lost point is a named finding: whether the pipeline compiles, structural risks, and columns that look like personal data with no mask or contract tag. Switch on live schema drift to read each source now and compare it with the schema its node declares. Use it to mark a pipeline review-ready.',
         placement: 'bottom',
     },
     {
