@@ -204,7 +204,7 @@ Real pipelines, built and run in Duckle - not mockups.
 4. **Build a pipeline two ways:**
    - **Drag + wire**: drag a **CSV source** in, point it at [`samples/orders.csv`](samples/orders.csv), hit **Autodetect schema**. Drag a **Filter**, wire it up. Drag a **Parquet sink** with an output path. Press **Run**, watch the nodes light up.
    - **Ask Duckie**: click the **Sparkles** icon (top-right of the toolbar), type *"read orders.csv, filter where status = 'paid', write to paid.parquet"*. When Duckie streams back a pipeline, click **Insert into canvas**.
-5. **Inspect.** Click any node to see its generated SQL in the **Plan** tab and a live row sample in the **Preview** tab.
+5. **Inspect.** Click any node for a live row sample in its **Preview** tab. The **Plan** tab, beside **Canvas**, shows the SQL generated for every stage.
 
 That's a real, native ETL pipeline built and run in under a minute. CSV is just the easiest first node; swap in Parquet, JSON, S3, Snowflake, MongoDB, or Stripe the same way.
 
@@ -327,7 +327,7 @@ A worked example using the bundled `samples/orders.csv` data.
 
 - Press **Run** in the toolbar. Nodes light up in execution order; row counts appear under each.
 - Open the **Output** tab (bottom panel) to see per-stage timing.
-- Click any node to inspect generated SQL in **Plan** + sampled rows in **Preview**.
+- Click any node for sampled rows in its **Preview** tab; the **Plan** tab beside **Canvas** shows the generated SQL for every stage.
 
 ### 5. Iterate
 
