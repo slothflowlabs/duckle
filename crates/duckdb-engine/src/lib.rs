@@ -4355,6 +4355,25 @@ fn count_projection(every_column: bool) -> &'static str {
             });
             return Ok(analysis);
         }
+        // A wired input whose columns nobody gave gets no stub, and DuckDB then
+        // says a table of that name does not exist: true of the stub database,
+        // false of the pipeline. The editor sends only the inputs it knows, so
+        // an SCD node read as broken until something had looked at its history.
+        let mut unknown: Vec<&str> = Vec::new();
+        for e in doc.edges.iter().filter(|e| e.target == node_id && plan::is_data_edge(e)) {
+            let given = inputs.iter().any(|(name, _)| *name == e.source);
+            if !given && !unknown.contains(&e.source.as_str()) {
+                unknown.push(e.source.as_str());
+            }
+        }
+        if !unknown.is_empty() {
+            let names = unknown.iter().map(|u| format!("{u:?}")).collect::<Vec<_>>().join(", ");
+            analysis.note = Some(format!(
+                "node {node_id:?} reads {names}, whose columns are not known yet (declare or detect that \
+                 input's schema), so it cannot be checked until they are"
+            ));
+            return Ok(analysis);
+        }
 
         let mut sql = String::new();
         for (name, cols) in inputs {

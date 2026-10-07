@@ -7511,6 +7511,7 @@ pub(crate) use builders::{build_view_sql, relational_pushdown_on};
 #[cfg(test)]
 pub(crate) use builders::references_spatial;
 pub(crate) use graph::NodeInputs;
+pub(crate) use graph::is_data_edge;
 pub(crate) use builders::*;
 
 #[cfg(test)]

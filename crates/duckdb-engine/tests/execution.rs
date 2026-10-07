@@ -1864,6 +1864,43 @@ fn raw_sql_can_name_its_upstream_by_alias() {
     );
 }
 
+/// An input whose columns nobody knows yet is said to be unknown, not missing.
+///
+/// The check stubs each input from the columns it is given, and the editor only
+/// gives the ones it knows. An SCD Type 2 node's history input has none before
+/// anything has looked at it, so it got no stub and DuckDB answered "Table with
+/// name hs does not exist! Did you mean pg_sequence?" - shown as an error in the
+/// inspector of a pipeline that was fine.
+#[test]
+fn an_input_with_unknown_columns_is_not_reported_as_a_missing_table() {
+    let engine = engine_or_skip!();
+    let col = |name: &str, t: duckle_duckdb_engine::DataType| duckle_duckdb_engine::Column {
+        tags: Vec::new(),
+        name: name.into(),
+        data_type: t,
+        nullable: true,
+        primary_key: None,
+        format: None,
+    };
+    let current = vec![
+        col("id", duckle_duckdb_engine::DataType::Int64),
+        col("v", duckle_duckdb_engine::DataType::String),
+    ];
+    let d = doc(
+        json!([
+            node("cur", "src.csv", json!({ "path": "cur.csv", "hasHeader": true })),
+            node("hs", "src.parquet", json!({ "path": "history.parquet" })),
+            node("h", "xf.cdc.scd2", json!({ "naturalKey": ["id"], "compareColumns": ["v"] })),
+        ]),
+        json!([main_edge("e1", "cur", "h"), lookup_edge("e2", "hs", "h")]),
+    );
+    let a = engine.analyze_node_sql(&d, "h", &[("cur".to_string(), current)]).unwrap();
+    assert!(a.diagnostics.is_empty(), "not an error: {:?}", a.diagnostics);
+    let note = a.note.unwrap_or_default();
+    assert!(note.contains("\"hs\""), "the note names the input it is waiting on: {note}");
+    assert!(!a.validated, "nothing was bound");
+}
+
 /// A Pure SQL node is refused, and told why in its own terms.
 #[test]
 fn a_pure_sql_node_is_refused_as_an_effect_step_not_as_a_defect() {
