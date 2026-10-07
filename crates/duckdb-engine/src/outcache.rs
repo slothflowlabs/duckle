@@ -102,7 +102,7 @@ pub fn key_for(
 ) -> Key {
     Key {
         dir: dir(workspace, pipeline, node_id),
-        key: key_material(config_fp, input_fp, env!("CARGO_PKG_VERSION")),
+        key: key_material(config_fp, input_fp, crate::VERSION),
     }
 }
 
@@ -309,6 +309,15 @@ mod tests {
         let a = key_material("cfg", "in", "0.6.1");
         assert_eq!(a, key_material("cfg", "in", "0.6.1"), "stable");
         assert_ne!(a, key_material("cfg", "in", "0.6.2"), "engine version counts");
+    }
+
+    /// The ingredient was there and never changed: every release keyed its
+    /// cache on the crates' 0.0.1 placeholder, so an upgrade went on serving
+    /// what the build it replaced had computed.
+    #[test]
+    fn an_output_cached_by_an_earlier_release_is_not_served() {
+        let now = key_for(std::path::Path::new("/ws"), "p", "n", "cfg", "in");
+        assert_ne!(now.key, key_material("cfg", "in", "0.0.1"));
     }
 
     #[test]

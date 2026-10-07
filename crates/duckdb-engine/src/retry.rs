@@ -49,8 +49,9 @@ use std::path::{Path, PathBuf};
 
 /// The engine build a run happened under. A parser fix or a changed default
 /// makes the same input produce a different answer, which is the same reason
-/// the output cache bakes the build into its key.
-pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// the output cache bakes the build into its key. The release version: the
+/// crates' own is a 0.0.1 placeholder no upgrade ever changed.
+pub const ENGINE_VERSION: &str = crate::VERSION;
 
 /// Components that write outside the run without carrying the `snk.` prefix
 /// the refusal was keyed on (#305).
@@ -1601,6 +1602,21 @@ mod tests {
         let p = plan(tmp.path(), "r1", &d, "r2", false, false, &Default::default());
         assert_eq!(p.refusal.as_ref().map(|r| r.code.as_str()), Some("retry:pipeline-changed"));
         assert!(p.decisions.is_empty(), "a refusal must not also plan work");
+    }
+
+    /// Every release before this one recorded the crates' 0.0.1 placeholder as
+    /// its engine, so an upgrade never registered and a retry reused outputs
+    /// the replaced engine had computed. A run from another build is refused.
+    #[test]
+    fn a_run_from_another_release_is_not_reused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = doc_with(&[("extract", "src.xml")]);
+        let mut prior = receipt("error", &pipeline_hash(&d), &[("extract", "ok", Some("K"), "source")]);
+        prior.engine_version = "0.0.1".into();
+        write(tmp.path(), &prior).unwrap();
+
+        let p = plan(tmp.path(), "r1", &d, "r2", false, false, &Default::default());
+        assert_eq!(p.refusal.as_ref().map(|r| r.code.as_str()), Some("retry:engine-changed"));
     }
 
     /// --allow-changed proceeds, but never with reuse: the recorded outputs
