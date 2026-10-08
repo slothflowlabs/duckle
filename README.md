@@ -1702,6 +1702,12 @@ possibly breaking      /lake/orders.parquet removes note, and nothing in this wo
 only breaking if something reads it - the same edit is additive in one workspace
 and an outage in another, and only the consumer graph can tell them apart.
 
+**Most sinks declare no schema of their own**: they take their columns from
+upstream, and the editor saves them with an empty one. Such an asset is compared
+through the node that feeds the sink, the same way in both revisions, so a
+declared schema is never set against a fallback. An asset with nothing to
+compare on one side is reported as not checked rather than counted as clean.
+
 | change | verdict |
 |---|---|
 | add a column | compatible - nothing can bind a column that did not exist |

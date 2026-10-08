@@ -26,6 +26,48 @@ fn declared_schema(doc: &Value, node_id: &str) -> Option<Vec<duckle_duckdb_engin
         .and_then(|s| serde_json::from_value(s).ok())
 }
 
+/// The saved schema of the one node whose rows a node writes, if exactly one feeds it.
+fn feeding_schema(doc: &Value, node_id: &str) -> Option<Vec<duckle_duckdb_engine::Column>> {
+    let feeding: Vec<&str> = doc
+        .get("edges")?
+        .as_array()?
+        .iter()
+        .filter(|e| e.get("target").and_then(Value::as_str) == Some(node_id))
+        .filter(|e| e.get("targetHandle").and_then(Value::as_str).is_none_or(|h| h == "main"))
+        .filter(|e| {
+            e.get("data")
+                .and_then(|d| d.get("connectionType"))
+                .and_then(Value::as_str)
+                .is_none_or(|c| c == "main")
+        })
+        .filter_map(|e| e.get("source").and_then(Value::as_str))
+        .collect();
+    match feeding.as_slice() {
+        [one] => declared_schema(doc, one).filter(|s| !s.is_empty()),
+        _ => None,
+    }
+}
+
+/// The schemas to compare for an asset a node writes, before and after.
+///
+/// The writing node's own schema when both revisions declare one. Otherwise the
+/// node feeding it, on both sides: 72 of 81 sinks take their columns from upstream
+/// and the editor saves them with an empty `schema`, so reading only the sink
+/// compared nothing for every pipeline built there and answered "no breaking
+/// changes" for a column another pipeline sums. Either way the two sides come from
+/// the same rule, so a declared schema is never compared with a fallback.
+fn schemas_to_compare(
+    base_doc: &Value,
+    head_doc: &Value,
+    node_id: &str,
+) -> Option<(Vec<duckle_duckdb_engine::Column>, Vec<duckle_duckdb_engine::Column>)> {
+    let own = |d| declared_schema(d, node_id).filter(|s| !s.is_empty());
+    if let (Some(before), Some(after)) = (own(base_doc), own(head_doc)) {
+        return Some((before, after));
+    }
+    Some((feeding_schema(base_doc, node_id)?, feeding_schema(head_doc, node_id)?))
+}
+
 pub fn run() -> ExitCode {
     let mut it = std::env::args().skip(2);
     let sub = it.next().unwrap_or_default();
@@ -81,6 +123,9 @@ pub fn run() -> ExitCode {
         .collect();
 
     let mut findings: Vec<contracts::Finding> = Vec::new();
+    // Assets with no schema to compare on one side: said, not dropped, so a gate
+    // that checked nothing cannot look like one that found nothing.
+    let mut unchecked = 0usize;
     for touch in head.touches.iter().filter(|t| t.direction == catalog::Direction::Write) {
         let Some((_, head_doc)) = head_docs.iter().find(|(id, _)| *id == touch.pipeline_id) else {
             continue;
@@ -89,15 +134,11 @@ pub fn run() -> ExitCode {
             // A brand new pipeline breaks nothing that existed before it.
             continue;
         };
-        // No declared contract on one side or the other means saying nothing:
-        // inferring a schema here and comparing it to a declared one would
-        // manufacture changes nobody made.
-        let (before, after) = match (
-            declared_schema(base_doc, &touch.node_id),
-            declared_schema(head_doc, &touch.node_id),
-        ) {
-            (Some(b), Some(a)) => (b, a),
-            _ => continue,
+        // Nothing to compare on one side or the other means no verdict: inferring a
+        // schema here would manufacture changes nobody made. It is counted instead.
+        let Some((before, after)) = schemas_to_compare(base_doc, head_doc, &touch.node_id) else {
+            unchecked += 1;
+            continue;
         };
         // Whoever reads this asset, other than the pipeline that writes it.
         let consumers: Vec<(String, duckle_duckdb_engine::PipelineDoc)> = head
@@ -158,7 +199,7 @@ pub fn run() -> ExitCode {
                 crate::report::json(
                     "contracts",
                     &rf,
-                    serde_json::json!({ "base": base, "breaking": breaking, "potentiallyBreaking": potential, "changes": findings }),
+                    serde_json::json!({ "base": base, "breaking": breaking, "potentiallyBreaking": potential, "unchecked": unchecked, "changes": findings }),
                 )
             ),
         }
@@ -176,6 +217,9 @@ pub fn run() -> ExitCode {
             );
         }
         println!("\n{breaking} breaking, {potential} possibly breaking, against {base}");
+    }
+    if format.is_empty() && unchecked > 0 {
+        println!("{unchecked} produced asset(s) not checked: no saved schema to compare in one revision or the other");
     }
 
     // Breaking fails the gate. `--strict` also fails on the uncertain ones, for
