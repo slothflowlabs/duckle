@@ -175,6 +175,11 @@ pub fn locked_packages(lock: &Path) -> Vec<(String, String)> {
             arr.iter()
                 .filter_map(|p| {
                     let t = p.as_table()?;
+                    // uv locks the workspace's own project as a virtual package and
+                    // never installs it, so it is nothing .venv should hold.
+                    if t.get("source").and_then(|s| s.get("virtual")).is_some() {
+                        return None;
+                    }
                     let n = t.get("name")?.as_str()?;
                     let v = t.get("version")?.as_str()?;
                     Some((normalize(n), v.to_string()))
@@ -504,6 +509,27 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         venv_with(tmp.path(), &[("splink", "3.9.1")], "3.12.4");
         assert!(drift(&inspect(tmp.path())).is_empty());
+        assert!(guard(tmp.path()).unwrap().is_none());
+    }
+
+    /// `uv init` locks the workspace's own project as a virtual package, and uv
+    /// never installs one, so every such workspace reported it as missing.
+    #[test]
+    fn the_workspace_project_uv_locks_is_not_a_package_to_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        venv_with(tmp.path(), &[("rapidfuzz", "3.14.6")], "3.12.12");
+        std::fs::write(
+            tmp.path().join("uv.lock"),
+            concat!(
+                "version = 1\n\n",
+                "[[package]]\nname = \"duckle-tutorial\"\nversion = \"0.1.0\"\n",
+                "source = { virtual = \".\" }\n\n",
+                "[[package]]\nname = \"rapidfuzz\"\nversion = \"3.14.6\"\n",
+                "source = { registry = \"https://pypi.org/simple\" }\n",
+            ),
+        )
+        .unwrap();
+        assert_eq!(drift(&inspect(tmp.path())), vec![]);
         assert!(guard(tmp.path()).unwrap().is_none());
     }
 

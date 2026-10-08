@@ -2736,7 +2736,9 @@ fail**. A lock resolves for every platform, so something absent here may simply
 not apply here; a package that really is needed and really is missing raises
 `ImportError` on the first row, which is already unambiguous. What does fail is
 a version that contradicts the lock, or a package the lock never mentions -
-those are the two shapes of "someone changed this environment".
+those are the two shapes of "someone changed this environment". The workspace's
+own project is not compared at all: `uv init` locks it as a virtual package,
+which uv never installs.
 
 **A deployed pipeline cannot silently run against an unprepared target.** A
 bundle built from a workspace with a `code.python` step carries `uv.lock` and
