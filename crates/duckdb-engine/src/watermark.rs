@@ -239,6 +239,124 @@ pub fn set_snapshot(
     write_state(workspace, pipeline, node_id, &json!({ "snapshot_id": snapshot_id }))
 }
 
+/// The name an editor run and the Backfill panel keep a pipeline's state under:
+/// its id, after moving what the editor saved under its display name.
+///
+/// The editor saves a pipeline as `pipelines/<id>.json`, and every other way of
+/// running it - the CLI, the console, both schedulers, a sub-pipeline - names
+/// the run after that file. Editor runs used the display name instead, so one
+/// pipeline kept two positions: a watermark built up in the editor started over
+/// when anything else ran the pipeline, a CDC feed re-delivered what the editor
+/// had already applied, and renaming the pipeline orphaned its state.
+///
+/// The display name is used only when there is no id that can name a file, as
+/// on a scratch canvas.
+pub fn editor_state_name(
+    workspace: Option<&Path>,
+    pipeline_id: Option<&str>,
+    display_name: Option<&str>,
+) -> Option<String> {
+    let display = display_name.map(str::trim).filter(|s| !s.is_empty());
+    let Some(id) = pipeline_id.map(str::trim).filter(|id| names_a_file(id)) else {
+        return display.map(str::to_string);
+    };
+    if let (Some(workspace), Some(display)) = (workspace, display) {
+        let moved = move_display_name_state(workspace, display, id);
+        if !moved.is_empty() {
+            eprintln!(
+                "duckle: moved {} saved state entr{} from state/{}/ to state/{}/, where every run of this pipeline keeps it",
+                moved.len(),
+                if moved.len() == 1 { "y" } else { "ies" },
+                sanitize_segment(display),
+                sanitize_segment(id)
+            );
+        }
+    }
+    Some(id.to_string())
+}
+
+/// The rule the servers apply to a name from the browser before it may name a file.
+fn names_a_file(id: &str) -> bool {
+    !id.is_empty() && id != "." && id != ".." && !id.contains(['/', '\\', ':', '\0'])
+}
+
+/// Move what the editor saved under `display` into the id's folder.
+///
+/// Moved, not copied, so a watermark cleared later is not brought back from the
+/// old folder by the next run. When the id has no folder yet - the editor was
+/// the only thing that ran the pipeline - the folder moves whole. Otherwise a
+/// run from another surface wrote under the id, and that copy is the one every
+/// surface but the editor has been reading, so only what it lacks is taken: a
+/// node's file together with a tumbling window's rows beside it, and one node at
+/// a time from `checkpoints/` and `baselines/`.
+///
+/// A display name can be another pipeline's file name, and every unnamed run
+/// shares the folder called `pipeline`; either folder holds someone else's
+/// state, so it stays where it is.
+fn move_display_name_state(workspace: &Path, display: &str, id: &str) -> Vec<PathBuf> {
+    let (from, to) = (state_dir(workspace, display), state_dir(workspace, id));
+    let folder = sanitize_segment(display);
+    if from == to || !from.is_dir() || folder == "pipeline" || has_pipeline_file(&workspace.join("pipelines"), &folder) {
+        return Vec::new();
+    }
+    let mut moved = Vec::new();
+    let mut take = |src: PathBuf, dst: PathBuf| {
+        if dst.exists() {
+            return;
+        }
+        if let Some(parent) = dst.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if std::fs::rename(&src, &dst).is_ok() {
+            moved.push(dst);
+        }
+    };
+    if !to.exists() {
+        take(from, to);
+        return moved;
+    }
+    let Ok(entries) = std::fs::read_dir(&from) else {
+        return moved;
+    };
+    for entry in entries.flatten() {
+        let (src, name) = (entry.path(), entry.file_name().to_string_lossy().into_owned());
+        if src.is_dir() {
+            if matches!(name.as_str(), "checkpoints" | "baselines") {
+                for node in std::fs::read_dir(&src).into_iter().flatten().flatten() {
+                    take(node.path(), to.join(&name).join(node.file_name()));
+                }
+            } else if !name.ends_with(".tumble") {
+                take(src, to.join(&name));
+            }
+        } else if let Some(node) = name.strip_suffix(".json") {
+            // A tumbling window's rows sit beside its pointer, and one without
+            // the other is a window pointing at another window's rows.
+            let rows = format!("{node}.tumble");
+            if !to.join(&name).exists() && !to.join(&rows).exists() {
+                take(src, to.join(&name));
+                if from.join(&rows).is_dir() {
+                    take(from.join(&rows), to.join(&rows));
+                }
+            }
+        } else {
+            take(src, to.join(&name));
+        }
+    }
+    moved
+}
+
+/// Is there a pipeline file, anywhere under `dir`, whose state folder is `folder`?
+fn has_pipeline_file(dir: &Path, folder: &str) -> bool {
+    std::fs::read_dir(dir).into_iter().flatten().flatten().any(|e| {
+        let p = e.path();
+        if p.is_dir() {
+            return has_pipeline_file(&p, folder);
+        }
+        p.extension().and_then(|x| x.to_str()) == Some("json")
+            && p.file_stem().is_some_and(|s| sanitize_segment(&s.to_string_lossy()) == folder)
+    })
+}
+
 /// Remove a node's state file so the next run starts from its initial value
 /// (incremental) / earliest snapshot (CDC) - i.e. a full reload. A missing
 /// file is treated as success.
@@ -330,6 +448,107 @@ mod tests {
         let p = state_path(ws.path(), "My Pipe", "node/1");
         // pipeline + node sanitized; under <ws>/state/.
         assert!(p.ends_with("state/My Pipe/node_1.json") || p.ends_with("state\\My Pipe\\node_1.json"));
+    }
+}
+
+#[cfg(test)]
+mod editor_name_tests {
+    use super::*;
+
+    const DISPLAY: &str = "3. Incremental load (watermark)";
+
+    fn put(ws: &Path, rel: &str, body: &str) {
+        let p = ws.join("state").join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    }
+    fn read(ws: &Path, rel: &str) -> Option<String> {
+        std::fs::read_to_string(ws.join("state").join(rel)).ok()
+    }
+
+    /// The editor named a run after the pipeline's display name; the CLI, the
+    /// console, both schedulers and sub-pipelines name it after its file.
+    #[test]
+    fn an_editor_run_is_named_after_the_pipeline_file() {
+        let name = |id, display| editor_state_name(None, id, display);
+        assert_eq!(name(Some("incremental_load"), Some(DISPLAY)).as_deref(), Some("incremental_load"));
+        // A scratch canvas has no file to be named after.
+        assert_eq!(name(None, Some(DISPLAY)).as_deref(), Some(DISPLAY));
+        // An id that cannot name a file is not used as one.
+        assert_eq!(name(Some("../outside"), Some(DISPLAY)).as_deref(), Some(DISPLAY));
+        assert_eq!(name(Some("  "), None), None);
+    }
+
+    /// One pipeline kept two positions: a watermark the editor built up started
+    /// over when anything else ran it, and a CDC feed re-delivered what the
+    /// editor had applied.
+    #[test]
+    fn state_saved_under_the_display_name_moves_to_the_id_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        let old = sanitize_segment(DISPLAY);
+        put(ws, &format!("{old}/inc.json"), r#"{"value":"500","type":"BIGINT"}"#);
+        put(ws, &format!("{old}/checkpoints/cls.ndjson"), "{}\n");
+        put(ws, &format!("{old}/win.json"), r#"{"buffer":"b","watermark":"w","emitted_through":"e"}"#);
+        put(ws, &format!("{old}/win.tumble/part-0.parquet"), "rows");
+
+        assert_eq!(
+            editor_state_name(Some(ws), Some("incremental_load"), Some(DISPLAY)).as_deref(),
+            Some("incremental_load")
+        );
+        let inc = list(ws, "incremental_load").into_iter().find(|e| e.node_id == "inc");
+        assert_eq!(inc.map(|e| e.value), Some("500".to_string()));
+        assert!(read(ws, "incremental_load/checkpoints/cls.ndjson").is_some(), "paid-for answers stay paid for");
+        assert!(read(ws, "incremental_load/win.tumble/part-0.parquet").is_some(), "a window's rows travel with it");
+        assert!(read(ws, &format!("{old}/inc.json")).is_none(), "moved, not copied");
+
+        // Cleared afterwards, it stays cleared: nothing comes back from the old folder.
+        clear(ws, "incremental_load", "inc").unwrap();
+        editor_state_name(Some(ws), Some("incremental_load"), Some(DISPLAY));
+        assert!(read(ws, "incremental_load/inc.json").is_none());
+    }
+
+    /// A run from another surface already wrote under the id, and that copy is
+    /// the one every surface but the editor has been reading.
+    #[test]
+    fn the_id_keeps_the_state_another_surface_advanced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        let old = sanitize_segment(DISPLAY);
+        put(ws, &format!("{old}/inc.json"), r#"{"value":"450","type":"BIGINT"}"#);
+        put(ws, &format!("{old}/cdc.json"), r#"{"slot":"duckle","lsn":"0/16B3748"}"#);
+        put(ws, &format!("{old}/win.json"), r#"{"buffer":"editor","watermark":"w","emitted_through":"e"}"#);
+        put(ws, &format!("{old}/win.tumble/part-1.parquet"), "editor rows");
+        put(ws, &format!("{old}/hour.json"), r#"{"buffer":"editor","watermark":"w","emitted_through":"e"}"#);
+        put(ws, "incremental_load/inc.json", r#"{"value":"500","type":"BIGINT"}"#);
+        put(ws, "incremental_load/win.json", r#"{"buffer":"cli","watermark":"w","emitted_through":"e"}"#);
+        put(ws, "incremental_load/hour.tumble/part-0.parquet", "cli rows");
+
+        editor_state_name(Some(ws), Some("incremental_load"), Some(DISPLAY));
+        assert!(read(ws, "incremental_load/inc.json").unwrap().contains("500"));
+        assert!(read(ws, "incremental_load/cdc.json").is_some(), "a node only the editor ran is taken");
+        assert!(read(ws, "incremental_load/win.tumble/part-1.parquet").is_none(), "rows of another window");
+        assert!(read(ws, "incremental_load/hour.json").is_none(), "a pointer to rows it did not write");
+        assert!(read(ws, &format!("{old}/inc.json")).is_some(), "the one not taken is left where it was");
+    }
+
+    /// A display name can be another pipeline's file name, and then that folder
+    /// is the other pipeline's state.
+    #[test]
+    fn a_display_name_that_is_another_pipelines_file_is_left_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        std::fs::create_dir_all(ws.join("pipelines").join("nightly")).unwrap();
+        std::fs::write(ws.join("pipelines").join("nightly").join("daily.json"), "{}").unwrap();
+        put(ws, "daily/inc.json", r#"{"value":"7","type":"BIGINT"}"#);
+        put(ws, "pipeline/inc.json", r#"{"value":"8","type":"BIGINT"}"#);
+
+        assert_eq!(editor_state_name(Some(ws), Some("orders"), Some("daily")).as_deref(), Some("orders"));
+        assert!(read(ws, "daily/inc.json").is_some());
+        // Nor is the folder every unnamed run shares.
+        editor_state_name(Some(ws), Some("orders"), Some("pipeline"));
+        assert!(read(ws, "pipeline/inc.json").is_some());
+        assert!(read(ws, "orders/inc.json").is_none());
     }
 }
 

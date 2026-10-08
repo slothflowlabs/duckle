@@ -510,7 +510,7 @@ async fn run_pipeline(
     // one a value rather than statement text.
     duckle_duckdb_engine::context::apply_params(&mut pipeline, &params.unwrap_or_default())?;
     ensure_pixeltable_if_used(&app, &pipeline);
-    let name = pipeline_name.clone();
+    let name = editor_state_name(workspace_path.as_deref(), pipeline_id.as_deref(), pipeline_name.as_deref());
     let receipt = begin_desktop_run(&workspace_path, &pipeline, pipeline_id.as_deref().unwrap_or("pipeline"), "desktop");
     let joined = tokio::task::spawn_blocking(move || {
         engine.execute_pipeline_with_events(&pipeline, None, name.as_deref(), |evt| {
@@ -627,7 +627,7 @@ async fn run_pipeline_partial(
     duckle_duckdb_engine::context::apply_params(&mut pipeline, &params.unwrap_or_default())?;
     ensure_pixeltable_if_used(&app, &pipeline);
     let target = target_node_id;
-    let name = pipeline_name.clone();
+    let name = editor_state_name(workspace_path.as_deref(), pipeline_id.as_deref(), pipeline_name.as_deref());
     // Run-to-here is still a run, and the one most likely to be asked about
     // afterwards ("what did that node actually produce?").
     let receipt = begin_desktop_run(&workspace_path, &pipeline, pipeline_id.as_deref().unwrap_or("pipeline"), "desktop-partial");
@@ -661,17 +661,35 @@ fn run_history(workspace_path: String, pipeline_id: String) -> Result<Vec<RunRec
 
 // ---- Backfill: xf.incremental / src.ducklake.changes saved state --------
 
+/// The name an editor run and the Backfill panel keep a pipeline's saved state
+/// under: its file, as the desktop scheduler and every other run of it do. See
+/// `watermark::editor_state_name`.
+fn editor_state_name(
+    workspace_path: Option<&str>,
+    pipeline_id: Option<&str>,
+    pipeline_name: Option<&str>,
+) -> Option<String> {
+    duckle_duckdb_engine::watermark::editor_state_name(
+        workspace_path.filter(|w| !w.is_empty()).map(std::path::Path::new),
+        pipeline_id,
+        pipeline_name,
+    )
+}
+
 /// List the saved watermarks/snapshots for a pipeline (one per
-/// xf.incremental / src.ducklake.changes node that has run). `pipeline_name`
-/// is the run-log / state folder name (the pipeline's display name).
+/// xf.incremental / src.ducklake.changes node that has run). The state is
+/// found by `pipeline_id` (the pipeline's file name); `pipeline_name` is used
+/// only when there is no id.
 #[tauri::command]
 fn watermark_list(
     workspace_path: String,
     pipeline_name: String,
+    pipeline_id: Option<String>,
 ) -> Result<Vec<duckle_duckdb_engine::watermark::WatermarkEntry>, String> {
+    let name = editor_state_name(Some(&workspace_path), pipeline_id.as_deref(), Some(&pipeline_name)).unwrap_or(pipeline_name);
     Ok(duckle_duckdb_engine::watermark::list(
         std::path::Path::new(&workspace_path),
-        &pipeline_name,
+        &name,
     ))
 }
 
@@ -686,7 +704,10 @@ fn watermark_set(
     kind: String,
     value: String,
     value_type: Option<String>,
+    pipeline_id: Option<String>,
 ) -> Result<(), String> {
+    let pipeline_name =
+        editor_state_name(Some(&workspace_path), pipeline_id.as_deref(), Some(&pipeline_name)).unwrap_or(pipeline_name);
     let ws = std::path::Path::new(&workspace_path);
     if kind == "snapshot" {
         let id: u64 = value
@@ -713,10 +734,12 @@ fn watermark_clear(
     workspace_path: String,
     pipeline_name: String,
     node_id: String,
+    pipeline_id: Option<String>,
 ) -> Result<(), String> {
+    let name = editor_state_name(Some(&workspace_path), pipeline_id.as_deref(), Some(&pipeline_name)).unwrap_or(pipeline_name);
     duckle_duckdb_engine::watermark::clear(
         std::path::Path::new(&workspace_path),
-        &pipeline_name,
+        &name,
         &node_id,
     )
     .map_err(|e| e.to_string())
@@ -2663,6 +2686,29 @@ mod tests {
     /// These commands are thin, which is the point: what is worth pinning is that they
     /// round-trip through the same `plans.json` the console and the scheduler read, in the
     /// same spelling, and that a plan which cannot work is refused where it was written.
+    /// The desktop Backfill panel kept a pipeline's state under its display
+    /// name, while the desktop scheduler runs the pipeline under its file name:
+    /// one pipeline, two positions, and the panel edited the one the schedule
+    /// never read.
+    #[test]
+    fn the_backfill_commands_keep_state_under_the_pipeline_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_string_lossy().to_string();
+        let saved = |folder: &str| tmp.path().join("state").join(folder).join("inc.json");
+        std::fs::create_dir_all(saved("Orders _nightly_").parent().unwrap()).unwrap();
+        std::fs::write(saved("Orders _nightly_"), r#"{"value":"500","type":"BIGINT"}"#).unwrap();
+        let (name, id) = ("Orders (nightly)".to_string(), Some("orders".to_string()));
+
+        let listed = watermark_list(ws.clone(), name.clone(), id.clone()).unwrap();
+        assert_eq!(listed.iter().map(|e| e.value.as_str()).collect::<Vec<_>>(), ["500"]);
+        assert!(saved("orders").exists() && !saved("Orders _nightly_").exists());
+        watermark_set(ws.clone(), name.clone(), "inc".into(), "incremental".into(), "450".into(), Some("BIGINT".into()), id.clone())
+            .unwrap();
+        assert!(std::fs::read_to_string(saved("orders")).unwrap().contains("450"));
+        watermark_clear(ws.clone(), name, "inc".into(), id).unwrap();
+        assert!(!saved("orders").exists());
+    }
+
     #[test]
     fn the_plans_commands_round_trip_through_the_shared_store() {
         let tmp = tempfile::tempdir().unwrap();

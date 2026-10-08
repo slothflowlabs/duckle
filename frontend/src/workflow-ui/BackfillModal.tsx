@@ -9,6 +9,8 @@ import {
 } from '../tauri-bridge';
 
 type Props = {
+    // The pipeline's file name, which its state is kept under; the name is shown.
+    pipelineId: string;
     pipelineName: string;
     workspacePath: string | null;
     onClose: () => void;
@@ -19,7 +21,7 @@ type Props = {
 // on a fully successful run. Editing it replays from an earlier point; clearing
 // it forces a full reload on the next run. State only appears here after a node
 // has run at least once and written state.
-export default function BackfillModal({ pipelineName, workspacePath, onClose }: Props) {
+export default function BackfillModal({ pipelineId, pipelineName, workspacePath, onClose }: Props) {
     const [entries, setEntries] = useState<WatermarkEntry[]>([]);
     // node_id -> edited value (controlled inputs)
     const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -34,11 +36,11 @@ export default function BackfillModal({ pipelineName, workspacePath, onClose }: 
             return;
         }
         setLoading(true);
-        const list = await watermarkList(workspacePath, pipelineName);
+        const list = await watermarkList(workspacePath, pipelineName, pipelineId);
         setEntries(list);
         setDrafts(Object.fromEntries(list.map(e => [e.node_id, e.value])));
         setLoading(false);
-    }, [workspacePath, pipelineName]);
+    }, [workspacePath, pipelineName, pipelineId]);
 
     useEffect(() => {
         void reload();
@@ -60,6 +62,7 @@ export default function BackfillModal({ pipelineName, workspacePath, onClose }: 
                 entry.kind,
                 drafts[entry.node_id] ?? entry.value,
                 entry.value_type,
+                pipelineId,
             );
             await reload();
         } catch (e) {
@@ -74,7 +77,7 @@ export default function BackfillModal({ pipelineName, workspacePath, onClose }: 
         setBusy(entry.node_id);
         setError(null);
         try {
-            await watermarkClear(workspacePath, pipelineName, entry.node_id);
+            await watermarkClear(workspacePath, pipelineName, entry.node_id, pipelineId);
             await reload();
         } catch (e) {
             setError(String(e));

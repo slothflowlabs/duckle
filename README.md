@@ -2099,6 +2099,17 @@ duckle-runner backfill clear --pipeline ./pipelines/daily.json --node inc
 duckle-runner backfill list  --pipeline ./pipelines/daily.json --json      # for CI and agents
 ```
 
+**One pipeline, one folder.** Every run of a pipeline keeps its state under the
+pipeline's file name, `state/daily/` for `pipelines/daily.json`, whether the
+editor, the CLI, the console or either scheduler started it. So
+`backfill list --pipeline pipelines/daily.json --workspace .` shows what an
+editor run saved, and the editor's Backfill panel edits what a scheduled run
+reads. Editor runs used to file it under the display name instead, so a
+watermark built up in the editor started over the first time anything else ran
+the pipeline, and a CDC feed delivered again what the editor had applied. The
+first editor run, or Backfill panel, after upgrading moves that state across,
+node by node where the file name has none of its own yet.
+
 **Six node kinds keep state in that folder, and only two resume from a value a
 person can write down.** `xf.incremental` (a watermark) and
 `src.ducklake.changes` (a snapshot id) can be set; a `src.kafka` resume offset,
