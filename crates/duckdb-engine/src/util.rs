@@ -1517,7 +1517,10 @@ pub(crate) fn finalize_xlsx_whitespace(path: &std::path::Path) -> std::io::Resul
             let mut entry = archive
                 .by_index(i)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            let name = entry.name().to_string();
+            let name = entry
+                .name()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
+                .into_owned();
             // Cell strings live in the worksheet parts (the native inlineStr
             // writer) and in sharedStrings.xml (the GDAL writer); only those
             // parts need patching.

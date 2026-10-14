@@ -53,7 +53,7 @@ private-key operations.
 
 ---
 
-## RUSTSEC-2026-0049, -0098, -0099, -0104 - `rustls-webpki` 0.101.7 and 0.102.8
+## RUSTSEC-2026-0049, -0098, -0099, -0104 - `rustls-webpki` 0.102.8
 
 **Fix available:** for the crate, yes (0.103.10+). For Duckle, no - see below.
 
@@ -64,29 +64,32 @@ parsing a certificate revocation list.
 
 **Reachability: narrow, and it is not Duckle's own TLS.** Duckle's own TLS - the
 console, HTTPS sources and sinks, the updater - resolves to `rustls-webpki`
-0.103.15, which is unaffected. The two vulnerable copies arrive through two
-connectors:
+0.103.15, which is unaffected. The vulnerable copy arrives through one
+connector:
 
 | Path | Reached when |
 | :--- | :--- |
-| `tiberius` 0.12.3 → `rustls` 0.21 → `rustls-webpki` 0.101.7 | Connecting to SQL Server over TLS |
 | `imap` 3.0.0-alpha.15 → `rustls-connector` 0.19 → `rustls` 0.22 → `rustls-webpki` 0.102.8 | Connecting to an IMAP server over TLS |
 
-So the exposure is: a deployment that uses the SQL Server or IMAP connector, and
-whose certificate chain runs through a CA that issues name constraints, could
-have a chain accepted that a correct implementation would reject. That needs an
+SQL Server was the second path, through `tiberius` 0.12.3 and `rustls` 0.21
+(`rustls-webpki` 0.101.7). `tiberius` 0.13 moved to `rustls` 0.23, which removed
+that copy.
+
+So the exposure is: a deployment that uses the IMAP connector, and whose
+certificate chain runs through a CA that issues name constraints, could have a
+chain accepted that a correct implementation would reject. That needs an
 attacker positioned to present such a chain.
 
-**No upgrade exists to take.** `tiberius` 0.12.3 and `imap` 3.0.0-alpha.15 are
-the newest published versions of both crates, and each pins the older `rustls`
-line. Forcing a newer `rustls` is not possible across that semver boundary.
+**No upgrade exists to take.** `imap` 3.0.0-alpha.15 is the newest published
+version and pins the older `rustls` line. Forcing a newer `rustls` is not
+possible across that semver boundary.
 
-**Removed when:** `tiberius` or `imap` publish a release built on `rustls` 0.23
-or later. Both are watched at the review date above.
+**Removed when:** `imap` publishes a release built on `rustls` 0.23 or later.
+It is watched at the review date above.
 
 ---
 
-## RUSTSEC-2026-0194, -0195 - `quick-xml` 0.38.4 and 0.39.4
+## RUSTSEC-2026-0194, -0195 - `quick-xml` 0.40.1
 
 **Severity as published:** denial of service. **Fix available:** 0.41.0+, and
 Duckle's direct dependency is already past it.
@@ -96,17 +99,17 @@ namespace-declaration allocation in `NsReader`.
 
 **Reachability: not from pipeline input.** Duckle's own XML reading - the
 streaming XML source, the XML sink, SQL Server XML columns - is on `quick-xml`
-0.42, which contains both fixes. The two vulnerable copies come only through the
-optional `duckle-lance` sidecar:
+0.42, which contains both fixes. The vulnerable copy comes only through the
+optional `duckle-lance` sidecar: `quick-xml` 0.40.1, via `lance-namespace-impls`
+under `lancedb` 0.40, where it parses the responses of Azure's own credential
+endpoint (`credentials/azure.rs`, the Azure credential vendor) - not a document
+a pipeline was pointed at. `duckle-lance` is a separate sidecar binary and is not
+part of the engine, the runner or the desktop app.
 
-- `quick-xml` 0.38.4, via `opendal` and `lance-namespace-impls`
-- `quick-xml` 0.39.4, via `object_store`, under `datafusion`
+`lancedb` 0.38 also carried 0.39.4, via `object_store` under `datafusion`; the
+move to 0.40 removed that copy.
 
-In both, the XML being parsed is an object-storage provider's own list response,
-not a document a pipeline was pointed at. `duckle-lance` is a separate sidecar
-binary and is not part of the engine, the runner or the desktop app.
-
-**Removed when:** `lancedb` takes `object_store` and `opendal` releases built on
+**Removed when:** `lancedb` takes a `lance-namespace-impls` release built on
 `quick-xml` 0.41+.
 
 ---

@@ -7000,7 +7000,10 @@ impl DuckdbEngine {
                         if entry.is_dir() {
                             continue;
                         }
-                        (entry.name().to_string(), entry.compressed_size())
+                        let name = entry.name().map_err(|e| {
+                            EngineError::Query(format!("archive: {} member {i}: {e}", archive.uri))
+                        })?;
+                        (name.into_owned(), entry.compressed_size())
                     };
                     if !member_wanted(&name, spec) {
                         continue;
@@ -9570,8 +9573,13 @@ impl DuckdbEngine {
                     }
                     let name = archive
                         .file_names()
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|e| {
+                            EngineError::Query(format!("xml: read zip {}: {}", spec.path, e))
+                        })?
+                        .into_iter()
                         .find(|n| n.to_ascii_lowercase().ends_with(".xml"))
-                        .map(|s| s.to_string());
+                        .map(|s| s.into_owned());
                     let entry = match name {
                         Some(n) => archive.by_name(&n),
                         None => archive.by_index(0),
@@ -21405,21 +21413,26 @@ fn ftp_connect_bounded(
 
 /// Open a SQL Server connection, giving up after `budget`.
 ///
-/// tiberius 0.12.3 has no timeout of its own - `Config` carries nine fields and
-/// not one of them is a timeout - and `Client::connect` runs the whole TDS
-/// handshake, whose first act is to send PRELOGIN and then read the reply
-/// (`client/connection.rs:91` and the collect at `:277`). A peer that accepts the
-/// socket and never speaks TDS leaves that read pending for the life of the
-/// process.
+/// `Client::connect` runs the whole TDS handshake, whose first act is to send
+/// PRELOGIN and then read the reply. A peer that accepts the socket and never
+/// speaks TDS would leave that read pending for the life of the process.
+///
+/// tiberius 0.13 brought timeouts of its own, on by default: 15s for the
+/// handshake and 30s for every command round-trip, where 0.12 had neither. Both
+/// are turned off here. The handshake is bounded by `budget`, as it was, and a
+/// query may go quiet for longer than 30s and still be right - a big sort, a
+/// MERGE, a slow view - so a pull that worked before still works.
 ///
 /// The TCP connect is inside the same budget on purpose: left on its own it is
 /// bounded only by the OS SYN retries, which is about 21s on Windows and over two
 /// minutes on Linux, so the platform would decide what "connecting" costs.
 async fn tds_connect(
-    config: tiberius::Config,
+    mut config: tiberius::Config,
     budget: std::time::Duration,
 ) -> Result<tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>, String> {
     use tokio_util::compat::TokioAsyncWriteCompatExt;
+    config.handshake_timeout(None);
+    config.command_timeout(None);
     let connect = async {
         let tcp = tokio::net::TcpStream::connect(config.get_addr())
             .await
@@ -22028,8 +22041,9 @@ mod connector_helper_tests {
     /// A SQL Server that accepts the socket and never answers PRELOGIN fails,
     /// rather than hanging the run forever.
     ///
-    /// tiberius carries no timeout of its own, and `Client::connect` runs the
-    /// whole TDS handshake, whose first act is a write followed by a read.
+    /// tds_connect turns tiberius's own timeouts off, so its budget is the only
+    /// bound, and `Client::connect` runs the whole TDS handshake, whose first act
+    /// is a write followed by a read.
     #[test]
     fn a_sql_server_that_never_answers_prelogin_fails_instead_of_hanging() {
         let (port, silent) = silent_listener(std::time::Duration::from_secs(5));

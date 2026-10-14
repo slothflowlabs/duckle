@@ -22,24 +22,24 @@ ignore = [
     # Remove when: the rsa crate publishes a constant-time release.
     "RUSTSEC-2023-0071",
 
-    # rustls-webpki 0.101.7 and 0.102.8 - certificate path validation defects.
-    # Pulled in by tiberius 0.12.3 (SQL Server, via rustls 0.21) and imap
-    # 3.0.0-alpha.15 (via rustls-connector 0.19 and rustls 0.22). Both are the
-    # newest published versions of those crates, so there is no upgrade to take.
+    # rustls-webpki 0.102.8 - certificate path validation defects.
+    # Pulled in by imap 3.0.0-alpha.15 (via rustls-connector 0.19 and rustls
+    # 0.22), the newest published version, so there is no upgrade to take.
+    # tiberius was the other path until 0.13 moved SQL Server to rustls 0.23.
     # Duckle's own TLS - the console, the HTTP sources, the updater - is on
     # rustls-webpki 0.103.15, which is unaffected.
-    # Remove when: tiberius or imap publish a release on rustls 0.23+.
+    # Remove when: imap publishes a release on rustls 0.23+.
     "RUSTSEC-2026-0049",
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
     "RUSTSEC-2026-0104",
 
-    # quick-xml 0.38 and 0.39 - denial of service on hostile XML.
-    # Duckle's own XML reading is on quick-xml 0.42, which is past the fix. These
-    # two come only through the optional duckle-lance sidecar, inside
-    # object_store and opendal, where the XML parsed is a storage provider's own
-    # list response rather than pipeline input.
-    # Remove when: lancedb takes object_store and opendal releases on 0.41+.
+    # quick-xml 0.40 - denial of service on hostile XML.
+    # Duckle's own XML reading is on quick-xml 0.42, which is past the fix. This
+    # copy comes only through the optional duckle-lance sidecar, inside
+    # lance-namespace-impls' Azure credential vendor, where the XML parsed is
+    # Azure's own credential response rather than pipeline input.
+    # Remove when: lancedb takes a lance-namespace-impls release on 0.41+.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
 ]

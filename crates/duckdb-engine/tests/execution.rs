@@ -4102,6 +4102,38 @@ fn sqlserver_upsert_merges_and_inserts() {
     assert_upsert_result(&out);
 }
 
+/// tiberius 0.13 gave every command round-trip a 30s limit by default, where
+/// 0.12 had none. A query can go quiet for longer than that and still be right -
+/// a big sort, a MERGE, a slow view - so a batch that sends nothing for 31s must
+/// still come back with its row instead of timing out.
+#[test]
+fn sqlserver_a_query_quiet_for_over_thirty_seconds_still_reads() {
+    let engine = engine_or_skip!();
+    let (host, port, db, user, pass) = match mssql_env() {
+        Some(x) => x,
+        None => {
+            eprintln!("skipping: set DUCKLE_MSSQL_HOST to run against a real SQL Server");
+            return;
+        }
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let read = doc(
+        json!([
+            node("r", "src.sqlserver", json!({
+                "host": host, "port": port, "database": db, "user": user, "password": pass,
+                "query": "WAITFOR DELAY '00:00:31'; SELECT 1 AS one", "trustCert": true
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "r", "k")]),
+    );
+    let r = engine.execute_pipeline(&read);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let csv = std::fs::read_to_string(&out).unwrap();
+    assert_eq!(csv.lines().collect::<Vec<_>>(), ["one", "1"], "{csv}");
+}
+
 #[test]
 fn oracle_upsert_merges_and_inserts() {
     let engine = engine_or_skip!();
@@ -22993,8 +23025,8 @@ fn write_zip(path: &Path, members: &[(&str, &str)]) {
     use std::io::Write;
     let f = std::fs::File::create(path).unwrap();
     let mut z = zip::ZipWriter::new(f);
-    let opts: zip::write::FileOptions<'_, ()> =
-        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
     for (name, body) in members {
         z.start_file(*name, opts).unwrap();
         z.write_all(body.as_bytes()).unwrap();

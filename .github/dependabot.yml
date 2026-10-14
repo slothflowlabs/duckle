@@ -73,6 +73,16 @@ updates:
       # round-trip test passes. A vortex advisory would reach us through the
       # cargo-audit job meanwhile, as with lopdf.
       - dependency-name: "vortex"
+      # arrow-flight is held for the same reason as arrow, in the engine rather
+      # than the sidecar. GizmoSQL's Flight client, the ADBC source and the
+      # parquet writer share one arrow there - ADBC's batches go through that
+      # writer - and the newest adbc_core (0.24) caps arrow below 60. arrow-flight
+      # 60 requires arrow 60, so taking it alone put two arrow majors in one
+      # crate and the build failed (#370, #380). Drop this entry when
+      # adbc_core allows the next arrow, then move arrow-flight, arrow-array,
+      # arrow-schema and parquet together.
+      - dependency-name: "arrow-flight"
+        update-types: ["version-update:semver-major"]
     groups:
       cargo-safe:
         patterns: ["*"]

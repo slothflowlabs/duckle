@@ -334,7 +334,10 @@ fn unzip_into(payload: &[u8], dest: &Path) -> Result<(), String> {
         let mut entry = archive
             .by_index(i)
             .map_err(|e| format!("zip entry {}: {}", i, e))?;
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .map_err(|e| format!("zip entry {}: {}", i, e))?
+            .into_owned();
         let rel = sanitize_entry(&name)?;
         let out_path = dest.join(&rel);
         if let Some(parent) = out_path.parent() {

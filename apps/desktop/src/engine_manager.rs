@@ -510,7 +510,7 @@ pub fn ensure_cross_duckdb(app_data: &Path, os: &str, arch: &str) -> Result<Path
         if file.is_dir() {
             continue;
         }
-        let name = file.name().to_string();
+        let name = file.name().map_err(|e| e.to_string())?.into_owned();
         let leaf = name.rsplit('/').next().unwrap_or(&name);
         if leaf.eq_ignore_ascii_case("duckdb") || leaf.eq_ignore_ascii_case("duckdb.exe") {
             copy_atomic(&mut file, &target)?;
@@ -1001,7 +1001,7 @@ fn install_spec<F: FnMut(InstallProgress)>(
         let extract_all = s.id == "llamacpp";
         for i in 0..archive.len() {
             let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
-            let name = file.name().to_string();
+            let name = file.name().map_err(|e| e.to_string())?.into_owned();
             let leaf = name.rsplit('/').next().unwrap_or(&name).to_string();
             if file.is_dir() || leaf.is_empty() {
                 continue;

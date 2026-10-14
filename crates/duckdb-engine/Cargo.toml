@@ -226,7 +226,7 @@ parquet = { workspace = true }
 # build against chrono >= 0.4.42, which russh-sftp pins us above). arrow-flight 53
 # unifies with the workspace arrow pins; do_get RecordBatches stream to a Parquet
 # temp file + materialize via DuckDB read_parquet, like the ADBC source.
-arrow-flight = "60"
+arrow-flight = "59"
 tonic = { version = "0.14", features = ["transport", "tls-ring", "tls-native-roots"] }
 prost = "0.14"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }

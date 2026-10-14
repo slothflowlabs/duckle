@@ -147,7 +147,7 @@ pub(crate) fn ensure_uv(app_data: &Path) -> Result<PathBuf, String> {
             .map_err(|e| format!("open uv zip: {e}"))?;
         for i in 0..zip.len() {
             let mut f = zip.by_index(i).map_err(|e| e.to_string())?;
-            let name = f.name().rsplit('/').next().unwrap_or("").to_string();
+            let name = f.name().map_err(|e| e.to_string())?.rsplit('/').next().unwrap_or("").to_string();
             if name == "uv.exe" || name == "uv" {
                 let mut out = std::fs::File::create(&uv_exe).map_err(|e| e.to_string())?;
                 std::io::copy(&mut f, &mut out).map_err(|e| e.to_string())?;
@@ -296,7 +296,7 @@ fn ensure_fusion(app_data: &Path) -> Result<PathBuf, String> {
             .map_err(|e| format!("open Fusion zip: {e}"))?;
         for i in 0..zip.len() {
             let mut f = zip.by_index(i).map_err(|e| e.to_string())?;
-            let name = f.name().rsplit('/').next().unwrap_or("").to_string();
+            let name = f.name().map_err(|e| e.to_string())?.rsplit('/').next().unwrap_or("").to_string();
             if name == exe_name {
                 let mut out = std::fs::File::create(&dbt).map_err(|e| e.to_string())?;
                 std::io::copy(&mut f, &mut out).map_err(|e| e.to_string())?;
