@@ -55,7 +55,7 @@ ureq = { version = "2.10", default-features = false, features = ["tls", "json"] 
 ed25519-dalek = "3"
 # Self-extracting artifact payload (single-file build output). deflate-only
 # (drops aes/zstd/bzip2/lzma/xz); pulls flate2 rust_backend already in the lock.
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 # Teradata (ODBC via odbc-api) is enabled on gnu Linux and Windows, where a
 # dynamic libodbc driver manager is available to link and load. It is excluded
