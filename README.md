@@ -297,6 +297,12 @@ Delete the `engines/` folder if you ever want to force a fresh install.
 
 ---
 
+## ☁️ One-Click Deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/Duckle/)
+
+---
+
 ## Run your first pipeline
 
 A worked example using the bundled `samples/orders.csv` data.
