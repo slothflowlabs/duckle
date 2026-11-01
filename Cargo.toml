@@ -67,9 +67,9 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Arrow / columnar
 arrow = "59"
-arrow-array = "59"
+arrow-array = "58"
 arrow-schema = "59"
-parquet = "59"
+parquet = "58"
 
 # Storage
 rusqlite = { version = "0.40", features = ["bundled"] }
