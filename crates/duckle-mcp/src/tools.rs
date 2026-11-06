@@ -8,7 +8,9 @@
 use crate::catalog;
 use duckle_duckdb_engine::format::strip_bom;
 use duckle_duckdb_engine::trust::{declared_columns, looks_like_pii, structural_risks};
-use duckle_duckdb_engine::{compile_pipeline_sql, DuckdbEngine, PipelineDoc};
+use duckle_duckdb_engine::{
+    compile_pipeline_sql, is_secret_prop_key, url_passwords, DuckdbEngine, PipelineDoc,
+};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -209,7 +211,7 @@ pub fn list_tools() -> Value {
                 "directory": { "type": "string" }
             }, "required": ["directory"] })),
         tool("read_pipeline",
-            "Read and return a pipeline .json file.",
+            "Read and return a pipeline .json file. A typed secret is shown as *** (a URL keeps its login name and host); create_pipeline and update_pipeline refuse ***, so leave a secret out of a patch to keep it.",
             json!({ "type": "object", "properties": {
                 "path": { "type": "string" }
             }, "required": ["path"] })),
@@ -1001,6 +1003,7 @@ fn t_create_pipeline(args: &Value) -> Result<Value, String> {
         .get("pipeline")
         .filter(|v| v.is_object())
         .ok_or("missing 'pipeline' object")?;
+    refuse_masked_secret(pipeline)?;
     let do_validate = arg_bool(args, "validate", true);
     let overwrite = arg_bool(args, "overwrite", false);
 
@@ -1170,6 +1173,7 @@ fn t_update_pipeline(args: &Value) -> Result<Value, String> {
         .get("patch")
         .filter(|v| v.is_object())
         .ok_or("missing 'patch' object")?;
+    refuse_masked_secret(patch)?;
     let do_validate = arg_bool(args, "validate", true);
     let workspace = arg_str(args, "workspace");
     let id = arg_str(args, "id");
@@ -1465,7 +1469,10 @@ fn t_list_pipelines(args: &Value) -> Result<Value, String> {
 fn t_read_pipeline(args: &Value) -> Result<Value, String> {
     let path = arg_str(args, "path").ok_or("missing 'path'")?;
     let text = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
-    serde_json::from_str(strip_bom(&text)).map_err(|e| format!("parse {path}: {e}"))
+    let mut v: Value =
+        serde_json::from_str(strip_bom(&text)).map_err(|e| format!("parse {path}: {e}"))?;
+    mask_pipeline_secrets(&mut v);
+    Ok(v)
 }
 
 /// Backfill over MCP, so an agent can inspect and replay without a GUI.
@@ -1964,6 +1971,72 @@ fn first_plaintext_secret(v: &Value) -> Option<String> {
         }
         Value::Array(arr) => arr.iter().find_map(first_plaintext_secret),
         _ => None,
+    }
+}
+
+/// What read_pipeline shows in place of a secret. create_pipeline and
+/// update_pipeline refuse it, so the mask is never written over the real value.
+const SECRET_MASK: &str = "***";
+
+/// Hide the secrets in a file read_pipeline returns, by the engine's rules - the
+/// ones the desktop deploy refuses on: a value under a credential key unless it
+/// is empty or a whole `${...}` reference, and a password written into a URL
+/// under any key, keeping the login name and host readable. The whole document,
+/// because read_pipeline reads any JSON file, a saved connection too.
+fn mask_pipeline_secrets(v: &mut Value) {
+    match v {
+        Value::Object(obj) => {
+            for (key, val) in obj.iter_mut() {
+                match val {
+                    Value::String(s) if is_secret_prop_key(key) => {
+                        let t = s.trim();
+                        if t.is_empty() || (t.starts_with("${") && t.ends_with('}')) {
+                            continue;
+                        }
+                        *s = SECRET_MASK.to_string();
+                    }
+                    Value::String(s) => {
+                        let mut shown = s.clone();
+                        for password in url_passwords(s) {
+                            shown = shown
+                                .replace(&format!(":{password}@"), &format!(":{SECRET_MASK}@"));
+                        }
+                        *s = shown;
+                    }
+                    other => mask_pipeline_secrets(other),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(mask_pipeline_secrets),
+        _ => {}
+    }
+}
+
+/// The first field holding the mask read_pipeline shows.
+fn first_masked_secret(v: &Value) -> Option<String> {
+    match v {
+        Value::Object(obj) => obj.iter().find_map(|(key, val)| match val {
+            Value::String(s)
+                if (is_secret_prop_key(key) && s.trim() == SECRET_MASK)
+                    || url_passwords(s).contains(&SECRET_MASK) =>
+            {
+                Some(key.clone())
+            }
+            other => first_masked_secret(other),
+        }),
+        Value::Array(items) => items.iter().find_map(first_masked_secret),
+        _ => None,
+    }
+}
+
+/// Refuse to write a pipeline as read_pipeline showed it: the mask would
+/// replace the secret it stands for.
+fn refuse_masked_secret(v: &Value) -> Result<(), String> {
+    match first_masked_secret(v) {
+        Some(key) => Err(format!(
+            "field '{key}' holds {SECRET_MASK}, which read_pipeline shows in place of a secret; writing it would replace the real value, so nothing was written. Leave the field out of an update_pipeline patch to keep the value, or set a ${{ENV:KEY}} reference to change it"
+        )),
+        None => Ok(()),
     }
 }
 
@@ -2691,5 +2764,161 @@ mod repository_registration {
             "registering `new` destroyed the existing registrations: {ids:?}"
         );
         assert!(ids.contains(&"new"), "the new pipeline was not registered: {ids:?}");
+    }
+}
+
+#[cfg(test)]
+mod secret_masking {
+    use super::*;
+
+    fn write(path: &std::path::Path, v: &Value) {
+        std::fs::write(path, serde_json::to_string_pretty(v).unwrap()).unwrap();
+    }
+
+    fn node(id: &str, component: &str, props: Value) -> Value {
+        json!({ "id": id, "position": { "x": 0, "y": 0 },
+                "data": { "label": id, "componentId": component, "properties": props } })
+    }
+
+    /// A pipeline as an author saves it, with its secrets typed in.
+    fn typed_pipeline() -> Value {
+        json!({
+            "name": "orders",
+            "nodes": [
+                node("pg", "src.postgres", json!({
+                    "host": "db", "username": "app", "password": "Pw-typed-1",
+                    "connString": "host=db password=Cs-typed-2", "table": "orders"
+                })),
+                node("mg", "src.mongodb", json!({
+                    "uri": "mongodb://app:Uri-typed-3@db:27017/shop", "collection": "events"
+                })),
+                node("api", "src.rest", json!({
+                    "apiKey": "${ENV:API_KEY}", "tokenUrl": "https://auth.example.com/token"
+                }))
+            ],
+            "edges": []
+        })
+    }
+
+    fn node_in<'a>(p: &'a Value, id: &str) -> &'a Value {
+        p["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"] == id)
+            .unwrap()
+    }
+
+    /// What read_pipeline returns goes to the agent, and from there to a model
+    /// provider and its transcripts. list_connections masked a saved
+    /// connection's password, but a password typed into a pipeline came back
+    /// as typed.
+    #[test]
+    fn read_pipeline_hides_a_typed_secret_and_keeps_what_is_not_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("orders.json");
+        write(&path, &typed_pipeline());
+
+        let shown = t_read_pipeline(&json!({ "path": path.to_string_lossy() })).unwrap();
+
+        let text = shown.to_string();
+        for typed in ["Pw-typed-1", "Cs-typed-2", "Uri-typed-3"] {
+            assert!(
+                !text.contains(typed),
+                "read_pipeline returned {typed}: {text}"
+            );
+        }
+        let props = |id: &str| node_in(&shown, id)["data"]["properties"].clone();
+        assert_eq!(props("pg")["password"], "***");
+        assert_eq!(props("pg")["connString"], "***");
+        assert_eq!(
+            props("mg")["uri"],
+            "mongodb://app:***@db:27017/shop",
+            "only the password is hidden, so the agent still sees who logs in where"
+        );
+        assert_eq!(props("pg")["host"], "db");
+        assert_eq!(
+            props("api")["apiKey"],
+            "${ENV:API_KEY}",
+            "a reference is not the secret, and it names what the agent must set"
+        );
+        assert_eq!(props("api")["tokenUrl"], "https://auth.example.com/token");
+    }
+
+    /// read_pipeline reads any JSON file, so it also reached the connection
+    /// files list_connections masks.
+    #[test]
+    fn read_pipeline_masks_a_connection_file_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("c1.json");
+        write(
+            &path,
+            &json!({ "kind": "postgres", "host": "db", "password": "Conn-typed-4" }),
+        );
+
+        let shown = t_read_pipeline(&json!({ "path": path.to_string_lossy() })).unwrap();
+
+        assert_eq!(shown["password"], "***", "{shown}");
+        assert_eq!(shown["host"], "db");
+    }
+
+    /// The mask must never reach the file. update_pipeline writes what it is
+    /// sent, so a node sent back as read_pipeline showed it would put "***"
+    /// where the real password was.
+    #[test]
+    fn update_pipeline_refuses_to_write_a_masked_secret_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("orders.json");
+        write(&path, &typed_pipeline());
+        let p = path.to_string_lossy().to_string();
+        let shown = t_read_pipeline(&json!({ "path": p })).unwrap();
+
+        // `pg` carries masked credential fields, `mg` a masked URL password.
+        for id in ["pg", "mg"] {
+            let mut sent = node_in(&shown, id).clone();
+            sent["data"]["label"] = json!("renamed");
+            let err = t_update_pipeline(
+                &json!({ "path": p, "patch": { "nodes": [sent] }, "validate": false }),
+            )
+            .expect_err("the masked node was written");
+            assert!(err.contains("***"), "{err}");
+        }
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        for real in ["Pw-typed-1", "Uri-typed-3"] {
+            assert!(on_disk.contains(real), "{real} was replaced: {on_disk}");
+        }
+
+        // A patch that leaves the secret out keeps it.
+        t_update_pipeline(&json!({ "path": p, "validate": false, "patch": {
+            "nodes": [{ "id": "pg", "data": { "properties": { "table": "orders_v2" } } }]
+        } }))
+        .unwrap();
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains("orders_v2") && on_disk.contains("Pw-typed-1"),
+            "{on_disk}"
+        );
+    }
+
+    /// create_pipeline with `overwrite` replaces the file whole, so it is the
+    /// other way a pipeline as shown could be written over the real one.
+    #[test]
+    fn create_pipeline_refuses_to_write_a_masked_secret() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("orders.json");
+        write(&path, &typed_pipeline());
+        let shown = t_read_pipeline(&json!({ "path": path.to_string_lossy() })).unwrap();
+
+        let err = t_create_pipeline(&json!({
+            "name": "orders", "directory": tmp.path().to_string_lossy(), "pipeline": shown,
+            "overwrite": true, "validate": false
+        }))
+        .expect_err("the masked pipeline was written");
+        assert!(err.contains("***"), "{err}");
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains("Pw-typed-1"),
+            "the real password was replaced: {on_disk}"
+        );
     }
 }

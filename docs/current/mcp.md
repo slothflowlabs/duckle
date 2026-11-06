@@ -82,7 +82,7 @@ Add to the client's `mcpServers` config:
 | `validate_pipeline` | Compile a pipeline to SQL without running it. Returns per-stage SQL or a structured error. |
 | `run_pipeline` | Run a pipeline headlessly. Returns per-node status, row counts, errors and a small result preview. |
 | `list_pipelines` | List pipeline `.json` files in a directory with node/edge counts. |
-| `read_pipeline` | Read and return a pipeline file. |
+| `read_pipeline` | Read and return a pipeline file. A typed secret is shown as `***` (a URL keeps its login name and host); `create_pipeline` and `update_pipeline` refuse to write `***` back. |
 | `read_run_logs` | Read the tail of a pipeline's NDJSON run log (component-level events). |
 | `backfill_list` | List the saved state a pipeline resumes from - watermarks, snapshot ids, Kafka offsets, spool positions, tumbling-window buffers. Each says whether it can be set by hand. |
 | `backfill_set` | Set a watermark or snapshot id. Refused when the node holds a different kind of state. |
