@@ -67,6 +67,34 @@ pub const SECRET_NEEDLES: [&str; 19] = [
     "sas", "credential",
 ];
 
+/// The passwords written into URLs in `text`, as in `mongodb://user:PASSWORD@host`.
+///
+/// The key rule cannot see these: the key is `uri` or `url`, and those also name a
+/// LanceDB dataset path or a public endpoint. Only a URL's authority counts, so an
+/// `@` in its path is not a login; the last `@` ends the login, so a password with a
+/// raw `@` in it is still found whole. A password written as `${...}` is a
+/// reference, not the secret, and is left out.
+pub fn url_passwords(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("://") {
+        let after = &rest[at + 3..];
+        let end = after
+            .find(|c: char| matches!(c, '/' | '?' | '#' | '\'' | '"') || c.is_whitespace())
+            .unwrap_or(after.len());
+        let authority = &after[..end];
+        if let Some(login_end) = authority.rfind('@') {
+            if let Some((_, password)) = authority[..login_end].split_once(':') {
+                if !password.is_empty() && !(password.starts_with("${") && password.ends_with('}')) {
+                    out.push(password);
+                }
+            }
+        }
+        rest = &after[end..];
+    }
+    out
+}
+
 /// Every secret-keyed property in a pipeline whose value is a literal rather than a
 /// placeholder, named as `node label / property key`.
 ///
@@ -97,11 +125,16 @@ pub fn literal_secrets(doc: &serde_json::Value) -> Vec<String> {
             continue;
         };
         for (key, value) in props {
-            if !is_secret_prop_key(key) {
-                continue;
-            }
             let Some(text) = value.as_str() else { continue };
             let text = text.trim();
+            if !is_secret_prop_key(key) {
+                // A login written into a URL is a credential under any key: a MongoDB or
+                // ADBC `uri`, whose key also names a dataset path elsewhere.
+                if !url_passwords(text).is_empty() {
+                    out.push(format!("{label} / {key}"));
+                }
+                continue;
+            }
             // A placeholder is a reference to a secret, not the secret. `${ENV:PGPASS}`,
             // `${context.pw}` and a saved-connection ref all pass.
             if text.is_empty() || (text.starts_with("${") && text.ends_with('}')) {
@@ -216,21 +249,30 @@ pub(crate) fn collect_secrets(doc: &PipelineDoc, workspace: Option<&std::path::P
     for node in &doc.nodes {
         if let Some(JsonValue::Object(props)) = node.data.properties.as_ref() {
             for (key, val) in props {
-                if is_secret_prop_key(key) {
+                if !is_secret_prop_key(key) {
+                    // Only the password of a URL, so an error still says which host it
+                    // could not reach: mongodb://app:${DUCKLE_URI_PASSWORD}@db.
                     if let Some(s) = val.as_str() {
-                        // Any non-empty value under a secret key is a
-                        // credential and must be redacted regardless of length
-                        // (a short password is still a password). Only skip an
-                        // empty/whitespace value - redacting "" would splice
-                        // the placeholder across the whole SQL - and `${...}`
-                        // env placeholders, which are already safe to share.
-                        let t = s.trim();
-                        if !t.is_empty() && !t.starts_with("${") {
+                        for password in url_passwords(s) {
                             out.push(Secret {
-                                value: s.to_string(),
-                                placeholder: secret_placeholder(key),
+                                value: password.to_string(),
+                                placeholder: secret_placeholder(&format!("{key}Password")),
                             });
                         }
+                    }
+                } else if let Some(s) = val.as_str() {
+                    // Any non-empty value under a secret key is a
+                    // credential and must be redacted regardless of length
+                    // (a short password is still a password). Only skip an
+                    // empty/whitespace value - redacting "" would splice
+                    // the placeholder across the whole SQL - and `${...}`
+                    // env placeholders, which are already safe to share.
+                    let t = s.trim();
+                    if !t.is_empty() && !t.starts_with("${") {
+                        out.push(Secret {
+                            value: s.to_string(),
+                            placeholder: secret_placeholder(key),
+                        });
                     }
                 }
             }
@@ -1745,6 +1787,54 @@ mod tests {
         );
         // Written as a reference it is not the secret, and still packages.
         assert!(literal_secrets(&doc("${ENV:PG_DSN}")).is_empty());
+    }
+
+    /// A login written into a URL, as a MongoDB, ADBC or AMQP URI carries one. Its key
+    /// is `uri` or `url`, which also name a dataset path or a public endpoint, so the
+    /// key rule cannot see it and the value has to say.
+    #[test]
+    fn a_password_written_into_a_url_is_found_by_value() {
+        assert_eq!(super::url_passwords("mongodb://app:s3cret@h1:27017,h2:27017/db?replicaSet=rs0"), vec!["s3cret"]);
+        assert_eq!(super::url_passwords("mongodb+srv://app:p%40ss@cluster0.example.net/db"), vec!["p%40ss"]);
+        assert_eq!(super::url_passwords("postgresql://a:pw1@h/db, amqp://b:pw2@k"), vec!["pw1", "pw2"]);
+        for none in [
+            "mongodb://app@db:27017",
+            "mongodb://app:${ENV:MONGO_PW}@db:27017",
+            "mongodb://app:@db:27017",
+            "https://api.example.com/v1/users/me@example.com",
+            "/data/lance/orders.lance",
+            "db://my-db",
+        ] {
+            assert!(super::url_passwords(none).is_empty(), "{none} carries no password");
+        }
+    }
+
+    /// Deploy refuses it the way it refuses a typed password, under whatever key.
+    #[test]
+    fn a_password_in_a_url_is_refused_at_deploy() {
+        let doc = |uri: &str| {
+            serde_json::json!({ "nodes": [{ "id": "m", "data": { "label": "Mongo",
+                "properties": { "uri": uri, "collection": "orders" } } }] })
+        };
+        assert_eq!(literal_secrets(&doc("mongodb://app:s3cret@db:27017/shop")), vec!["Mongo / uri".to_string()]);
+        assert!(literal_secrets(&doc("mongodb://app:${ENV:MONGO_PW}@db:27017/shop")).is_empty());
+        assert!(literal_secrets(&doc("/data/lance/orders.lance")).is_empty());
+    }
+
+    /// And a run writes down the host but not the password.
+    #[test]
+    fn a_password_in_a_url_is_scrubbed_from_run_output() {
+        let doc: crate::PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [{ "id": "m", "position": { "x": 0, "y": 0 }, "data": { "label": "Mongo",
+                "componentId": "src.mongodb", "properties": { "uri": "mongodb://app:s3cret@db:27017/shop" } } }],
+            "edges": []
+        }))
+        .unwrap();
+        let said = super::redact_secret_values(
+            "could not reach mongodb://app:s3cret@db:27017/shop",
+            &super::collect_secrets(&doc, None),
+        );
+        assert_eq!(said, "could not reach mongodb://app:${DUCKLE_URI_PASSWORD}@db:27017/shop");
     }
 
     /// The shapes that must not panic or report: no nodes, no data, no properties.

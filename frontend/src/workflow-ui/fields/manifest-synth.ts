@@ -5691,7 +5691,7 @@ function synthNoSqlSource(comp: ComponentDef): ComponentManifest {
             {
                 label: 'MongoDB connection',
                 fields: [
-                    { key: 'uri', label: 'Connection URI', kind: 'text', required: true, placeholder: 'mongodb://user:pass@host:27017' },
+                    { key: 'uri', label: 'Connection URI', kind: 'text', required: true, placeholder: 'mongodb://user:pass@host:27017', secret: true },
                     { key: 'database', label: 'Database', kind: 'text', required: true },
                     { key: 'collection', label: 'Collection', kind: 'text', required: true },
                 ],
@@ -5839,7 +5839,7 @@ function synthNoSqlSink(comp: ComponentDef): ComponentManifest {
             {
                 label: 'MongoDB connection',
                 fields: [
-                    { key: 'uri', label: 'Connection URI', kind: 'text', required: true, placeholder: 'mongodb://user:pass@host:27017' },
+                    { key: 'uri', label: 'Connection URI', kind: 'text', required: true, placeholder: 'mongodb://user:pass@host:27017', secret: true },
                     { key: 'database', label: 'Database', kind: 'text', required: true },
                     { key: 'collection', label: 'Collection', kind: 'text', required: true },
                 ],

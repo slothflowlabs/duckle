@@ -1012,9 +1012,22 @@ fn every_field_the_form_calls_a_secret_is_one_the_redactor_knows() {
         marked.len()
     );
 
+    // `uri` is marked on the MongoDB nodes, whose URI carries their login. The same key is a
+    // LanceDB dataset path, so the engine finds that login by value (`url_passwords`) rather
+    // than by key. The exception has to be earned: a password written into one is refused.
+    const BY_VALUE: &[&str] = &["uri"];
+    for key in BY_VALUE {
+        let mut props = serde_json::Map::new();
+        props.insert(key.to_string(), serde_json::json!("mongodb://app:s3cret@db:27017/shop"));
+        let doc = serde_json::json!({ "nodes": [{ "id": "n", "data": { "label": "n", "properties": props } }] });
+        assert!(
+            !duckle_duckdb_engine::literal_secrets(&doc).is_empty(),
+            "{key} is excused from the key rule, but a password written into it is not caught by value"
+        );
+    }
     let unprotected: Vec<&String> = marked
         .iter()
-        .filter(|k| !duckle_duckdb_engine::is_secret_prop_key(k))
+        .filter(|k| !duckle_duckdb_engine::is_secret_prop_key(k) && !BY_VALUE.contains(&k.as_str()))
         .collect();
     assert!(
         unprotected.is_empty(),

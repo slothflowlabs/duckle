@@ -16,7 +16,7 @@ use duckle_duckdb_engine::context::{self, substitute_deep};
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::Engine as _;
-use duckle_duckdb_engine::{is_secret_prop_key, PipelineDoc, SECRET_NEEDLES};
+use duckle_duckdb_engine::{is_secret_prop_key, url_passwords, PipelineDoc, SECRET_NEEDLES};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -285,6 +285,17 @@ fn collect_node_secrets(
             }
         }
         JsonValue::String(s) => {
+            // S3: a password written into a URL, under a key S1 does not call a
+            // credential (S1 has already taken the whole value of one that is).
+            if !parent_key.is_some_and(is_secret_key) {
+                for password in url_passwords(s) {
+                    out.push(Detected {
+                        value: password.to_string(),
+                        key: format!("{}_PASSWORD", parent_key.map(key_namer).unwrap_or_else(|| "URL".to_string())),
+                        node_id: node_id.to_string(),
+                    });
+                }
+            }
             // S2: any string value equal to a captured secret context var.
             if s.len() >= SECRET_MIN_LEN && secret_values.iter().any(|sv| sv == s) {
                 let key = parent_key.map(key_namer).filter(|k| !k.is_empty()).unwrap_or_else(|| "SECRET".to_string());
@@ -1183,6 +1194,26 @@ mod tests {
         redact_doc(&mut doc, &replacements);
         let bundled = serde_json::to_string(&doc).unwrap();
         assert!(!bundled.contains("correct-horse-battery"), "bundled as typed: {bundled}");
+    }
+
+    /// A password written into a URL is bundled no more than one in a password field.
+    /// It is replaced in place, so the bundle still knows which host to reach.
+    #[test]
+    fn a_password_in_a_url_is_not_left_in_the_bundled_pipeline() {
+        let mut doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [{
+                "id": "m", "position": { "x": 0, "y": 0 },
+                "data": { "label": "m", "componentId": "src.mongodb",
+                          "properties": { "uri": "mongodb://app:s3cret-pw@db:27017/shop" } }
+            }],
+            "edges": []
+        }))
+        .unwrap();
+        let (_, replacements) = build_key_map(&doc, &[]);
+        redact_doc(&mut doc, &replacements);
+        let bundled = serde_json::to_string(&doc).unwrap();
+        assert!(!bundled.contains("s3cret-pw"), "bundled as typed: {bundled}");
+        assert!(bundled.contains("mongodb://app:${ENV:URI_PASSWORD}@db:27017/shop"), "{bundled}");
     }
     use super::*;
     use sha2::{Digest, Sha256};

@@ -14759,7 +14759,8 @@
                 "label": "Connection URI",
                 "kind": "text",
                 "required": true,
-                "placeholder": "mongodb://user:pass@host:27017"
+                "placeholder": "mongodb://user:pass@host:27017",
+                "secret": true
               },
               {
                 "key": "database",
@@ -40636,7 +40637,8 @@
                 "label": "Connection URI",
                 "kind": "text",
                 "required": true,
-                "placeholder": "mongodb://user:pass@host:27017"
+                "placeholder": "mongodb://user:pass@host:27017",
+                "secret": true
               },
               {
                 "key": "database",
