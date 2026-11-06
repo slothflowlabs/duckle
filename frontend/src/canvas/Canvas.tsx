@@ -72,6 +72,9 @@ export type DropPosition = { x: number; y: number };
 
 /** Whether a key press is meant for the canvas: focus on it or on nothing, never in a text field. */
 function canvasHasKeyboard(wrapper: HTMLElement | null): boolean {
+    // Another editor tab hides the canvas without unmounting it, and a quick-add
+    // opened there sat invisible until the canvas came back.
+    if (!wrapper || getComputedStyle(wrapper).visibility !== 'visible') return false;
     const ae = document.activeElement as HTMLElement | null;
     const inField =
         !!ae &&
