@@ -433,6 +433,8 @@ export default function App() {
     const [workspaceLoadError, setWorkspaceLoadError] = useState<string | null>(null);
     // Bumped by "Reload from disk" to re-trigger the load effect for the same path (#92).
     const [reloadNonce, setReloadNonce] = useState(0);
+    // Bumped once a load's files are on screen; undo starts over from them.
+    const [loadedNonce, setLoadedNonce] = useState(0);
     // True while a brand-new workspace is being seeded with sample pipelines +
     // generated data (Tauri only), so we can show a blocking init overlay.
     const [seeding, setSeeding] = useState(false);
@@ -625,6 +627,9 @@ export default function App() {
                     }
                     if (state.corruptFiles?.length) setCorruptFiles(state.corruptFiles);
                 }
+                // In the same render as the files, so the undo history starts from
+                // them rather than taking their arrival for an edit.
+                setLoadedNonce(n => n + 1);
                 setWorkspaceReady(true);
                 // #307: the palette learns what this workspace installs. Not
                 // awaited and never fatal - an editor that would not open
@@ -1063,9 +1068,12 @@ export default function App() {
         [activeJobId, markDirty],
     );
     const { undo, redo, noteEdit } = useUndoRedo(
-        // A reload re-reads the files (after a git pull, say), so undo must not
-        // reach back to what was on the canvas before it.
-        `${workspacePathState ?? ''}#${reloadNonce}`,
+        // Undo starts over when a load's files reach the screen, not when the load
+        // begins. Started at the in-memory starter, the history took the files'
+        // arrival for an edit, so Ctrl+Z right after opening put the starter back,
+        // and autosave wrote it over the pipeline. A reload (after a git pull,
+        // say) starts it over the same way, so undo cannot reach back before it.
+        `${workspacePathState ?? ''}#${loadedNonce}`,
         activeJobId,
         activePipeline as unknown as CanvasSnapshot,
         applyPipelineSnapshot,
