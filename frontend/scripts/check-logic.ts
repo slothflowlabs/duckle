@@ -26,6 +26,7 @@ import { resolveOutputSchema } from '../src/schema-resolve';
 import { placeTip } from '../src/tour-place';
 import { pipelinesUsingConnections } from '../src/connection-usage';
 import { arrange } from '../src/canvas/arrange';
+import { pipelineDocument } from '../src/pipeline-doc';
 import { getManifest } from '../src/workflow-ui/fields/component-manifests';
 import { caseProblem, cleaned, dummyInput, guessGenerator, listOf, newCase, newSuite } from '../src/test-cases';
 import {
@@ -1567,6 +1568,133 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     check('undo: adding a note is a step', steps(withNote(null), withNote('')), 'undo did not take the note away');
     check('undo: writing in a note is a step', steps(withNote(''), withNote('check the VAT rule')), 'undo did not restore the text');
     check('undo: moving a note is a step', steps(withNote('x', 0), withNote('x', 200)), 'undo did not move the note back');
+}
+
+// ---------------------------------------------------------------------------
+// Generated pipeline documentation, as Talend's "Generate Doc as HTML".
+//
+// One page a person can read without Duckle: every step in the order it runs,
+// what it is set to, the columns it produces, the notes, and what it needs
+// from outside. It is meant to be shared, so nothing secret goes into it: a
+// value under a credential key, an auth header, a password inside a URL or a
+// connection string, a secret context variable or parameter, or any setting
+// of a saved connection beyond its name and kind. A secret written as a
+// reference, ${ENV:NAME}, says where it comes from and stays.
+// ---------------------------------------------------------------------------
+{
+    const step = (id: string, componentId: string, label: string, properties: Record<string, unknown>, x: number, extra: Record<string, unknown> = {}) =>
+        ({ id, position: { x, y: 0 }, data: { label, componentId, properties, ...extra } }) as unknown as Node<DuckleNodeData>;
+    const nodes = [
+        step('k1', 'snk.parquet', 'Write paid', { path: 'out/${api_token}/paid.parquet', compression: 'snappy', compressionLevel: 9 }, 900),
+        step('s1', 'src.csv', 'Read orders', { path: 'data/orders.csv' }, 0, { schema: [{ name: 'order_id', type: 'int64', nullable: false }] }),
+        step('t1', 'xf.filter', 'Keep paid', { predicate: "status = 'paid' AND note <> '<b>x</b>' AND code = '${ref_code}'", apiSecret: 'undeclared-secret-222' }, 300),
+        step('r1', 'src.rest', 'Pull rates', {
+            url: 'https://etl:s3cr3t-in-url@api.example.test/rates?day=${batch_date}',
+            authToken: 'tok-literal-123',
+            headers: [{ key: 'Authorization', value: 'Bearer hdr-secret-456' }, { key: 'Accept', value: 'application/json' }],
+            connectionRef: 'c_api',
+        }, 0),
+        step('p1', 'src.postgres', 'Load dims', {
+            connectionRef: 'c_pg',
+            password: '${ENV:PG_PASSWORD}',
+            connString: 'host=db user=etl password=connstr-pw-789',
+            tableName: 'dims',
+        }, 0, { disabled: true }),
+    ];
+    const edges = [
+        { id: 'e1', source: 's1', target: 't1', data: { connectionType: 'main' } },
+        { id: 'e2', source: 't1', target: 'k1', data: { connectionType: 'main' } },
+    ];
+    const repo = [
+        { id: 'p', name: 'orders & refunds', type: 'pipeline', parentId: 'root' },
+        { id: 'c_api', name: 'rates api', type: 'connection', parentId: 'root', payload: { kind: 'rest', token: 'conn-token-000' } },
+        { id: 'c_pg', name: 'warehouse', type: 'connection', parentId: 'root', payload: { kind: 'postgres', host: 'db.internal', password: 'conn-pass-321' } },
+        {
+            id: 'ctx',
+            name: 'prod',
+            type: 'context',
+            parentId: 'root',
+            payload: {
+                variables: [
+                    { key: 'batch_date', value: '2026-01-01' },
+                    { key: 'api_token', value: 'ctx-secret-654', secret: true },
+                    { key: 'ref_code', value: 'ctx-secret-777', secret: true },
+                ],
+            },
+        },
+    ] as unknown as RepoItem[];
+    const html = pipelineDocument({
+        name: 'orders & refunds',
+        pipeline: {
+            nodes,
+            edges,
+            notes: [{ id: 'note1', type: 'note', position: { x: 0, y: 300 }, data: { text: 'Paid orders only; ask finance first.' } }],
+            parameters: {
+                region: { type: 'string', default: 'eu', description: 'Which region to load' },
+                dbpass: { type: 'secret', default: 'param-secret-111' },
+            },
+        },
+        repo,
+        contextId: 'ctx',
+        generatedAt: new Date('2026-11-06T08:00:00Z'),
+    });
+    const has = (s: string) => html.includes(s);
+    check('doc: named in the title and the heading, escaped', has('<title>orders &amp; refunds') && has('<h1>orders &amp; refunds</h1>'), html.slice(0, 300));
+    // A step's own section: its name also appears in the links of the steps around it.
+    const section = (id: string) => {
+        const from = html.indexOf(`id="step-${id}"`);
+        const to = html.indexOf('<section', from + 1);
+        return from < 0 ? '' : html.slice(from, to < 0 ? undefined : to);
+    };
+    const at = (id: string) => html.indexOf(`id="step-${id}"`);
+    check(
+        'doc: steps are listed in the order they run',
+        at('s1') >= 0 && at('s1') < at('t1') && at('t1') < at('k1'),
+        JSON.stringify([at('s1'), at('t1'), at('k1')]),
+    );
+    const csvStep = section('s1');
+    check('doc: a setting shows under its form label', csvStep.includes('>Path<') && csvStep.includes('data/orders.csv'), csvStep.slice(0, 400));
+    check('doc: a step lists the columns it produces', csvStep.includes('order_id') && csvStep.includes('int64'), csvStep.slice(0, 400));
+    check('doc: what a pipeline says is escaped, not run', has('&lt;b&gt;x&lt;/b&gt;') && !has('<b>x</b>'), 'raw HTML from a property reached the page');
+    for (const secret of ['tok-literal-123', 'hdr-secret-456', 's3cr3t-in-url', 'connstr-pw-789', 'undeclared-secret-222', 'conn-token-000', 'conn-pass-321', 'db.internal', 'ctx-secret-654', 'ctx-secret-777', 'param-secret-111']) {
+        check(`doc: ${secret} stays out of the page`, !has(secret), 'a secret reached a page meant to be shared');
+    }
+    check('doc: a secret given as a reference says where it comes from', has('${ENV:PG_PASSWORD}'), 'the reference was hidden too');
+    check('doc: a header that is not a credential stays readable', has('application/json'), 'the Accept header was withheld');
+    check('doc: a setting the form hides is not shown', !has('Compression level'), 'a stale compressionLevel was documented under snappy');
+    check('doc: connections are named, with their kind', has('rates api') && has('warehouse') && has('postgres'), 'connection names or kinds missing');
+    check('doc: a context variable it reads is listed with its value', has('batch_date') && has('2026-01-01'), 'batch_date missing');
+    check('doc: a secret context variable is named but not shown', has('api_token'), 'api_token missing');
+    check('doc: declared parameters are described', has('region') && has('Which region to load') && has('dbpass'), 'parameters missing');
+    check('doc: the notes are on the page', has('Paid orders only; ask finance first.'), 'the note is missing');
+    const dims = section('p1');
+    check('doc: a disabled step says so', /disabled/i.test(dims), dims.slice(0, 300));
+    check('doc: an enabled step does not', !/disabled/i.test(section('s1')), section('s1').slice(0, 300));
+    check('doc: the diagram draws every step', (html.match(/<rect class="node/g) ?? []).length === 5 && has('<svg'), String((html.match(/<rect class="node/g) ?? []).length));
+    check('doc: nothing renders as undefined', !/undefined|\[object Object\]|NaN/.test(html), (html.match(/.{40}(undefined|\[object Object\]|NaN).{40}/) ?? [''])[0]);
+}
+
+// A pipeline file can be written by hand, by an agent or a script: a step with no
+// label, a note with no text. Its documentation still comes out, and still reads.
+{
+    let page = '';
+    let threw = '';
+    try {
+        page = pipelineDocument({
+            name: 'handwritten',
+            pipeline: {
+                nodes: [{ id: 'only', position: { x: 0, y: 0 }, data: { componentId: 'xf.filter', properties: {} } }],
+                edges: [],
+                notes: [{ id: 'n', type: 'note', position: { x: 0, y: 200 }, data: {} }],
+            },
+            repo: [],
+            generatedAt: new Date('2026-11-06T08:00:00Z'),
+        });
+    } catch (e) {
+        threw = String(e);
+    }
+    check('doc: a hand-written pipeline still documents', !threw && page.includes('id="step-only"'), threw || page.slice(0, 200));
+    check('doc: a step with no label goes by its id', page.includes('1. only') && !/undefined/.test(page), (page.match(/.{40}undefined.{40}/) ?? [''])[0]);
 }
 
 if (failures.length) {

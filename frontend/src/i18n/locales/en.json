@@ -49,6 +49,8 @@
     "copySqlDesc": "Compile to DuckDB SQL, copy to clipboard",
     "exportSql": "Export as .sql",
     "exportSqlDesc": "Download the compiled SQL as a file",
+    "generateDocs": "Generate documentation",
+    "generateDocsDesc": "An HTML page with every step, setting and column",
     "exportJson": "Export as .duckle.json",
     "exportJsonDesc": "Download nodes + edges as portable JSON",
     "importJson": "Import .duckle.json...",

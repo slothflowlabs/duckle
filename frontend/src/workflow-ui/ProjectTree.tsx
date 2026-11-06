@@ -51,6 +51,7 @@ type Props = {
     onSchedulePipeline: (id: string) => void;
     onBackfillPipeline: (id: string) => void;
     onBuildPipeline: (id: string) => void;
+    onDocumentPipeline: (id: string) => void;
     /** Undefined in the web editor: deploying goes through a desktop-only command. */
     onDeployPipeline?: (id: string) => void;
 };
@@ -119,6 +120,7 @@ export default function ProjectTree(props: Props) {
         onSchedulePipeline,
         onBackfillPipeline,
         onBuildPipeline,
+        onDocumentPipeline,
         onDeployPipeline,
     } = props;
 
@@ -357,6 +359,13 @@ export default function ProjectTree(props: Props) {
                 label: 'Build pipeline…',
                 icon: <Package size={ICON_SIZE} />,
                 onClick: () => onBuildPipeline(item.id),
+            });
+            items.push({
+                kind: 'item',
+                key: 'document',
+                label: 'Generate documentation…',
+                icon: <FileText size={ICON_SIZE} />,
+                onClick: () => onDocumentPipeline(item.id),
             });
             if (onDeployPipeline) {
                 items.push({

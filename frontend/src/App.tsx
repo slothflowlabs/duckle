@@ -118,6 +118,7 @@ import type {
 import { getDefaults, getManifest } from './workflow-ui/fields/component-manifests';
 import type { DuckleNodeData, NoteData } from './pipeline-types';
 import { pipelinesUsingConnections } from './connection-usage';
+import { pipelineDocument } from './pipeline-doc';
 import type { DropPosition, NodeAction, PaneAction } from './canvas/Canvas';
 import { useUndoRedo, type CanvasSnapshot } from './useUndoRedo';
 import type { RepoItem } from './repo-types';
@@ -1757,6 +1758,25 @@ export default function App() {
         );
     }, [nodes, edges, notes, activeJobName]);
 
+    // Talend's "Generate Doc as HTML": one page describing a pipeline, saved
+    // where the user picks, or downloaded in the web editor.
+    const handleDocumentPipeline = useCallback(
+        async (id: string) => {
+            const item = repo.find(i => i.id === id && i.type === 'pipeline');
+            const pipeline = pipelineData[id];
+            if (!item || !pipeline) return;
+            const html = pipelineDocument({
+                name: item.name,
+                pipeline,
+                repo,
+                contextId: activeContextId,
+                generatedAt: new Date(),
+            });
+            await saveTextFile(`${item.name}-documentation.html`, html, [{ name: 'Web page', extensions: ['html'] }]);
+        },
+        [repo, pipelineData, activeContextId],
+    );
+
     const uniquePipelineName = useCallback(
         (base: string): string => {
             const taken = new Set(repo.filter(r => r.type === 'pipeline').map(r => r.name));
@@ -2838,6 +2858,7 @@ export default function App() {
                     onSchedulePipeline={handleSchedulePipeline}
                     onBackfillPipeline={handleBackfillPipeline}
                     onBuildPipeline={handleBuildPipeline}
+                    onDocumentPipeline={id => void handleDocumentPipeline(id)}
                     onDeployPipeline={isInTauri() ? setDeployModalPipelineId : undefined}
                 />
                 <section className="canvas-shell" data-tour="canvas">
@@ -2861,6 +2882,7 @@ export default function App() {
                             isInTauri() ? () => setDeployModalPipelineId(activeJobId) : undefined
                         }
                         onExportSqlFile={handleExportSql}
+                        onGenerateDocs={() => void handleDocumentPipeline(activeJobId)}
                         onImportJson={handleImportJson}
                         onImportJob={isInTauri() ? handleImportJob : undefined}
                         onGoHome={() => setShowHome(true)}

@@ -5,6 +5,7 @@ import {
     Clipboard,
     Download,
     FileCode,
+    FileText,
     LayoutGrid,
     MoreHorizontal,
     Play,
@@ -44,6 +45,7 @@ type Props = {
     /** Undefined in the web editor: deploying goes through a desktop-only command. */
     onDeploy?: () => void;
     onExportSqlFile: () => void;
+    onGenerateDocs: () => void;
     onImportJson: () => void;
     /** Undefined in the web editor, where the engine-side translator is unreachable. */
     onImportJob?: () => void;
@@ -69,6 +71,7 @@ export default function EditorHeader({
     onExportJson,
     onDeploy,
     onExportSqlFile,
+    onGenerateDocs,
     onImportJson,
     onImportJob,
     onGoHome,
@@ -270,6 +273,20 @@ export default function EditorHeader({
                                     <div>{t('header.exportSql')}</div>
                                     <div className="toolbar-more-desc">
                                         {t('header.exportSqlDesc')}
+                                    </div>
+                                </div>
+                            </button>
+                            <button
+                                type="button"
+                                role="menuitem"
+                                className="toolbar-more-item"
+                                onClick={fire(onGenerateDocs)}
+                            >
+                                <FileText size={13} />
+                                <div>
+                                    <div>{t('header.generateDocs')}</div>
+                                    <div className="toolbar-more-desc">
+                                        {t('header.generateDocsDesc')}
                                     </div>
                                 </div>
                             </button>

@@ -10,7 +10,7 @@ type Props<T> = {
 
 // A field holds a secret when explicitly flagged, or by the long-standing
 // convention that password / token / key inputs use the bullet placeholder.
-function isSecretField(field: Field): boolean {
+export function isSecretField(field: Field): boolean {
     return field.secret === true || field.placeholder === '••••••••';
 }
 

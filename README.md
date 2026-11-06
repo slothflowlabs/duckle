@@ -333,6 +333,7 @@ A worked example using the bundled `samples/orders.csv` data.
 
 - Add a **Group By** before the sink to aggregate. Re-run. Sub-second on small data.
 - Right-click the canvas to **Add note** for whoever reads the pipeline next, or turn on **Snap to grid**. Select several nodes and right-click one to align or distribute them.
+- Right-click the pipeline in the project tree and choose **Generate documentation…** for one HTML page with every step, setting and column, in the order they run. Credentials are left out, so the page can be shared.
 - Cancel mid-run with the **Stop** button - the DuckDB process is killed cleanly.
 - Save your work: **Cmd/Ctrl-S** writes a JSON pipeline file to your workspace folder.
 

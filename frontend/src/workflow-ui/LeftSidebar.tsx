@@ -30,6 +30,7 @@ type Props = {
     onSchedulePipeline: (id: string) => void;
     onBackfillPipeline: (id: string) => void;
     onBuildPipeline: (id: string) => void;
+    onDocumentPipeline: (id: string) => void;
     onDeployPipeline?: (id: string) => void;
 };
 
@@ -55,6 +56,7 @@ export default function LeftSidebar({
     onSchedulePipeline,
     onBackfillPipeline,
     onBuildPipeline,
+    onDocumentPipeline,
     onDeployPipeline,
 }: Props) {
     const { t } = useTranslation();
@@ -110,6 +112,7 @@ export default function LeftSidebar({
                         onSchedulePipeline={onSchedulePipeline}
                         onBackfillPipeline={onBackfillPipeline}
                         onBuildPipeline={onBuildPipeline}
+                        onDocumentPipeline={onDocumentPipeline}
                         onDeployPipeline={onDeployPipeline}
                     />
                 )}
