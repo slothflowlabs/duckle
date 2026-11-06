@@ -377,6 +377,7 @@ export default function App() {
         [],
     );
     const [renameRequest, setRenameRequest] = useState<number>(0);
+    const [openPropertiesRequest, setOpenPropertiesRequest] = useState<number>(0);
     const [repo, setRepo] = useState<RepoItem[]>(() => loadPersisted('repo', INITIAL_REPO));
     const [activeContextId, setActiveContextId] = useState<string | null>(() =>
         loadPersisted<string | null>('active-context', null),
@@ -792,28 +793,6 @@ export default function App() {
         activeContextId,
         engine,
     ]);
-
-    // Ctrl/Cmd+S: flush the active pipeline + repo + metadata to disk now.
-    // Saves are normally debounced; this makes the familiar gesture work
-    // (and stops the webview's "save page" dialog from hijacking it).
-    useEffect(() => {
-        if (!isInTauri()) return;
-        const onKey = (e: KeyboardEvent) => {
-            if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 's') return;
-            e.preventDefault();
-            if (!workspacePathState) return;
-            const ws = workspacePathState;
-            void (async () => {
-                const active = pipelineData[activeJobId];
-                if (active) await savePipelineFile(ws, activeJobId, active);
-                await saveRepository(ws, repo as unknown as Array<Record<string, unknown>>);
-                await saveMetadata(ws, { engine, jobs, activeJobId });
-                setJobs(js => js.map(j => (j.id === activeJobId ? { ...j, dirty: false } : j)));
-            })();
-        };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [workspacePathState, pipelineData, activeJobId, repo, engine, jobs]);
 
     // Suppress the native webview right-click menu (Back / Reload / Print ...)
     // in the desktop app - it looks out of place on the header, footer and
@@ -1682,6 +1661,19 @@ export default function App() {
 
     const handleSave = useCallback(() => void saveActive(), [saveActive]);
 
+    // Ctrl/Cmd+S: the Save button. Saves are normally debounced; this makes the
+    // familiar gesture work, in the web editor too, where the browser's "Save page
+    // as" dialog opened instead.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 's') return;
+            e.preventDefault();
+            void saveActive();
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [saveActive]);
+
     const activeJobName = useMemo(
         () => jobs.find(j => j.id === activeJobId)?.name ?? 'pipeline',
         [jobs, activeJobId],
@@ -1954,6 +1946,17 @@ export default function App() {
             if (!node) return;
 
             switch (action) {
+                case 'open':
+                    // What a double-click opens in Talend, Hop and NiFi: the editor
+                    // for the node. A Map node is edited in its visual mapper.
+                    if (node.data.componentId === 'xf.map') {
+                        handleOpenMapper(nodeId);
+                    } else {
+                        setSelectedId(nodeId);
+                        setOpenPropertiesRequest(n => n + 1);
+                    }
+                    break;
+
                 case 'rename':
                     setSelectedId(nodeId);
                     setRenameRequest(n => n + 1);
@@ -2047,7 +2050,7 @@ export default function App() {
                     break;
             }
         },
-        [nodes, edges, selectedId, setNodes, setEdges, markDirty, handleRunFromHere],
+        [nodes, edges, selectedId, setNodes, setEdges, markDirty, handleRunFromHere, handleOpenMapper],
     );
 
     // Copy the selected component(s) - falling back to the single active
@@ -2864,6 +2867,7 @@ export default function App() {
                     onUpdate={handleUpdateNode}
                     onOpenMapper={handleOpenMapper}
                     focusNameRequest={renameRequest}
+                    openRequest={openPropertiesRequest}
                 />
             </main>
 

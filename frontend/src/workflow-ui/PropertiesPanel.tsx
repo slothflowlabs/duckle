@@ -137,6 +137,8 @@ type Props = {
     onUpdate: (id: string, patch: Partial<DuckleNodeData>) => void;
     onOpenMapper?: (nodeId: string) => void;
     focusNameRequest?: number;
+    /** Bumped by a double-click on a node: show its properties, collapsed or not. */
+    openRequest?: number;
 };
 
 export default function PropertiesPanel({
@@ -149,6 +151,7 @@ export default function PropertiesPanel({
     onUpdate,
     onOpenMapper,
     focusNameRequest,
+    openRequest,
 }: Props) {
     const { t } = useTranslation();
     const [tab, setTab] = useState<TabId>('basic');
@@ -158,17 +161,6 @@ export default function PropertiesPanel({
     const [autodetectingFor, setAutodetectingFor] = useState<string | null>(null);
     const [detectError, setDetectError] = useState<{ nodeId: string; message: string } | null>(null);
     const nameInputRef = useRef<HTMLInputElement>(null);
-
-    useEffect(() => {
-        if (focusNameRequest && nameInputRef.current) {
-            setTab('basic');
-            const el = nameInputRef.current;
-            setTimeout(() => {
-                el.focus();
-                el.select();
-            }, 50);
-        }
-    }, [focusNameRequest]);
 
     // Every component opens on the Basic tab. Switching to Schema / Preview /
     // Advanced / Validation is then the user's choice and stays put while this
@@ -269,6 +261,26 @@ export default function PropertiesPanel({
             }
             return next;
         });
+
+    // Rename and a double-click both land in the name field, which exists only
+    // once the panel is expanded and on its Basic tab. Rename used to look for it
+    // first, so from a collapsed panel or another tab it did nothing at all.
+    const showName = (select: boolean) => {
+        if (collapsed) toggleCollapsed();
+        setTab('basic');
+        setTimeout(() => {
+            const el = nameInputRef.current;
+            if (!el) return;
+            el.focus();
+            if (select) el.select();
+        }, 50);
+    };
+    useEffect(() => {
+        if (focusNameRequest) showName(true);
+    }, [focusNameRequest]);
+    useEffect(() => {
+        if (openRequest) showName(false);
+    }, [openRequest]);
 
     // #102 item 4a: drag the panel's left edge to resize; width persists per machine.
     const [panelWidth, setPanelWidth] = useState<number>(() => {

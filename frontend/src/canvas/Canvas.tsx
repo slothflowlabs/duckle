@@ -28,10 +28,12 @@ import {
     Play,
     Power,
     Redo2,
+    SlidersHorizontal,
     Sparkles,
     Trash2,
     Undo2,
     FlaskConical,
+    Workflow,
 } from 'lucide-react';
 import DuckleNode from './nodes/DuckleNode';
 import DuckleEdge from './DuckleEdge';
@@ -68,7 +70,21 @@ const PRO_OPTIONS = { hideAttribution: true };
 
 export type DropPosition = { x: number; y: number };
 
+/** Whether a key press is meant for the canvas: focus on it or on nothing, never in a text field. */
+function canvasHasKeyboard(wrapper: HTMLElement | null): boolean {
+    const ae = document.activeElement as HTMLElement | null;
+    const inField =
+        !!ae &&
+        (ae.tagName === 'INPUT' ||
+            ae.tagName === 'TEXTAREA' ||
+            ae.tagName === 'SELECT' ||
+            ae.isContentEditable);
+    const inCanvas = ae === document.body || (wrapper?.contains(ae) ?? false);
+    return !inField && inCanvas;
+}
+
 export type NodeAction =
+    | 'open'
     | 'rename'
     | 'duplicate'
     | 'copy'
@@ -83,7 +99,6 @@ export type PaneAction =
     | 'paste'
     | 'select-all'
     | 'auto-layout'
-    | 'fit-view'
     | 'undo'
     | 'redo'
     | 'build';
@@ -210,21 +225,53 @@ function CanvasInner({
             if (quickAddSeed !== null) return;
             if (e.metaKey || e.ctrlKey || e.altKey) return;
             if (e.key.length !== 1 || e.key === ' ') return;
-            const ae = document.activeElement as HTMLElement | null;
-            const inField =
-                !!ae &&
-                (ae.tagName === 'INPUT' ||
-                    ae.tagName === 'TEXTAREA' ||
-                    ae.tagName === 'SELECT' ||
-                    ae.isContentEditable);
-            const inCanvas = ae === document.body || (wrapperRef.current?.contains(ae) ?? false);
-            if (inField || !inCanvas) return;
+            if (!canvasHasKeyboard(wrapperRef.current)) return;
             e.preventDefault();
             setQuickAddSeed(e.key);
         };
         document.addEventListener('keydown', onKey);
         return () => document.removeEventListener('keydown', onKey);
     }, [quickAddSeed]);
+
+    // A click on the bare canvas leaves the focus on the page body, and so does a
+    // click on the run log, so the focus alone cannot say a key is for the canvas.
+    // Where the last click landed can.
+    const clickedCanvasLast = useRef(false);
+    useEffect(() => {
+        const onDown = (e: PointerEvent) => {
+            clickedCanvasLast.current = wrapperRef.current?.contains(e.target as HTMLElement | null) ?? false;
+        };
+        document.addEventListener('pointerdown', onDown, true);
+        return () => document.removeEventListener('pointerdown', onDown, true);
+    }, []);
+
+    // The shortcuts the context menus show beside their items. Only while the
+    // canvas has the keyboard, so a text field or the run log keeps its own
+    // Ctrl+A, and the browser keeps Ctrl+D and Ctrl+0 everywhere else.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (!canvasHasKeyboard(wrapperRef.current)) return;
+            if (document.activeElement === document.body && !clickedCanvasLast.current) return;
+            const ctrl = e.ctrlKey || e.metaKey;
+            const key = e.key.toLowerCase();
+            const selected = nodes.filter(n => n.selected);
+            const only = selected.length === 1 ? selected[0].id : null;
+            if (e.key === 'F2' && !ctrl) {
+                if (only) onNodeAction('rename', only);
+            } else if (ctrl && key === 'd') {
+                if (only) onNodeAction('duplicate', only);
+            } else if (ctrl && key === 'a') {
+                onPaneAction('select-all');
+            } else if (ctrl && key === '0') {
+                fitView();
+            } else {
+                return;
+            }
+            e.preventDefault();
+        };
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+    }, [nodes, onNodeAction, onPaneAction, fitView]);
 
     const handleQuickAdd = useCallback(
         (component: ComponentDef) => {
@@ -375,6 +422,23 @@ function CanvasInner({
                     key: 'header',
                     label: node.data.label + '  #' + node.id.slice(0, 6),
                 },
+                node.data.componentId === 'xf.map'
+                    ? {
+                          kind: 'item',
+                          key: 'open',
+                          label: 'Open visual mapper',
+                          icon: <Workflow size={ICON_SIZE} />,
+                          shortcut: 'Dbl-click',
+                          onClick: () => onNodeAction('open', node.id),
+                      }
+                    : {
+                          kind: 'item',
+                          key: 'open',
+                          label: 'Properties',
+                          icon: <SlidersHorizontal size={ICON_SIZE} />,
+                          shortcut: 'Dbl-click',
+                          onClick: () => onNodeAction('open', node.id),
+                      },
                 {
                     kind: 'item',
                     key: 'rename',
@@ -522,7 +586,7 @@ function CanvasInner({
                     label: 'Fit to view',
                     icon: <Maximize2 size={ICON_SIZE} />,
                     shortcut: 'Ctrl+0',
-                    onClick: () => onPaneAction('fit-view'),
+                    onClick: () => fitView(),
                 },
                 {
                     kind: 'item',
@@ -560,7 +624,7 @@ function CanvasInner({
             ];
             menu.open(e, items);
         },
-        [menu, onPaneAction],
+        [menu, onPaneAction, fitView],
     );
 
     return (
@@ -581,6 +645,7 @@ function CanvasInner({
                 onSelectionChange={onSelectionChange}
                 onNodeContextMenu={handleNodeContextMenu}
                 onEdgeContextMenu={handleEdgeContextMenu}
+                onNodeDoubleClick={(_, node) => onNodeAction('open', node.id)}
                 onEdgeDoubleClick={(_, edge) => onEdgeEdit(edge.id)}
                 onPaneContextMenu={handlePaneContextMenu}
                 nodeTypes={nodeTypes}
