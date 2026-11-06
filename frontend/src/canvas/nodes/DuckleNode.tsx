@@ -98,6 +98,25 @@ export default function DuckleNode({ id, data, selected, type }: NodeProps<Duckl
                 <div className="node-header-row">
                     <div className="node-kind">{t(`node.${kind}`, { defaultValue: kind })}</div>
                     {runStatus ? <RunStatusBadge status={runStatus.status} /> : null}
+                    {/* The rows a step produced, on the step itself, as Talend, Hop
+                        and NiFi show them - not only in the Output tab. */}
+                    {runStatus?.status === 'ok' && runStatus.rows !== undefined ? (
+                        <span
+                            className="node-run-rows"
+                            title={
+                                runStatus.duration_ms !== undefined
+                                    ? t('node.rowsIn', {
+                                          rows: runStatus.rows.toLocaleString(),
+                                          unit: runStatus.rows === 1 ? t('node.rowsSingular') : t('node.rowsPlural'),
+                                          ms: runStatus.duration_ms,
+                                      })
+                                    : undefined
+                            }
+                        >
+                            {runStatus.rows.toLocaleString()}{' '}
+                            {runStatus.rows === 1 ? t('node.rowsSingular') : t('node.rowsPlural')}
+                        </span>
+                    ) : null}
                     {needsConfig ? (
                         <span
                             className="node-needs-config"

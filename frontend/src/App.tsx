@@ -116,7 +116,8 @@ import type {
     RoutinePayload,
 } from './repo-types';
 import { getDefaults, getManifest } from './workflow-ui/fields/component-manifests';
-import type { DuckleNodeData } from './pipeline-types';
+import type { DuckleNodeData, NoteData } from './pipeline-types';
+import { pipelinesUsingConnections } from './connection-usage';
 import type { DropPosition, NodeAction, PaneAction } from './canvas/Canvas';
 import { useUndoRedo, type CanvasSnapshot } from './useUndoRedo';
 import type { RepoItem } from './repo-types';
@@ -134,7 +135,11 @@ type RuntimeState = 'connecting' | 'ready' | 'offline';
 type PipelineState = {
     nodes: Node<DuckleNodeData>[];
     edges: Edge[];
+    /** Canvas notes, kept apart from the nodes so a run never sees one. */
+    notes?: Node<NoteData>[];
 };
+
+const NO_NOTES: Node<NoteData>[] = [];
 
 const SAMPLE_NODES: Node<DuckleNodeData>[] = [
     {
@@ -535,6 +540,7 @@ export default function App() {
     const activePipeline = pipelineData[activeJobId] ?? EMPTY_PIPELINE;
     const nodes = activePipeline.nodes;
     const edges = activePipeline.edges;
+    const notes = activePipeline.notes ?? NO_NOTES;
 
     // Web edition: no folder picker - the server tells us which workspace it
     // serves, so we adopt and load it.
@@ -1079,6 +1085,14 @@ export default function App() {
         [setEdges],
     );
 
+    const handleNotesChange = useCallback(
+        (changes: NodeChange[]) => {
+            updateActive(s => ({ ...s, notes: applyNodeChanges(changes, s.notes ?? []) as Node<NoteData>[] }));
+            if (changes.some(c => c.type === 'add' || c.type === 'replace' || c.type === 'remove')) markDirty();
+        },
+        [updateActive, markDirty],
+    );
+
     const handleConnectWithType = useCallback(
         (connection: Connection, type: ConnectionType) => {
             setEdges(es =>
@@ -1245,7 +1259,7 @@ export default function App() {
     );
 
     const handleSelectionChange = useCallback((params: OnSelectionChangeParams) => {
-        const sel = params.nodes[0] ?? null;
+        const sel = params.nodes.find(n => n.type !== 'note') ?? null;
         setSelectedId(sel?.id ?? null);
         // Live mode: previewing whatever node you click makes the toggle feel
         // alive (run up to it + animate). Skip sinks (a run to a sink writes and
@@ -1725,6 +1739,7 @@ export default function App() {
             name: activeJobName,
             nodes,
             edges,
+            ...(notes.length > 0 ? { notes } : {}),
             exportedAt: new Date().toISOString(),
         };
         await saveTextFile(
@@ -1732,7 +1747,7 @@ export default function App() {
             JSON.stringify(payload, null, 2),
             [{ name: 'Duckle pipeline', extensions: ['json'] }],
         );
-    }, [nodes, edges, activeJobName]);
+    }, [nodes, edges, notes, activeJobName]);
 
     const uniquePipelineName = useCallback(
         (base: string): string => {
@@ -1749,7 +1764,7 @@ export default function App() {
 
     const importFromText = useCallback(
         (text: string, suggestedName: string) => {
-            let parsed: { name?: string; nodes?: unknown; edges?: unknown };
+            let parsed: { name?: string; nodes?: unknown; edges?: unknown; notes?: unknown };
             try {
                 parsed = JSON.parse(text);
             } catch (err) {
@@ -1777,6 +1792,7 @@ export default function App() {
                 [id]: {
                     nodes: importedNodes as PipelineState['nodes'],
                     edges: importedEdges as PipelineState['edges'],
+                    ...(Array.isArray(parsed.notes) ? { notes: parsed.notes as PipelineState['notes'] } : {}),
                 },
             }));
             setJobs(js =>
@@ -2247,7 +2263,16 @@ export default function App() {
         addKids(item.id);
         const n = ids.size - 1;
         const nested = n > 0 ? ` and its ${n} nested item${n === 1 ? '' : 's'}` : '';
-        return `Delete ${item.type} "${item.name}"${nested}?\n\nThis cannot be undone.`;
+        // A connection pipelines still read through: say which, before they stop running.
+        const users = pipelinesUsingConnections(ids, repo, pipelineData);
+        const shown = users.slice(0, 5).join(', ') + (users.length > 5 ? ` and ${users.length - 5} more` : '');
+        const used =
+            users.length === 0
+                ? ''
+                : users.length === 1
+                  ? `\n\nUsed by 1 pipeline: ${shown}. It will fail until it points at another connection.`
+                  : `\n\nUsed by ${users.length} pipelines: ${shown}. They will fail until they point at another connection.`;
+        return `Delete ${item.type} "${item.name}"${nested}?${used}\n\nThis cannot be undone.`;
     };
 
     const handleCreatePipeline = useCallback(
@@ -2836,6 +2861,7 @@ export default function App() {
                         engine={engine}
                         nodes={nodes}
                         planNodes={planNodes}
+                        notes={notes}
                         edges={edges}
                         runResult={shownRunResult}
                         isRunning={isRunning}
@@ -2843,6 +2869,7 @@ export default function App() {
                         workspacePath={workspacePathState}
                         pipelineId={activeJobId}
                         onNodesChange={handleNodesChange}
+                        onNotesChange={handleNotesChange}
                         onEdgesChange={handleEdgesChange}
                         onConnectWithType={handleConnectWithType}
                         onSelectionChange={handleSelectionChange}

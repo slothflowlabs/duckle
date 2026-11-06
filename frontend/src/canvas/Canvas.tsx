@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
     ReactFlow,
     ReactFlowProvider,
@@ -15,6 +15,12 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
+    AlignEndHorizontal,
+    AlignEndVertical,
+    AlignHorizontalSpaceAround,
+    AlignStartHorizontal,
+    AlignStartVertical,
+    AlignVerticalSpaceAround,
     Check,
     ClipboardCopy,
     ClipboardPaste,
@@ -30,18 +36,22 @@ import {
     Redo2,
     SlidersHorizontal,
     Sparkles,
+    StickyNote,
     Trash2,
     Undo2,
     FlaskConical,
     Workflow,
 } from 'lucide-react';
 import DuckleNode from './nodes/DuckleNode';
+import NoteNode from './nodes/NoteNode';
+import { NoteContext } from './note-context';
+import { arrange, type ArrangeMode } from './arrange';
 import DuckleEdge from './DuckleEdge';
 import ConnectionTypePicker from './ConnectionTypePicker';
 import { QuickAddSearch } from './QuickAddSearch';
 import { CONNECTION_TYPES, type ConnectionType } from './connection-types';
-import { loadPersisted } from '../persistence';
-import type { DuckleNodeData } from '../pipeline-types';
+import { loadPersisted, savePersisted } from '../persistence';
+import type { DuckleNodeData, NoteData } from '../pipeline-types';
 import { readClipboard } from '../clipboard';
 import type { ComponentDef } from '../workflow-ui/palette-data';
 import { useContextMenu, type MenuItem } from '../workflow-ui/ContextMenu';
@@ -54,6 +64,7 @@ const nodeTypes = {
     source: DuckleNode,
     transform: DuckleNode,
     sink: DuckleNode,
+    note: NoteNode,
 };
 
 const edgeTypes = {
@@ -67,6 +78,9 @@ const DEFAULT_EDGE_OPTIONS = {
 const DELETE_KEYS = ['Delete', 'Backspace'];
 
 const PRO_OPTIONS = { hideAttribution: true };
+
+// The same step as the background's dots, so a snapped node sits on them.
+const SNAP_GRID: [number, number] = [16, 16];
 
 export type DropPosition = { x: number; y: number };
 
@@ -108,8 +122,11 @@ export type PaneAction =
 
 type Props = {
     nodes: Node<DuckleNodeData>[];
+    /** Notes on the canvas: drawn with the nodes, never among them. */
+    notes: Node<NoteData>[];
     edges: Edge[];
     onNodesChange: (changes: NodeChange[]) => void;
+    onNotesChange: (changes: NodeChange[]) => void;
     onEdgesChange: (changes: EdgeChange[]) => void;
     onConnectWithType: (connection: Connection, type: ConnectionType) => void;
     onSelectionChange: (params: OnSelectionChangeParams) => void;
@@ -127,8 +144,10 @@ type Props = {
 
 function CanvasInner({
     nodes,
+    notes,
     edges,
     onNodesChange,
+    onNotesChange,
     onEdgesChange,
     onConnectWithType,
     onSelectionChange,
@@ -208,6 +227,86 @@ function CanvasInner({
         window.addEventListener('duckle:minimap-visibility', sync);
         return () => window.removeEventListener('duckle:minimap-visibility', sync);
     }, []);
+
+    // Notes are drawn with the nodes but kept apart from them: every change to a
+    // note goes back to the notes, so nothing that reads the nodes sees one.
+    const noteIds = useMemo(() => new Set(notes.map(n => n.id)), [notes]);
+    const flowNodes = useMemo<Node[]>(() => [...notes, ...nodes], [notes, nodes]);
+    const handleFlowNodesChange = useCallback(
+        (changes: NodeChange[]) => {
+            const isNote = (c: NodeChange) => c.type !== 'add' && noteIds.has(c.id);
+            const toNotes = changes.filter(isNote);
+            const toNodes = changes.filter(c => !isNote(c));
+            if (toNotes.length) onNotesChange(toNotes);
+            if (toNodes.length) onNodesChange(toNodes);
+        },
+        [noteIds, onNotesChange, onNodesChange],
+    );
+    const [editingNote, setEditingNote] = useState<string | null>(null);
+    const noteActions = useMemo(
+        () => ({
+            editing: editingNote,
+            setEditing: setEditingNote,
+            commit: (id: string, text: string) => {
+                const note = notes.find(n => n.id === id);
+                if (note) onNotesChange([{ type: 'replace', id, item: { ...note, data: { ...note.data, text } } }]);
+            },
+        }),
+        [editingNote, notes, onNotesChange],
+    );
+    const addNote = useCallback(
+        (position: { x: number; y: number }) => {
+            const id = 'note_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+            onNotesChange([{ type: 'add', item: { id, type: 'note', position, data: { text: '' } } }]);
+            setEditingNote(id);
+        },
+        [onNotesChange],
+    );
+
+    // Snap to grid: off until asked for, so a drag lands where it always did.
+    const [snapToGrid, setSnapToGrid] = useState(() => loadPersisted('snapToGrid', false));
+    const toggleSnap = useCallback(() => {
+        setSnapToGrid(on => {
+            savePersisted('snapToGrid', !on);
+            return !on;
+        });
+    }, []);
+
+    // Align and distribute act on the selection, when the node right-clicked is
+    // part of one; a single node has nothing to line up with.
+    const arrangeItems = useCallback(
+        (nodeId: string): MenuItem[] => {
+            const chosen = flowNodes.filter(n => n.selected);
+            if (chosen.length < 2 || !chosen.some(n => n.id === nodeId)) return [];
+            const item = (mode: ArrangeMode, label: string, icon: ReactNode): MenuItem => ({
+                kind: 'item',
+                key: 'arrange-' + mode,
+                label,
+                icon,
+                onClick: () => {
+                    const moves = arrange(chosen, mode);
+                    if (moves.length) {
+                        handleFlowNodesChange(moves.map(m => ({ type: 'position', id: m.id, position: m.position })));
+                    }
+                },
+            });
+            return [
+                { kind: 'separator', key: 's-arrange' },
+                item('left', 'Align left', <AlignStartVertical size={ICON_SIZE} />),
+                item('right', 'Align right', <AlignEndVertical size={ICON_SIZE} />),
+                item('top', 'Align top', <AlignStartHorizontal size={ICON_SIZE} />),
+                item('bottom', 'Align bottom', <AlignEndHorizontal size={ICON_SIZE} />),
+                ...(chosen.length >= 3
+                    ? [
+                          item('distribute-x', 'Distribute horizontally', <AlignHorizontalSpaceAround size={ICON_SIZE} />),
+                          item('distribute-y', 'Distribute vertically', <AlignVerticalSpaceAround size={ICON_SIZE} />),
+                      ]
+                    : []),
+            ];
+        },
+        [flowNodes, handleFlowNodesChange],
+    );
+
     const [pendingConnection, setPendingConnection] = useState<Connection | null>(null);
     const [pickerPos, setPickerPos] = useState<{ x: number; y: number } | null>(null);
     const [pickerAllowed, setPickerAllowed] = useState<Set<ConnectionType> | null>(null);
@@ -416,7 +515,31 @@ function CanvasInner({
     );
 
     const handleNodeContextMenu = useCallback(
-        (e: React.MouseEvent, node: Node<DuckleNodeData>) => {
+        (e: React.MouseEvent, flowNode: Node) => {
+            if (noteIds.has(flowNode.id)) {
+                menu.open(e, [
+                    { kind: 'header', key: 'header', label: 'Note' },
+                    {
+                        kind: 'item',
+                        key: 'edit',
+                        label: 'Edit text',
+                        icon: <Pencil size={ICON_SIZE} />,
+                        shortcut: 'Dbl-click',
+                        onClick: () => setEditingNote(flowNode.id),
+                    },
+                    {
+                        kind: 'item',
+                        key: 'delete',
+                        label: 'Delete',
+                        icon: <Trash2 size={ICON_SIZE} />,
+                        shortcut: 'Del',
+                        onClick: () => onNotesChange([{ type: 'remove', id: flowNode.id }]),
+                        danger: true,
+                    },
+                ]);
+                return;
+            }
+            const node = flowNode as Node<DuckleNodeData>;
             const isDisabled = node.data.disabled === true;
             const autodetect = nodeAutodetectAvailable(node.id);
             const items: MenuItem[] = [
@@ -473,6 +596,7 @@ function CanvasInner({
                     icon: <Power size={ICON_SIZE} />,
                     onClick: () => onNodeAction('toggle-disable', node.id),
                 },
+                ...arrangeItems(node.id),
                 { kind: 'separator', key: 's1' },
                 {
                     kind: 'item',
@@ -517,7 +641,7 @@ function CanvasInner({
             ];
             menu.open(e, items);
         },
-        [menu, onNodeAction, nodeAutodetectAvailable],
+        [menu, onNodeAction, nodeAutodetectAvailable, noteIds, onNotesChange, arrangeItems],
     );
 
     const handleEdgeContextMenu = useCallback(
@@ -564,6 +688,7 @@ function CanvasInner({
 
     const handlePaneContextMenu = useCallback(
         (e: React.MouseEvent | MouseEvent) => {
+            const at = screenToFlowPosition({ x: e.clientX, y: e.clientY });
             const items: MenuItem[] = [
                 { kind: 'header', key: 'header', label: 'Canvas' },
                 {
@@ -598,6 +723,13 @@ function CanvasInner({
                     icon: <LayoutGrid size={ICON_SIZE} />,
                     onClick: () => onPaneAction('auto-layout'),
                 },
+                {
+                    kind: 'item',
+                    key: 'snap',
+                    label: 'Snap to grid',
+                    icon: snapToGrid ? <Check size={ICON_SIZE} /> : null,
+                    onClick: toggleSnap,
+                },
                 { kind: 'separator', key: 's1' },
                 {
                     kind: 'item',
@@ -616,6 +748,13 @@ function CanvasInner({
                     onClick: () => onPaneAction('paste'),
                     disabled: readClipboard() === null,
                 },
+                {
+                    kind: 'item',
+                    key: 'note',
+                    label: 'Add note',
+                    icon: <StickyNote size={ICON_SIZE} />,
+                    onClick: () => addNote(at),
+                },
                 { kind: 'separator', key: 's2' },
                 {
                     kind: 'item',
@@ -627,7 +766,7 @@ function CanvasInner({
             ];
             menu.open(e, items);
         },
-        [menu, onPaneAction, fitView],
+        [menu, onPaneAction, fitView, screenToFlowPosition, snapToGrid, toggleSnap, addNote],
     );
 
     return (
@@ -638,31 +777,38 @@ function CanvasInner({
             onDrop={handleDrop}
             onMouseMove={onMouseMove}
         >
-            <ReactFlow
-                nodes={nodes}
-                edges={edges}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onConnect={handleConnect}
-                onConnectStart={handleConnectStart}
-                onSelectionChange={onSelectionChange}
-                onNodeContextMenu={handleNodeContextMenu}
-                onEdgeContextMenu={handleEdgeContextMenu}
-                onNodeDoubleClick={(_, node) => onNodeAction('open', node.id)}
-                onEdgeDoubleClick={(_, edge) => onEdgeEdit(edge.id)}
-                onPaneContextMenu={handlePaneContextMenu}
-                nodeTypes={nodeTypes}
-                edgeTypes={edgeTypes}
-                defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
-                deleteKeyCode={DELETE_KEYS}
-                proOptions={PRO_OPTIONS}
-                onMoveEnd={handleMoveEnd}
-                colorMode={theme}
-            >
-                <Background gap={16} />
-                {showMinimap ? <MiniMap pannable zoomable /> : null}
-                <Controls />
-            </ReactFlow>
+            <NoteContext.Provider value={noteActions}>
+                <ReactFlow
+                    nodes={flowNodes}
+                    edges={edges}
+                    onNodesChange={handleFlowNodesChange}
+                    onEdgesChange={onEdgesChange}
+                    onConnect={handleConnect}
+                    onConnectStart={handleConnectStart}
+                    onSelectionChange={onSelectionChange}
+                    onNodeContextMenu={handleNodeContextMenu}
+                    onEdgeContextMenu={handleEdgeContextMenu}
+                    onNodeDoubleClick={(_, node) => {
+                        // A note opens itself for writing; see NoteNode.
+                        if (!noteIds.has(node.id)) onNodeAction('open', node.id);
+                    }}
+                    onEdgeDoubleClick={(_, edge) => onEdgeEdit(edge.id)}
+                    onPaneContextMenu={handlePaneContextMenu}
+                    nodeTypes={nodeTypes}
+                    edgeTypes={edgeTypes}
+                    defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
+                    deleteKeyCode={DELETE_KEYS}
+                    proOptions={PRO_OPTIONS}
+                    onMoveEnd={handleMoveEnd}
+                    colorMode={theme}
+                    snapToGrid={snapToGrid}
+                    snapGrid={SNAP_GRID}
+                >
+                    <Background gap={16} />
+                    {showMinimap ? <MiniMap pannable zoomable /> : null}
+                    <Controls />
+                </ReactFlow>
+            </NoteContext.Provider>
             {menu.element}
             {pickerPos ? (
                 <ConnectionTypePicker

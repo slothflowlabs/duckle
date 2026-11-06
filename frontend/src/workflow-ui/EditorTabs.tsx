@@ -14,7 +14,7 @@ import RunView from './RunView';
 import RunHistoryView from './RunHistoryView';
 import TestsView from './TestsView';
 import type { EngineId } from './EngineSelector';
-import type { DuckleNodeData } from '../pipeline-types';
+import type { DuckleNodeData, NoteData } from '../pipeline-types';
 import type { ComponentDef } from './palette-data';
 import type { ConnectionType } from '../canvas/connection-types';
 import type { RunResult } from '../tauri-bridge';
@@ -32,6 +32,7 @@ type Props = {
     nodes: Node<DuckleNodeData>[];
     /** Nodes with ${...} placeholders resolved, for the Plan preview (#105). */
     planNodes: Node<DuckleNodeData>[];
+    notes: Node<NoteData>[];
     edges: Edge[];
     runResult: RunResult | null;
     isRunning: boolean;
@@ -39,6 +40,7 @@ type Props = {
     workspacePath: string | null;
     pipelineId: string | null;
     onNodesChange: (changes: NodeChange[]) => void;
+    onNotesChange: (changes: NodeChange[]) => void;
     onEdgesChange: (changes: EdgeChange[]) => void;
     onConnectWithType: (connection: Connection, type: ConnectionType) => void;
     onSelectionChange: (params: OnSelectionChangeParams) => void;
@@ -60,10 +62,12 @@ export default function EditorTabs({
     runResult,
     isRunning,
     planNodes,
+    notes,
     nodeLabels,
     workspacePath,
     pipelineId,
     onNodesChange,
+    onNotesChange,
     onEdgesChange,
     onConnectWithType,
     onSelectionChange,
@@ -124,9 +128,11 @@ export default function EditorTabs({
                 <div className={'tab-panel' + (active === 'canvas' ? ' tab-panel-active' : '')}>
                     <Canvas
                         nodes={nodes}
+                        notes={notes}
                         edges={edges}
                         pipelineId={pipelineId}
                         onNodesChange={onNodesChange}
+                        onNotesChange={onNotesChange}
                         onEdgesChange={onEdgesChange}
                         onConnectWithType={onConnectWithType}
                         onSelectionChange={onSelectionChange}

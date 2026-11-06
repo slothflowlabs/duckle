@@ -210,7 +210,10 @@
     "failed": "Failed",
     "ok": "OK",
     "colsSingular": "col",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "row",
+    "rowsPlural": "rows",
+    "rowsIn": "{{rows}} {{unit}} in {{ms}} ms"
   },
   "common": {
     "save": "Save",

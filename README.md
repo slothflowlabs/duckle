@@ -305,7 +305,7 @@ A worked example using the bundled `samples/orders.csv` data.
 
 - Open the **Components** sidebar (left). Click **Sources -> Files -> CSV**.
 - Drag it onto the canvas.
-- In the right-side Properties panel:
+- In the right-side Properties panel (double-click a node to open it):
   - **Path**: browse to `samples/orders.csv`
   - Click **Autodetect schema** - the **Schema** tab fills in column types from the file, the **Preview** tab shows the first 20 rows.
 
@@ -325,13 +325,14 @@ A worked example using the bundled `samples/orders.csv` data.
 
 ### 4. Run it
 
-- Press **Run** in the toolbar. Nodes light up in execution order; row counts appear under each.
+- Press **Run** in the toolbar. Nodes light up in execution order, and each shows the rows it produced; hover the count for how long the step took.
 - Open the **Output** tab (bottom panel) to see per-stage timing.
 - Click any node for sampled rows in its **Preview** tab; the **Plan** tab beside **Canvas** shows the generated SQL for every stage.
 
 ### 5. Iterate
 
 - Add a **Group By** before the sink to aggregate. Re-run. Sub-second on small data.
+- Right-click the canvas to **Add note** for whoever reads the pipeline next, or turn on **Snap to grid**. Select several nodes and right-click one to align or distribute them.
 - Cancel mid-run with the **Stop** button - the DuckDB process is killed cleanly.
 - Save your work: **Cmd/Ctrl-S** writes a JSON pipeline file to your workspace folder.
 

@@ -6004,6 +6004,60 @@ select.modal-select:focus {
     flex-shrink: 0;
 }
 
+/* The rows a step produced, beside its run badge. */
+.node-run-rows {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.6923rem;
+    font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    color: var(--text-2);
+}
+
+/* Canvas notes: text on the canvas, never part of a run. */
+.canvas-note {
+    width: 220px;
+    min-height: 56px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--warn) 14%, var(--bg-2));
+    border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+    color: var(--text-1);
+    font-size: 0.8462rem;
+    line-height: 1.45;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.canvas-note.is-selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+}
+
+.canvas-note-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.canvas-note-placeholder {
+    color: var(--text-3);
+    font-style: italic;
+}
+
+.canvas-note-input {
+    display: block;
+    width: 100%;
+    min-height: 72px;
+    padding: 0;
+    resize: vertical;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: inherit;
+    font: inherit;
+    line-height: inherit;
+}
+
 .node-run-badge-running {
     background: rgba(255, 122, 69, 0.15);
     color: var(--accent);

@@ -41,6 +41,13 @@ export type Column = {
 
 export type NodeKind = 'source' | 'transform' | 'sink';
 
+/**
+ * A note on the canvas, as Talend, Hop and NiFi have them: text and nothing else.
+ * Notes live beside a pipeline's nodes, not among them, so nothing that runs,
+ * validates or compiles a pipeline ever sees one.
+ */
+export type NoteData = { text: string };
+
 export type DuckleNodeData = {
     label: string;
     subtitle?: string;

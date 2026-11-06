@@ -24,6 +24,9 @@ import { validatePipeline } from '../src/validation';
 import { deriveNodeSubtitle } from '../src/node-subtitle';
 import { resolveOutputSchema } from '../src/schema-resolve';
 import { placeTip } from '../src/tour-place';
+import { pipelinesUsingConnections } from '../src/connection-usage';
+import { arrange } from '../src/canvas/arrange';
+import { getManifest } from '../src/workflow-ui/fields/component-manifests';
 import { caseProblem, cleaned, dummyInput, guessGenerator, listOf, newCase, newSuite } from '../src/test-cases';
 import {
     buildBundle,
@@ -1435,6 +1438,135 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         empty.some(i => i.code === 'missing-required-field' && i.message.includes('Columns')),
         JSON.stringify(empty),
     );
+}
+
+// ---------------------------------------------------------------------------
+// Deleting a connection says which pipelines still use it.
+//
+// The confirmation only said "This cannot be undone", so a connection several
+// pipelines read through was deleted with nothing to say they would stop
+// running. A node names its connection in any field of kind connection-ref:
+// `connectionRef`, and on REST sources the HTTP transport's `transportRef` too.
+// ---------------------------------------------------------------------------
+{
+    const restFields = (getManifest('src.rest')?.sections ?? []).flatMap(s => s.fields);
+    check(
+        'connection usage: src.rest still carries transportRef as a connection field',
+        restFields.some(f => f.key === 'transportRef' && f.kind === 'connection-ref'),
+        'the REST case below would pass for the wrong reason',
+    );
+    const item = (id: string, name: string, type: string, parentId = 'root'): RepoItem =>
+        ({ id, name, type, parentId }) as unknown as RepoItem;
+    const repo = [
+        item('conns', 'Connections', 'folder'),
+        item('pg', 'warehouse', 'connection', 'conns'),
+        item('proxy', 'corp proxy', 'connection', 'conns'),
+        item('other', 'other db', 'connection', 'conns'),
+        item('p1', 'orders_etl', 'pipeline'),
+        item('p2', 'api_pull', 'pipeline'),
+        item('p3', 'unrelated', 'pipeline'),
+        item('p4', 'nested load', 'pipeline', 'conns'),
+    ];
+    const data = {
+        p1: { nodes: [node('a', 'src.postgres', { connectionRef: 'pg', table: 'orders' })] },
+        p2: { nodes: [node('b', 'src.rest', { url: 'https://example.test', transportRef: 'proxy' })] },
+        p3: { nodes: [node('c', 'src.postgres', { connectionRef: 'other' }), node('d', 'xf.filter', { connectionRef: 'pg' })] },
+        p4: { nodes: [node('e', 'src.postgres', { connectionRef: 'pg' })] },
+    };
+    const names = (ids: string[]) => JSON.stringify(pipelinesUsingConnections(new Set(ids), repo, data));
+    check('connection usage: a pipeline reading through the connection is named', names(['pg']) === '["orders_etl","nested load"]', names(['pg']));
+    check('connection usage: an HTTP transport counts as a connection', names(['proxy']) === '["api_pull"]', names(['proxy']));
+    check('connection usage: a property that is not a connection field does not count', !names(['pg']).includes('unrelated'), names(['pg']));
+    check('connection usage: nothing uses it, nothing is named', names(['other', 'p3']) === '[]', names(['other', 'p3']));
+    check(
+        'connection usage: a pipeline deleted along with the connection is not named',
+        names(['conns', 'pg', 'proxy', 'other', 'p4']) === '["orders_etl","api_pull","unrelated"]',
+        names(['conns', 'pg', 'proxy', 'other', 'p4']),
+    );
+    check('connection usage: deleting a pipeline names nothing', names(['p1']) === '[]', names(['p1']));
+}
+
+// ---------------------------------------------------------------------------
+// Align and distribute, as Hop and Talend have them.
+//
+// Aligning lines the selection up on its outermost edge; distributing leaves the
+// outer two where they are and spaces the rest so every gap is equal. Only the
+// nodes that move are returned, so nothing else is written.
+// ---------------------------------------------------------------------------
+{
+    const box = (id: string, x: number, y: number, width: number, height: number) => ({
+        id,
+        position: { x, y },
+        measured: { width, height },
+    });
+    const a = box('a', 10, 0, 100, 50);
+    const b = box('b', 50, 30, 80, 40);
+    const c = box('c', 400, 200, 100, 60);
+    const moved = (mode: Parameters<typeof arrange>[1], nodes: ReturnType<typeof box>[]) =>
+        JSON.stringify(arrange(nodes, mode).map(m => [m.id, m.position.x, m.position.y]));
+    check('align: left lines up on the leftmost edge', moved('left', [a, b]) === '[["b",10,30]]', moved('left', [a, b]));
+    check('align: right lines up on the rightmost edge', moved('right', [a, b]) === '[["a",30,0]]', moved('right', [a, b]));
+    check('align: top lines up on the topmost edge', moved('top', [a, b]) === '[["b",50,0]]', moved('top', [a, b]));
+    check('align: bottom lines up on the lowest edge', moved('bottom', [a, b]) === '[["a",10,20]]', moved('bottom', [a, b]));
+    const m = box('m', 150, 0, 50, 10);
+    const left = box('l', 0, 0, 100, 10);
+    const right = box('r', 400, 0, 100, 10);
+    check(
+        'distribute: horizontally makes every gap equal and keeps the ends',
+        moved('distribute-x', [right, m, left]) === '[["m",225,0]]',
+        moved('distribute-x', [right, m, left]),
+    );
+    const top = box('t', 0, 0, 10, 100);
+    const mid = box('mid', 0, 120, 10, 20);
+    const low = box('low', 0, 300, 10, 100);
+    check(
+        'distribute: vertically makes every gap equal and keeps the ends',
+        moved('distribute-y', [low, top, mid]) === '[["mid",0,190]]',
+        moved('distribute-y', [low, top, mid]),
+    );
+    check('distribute: two nodes have nothing to distribute', moved('distribute-x', [a, c]) === '[]', moved('distribute-x', [a, c]));
+}
+
+// ---------------------------------------------------------------------------
+// A canvas note is part of the undo history.
+//
+// The history keeps whole snapshots and records a step only when its key changes.
+// A note left out of the key would never be a step of its own, and the next undo
+// would take it back together with whatever came before.
+// ---------------------------------------------------------------------------
+{
+    const timers = new Map<number, () => void>();
+    let nextTimer = 0;
+    const timer = (fn: () => void) => {
+        const id = nextTimer++;
+        timers.set(id, fn);
+        return () => {
+            timers.delete(id);
+        };
+    };
+    const settle = () => {
+        for (const [id, fn] of [...timers]) {
+            timers.delete(id);
+            fn();
+        }
+    };
+    const withNote = (text: string | null, x = 0): CanvasSnapshot =>
+        ({
+            nodes: [],
+            edges: [],
+            notes: text === null ? [] : [{ id: 'note1', type: 'note', position: { x, y: 0 }, data: { text } }],
+        }) as unknown as CanvasSnapshot;
+    const steps = (from: CanvasSnapshot, to: CanvasSnapshot) => {
+        timers.clear();
+        const h = new UndoHistory('a', from, timer, () => {});
+        h.observe('a', from);
+        h.observe('a', to);
+        settle();
+        return h.undo() === from;
+    };
+    check('undo: adding a note is a step', steps(withNote(null), withNote('')), 'undo did not take the note away');
+    check('undo: writing in a note is a step', steps(withNote(''), withNote('check the VAT rule')), 'undo did not restore the text');
+    check('undo: moving a note is a step', steps(withNote('x', 0), withNote('x', 200)), 'undo did not move the note back');
 }
 
 if (failures.length) {

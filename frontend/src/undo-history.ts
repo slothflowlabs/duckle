@@ -12,7 +12,7 @@
 // useUndoRedo.ts only feeds it snapshots and applies what it returns.
 import type { Node, Edge } from '@xyflow/react';
 
-export type CanvasSnapshot = { nodes: Node<Record<string, unknown>>[]; edges: Edge[] };
+export type CanvasSnapshot = { nodes: Node<Record<string, unknown>>[]; edges: Edge[]; notes?: Node<Record<string, unknown>>[] };
 
 /** Run `fn` after `ms`; the returned function cancels it. */
 export type Timer = (fn: () => void, ms: number) => () => void;
@@ -46,7 +46,15 @@ function meaningfulKey(s: CanvasSnapshot): string {
         targetHandle: e.targetHandle ?? null,
         data: e.data,
     }));
-    return JSON.stringify({ nodes, edges });
+    // Canvas notes are in the key too: without them a note would never be a step
+    // of its own, and the next undo would take it back with whatever came before.
+    const notes = (s.notes ?? []).map(n => ({
+        id: n.id,
+        x: Math.round(n.position?.x ?? 0),
+        y: Math.round(n.position?.y ?? 0),
+        text: (n.data as { text?: unknown } | undefined)?.text,
+    }));
+    return JSON.stringify({ nodes, edges, notes });
 }
 
 type Stack = { past: CanvasSnapshot[]; future: CanvasSnapshot[] };
