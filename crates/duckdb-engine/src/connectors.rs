@@ -4987,11 +4987,7 @@ impl DuckdbEngine {
         // string arrives as NULL here (the Windows driver keeps it).
         let iso = "%Y-%m-%d %H:%M:%S";
         let csv = mdbtools(&["mdb-export", "-D", iso, "-T", iso, "-B", "-b", "hex", &spec.path, table])?;
-        let tmp = std::env::temp_dir().join(format!(
-            "duckle-access-{}-{}.csv",
-            std::process::id(),
-            spec.node_id.replace(|c: char| !c.is_ascii_alphanumeric(), "_")
-        ));
+        let tmp = access_export_path(&spec.node_id);
         std::fs::write(&tmp, csv)
             .map_err(|e| EngineError::Query(format!("access: write {}: {}", tmp.display(), e)))?;
         let read = format!(
@@ -10685,6 +10681,8 @@ impl DuckdbEngine {
         // Scaffold/resolve the project, write profiles.yml, and assemble the
         // project/profiles/vars flags shared with the #146 pre-warm parse.
         let inv = prepare_dbt_invocation(spec, db)?;
+        // The profile is this run's alone; nothing reads it after the stage.
+        let _profile = ScopedDir(inv.profiles_dir.clone());
         // dbt <user command tokens (default "run")> then the shared flags. The
         // command is split on whitespace (documented; no shell quoting), which
         // avoids cmd.exe/sh quoting pitfalls entirely.
@@ -18468,6 +18466,7 @@ impl DuckdbEngine {
 /// (--project-dir / --profiles-dir / [--profile] / [--vars]).
 struct DbtInvocation {
     project_dir: std::path::PathBuf,
+    profiles_dir: std::path::PathBuf,
     target_db: String,
     dbt_bin: String,
     shared_args: Vec<String>,
@@ -18519,9 +18518,16 @@ fn prepare_dbt_invocation(spec: &DbtSpec, db: &Path) -> Result<DbtInvocation, En
         .unwrap_or_else(|| db.to_string_lossy().into_owned());
     let target_db_yaml = target_db.replace('\\', "/");
 
+    // Named after this run's database, which is unique per run and the same for
+    // the pre-warm parse and the run, so those two still hand dbt the same
+    // profile. Named by process id and node id, two runs of one node at once
+    // shared a profiles.yml, and one run's dbt built into the other's database.
+    // run_dbt removes it when the stage ends.
     let profiles_dir = std::env::temp_dir().join(format!(
         "duckle_dbt_{}_{}",
-        std::process::id(),
+        db.file_stem()
+            .map(|s| s.to_string_lossy())
+            .unwrap_or_default(),
         spec.node_id.replace(|c: char| !c.is_alphanumeric(), "_")
     ));
     std::fs::create_dir_all(&profiles_dir)
@@ -18564,6 +18570,7 @@ fn prepare_dbt_invocation(spec: &DbtSpec, db: &Path) -> Result<DbtInvocation, En
 
     Ok(DbtInvocation {
         project_dir,
+        profiles_dir,
         target_db,
         dbt_bin: resolve_dbt_bin(spec.dbt_bin.as_deref()),
         shared_args,
@@ -18727,6 +18734,96 @@ fn scaffold_inline_dbt_project(
     write_str_if_changed(&root.join("dbt_project.yml"), project_yml)?;
     write_str_if_changed(&models.join(format!("{}.sql", safe_model)), model_sql)?;
     Ok(root)
+}
+
+#[cfg(test)]
+mod dbt_profile_tests {
+    use super::*;
+
+    fn inline(node_id: &str) -> plan::DbtSpec {
+        plan::DbtSpec {
+            node_id: node_id.into(),
+            project_dir: None,
+            inline_model: Some("select 1 as x".into()),
+            inline_model_name: "m".into(),
+            command: "run".into(),
+            dbt_bin: None,
+            database: None,
+            schema: "main".into(),
+            output_model: None,
+            from_view: None,
+            from_views: Vec::new(),
+            timeout_ms: None,
+        }
+    }
+
+    fn profiles_dir(inv: &DbtInvocation) -> std::path::PathBuf {
+        let at = inv
+            .shared_args
+            .iter()
+            .position(|a| a == "--profiles-dir")
+            .unwrap();
+        std::path::PathBuf::from(&inv.shared_args[at + 1])
+    }
+
+    /// Two runs of one dbt node at once - one pipeline started twice, or two
+    /// pipelines whose dbt nodes share an id - each get their own profiles.yml.
+    /// Named by process id and node id, the second run's profile replaced the
+    /// first one's, so the first run's dbt built into the other run's database.
+    /// The pre-warm parse and the run of ONE run must still share it, or the
+    /// pre-warmed parse is thrown away.
+    #[test]
+    fn two_runs_of_one_dbt_node_each_get_their_own_profile() {
+        let spec = inline(&format!("profile_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let (run_a, run_b) = (
+            tmp.path().join("duckle_run_a.duckdb"),
+            tmp.path().join("duckle_run_b.duckdb"),
+        );
+
+        let prewarm = prepare_dbt_invocation(&spec, &run_a).unwrap();
+        let run = prepare_dbt_invocation(&spec, &run_a).unwrap();
+        let other = prepare_dbt_invocation(&spec, &run_b).unwrap();
+
+        let profile_a = std::fs::read_to_string(profiles_dir(&run).join("profiles.yml")).unwrap();
+        let (a, b) = (profiles_dir(&run), profiles_dir(&other));
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
+        let _ = std::fs::remove_dir_all(&run.project_dir);
+        assert_eq!(
+            profiles_dir(&prewarm),
+            a,
+            "the pre-warm parse and the run must share a profile"
+        );
+        assert!(
+            profile_a.contains("duckle_run_a.duckdb"),
+            "run a's profile points at: {profile_a}"
+        );
+        assert_ne!(a, b);
+    }
+
+    /// Each run having its own profile, the stage removes it when it ends,
+    /// failed or not; left behind, one directory per run would pile up in the
+    /// temp folder.
+    #[test]
+    fn a_dbt_stage_removes_its_profile_when_it_ends() {
+        let mut spec = inline(&format!("cleanup_{}", std::process::id()));
+        spec.dbt_bin = Some(format!("no-such-dbt-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("duckle_run_c.duckdb");
+        let inv = prepare_dbt_invocation(&spec, &db).unwrap();
+        assert!(inv.profiles_dir.exists());
+
+        let engine = crate::DuckdbEngine::new(std::path::PathBuf::from("duckdb"));
+        let ran = engine.run_dbt(&db, &spec);
+        let _ = std::fs::remove_dir_all(&inv.project_dir);
+        assert!(ran.is_err(), "there is no dbt to run");
+        assert!(
+            !inv.profiles_dir.exists(),
+            "the profile outlived the stage: {}",
+            inv.profiles_dir.display()
+        );
+    }
 }
 
 /// Resolve the dbt executable. Order: explicit `dbtBin` prop -> DUCKLE_DBT_BIN
@@ -20141,9 +20238,33 @@ fn mdb_schema_types(ddl: &str) -> std::collections::HashMap<String, String> {
     out
 }
 
+/// Where an mdbtools export is staged for DuckDB to read. A sequence number as
+/// well as the pid and node id: two reads of one node at once must not share
+/// a file, or one run reads the other's table.
+#[cfg_attr(all(windows, feature = "odbc"), allow(dead_code))]
+fn access_export_path(node_id: &str) -> std::path::PathBuf {
+    static ACCESS_EXPORT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = ACCESS_EXPORT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "duckle-access-{}-{}-{}.csv",
+        std::process::id(),
+        node_id.replace(|c: char| !c.is_ascii_alphanumeric(), "_"),
+        seq
+    ))
+}
+
 #[cfg(test)]
 mod mdb_schema_tests {
-    use super::mdb_schema_types;
+    use super::{access_export_path, mdb_schema_types};
+
+    /// Two reads of one node at once - one pipeline started twice, or two
+    /// pipelines whose Access nodes share an id - each stage their own export.
+    /// Named by process id and node id, they shared one CSV, and one run read
+    /// the other's table.
+    #[test]
+    fn two_reads_of_one_node_do_not_share_an_export() {
+        assert_ne!(access_export_path("orders"), access_export_path("orders"));
+    }
 
     /// What `mdb-schema -T People file.accdb` printed, verbatim, from mdbtools
     /// 1.0.0 on Ubuntu 24.04 over a file Access made.
