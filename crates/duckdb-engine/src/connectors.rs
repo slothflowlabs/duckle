@@ -11109,7 +11109,12 @@ impl DuckdbEngine {
             "jsonl" => "jsonl",
             _ => "csv",
         };
-        let name = format!("duckle-ftp-{}.{}", std::process::id(), ext);
+        // A sequence number as well as the pid: two uploads in one process (two
+        // pipelines, or two sinks) must not share a file, or one deletes or
+        // replaces the rows the other is about to send.
+        static FTP_TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = FTP_TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = format!("duckle-ftp-{}-{}.{}", std::process::id(), seq, ext);
         let path = std::env::temp_dir().join(name);
         // Best-effort clear of any stale temp from a prior run with the same pid.
         let _ = std::fs::remove_file(&path);
@@ -21672,6 +21677,49 @@ pub(crate) fn is_sftp_target(host: &str, port: u16) -> bool {
 #[cfg(test)]
 mod ftp_tests {
     use super::is_sftp_target;
+
+    /// Two uploads in one process - two pipelines, or two sinks - each get
+    /// their own temp file. With one name per process, the second COPY deleted
+    /// and replaced the first one's file, so the first upload sent the other
+    /// run's rows, or found its file gone. The SFTP integration test hit it as
+    /// "open temp ... No such file or directory".
+    #[test]
+    fn two_uploads_in_one_process_do_not_share_a_temp_file() {
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN")
+            .ok()
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.exists())
+        else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN to a duckdb CLI to run");
+            return;
+        };
+        let engine = crate::DuckdbEngine::new(bin.clone());
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("run.db");
+        crate::apply_duckdb_sql(
+            &bin,
+            &db,
+            "CREATE VIEW a AS SELECT 'first' AS who; CREATE VIEW b AS SELECT 'second' AS who",
+        )
+        .unwrap();
+
+        let first = engine.ftp_copy_view_to_temp(&db, "a", "csv").unwrap();
+        let second = engine.ftp_copy_view_to_temp(&db, "b", "csv").unwrap();
+
+        let read = |p: &std::path::Path| {
+            std::fs::read_to_string(p)
+                .unwrap_or_default()
+                .replace("\r\n", "\n")
+        };
+        let (got_first, got_second) = (read(&first), read(&second));
+        let _ = std::fs::remove_file(&first);
+        let _ = std::fs::remove_file(&second);
+        assert_eq!(
+            got_first, "who\nfirst\n",
+            "the first upload's file was replaced"
+        );
+        assert_eq!(got_second, "who\nsecond\n");
+    }
 
     #[test]
     fn detects_sftp_targets_only() {
