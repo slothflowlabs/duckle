@@ -12,7 +12,7 @@ export const SECRET_NEEDLES = [
     'password', 'passwd', 'passphrase', 'secret', 'token', 'apikey', 'api_key',
     'privatekey', 'private_key', 'accesskey', 'access_key', 'accountkey',
     'clientsecret', 'client_secret', 'connectionstring', 'connection_string',
-    'sas', 'credential',
+    'connstring', 'sas', 'credential',
 ];
 
 /** Whole keys the needles would swallow that name something public, a token URL say. */

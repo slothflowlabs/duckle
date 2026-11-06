@@ -58,10 +58,12 @@ pub fn is_secret_prop_key(key: &str) -> bool {
 /// What a lowercased property key contains when it holds a credential. Public
 /// so the build bundler refines this list rather than keeping its own copy:
 /// its copy had lost `passphrase`, and bundled an SSH key's passphrase as typed.
-pub const SECRET_NEEDLES: [&str; 18] = [
+pub const SECRET_NEEDLES: [&str; 19] = [
     "password", "passwd", "passphrase", "secret", "token", "apikey", "api_key",
     "privatekey", "private_key", "accesskey", "access_key", "accountkey",
     "clientsecret", "client_secret", "connectionstring", "connection_string",
+    // `connString` on the PostgreSQL and MySQL nodes: a whole DSN, password and all.
+    "connstring",
     "sas", "credential",
 ];
 
@@ -1723,6 +1725,26 @@ mod tests {
             "refused a pipeline with no credential in it: {:?}",
             literal_secrets(&doc)
         );
+    }
+
+    /// The PostgreSQL and MySQL readers and writers, and PostgreSQL CDC, take a whole
+    /// connection string under `connString`, password and all. The needle was
+    /// `connectionstring`, which `connString` does not contain, so its value was shown
+    /// in the form, kept in run logs, exported inside the ATTACH of the compiled SQL,
+    /// and let through by build and deploy.
+    #[test]
+    fn a_conn_string_is_a_credential() {
+        assert!(is_secret_prop_key("connString"), "connString holds a password");
+        let doc = |value: &str| {
+            serde_json::json!({ "nodes": [{ "id": "n1", "data": { "label": "Postgres",
+                "properties": { "connString": value } } }] })
+        };
+        assert_eq!(
+            literal_secrets(&doc("host=db user=etl password=hunter2")),
+            vec!["Postgres / connString".to_string()]
+        );
+        // Written as a reference it is not the secret, and still packages.
+        assert!(literal_secrets(&doc("${ENV:PG_DSN}")).is_empty());
     }
 
     /// The shapes that must not panic or report: no nodes, no data, no properties.

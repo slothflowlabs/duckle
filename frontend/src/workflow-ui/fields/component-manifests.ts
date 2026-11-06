@@ -1710,6 +1710,8 @@ const CREDENTIAL_KEYS = new Set([
     'clientSecret',
     'privateKey',
     'connectionString',
+    // The PostgreSQL / MySQL family's whole DSN, password and all.
+    'connString',
 ]);
 
 /// Mask credential inputs, in one place rather than on ~50 declarations.

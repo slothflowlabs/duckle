@@ -5352,7 +5352,8 @@
                 "label": "Connection string (advanced)",
                 "kind": "text",
                 "placeholder": "mysql://user:p%40ss@host:3306/db  or  host=... dbname=... user=... password=...",
-                "description": "Optional. When set, this exact string is used for the ATTACH and the host/port/user/password above are ignored. Use it to encode special characters yourself or supply a full connection URL."
+                "description": "Optional. When set, this exact string is used for the ATTACH and the host/port/user/password above are ignored. Use it to encode special characters yourself or supply a full connection URL.",
+                "secret": true
               }
             ]
           }
@@ -5558,7 +5559,8 @@
                 "label": "Connection string (optional)",
                 "kind": "text",
                 "placeholder": "host=... port=5432 dbname=... user=...",
-                "description": "A libpq key-value string or postgresql:// URL. When set it replaces the host, port and credentials above."
+                "description": "A libpq key-value string or postgresql:// URL. When set it replaces the host, port and credentials above.",
+                "secret": true
               }
             ]
           },
@@ -5720,7 +5722,8 @@
                 "label": "Connection string (advanced)",
                 "kind": "text",
                 "placeholder": "mysql://user:p%40ss@host:3306/db  or  host=... dbname=... user=... password=...",
-                "description": "Optional. When set, this exact string is used for the ATTACH and the host/port/user/password above are ignored. Use it to encode special characters yourself or supply a full connection URL."
+                "description": "Optional. When set, this exact string is used for the ATTACH and the host/port/user/password above are ignored. Use it to encode special characters yourself or supply a full connection URL.",
+                "secret": true
               }
             ]
           }
@@ -5863,7 +5866,8 @@
                 "label": "Connection string (advanced)",
                 "kind": "text",
                 "placeholder": "mysql://user:p%40ss@host:3306/db  or  host=... dbname=... user=... password=...",
-                "description": "Optional. When set, this exact string is used for the ATTACH and the host/port/user/password above are ignored. Use it to encode special characters yourself or supply a full connection URL."
+                "description": "Optional. When set, this exact string is used for the ATTACH and the host/port/user/password above are ignored. Use it to encode special characters yourself or supply a full connection URL.",
+                "secret": true
               }
             ]
           }
@@ -6877,7 +6881,8 @@
                 "label": "Connection string (advanced)",
                 "kind": "text",
                 "placeholder": "mysql://user:p%40ss@host:3306/db  or  host=... dbname=... user=... password=...",
-                "description": "Optional. When set, this exact string is used for the ATTACH and the host/port/user/password above are ignored. Use it to encode special characters yourself or supply a full connection URL."
+                "description": "Optional. When set, this exact string is used for the ATTACH and the host/port/user/password above are ignored. Use it to encode special characters yourself or supply a full connection URL.",
+                "secret": true
               }
             ]
           }
@@ -35485,7 +35490,8 @@
                 "key": "connString",
                 "label": "Connection string (advanced)",
                 "kind": "text",
-                "description": "Optional. When set, this exact string is used for the ATTACH and the fields above are ignored."
+                "description": "Optional. When set, this exact string is used for the ATTACH and the fields above are ignored.",
+                "secret": true
               }
             ]
           },

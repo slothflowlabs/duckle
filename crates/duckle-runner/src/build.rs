@@ -1157,6 +1157,8 @@ mod tests {
             "passphrase", "keyPassphrase",
             // A path that reaches a credential stays redacted on purpose.
             "credentialsPath", "privateKeyPath",
+            // A PostgreSQL or MySQL connection string, password and all.
+            "connString",
         ] {
             assert!(super::is_secret_key(key), "{key} must not be bundled in the clear");
         }

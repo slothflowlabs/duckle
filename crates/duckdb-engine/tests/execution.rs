@@ -2620,6 +2620,37 @@ fn compiled_sql_redacts_secrets() {
 }
 
 #[test]
+fn compiled_sql_redacts_a_conn_string() {
+    // The same leak through another field: a PostgreSQL or MySQL node given a
+    // whole connection string. The ATTACH carried it verbatim, password and
+    // all, into the Plan tab and the exported script.
+    use duckle_duckdb_engine::compile_pipeline_sql_opts;
+    for (component, conn) in [
+        ("src.postgres", "host=db.example.com dbname=app user=admin password=c0nnstr1ngpw"),
+        ("src.mysql", "mysql://admin:c0nnstr1ngpw@db.example.com:3306/app"),
+    ] {
+        let d = doc(
+            json!([node("s", component, json!({ "connString": conn, "tableName": "orders" }))]),
+            json!([]),
+        );
+        let sql = compile_pipeline_sql_opts(&d, false)
+            .expect("compile_pipeline_sql_opts")
+            .iter()
+            .map(|s| s.sql.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !sql.contains("c0nnstr1ngpw"),
+            "{component}: the password inside connString leaked into compiled SQL: {sql}"
+        );
+        assert!(
+            sql.contains("${DUCKLE_CONN_STRING}"),
+            "{component}: expected a named placeholder in compiled SQL: {sql}"
+        );
+    }
+}
+
+#[test]
 fn run_errors_redact_secrets() {
     // Security regression: DuckDB's postgres ATTACH echoes the full connection
     // string (password included) in connect errors. That raw stderr used to be
