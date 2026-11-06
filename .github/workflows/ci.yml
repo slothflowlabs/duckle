@@ -459,6 +459,56 @@ jobs:
           DUCKLE_SHAREPOINT_URL: http://127.0.0.1:8765/sites/team
         run: cargo test -p duckle-duckdb-engine --test sharepoint
 
+  # SFTP against the runner's own OpenSSH server. russh, the SSH client under
+  # the SFTP source and sink, changes its API in minor releases, and the unit
+  # tests never connect to a server. The tests judge each transfer from the
+  # server's disk, which they share, not through the code under test.
+  sftp-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install DuckDB CLI
+        run: |
+          set -e
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
+          mkdir -p "$RUNNER_TEMP/duckdb"
+          tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
+          echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
+      - name: Start an OpenSSH SFTP server
+        run: |
+          set -e
+          [ -x /usr/sbin/sshd ] || { sudo apt-get update; sudo apt-get install -y openssh-server; }
+          sudo useradd --create-home duckle
+          echo 'duckle:Sftp-Pass-1' | sudo chpasswd
+          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/client_key"
+          sudo install -d -m 700 -o duckle -g duckle /home/duckle/.ssh
+          sudo install -m 600 -o duckle -g duckle "$RUNNER_TEMP/client_key.pub" /home/duckle/.ssh/authorized_keys
+          sudo install -d -m 777 /srv/duckle-sftp
+          sudo ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/duckle_test_host_key
+          printf '%s\n' 'Port 2222' 'ListenAddress 127.0.0.1' \
+            'HostKey /etc/ssh/duckle_test_host_key' 'PidFile /run/duckle_test_sshd.pid' \
+            'PasswordAuthentication yes' 'PubkeyAuthentication yes' \
+            'KbdInteractiveAuthentication no' 'UsePAM yes' 'Subsystem sftp internal-sftp' \
+            | sudo tee /etc/ssh/duckle_test_sshd_config > /dev/null
+          sudo mkdir -p /run/sshd
+          sudo /usr/sbin/sshd -t -f /etc/ssh/duckle_test_sshd_config
+          sudo /usr/sbin/sshd -f /etc/ssh/duckle_test_sshd_config
+          echo "DUCKLE_SFTP_FINGERPRINT=$(ssh-keygen -lf /etc/ssh/duckle_test_host_key.pub | awk '{print $2}')" >> "$GITHUB_ENV"
+          # The server is only a fair judge if OpenSSH's own client gets in.
+          echo 'ls /srv/duckle-sftp' | sftp -b - -i "$RUNNER_TEMP/client_key" -P 2222 \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null duckle@127.0.0.1
+      - name: Run SFTP tests
+        env:
+          DUCKLE_SFTP_HOST: 127.0.0.1
+          DUCKLE_SFTP_PORT: '2222'
+          DUCKLE_SFTP_USER: duckle
+          DUCKLE_SFTP_PASSWORD: Sftp-Pass-1
+          DUCKLE_SFTP_KEY: ${{ runner.temp }}/client_key
+          DUCKLE_SFTP_DIR: /srv/duckle-sftp
+        run: cargo test -p duckle-duckdb-engine --test sftp
+
   mysql-integration:
     runs-on: ubuntu-latest
     services:
