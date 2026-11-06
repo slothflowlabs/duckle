@@ -263,8 +263,8 @@ export default function PropertiesPanel({
         });
 
     // Rename and a double-click both land in the name field, which exists only
-    // once the panel is expanded and on its Basic tab. Rename used to look for it
-    // first, so from a collapsed panel or another tab it did nothing at all.
+    // once the panel is expanded. Rename used to look for it first, so from a
+    // collapsed panel it did nothing at all.
     const showName = (select: boolean) => {
         if (collapsed) toggleCollapsed();
         setTab('basic');
