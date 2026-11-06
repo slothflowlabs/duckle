@@ -134,7 +134,7 @@ jobs:
   # Compute the build matrix so a workflow_dispatch can re-roll a single OS
   # family (os_filter=linux) without rebuilding/clobbering the other assets. A
   # normal tag push leaves os_filter unset and builds every binary.
-  #   macOS: both built on the macos-14 (Apple Silicon) runner. The Intel binary
+  #   macOS: both built on the macos-15 (Apple Silicon) runner. The Intel binary
   #   is cross-compiled to x86_64-apple-darwin rather than run on a macos-13
   #   runner: GitHub's Intel-mac runners are scarce / being deprecated and
   #   routinely leave the job queued for hours, stalling the whole release.
@@ -150,7 +150,7 @@ jobs:
           OS_FILTER: ${{ github.event.inputs.os_filter }}
         run: |
           linux='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Duckle-linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Duckle-linux-arm64"}]'
-          all='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Duckle-linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Duckle-linux-arm64"},{"os":"macos-14","binary":"duckle","asset":"Duckle-macos-x64","target":"x86_64-apple-darwin"},{"os":"macos-14","binary":"duckle","asset":"Duckle-macos-arm64"},{"os":"windows-latest","binary":"duckle.exe","asset":"Duckle-windows-x64.exe"},{"os":"windows-11-arm","binary":"duckle.exe","asset":"Duckle-windows-arm64.exe"}]'
+          all='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Duckle-linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Duckle-linux-arm64"},{"os":"macos-15","binary":"duckle","asset":"Duckle-macos-x64","target":"x86_64-apple-darwin"},{"os":"macos-15","binary":"duckle","asset":"Duckle-macos-arm64"},{"os":"windows-latest","binary":"duckle.exe","asset":"Duckle-windows-x64.exe"},{"os":"windows-11-arm","binary":"duckle.exe","asset":"Duckle-windows-arm64.exe"}]'
           if [ "$OS_FILTER" = "linux" ]; then include="$linux"; else include="$all"; fi
           echo "matrix={\"include\":$include}" >> "$GITHUB_OUTPUT"
 
