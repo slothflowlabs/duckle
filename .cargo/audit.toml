@@ -53,4 +53,13 @@ ignore = [
     # itself clears stream::read::Decoder and the bulk API, which are what is used.
     # Remove when: zstd 0.13.3 is gone, as above.
     "RUSTSEC-2026-0403",
+
+    # thrift 0.17.0 - unbounded allocation from a length prefix in the binary protocol.
+    # The fix is on 0.23.0, and this copy is pinned by parquet 58 in the optional
+    # duckle-lance sidecar, which lancedb, lance and vortex hold on arrow 58. The
+    # engine's own parquet is 59, which does not use thrift. NOT REACHABLE: the sidecar
+    # reads only Parquet files the engine has just written with DuckDB, so every length
+    # in a footer it decodes is DuckDB's.
+    # Remove when: lancedb, lance and vortex move to arrow 59, or parquet 58 takes thrift 0.23+.
+    "RUSTSEC-2026-0435",
 ]
