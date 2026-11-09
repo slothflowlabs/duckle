@@ -50,6 +50,7 @@ https://github.com/user-attachments/assets/8bfac3fa-3f91-4b43-b5d8-a526716c8ef1
 
 - [Where Duckle runs](#where-duckle-runs)
 - [What is Duckle?](#what-is-duckle)
+- [What's new in v0.8.0](#whats-new-in-v080)
 - [What's new in v0.7.4](#whats-new-in-v074)
 - [What's new in v0.7.3](#whats-new-in-v073)
 - [What's new in v0.7.2](#whats-new-in-v072)
@@ -212,7 +213,7 @@ That's a real, native ETL pipeline built and run in under a minute. CSV is just 
 
 ## Download / Install
 
-Pick the binary for your OS from the [latest release](https://github.com/slothflowlabs/duckle/releases/tag/v0.7.4):
+Pick the binary for your OS from the [latest release](https://github.com/slothflowlabs/duckle/releases/tag/v0.8.0):
 
 | OS | Asset | How to run |
 |---|---|---|
@@ -4585,6 +4586,76 @@ gh release edit vX.Y.Z --draft=false --latest
 ```
 
 ---
+
+## What's new in v0.8.0
+
+111 commits. **DuckDB 2.0 runs underneath now, and interval schedules run on
+the clock**, so read *Before you upgrade* first. Beyond that: several servers can
+share a workspace, a Data Generator and a Tests tab, a canvas that shows row
+counts and takes notes, Kev as a Classify engine, and a fix for an FTP or SFTP
+upload that could send another run's rows under a green status.
+
+- **Before you upgrade.** Interval schedules now run on the clock in UTC: every
+  15 minutes means :00, :15, :30 and :45, and every 24 hours means midnight, so
+  every interval schedule fires at a new time, on one server as much as on
+  several. DuckDB moves to 2.0.0. A `.duckdb` file Duckle creates still opens in
+  DuckDB 1.5, but your own SQL may need changes (`x -> x + 1` lambdas are
+  refused, `~` matches anywhere in the string, division by zero raises an
+  error), a merge sink fails on two source rows for one key instead of keeping
+  the first, the first write to a DuckLake whose catalog is a DuckDB file
+  upgrades it past what DuckDB 1.x can attach, and a Quack server still on 1.5
+  cannot be reached. [Moving to DuckDB 2.0](#moving-to-duckdb-20) lists every
+  difference, each measured.
+- **Several servers on one workspace.** Each schedule occurrence is claimed
+  before it runs, by `serve` and by the desktop scheduler alike, so it runs once
+  however many are looking. A run accepted by one server can be followed and
+  cancelled through another, and what a dead replica was running is marked
+  interrupted within about a minute instead of reading as running until a
+  restart. The servers have to share one host for now.
+- **Test a pipeline where you build it.** A Data Generator node
+  (`src.generate`) makes believable fake rows (names, emails, addresses,
+  companies, phone numbers, network values, numbers and dates), the same rows
+  for the same seed, so a pipeline can run without what it connects to. The
+  Tests tab, in the desktop app and the web editor, writes test cases from any
+  node and runs them through the same harness as `duckle test`. `qa.assert`
+  states a condition the rows must meet.
+- **The canvas.** After a run each node shows the rows it produced. Right-click
+  the canvas for a note kept beside the nodes. Align selected nodes and snap
+  them to a grid. Double-click a node to open its editor, or the visual mapper
+  for a Map. *Generate documentation* saves a pipeline as one self-contained
+  HTML page with nothing secret in it. Undo right after opening no longer
+  writes the starter pipeline over your file.
+- **New nodes and options.** Kev, a Jev-like decision model you run on your own
+  machine, is a third engine on Classify: no API key for a local server, an
+  answer that is always one of your labels, and its probability beside it.
+  Nearest Join, DuckDB 2.0's `NEAREST` as a node. Cast to VARIANT. Delta time
+  travel (`asOfVersion` / `asOfTimestamp`) and partitioned Delta tables. CSV,
+  TSV and JSON Lines sinks append (#367). A REST source reads server-sent
+  events (#365). A CSV source can detect whether its first row is a header.
+  `src.changed` chooses what a first run does with files already there, filters
+  by glob and modification time, takes a capped listing oldest first, and no
+  longer strands everything past `maxEntries` on S3 (#324). Run parameters bind
+  to a schedule and to each pipeline in a plan step, and editor runs check them
+  like every other surface (#317). A connection can be tested from its editor.
+- **Green runs that were wrong.** When two ran at once in one process, an FTP,
+  FTPS or SFTP upload could send the other run's rows under a green status,
+  two upserts with one upstream node id could corrupt each other's staging
+  table, and two runs of one Access read or dbt node shared temp files. Each
+  now has its own. A `.gz` or `.zst` file sink published plain text under the
+  compressed name, a regression in 0.7.4.
+- **Security.** Backfill and batch ids in the serve console are confined to
+  their store folders. A run parameter an operator supplies can no longer carry
+  SQL expression syntax. `connString` and a password written into a URL are
+  treated as credentials everywhere, and MCP's `read_pipeline` shows a typed
+  secret as `***` and refuses to write `***` back. Dependency advisories fixed
+  in russh, hickory, quinn-proto, rustls, zip, pageant, zstd and others.
+- **Also fixed.** Delete removes the item's file (#371). SQL Server autodetect
+  works in the desktop app (#375). The first-run screen honours
+  `DUCKLE_DUCKDB_BIN` (#373). ClickHouse strings through ADBC arrive as text
+  (#364). A `ctl.die` message names the offending row's columns (#366). A zoned
+  timestamp and a saved watermark no longer depend on the host's time zone
+  (#359). A DuckDB found on `PATH` starts. `duckle-runner --version` reports
+  the release.
 
 ## What's new in v0.7.4
 
