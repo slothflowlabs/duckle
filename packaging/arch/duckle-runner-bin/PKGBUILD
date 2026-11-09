@@ -6,7 +6,7 @@
 # than shipped as one package with optional dependencies.
 
 pkgname=duckle-runner-bin
-pkgver=0.7.4
+pkgver=0.8.0
 pkgrel=1
 pkgdesc="Headless runner for Duckle data pipelines (static binary)"
 arch=('x86_64')
@@ -28,7 +28,7 @@ options=('!strip')
 source=("duckle-runner-${pkgver}::${url}/releases/download/v${pkgver}/duckle-runner-linux-x64"
         "LICENSE-MIT-${pkgver}::https://raw.githubusercontent.com/slothflowlabs/duckle/v${pkgver}/LICENSE-MIT"
         "LICENSE-APACHE-${pkgver}::https://raw.githubusercontent.com/slothflowlabs/duckle/v${pkgver}/LICENSE-APACHE")
-sha256sums=('c84e1bedb020c1e60e221322011ba9c8774bb7274286a900a703a44e4c6055da'
+sha256sums=('9fb005ba092992fa6115ac0f64c94d88d5e9e716c9a5957735467cc6becbf632'
             '95935915cc360fbaf736ecbe22229671c404fc0bc53dab63663a58a9352fcea9'
             '1e7e1bc923e0f439d5aefb15b19be5082079f2929f86da51ae1339d1db5bce2b')
 
