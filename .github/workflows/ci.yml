@@ -311,7 +311,11 @@ jobs:
   # service container; engine tests that don't see DUCKLE_PG_HOST in the
   # main matrix job skip cleanly, so this is the only place they execute.
   postgres-integration:
-    runs-on: ubuntu-latest
+    # ubuntu-24.04, not ubuntu-latest, for every job here that builds Rust:
+    # ubuntu-latest moved to 26.04, where lz4-sys's bundled C fails to link
+    # (rust-lld: undefined symbol XXH32). 24.04 is what the main test leg and
+    # every release binary are built on.
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -372,7 +376,7 @@ jobs:
   # than as service containers, because a service cannot be given a command
   # and MinIO needs `server /data`.
   iceberg-rest-integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -427,7 +431,7 @@ jobs:
   # tests/sharepoint_mock.py: SharePoint's REST shapes behind a real NTLM
   # acceptor (pyspnego), the same one curl's --ntlm signs in to.
   sharepoint-ntlm-integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -464,7 +468,7 @@ jobs:
   # tests never connect to a server. The tests judge each transfer from the
   # server's disk, which they share, not through the code under test.
   sftp-integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -510,7 +514,7 @@ jobs:
         run: cargo test -p duckle-duckdb-engine --test sftp
 
   mysql-integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       mysql:
         image: mysql:8.0
@@ -550,7 +554,7 @@ jobs:
   # skipped everywhere else, which is how the default bulk path broke every
   # upsert without a test going red.
   sqlserver-integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       mssql:
         image: mcr.microsoft.com/mssql/server:2022-latest
@@ -590,7 +594,7 @@ jobs:
   # MinIO needs `server /data` as the container command; GitHub Actions
   # service containers can't override CMD, so we run it as a step.
   minio-integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -668,7 +672,7 @@ jobs:
   # rust matrix (engine execution tests + duckle-secrets' connection_e2e).
   salesforce-integration:
     if: vars.SF_LIVE_TESTS == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable

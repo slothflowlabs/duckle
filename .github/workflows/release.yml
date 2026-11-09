@@ -91,7 +91,10 @@ jobs:
   # SHA256SUMS covers it.
   capability-registry:
     needs: prepare-release
-    runs-on: ubuntu-latest
+    # ubuntu-24.04, like the release binaries: on ubuntu-latest (26.04) lz4-sys's
+    # bundled C fails to link (rust-lld: undefined symbol XXH32), and this job
+    # builds duckle-runner.
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
