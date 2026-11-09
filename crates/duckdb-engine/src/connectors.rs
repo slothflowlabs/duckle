@@ -10681,7 +10681,8 @@ impl DuckdbEngine {
         // Scaffold/resolve the project, write profiles.yml, and assemble the
         // project/profiles/vars flags shared with the #146 pre-warm parse.
         let inv = prepare_dbt_invocation(spec, db)?;
-        // The profile is this run's alone; nothing reads it after the stage.
+        // The profile, and an inline project under it, are this run's alone;
+        // nothing reads them after the stage.
         let _profile = ScopedDir(inv.profiles_dir.clone());
         // dbt <user command tokens (default "run")> then the shared flags. The
         // command is split on whitespace (documented; no shell quoting), which
@@ -18478,8 +18479,22 @@ struct DbtInvocation {
 /// identical project + vars - which is what keeps the pre-warm's partial-parse
 /// cache valid for the run (dbt does a full re-parse when the vars change).
 fn prepare_dbt_invocation(spec: &DbtSpec, db: &Path) -> Result<DbtInvocation, EngineError> {
+    // This run's own directory for the stage: profiles.yml, and an inline
+    // project under project/. Named after the run's database, which is unique
+    // per run and the same for the pre-warm parse and the run, so those two
+    // still hand dbt the same profile and project. Named by process id or node
+    // id, two runs of one node at once shared them: one run's dbt built into
+    // the other's database, or built the other's model. run_dbt removes it
+    // when the stage ends; a project the node points at lives elsewhere.
+    let profiles_dir = std::env::temp_dir().join(format!(
+        "duckle_dbt_{}_{}",
+        db.file_stem()
+            .map(|s| s.to_string_lossy())
+            .unwrap_or_default(),
+        spec.node_id.replace(|c: char| !c.is_alphanumeric(), "_")
+    ));
     // Resolve the project directory. Inline mode (no project_dir) scaffolds an
-    // ephemeral one-model project from spec.inline_model into a stable temp dir.
+    // ephemeral one-model project from spec.inline_model into this run's dir.
     let project_dir: std::path::PathBuf = match &spec.project_dir {
         Some(dir) => Path::new(dir).to_path_buf(),
         None => {
@@ -18488,8 +18503,12 @@ fn prepare_dbt_invocation(spec: &DbtSpec, db: &Path) -> Result<DbtInvocation, En
                     "xf.dbt: inline mode needs model SQL (or set projectDir)".into(),
                 )
             })?;
-            scaffold_inline_dbt_project(&spec.node_id, &spec.inline_model_name, model)
-                .map_err(|e| EngineError::Query(format!("xf.dbt: scaffold inline project: {e}")))?
+            scaffold_inline_dbt_project(
+                &profiles_dir.join("project"),
+                &spec.inline_model_name,
+                model,
+            )
+            .map_err(|e| EngineError::Query(format!("xf.dbt: scaffold inline project: {e}")))?
         }
     };
     let project_dir_str = project_dir.to_string_lossy().into_owned();
@@ -18518,18 +18537,6 @@ fn prepare_dbt_invocation(spec: &DbtSpec, db: &Path) -> Result<DbtInvocation, En
         .unwrap_or_else(|| db.to_string_lossy().into_owned());
     let target_db_yaml = target_db.replace('\\', "/");
 
-    // Named after this run's database, which is unique per run and the same for
-    // the pre-warm parse and the run, so those two still hand dbt the same
-    // profile. Named by process id and node id, two runs of one node at once
-    // shared a profiles.yml, and one run's dbt built into the other's database.
-    // run_dbt removes it when the stage ends.
-    let profiles_dir = std::env::temp_dir().join(format!(
-        "duckle_dbt_{}_{}",
-        db.file_stem()
-            .map(|s| s.to_string_lossy())
-            .unwrap_or_default(),
-        spec.node_id.replace(|c: char| !c.is_alphanumeric(), "_")
-    ));
     std::fs::create_dir_all(&profiles_dir)
         .map_err(|e| EngineError::Query(format!("xf.dbt: profiles dir: {}", e)))?;
     let profiles_yaml = format!(
@@ -18687,7 +18694,7 @@ pub(crate) fn prewarm_dbt(cancel: &std::sync::atomic::AtomicBool, db: &Path, spe
 
 /// Write `content` to `path` only if it differs from what's already there.
 /// Preserves file mtime when unchanged, which keeps dbt's partial-parse cache
-/// valid across runs.
+/// valid between the pre-warm parse and the run.
 fn write_str_if_changed(path: &Path, content: &str) -> std::io::Result<()> {
     if let Ok(existing) = std::fs::read_to_string(path) {
         if existing == content {
@@ -18698,42 +18705,22 @@ fn write_str_if_changed(path: &Path, content: &str) -> std::io::Result<()> {
 }
 
 fn scaffold_inline_dbt_project(
-    node_id: &str,
+    root: &Path,
     model_name: &str,
     model_sql: &str,
 ) -> std::io::Result<std::path::PathBuf> {
     // Same rule the planner uses for output_model (plan::sanitize_dbt_model_name)
     // so the table written here and the name the engine reads back agree.
     let safe_model: String = plan::sanitize_dbt_model_name(model_name);
-    // Stable per-node project dir (NOT process-id keyed) so dbt's
-    // target/partial_parse.msgpack survives across app launches. dbt-core's
-    // parse is the dominant cost of an inline run; a warm partial-parse cache
-    // shaves ~1s off an otherwise-cold start.
-    let root = std::env::temp_dir().join(format!(
-        "duckle_dbt_proj_{}",
-        node_id.replace(|c: char| !c.is_alphanumeric(), "_")
-    ));
     let models = root.join("models");
     std::fs::create_dir_all(&models)?;
-    // Drop any stale model left by a previous run (e.g. the model was renamed),
-    // so the project only ever contains the current inline model.
-    if let Ok(entries) = std::fs::read_dir(&models) {
-        for e in entries.flatten() {
-            let p = e.path();
-            if p.extension().and_then(|x| x.to_str()) == Some("sql")
-                && p.file_stem().and_then(|x| x.to_str()) != Some(safe_model.as_str())
-            {
-                let _ = std::fs::remove_file(p);
-            }
-        }
-    }
     let project_yml = "name: duckle\nversion: '1.0.0'\nprofile: duckle\nconfig-version: 2\nmodel-paths: [\"models\"]\nmodels:\n  duckle:\n    +materialized: table\n";
     // Write only when content differs: a touched dbt_project.yml forces dbt to
     // discard the partial-parse cache, and a re-touched model file needlessly
     // re-parses it. Identical content keeps the whole cache valid.
     write_str_if_changed(&root.join("dbt_project.yml"), project_yml)?;
     write_str_if_changed(&models.join(format!("{}.sql", safe_model)), model_sql)?;
-    Ok(root)
+    Ok(root.to_path_buf())
 }
 
 #[cfg(test)]
@@ -18822,6 +18809,85 @@ mod dbt_profile_tests {
             !inv.profiles_dir.exists(),
             "the profile outlived the stage: {}",
             inv.profiles_dir.display()
+        );
+    }
+
+    /// Two runs of one inline dbt node at once each get their own project.
+    /// Named by node id alone, the project was shared: the second run's model
+    /// SQL replaced the first one's, so the first run could build the other
+    /// run's model, and each could read the other's target/run_results.json.
+    /// The pre-warm parse and the run of ONE run must still share it, or the
+    /// pre-warmed parse is thrown away.
+    #[test]
+    fn two_runs_of_one_inline_dbt_node_each_get_their_own_project() {
+        let node = format!("project_{}", std::process::id());
+        let spec_a = inline(&node);
+        let mut spec_b = inline(&node);
+        spec_b.inline_model = Some("select 2 as x".into());
+        let tmp = tempfile::tempdir().unwrap();
+        let (run_a, run_b) = (
+            tmp.path().join("duckle_run_a.duckdb"),
+            tmp.path().join("duckle_run_b.duckdb"),
+        );
+
+        let prewarm = prepare_dbt_invocation(&spec_a, &run_a).unwrap();
+        let run = prepare_dbt_invocation(&spec_a, &run_a).unwrap();
+        let other = prepare_dbt_invocation(&spec_b, &run_b).unwrap();
+
+        let model_a = std::fs::read_to_string(run.project_dir.join("models").join("m.sql")).unwrap();
+        for inv in [&run, &other] {
+            let _ = std::fs::remove_dir_all(&inv.project_dir);
+            let _ = std::fs::remove_dir_all(&inv.profiles_dir);
+        }
+        assert_eq!(
+            prewarm.project_dir, run.project_dir,
+            "the pre-warm parse and the run must share a project"
+        );
+        assert_ne!(run.project_dir, other.project_dir);
+        assert_eq!(model_a, "select 1 as x", "run a's model was replaced by run b's");
+    }
+
+    /// The stage removes the inline project it scaffolded when it ends, failed
+    /// or not, as it does the profile; one project per run would pile up.
+    #[test]
+    fn a_dbt_stage_removes_its_inline_project_when_it_ends() {
+        let mut spec = inline(&format!("projclean_{}", std::process::id()));
+        spec.dbt_bin = Some(format!("no-such-dbt-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("duckle_run_d.duckdb");
+        let inv = prepare_dbt_invocation(&spec, &db).unwrap();
+        assert!(inv.project_dir.join("dbt_project.yml").exists());
+
+        let engine = crate::DuckdbEngine::new(std::path::PathBuf::from("duckdb"));
+        let ran = engine.run_dbt(&db, &spec);
+        assert!(ran.is_err(), "there is no dbt to run");
+        assert!(
+            !inv.project_dir.exists(),
+            "the project outlived the stage: {}",
+            inv.project_dir.display()
+        );
+    }
+
+    /// A project the node points at is the user's: the stage removes only what
+    /// it scaffolded, never that.
+    #[test]
+    fn a_dbt_stage_leaves_the_users_own_project_in_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("my_dbt");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("dbt_project.yml"), "name: mine\nprofile: mine\n").unwrap();
+        let mut spec = inline(&format!("userproj_{}", std::process::id()));
+        spec.project_dir = Some(project.to_string_lossy().into_owned());
+        spec.inline_model = None;
+        spec.dbt_bin = Some(format!("no-such-dbt-{}", std::process::id()));
+        let db = tmp.path().join("duckle_run_e.duckdb");
+
+        let engine = crate::DuckdbEngine::new(std::path::PathBuf::from("duckdb"));
+        let ran = engine.run_dbt(&db, &spec);
+        assert!(ran.is_err(), "there is no dbt to run");
+        assert!(
+            project.join("dbt_project.yml").exists(),
+            "the stage removed the user's own dbt project"
         );
     }
 }
