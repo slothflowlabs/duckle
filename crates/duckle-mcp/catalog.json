@@ -29394,7 +29394,7 @@
       "label": "Classify",
       "kind": "transform",
       "availability": "available",
-      "summary": "Per-row LLM-backed classification. Props: inputColumn (default `text`), outputColumn (default `category`), categories (required, comma-separated list), model (default `gpt-4o-mini`), apiKey, baseUrl. The model is prompted to pick exactly one category; anything outside the list normalizes to `UNKNOWN`. One HTTP call per row.",
+      "summary": "Per-row LLM-backed classification. Props: inputColumn (default `text`), outputColumn (default `category`), categories (required, comma-separated list), model (default `gpt-4o-mini`), apiKey, baseUrl. The model is prompted to pick exactly one category; anything outside the list normalizes to `UNKNOWN`. One HTTP call per row. provider `jev` or `kev` asks a decision model a typed choice question instead, so the answer is always on the list and `<outputColumn>_confidence` holds its probability; Kev runs on your own server and needs no key.",
       "ports": {
         "inputs": [
           {
@@ -29415,7 +29415,7 @@
         "id": "xf.ai.classify",
         "kind": "transform",
         "label": "Classify",
-        "description": "Per-row LLM-backed classification. Props: inputColumn (default `text`), outputColumn (default `category`), categories (required, comma-separated list), model (default `gpt-4o-mini`), apiKey, baseUrl. The model is prompted to pick exactly one category; anything outside the list normalizes to `UNKNOWN`. One HTTP call per row.",
+        "description": "Per-row LLM-backed classification. Props: inputColumn (default `text`), outputColumn (default `category`), categories (required, comma-separated list), model (default `gpt-4o-mini`), apiKey, baseUrl. The model is prompted to pick exactly one category; anything outside the list normalizes to `UNKNOWN`. One HTTP call per row. provider `jev` or `kev` asks a decision model a typed choice question instead, so the answer is always on the list and `<outputColumn>_confidence` holds its probability; Kev runs on your own server and needs no key.",
         "schemaSource": "declared",
         "sections": [
           {
@@ -29434,9 +29434,13 @@
                   {
                     "label": "Jev evaluation model (Vercel AI Gateway)",
                     "value": "jev"
+                  },
+                  {
+                    "label": "Kev decision model (your own server)",
+                    "value": "kev"
                   }
                 ],
-                "description": "A chat model is asked for the label and its prose is matched back to your list, so an off-list reply becomes UNKNOWN. Jev is asked a typed choice question whose options ARE your labels, so it cannot answer off-list, and it also writes <output column>_confidence with the probability it gave the label it picked."
+                "description": "A chat model is asked for the label and its prose is matched back to your list, so an off-list reply becomes UNKNOWN. Jev and Kev are asked a typed choice question whose options ARE your labels, so they cannot answer off-list, and they also write <output column>_confidence with the probability given to the label picked. Kev (github.com/jaredpalmer/kev) is a Jev-like model you run yourself: a blank Base URL means its server on http://127.0.0.1:8008."
               },
               {
                 "key": "inputColumn",
@@ -29457,14 +29461,14 @@
                 "label": "Model",
                 "kind": "text",
                 "defaultValue": "gpt-4o-mini",
-                "description": "Left empty, a chat provider uses gpt-4o-mini and Jev uses typesafe-ai/jev."
+                "description": "Left empty, a chat provider uses gpt-4o-mini, Jev uses typesafe-ai/jev and Kev uses kev-latest."
               },
               {
                 "key": "apiKey",
                 "label": "API key",
                 "kind": "text",
                 "placeholder": "••••••••",
-                "description": "For Jev this is a Vercel AI Gateway API key, sent as a bearer token.",
+                "description": "For Jev this is a Vercel AI Gateway API key, sent as a bearer token. Kev needs one only when its server was started with KEV_API_KEY.",
                 "secret": true
               },
               {

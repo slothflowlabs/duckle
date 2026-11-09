@@ -6728,9 +6728,22 @@ fn build_stage(
         let from_view = inputs
             .main()
             .ok_or_else(|| EngineError::Config(format!("{}: upstream input required", component_id)))?;
-        let api_key = string_prop(&props, "apiKey")
+        // An evaluation model is a different endpoint, a different body and a
+        // different answer, so the defaults for model and host follow it.
+        let provider = string_prop(&props, "provider")
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| EngineError::Config(format!("{}: apiKey required", component_id)))?;
+            .unwrap_or_else(|| "openai".into());
+        let jev = provider == "jev";
+        let kev = provider == "kev";
+        // Kev runs on your own machine, and its server is open unless it was
+        // started with KEV_API_KEY, so it is the one engine that needs no key.
+        let api_key = match string_prop(&props, "apiKey").filter(|s| !s.is_empty()) {
+            Some(key) => key,
+            None if kev => String::new(),
+            None => {
+                return Err(EngineError::Config(format!("{}: apiKey required", component_id)))
+            }
+        };
         let categories: Vec<String> = string_prop(&props, "categories")
             .or_else(|| string_prop(&props, "labels"))
             .filter(|s| !s.is_empty())
@@ -6747,12 +6760,6 @@ fn build_stage(
                 component_id
             )));
         }
-        // An evaluation model is a different endpoint, a different body and a
-        // different answer, so the defaults for model and host follow it.
-        let provider = string_prop(&props, "provider")
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "openai".into());
-        let jev = provider == "jev";
         ai_classify = Some(AiClassifySpec {
             provider: provider.clone(),
             budget: AiBudgetSpec::read(&props),
@@ -6773,11 +6780,24 @@ fn build_stage(
                 .unwrap_or_else(|| "category".into()),
             categories,
             model: string_prop(&props, "model").filter(|s| !s.is_empty()).unwrap_or_else(|| {
-                if jev { "typesafe-ai/jev".into() } else { "gpt-4o-mini".into() }
+                if jev {
+                    "typesafe-ai/jev".into()
+                } else if kev {
+                    "kev-latest".into()
+                } else {
+                    "gpt-4o-mini".into()
+                }
             }),
             api_key,
+            // kev.serve binds 127.0.0.1:8008 unless started with --port.
             base_url: string_prop(&props, "baseUrl").filter(|s| !s.is_empty()).unwrap_or_else(|| {
-                if jev { "https://ai-gateway.vercel.sh".into() } else { "https://api.openai.com".into() }
+                if jev {
+                    "https://ai-gateway.vercel.sh".into()
+                } else if kev {
+                    "http://127.0.0.1:8008".into()
+                } else {
+                    "https://api.openai.com".into()
+                }
             }),
             headers: headers_from_props(&props),
             endpoint_path: string_prop(&props, "endpointPath").filter(|s| !s.is_empty()),

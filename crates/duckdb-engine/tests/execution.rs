@@ -13856,6 +13856,135 @@ fn ai_classify_through_jev_answers_in_set_and_reports_its_probability() {
     );
 }
 
+/// xf.ai.classify through Kev, a Jev-like decision model that runs on your own
+/// machine. Kev serves TypeSafe's System One API: the same typed `choice`
+/// question as Jev on the gateway, posted to /v1/systemone, and an answer that
+/// carries the probability of every option. Its server is open unless it was
+/// started with KEV_API_KEY, so the node needs no key and sends none.
+///
+/// Kev's answer also has a `confidence`, which is chance-corrected rather than
+/// the probability of the label it picked. The column stays that probability,
+/// as it is for Jev, so the two engines mean the same thing by it.
+#[test]
+fn ai_classify_through_kev_needs_no_key_and_reports_its_probability() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let captured = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let cap = captured.clone();
+    let handle = std::thread::spawn(move || {
+        // One request per row, answering in the shape kev.serve returns:
+        // (choice, probability of it, Kev's chance-corrected confidence).
+        let replies = [("positive", 0.91_f64, 0.82_f64), ("negative", 0.77_f64, 0.54_f64)];
+        for (idx, stream) in incoming_bounded(&listener, 2).enumerate() {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+            stream.set_nodelay(true).ok();
+            let mut buf = Vec::with_capacity(8192);
+            let mut chunk = [0u8; 4096];
+            for _ in 0..16 {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+            }
+            cap.lock().unwrap().push(String::from_utf8_lossy(&buf).to_string());
+            let (choice, p, confidence) = replies[idx.min(replies.len() - 1)];
+            let other = if choice == "positive" { "negative" } else { "positive" };
+            let body = format!(
+                r#"{{"model":"kev-latest","answers":{{"category":{{"type":"choice","choice":"{}","confidence":{},"probabilities":{{"{}":{},"{}":{}}}}}}},"usage":{{"input_tokens":12,"output_tokens":31}},"latency_ms":41}}"#,
+                choice,
+                confidence,
+                choice,
+                p,
+                other,
+                1.0 - p
+            );
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let in_csv = write_file(tmp.path(), "in.csv", "id,text\n1,loved it\n2,hated it\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let base = format!("http://127.0.0.1:{port}");
+    // No apiKey and no model: a local Kev server takes neither.
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": in_csv, "hasHeader": true })),
+            node("c", "xf.ai.classify", json!({
+                "provider": "kev",
+                "inputColumn": "text",
+                "categories": "positive, negative",
+                "outputColumn": "category",
+                "baseUrl": base,
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "kev classify failed: {:?}", r.error);
+
+    let cat1 = scalar_string(&format!(
+        "SELECT category FROM read_csv_auto('{}') WHERE id = 1",
+        out
+    ));
+    assert_eq!(cat1, "positive");
+    let conf1 = scalar_string(&format!(
+        "SELECT CAST(category_confidence AS VARCHAR) FROM read_csv_auto('{}') WHERE id = 1",
+        out
+    ));
+    assert!(
+        conf1.starts_with("0.91"),
+        "the chosen label's probability, not Kev's confidence: {conf1}"
+    );
+    let cat2 = scalar_string(&format!(
+        "SELECT category FROM read_csv_auto('{}') WHERE id = 2",
+        out
+    ));
+    assert_eq!(cat2, "negative");
+
+    // The request is the System One contract, with no key to send.
+    let reqs = captured.lock().unwrap();
+    let first = reqs.first().expect("a request reached the stub").clone();
+    assert!(
+        first.starts_with("POST /v1/systemone "),
+        "wrong route: {}",
+        first.lines().next().unwrap_or("")
+    );
+    assert!(
+        !first.to_ascii_lowercase().contains("\r\nauthorization:"),
+        "no key was set, so no Authorization header should be sent"
+    );
+    let body_start = first.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
+    let body: serde_json::Value =
+        serde_json::from_str(&first[body_start..]).expect("the body is JSON");
+    assert_eq!(body["model"], "kev-latest");
+    assert_eq!(body["state"], "loved it", "the row's text is the state");
+    assert_eq!(body["questions"]["category"]["type"], "choice");
+    let criteria = body["questions"]["category"]["criteria"]
+        .as_object()
+        .expect("a choice question's criteria carry the options");
+    let mut options: Vec<&String> = criteria.keys().collect();
+    options.sort();
+    assert_eq!(options, vec!["negative", "positive"]);
+    assert!(criteria.values().all(|v| v.is_null()), "options without descriptions");
+}
+
 /// xf.ai.dedupe: pre-stage rows with embedding column, run dedupe at
 /// a tight threshold, verify the near-duplicate row is dropped.
 /// Uses CSV input where the embedding column is a JSON array literal

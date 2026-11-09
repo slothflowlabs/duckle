@@ -5339,6 +5339,53 @@
     }
 
     #[test]
+    fn classify_through_kev_needs_no_key_and_defaults_to_a_local_server() {
+        // Kev runs on your own machine, and its server is open unless it was
+        // started with KEV_API_KEY, so a Kev node needs no key. The host and
+        // model default to what `python -m kev.serve` binds and answers to.
+        let classify = |props: serde_json::Value| {
+            pipeline_from_json(
+                &serde_json::json!({
+                    "nodes": [
+                        {"id": "s", "position": {"x": 0, "y": 0}, "data": {
+                            "label": "CSV", "componentId": "src.csv",
+                            "properties": {"path": "/tmp/t.csv", "hasHeader": true}}},
+                        {"id": "c", "position": {"x": 0, "y": 0}, "data": {
+                            "label": "Classify", "componentId": "xf.ai.classify",
+                            "properties": props}}
+                    ],
+                    "edges": [
+                        {"id": "e1", "source": "s", "target": "c",
+                         "data": {"connectionType": "main"}}
+                    ]
+                })
+                .to_string(),
+            )
+        };
+        let p = classify(serde_json::json!({"provider": "kev", "categories": "spam, ham"}));
+        let stage = compile(&p)
+            .expect("a Kev node with no key compiles")
+            .stages
+            .into_iter()
+            .find(|s| s.node_id == "c")
+            .unwrap();
+        match stage.runtime {
+            Some(RuntimeSpec::AiClassify(spec)) => {
+                assert_eq!(spec.base_url, "http://127.0.0.1:8008");
+                assert_eq!(spec.model, "kev-latest");
+                assert_eq!(spec.api_key, "");
+            }
+            other => panic!("expected an AiClassify runtime, got: {:?}", other),
+        }
+        // Every other engine still needs its key.
+        for provider in ["jev", "openai"] {
+            let p = classify(serde_json::json!({"provider": provider, "categories": "spam, ham"}));
+            let err = compile(&p).unwrap_err().to_string();
+            assert!(err.contains("apiKey required"), "{provider}: {err}");
+        }
+    }
+
+    #[test]
     fn driver_sink_upsert_rejects_missing_conflict_columns() {
         // The driver sinks (mongo / oracle / databricks / snowflake / sqlserver)
         // route through upsert_keys_from rather than build_sink_sql, and every

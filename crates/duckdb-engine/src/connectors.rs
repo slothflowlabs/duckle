@@ -11354,7 +11354,8 @@ impl DuckdbEngine {
     /// #142: apply the user's custom headers, then default `Authorization: Bearer`
     /// and JSON `Content-Type` only when the custom headers did not already set
     /// them (case-insensitive), so a custom gateway can override auth while
-    /// existing pipelines (no custom headers) behave exactly as before.
+    /// existing pipelines (no custom headers) behave exactly as before. With no
+    /// key there is no bearer to send, which only Kev's local server allows.
     fn ai_post(endpoint: &str, headers: &[(String, String)], api_key: &str) -> ureq::Request {
         let mut req = crate::tls::http_agent().post(endpoint);
         let has = |name: &str| headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(name));
@@ -11362,7 +11363,7 @@ impl DuckdbEngine {
         for (k, v) in headers {
             req = req.set(k, v);
         }
-        if !has_auth {
+        if !has_auth && !api_key.is_empty() {
             req = req.set("Authorization", &format!("Bearer {}", api_key));
         }
         if !has_ct {
@@ -13410,13 +13411,22 @@ impl DuckdbEngine {
             materialize_empty_like_view(&self.bin, db, &spec.node_id, &spec.from_view)?;
             return Ok(format!("ai.classify: 0 upstream rows -> {}", spec.node_id));
         }
-        // Jev is an evaluation model and is not on the chat-completions
-        // surface at all, so the route moves with the provider.
-        let jev = spec.provider == "jev";
+        // Jev and Kev are evaluation models and are not on the chat-completions
+        // surface at all, so the route moves with the provider. Kev serves
+        // TypeSafe's System One API, which takes the same typed question as Jev
+        // on the gateway and gives the same answer; only the route differs.
+        let kev = spec.provider == "kev";
+        let evaluation = kev || spec.provider == "jev";
         let endpoint = Self::ai_endpoint(
             &spec.base_url,
             &spec.endpoint_path,
-            if jev { "/v1/evaluate" } else { "/v1/chat/completions" },
+            if kev {
+                "/v1/systemone"
+            } else if evaluation {
+                "/v1/evaluate"
+            } else {
+                "/v1/chat/completions"
+            },
         );
         let cat_list = spec.categories.join(", ");
         // A `choice` question's criteria are REQUIRED and are the options
@@ -13496,7 +13506,7 @@ impl DuckdbEngine {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let body = if jev {
+            let body = if evaluation {
                 serde_json::json!({
                     "model": spec.model,
                     "state": text,
@@ -13536,7 +13546,7 @@ impl DuckdbEngine {
             // An evaluation answer carries the decision and, optionally, how
             // sure it was. `probabilities` is documented as optional on a
             // choice, so a missing one is a null confidence, not a failure.
-            let (raw, confidence) = if jev {
+            let (raw, confidence) = if evaluation {
                 let answer = response.pointer("/answers/category");
                 let choice = answer
                     .and_then(|a| a.get("choice"))
@@ -13577,7 +13587,7 @@ impl DuckdbEngine {
             // Only the evaluation path has a probability to report. Writing the
             // column unconditionally would put an always-null column into every
             // existing pipeline's output.
-            if jev {
+            if evaluation {
                 obj.insert(
                     format!("{}_confidence", spec.output_column),
                     confidence

@@ -1455,7 +1455,9 @@ pub struct AiClassifySpec {
     /// Which decision surface answers. `openai` sends a constrained prompt to
     /// chat completions and matches the reply back to the list; `jev` posts a
     /// typed `choice` question to an evaluation model, which cannot answer
-    /// outside the criteria and returns a probability for what it picked.
+    /// outside the criteria and returns a probability for what it picked;
+    /// `kev` asks the same question of a Kev server, a Jev-like model the
+    /// user runs, through TypeSafe's System One API.
     pub provider: String,
     /// #258: a hard ceiling on what this stage may spend.
     pub budget: AiBudgetSpec,
