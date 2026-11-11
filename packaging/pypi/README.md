@@ -1,6 +1,6 @@
 # Duckle
 
-**Local-first ETL/ELT pipelines that run on DuckDB.** Python builds the plan, DuckDB moves the rows. Your data never leaves the machine.
+**ETL/ELT pipelines you own, on DuckDB. Author and deploy to your servers or cloud.** Python builds the plan, DuckDB moves the rows, with no vendor cloud in between.
 
 [![PyPI](https://img.shields.io/pypi/v/duckle.svg)](https://pypi.org/project/duckle/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/slothflowlabs/duckle/blob/main/LICENSE)

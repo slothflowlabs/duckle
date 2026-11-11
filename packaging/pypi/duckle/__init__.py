@@ -1,4 +1,4 @@
-"""Duckle: local-first ETL/ELT pipelines that run on DuckDB.
+"""Duckle: ETL/ELT pipelines you own, on DuckDB.
 
     import duckle
 

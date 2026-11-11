@@ -9,7 +9,7 @@ name = "duckle"
 # affects the wheel has to bump here without waiting for a desktop release.
 # Keep this in step with __version__ in duckle/__init__.py.
 version = "0.8.0"
-description = "Local-first ETL/ELT pipelines that run on DuckDB. CLI, Python API, and MCP server for AI agents."
+description = "ETL/ELT pipelines you own, on DuckDB. Author and deploy to your servers or cloud. CLI, Python API, and MCP server for AI agents."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "Apache-2.0" }
