@@ -105,13 +105,16 @@
   "sidebar": {
     "ariaLabel": "Oldalsáv",
     "project": "Projekt",
-    "components": "Alkatrészek"
+    "components": "Alkatrészek",
+    "importJob": "Talend",
+    "importJobTitle": "Talend .item feladat importálása"
   },
   "editorTabs": {
     "ariaLabel": "Szerkesztői nézetek",
     "canvas": "Vászon",
     "plan": "Terv",
-    "run": "Fut"
+    "run": "Fut",
+    "history": "Előzmények"
   },
   "header": {
     "unsavedChanges": "nem mentett módosítások",
@@ -121,6 +124,9 @@
     "stopTooltip": "Csővezeték leállítása (F6)",
     "run": "Fut",
     "runTooltip": "Futtatási folyamat (F5)",
+    "live": "Élő",
+    "liveTooltip": "Élő előnézet: futtatás egy csomópontig, amikor kijelölöd vagy szerkeszted",
+    "liveOnTooltip": "Élő előnézet bekapcsolva - egy csomópont kijelölése vagy szerkesztése addig futtatja a folyamatot",
     "save": "Megtakarítás",
     "saveTooltip": "Mentés (Ctrl+S)",
     "validate": "Érvényesít",
@@ -132,10 +138,14 @@
     "copySqlDesc": "Fordítás DuckDB SQL-be, másolás vágólapra",
     "exportSql": "Exportálás .sql formátumban",
     "exportSqlDesc": "Töltse le a lefordított SQL-t fájlként",
+    "generateDocs": "Dokumentáció készítése",
+    "generateDocsDesc": "HTML-oldal minden lépéssel, beállítással és oszloppal",
     "exportJson": "Exportálás .duckle.json formátumban",
     "exportJsonDesc": "Töltse le a csomópontokat + éleket hordozható JSON-ként",
     "importJson": "Importálja a .duckle.json fájlt...",
-    "importJsonDesc": "Nyisson meg egy hordozható JSON-t új folyamatként"
+    "importJsonDesc": "Nyisson meg egy hordozható JSON-t új folyamatként",
+    "importJob": "Talend feladat importálása...",
+    "importJobDesc": "Talend .item feladat átalakítása folyamattá"
   },
   "properties": {
     "nothingSelected": "Semmi nincs kiválasztva",
@@ -182,7 +192,8 @@
     "ready": "[kész]",
     "consoleDesc": "A végrehajtási napló. Futtasson egy folyamatot, és itt megjelenik az egyes szakaszok állapota, sorszáma és időzítése – valamint az esetleges hibák.",
     "pipelineFinished": "A csővezeték elkészült",
-    "pipelineLabel": "Csővezeték"
+    "pipelineLabel": "Csővezeték",
+    "dismissError": "Hiba elvetése"
   },
   "status": {
     "pipelineLabel": "Csővezeték:",
@@ -213,6 +224,33 @@
     "failed": "Sikertelen",
     "ok": "RENDBEN",
     "colsSingular": "col",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "sor",
+    "rowsPlural": "sor",
+    "rowsIn": "{{rows}} {{unit}} {{ms}} ms alatt"
+  },
+  "import": {
+    "reportTitle": "Feladat importálva",
+    "reportCounts": "{{total}} komponensből {{translated}} átalakítva",
+    "reportNotReady": "Ez a folyamat még nem futtatható. Előbb nézd át az alábbi listát.",
+    "reportClean": "Minden komponens átalakítva, és semmi sem maradt megoldatlanul.",
+    "reportNeedsAttention": "Figyelmet igényel ({{n}})",
+    "reportComponentsSeen": "A feladatfájl komponensei",
+    "failed": "Semmi sem lett importálva"
+  },
+  "launcher": {
+    "title": "Kezdőlap",
+    "goHome": "Kezdőlap",
+    "subtitle": "Válaszd ki, mit szeretnél tenni",
+    "subtitleWs": "Munkaterület: {{name}}",
+    "planned": "Tervezett",
+    "showOnStartup": "Megjelenítés a Duckle indításakor",
+    "readyCount": "{{n}} elérhető most",
+    "groupCount": "{{ready}} / {{total}} kész",
+    "group": {
+      "build": "Építés",
+      "operate": "Üzemeltetés",
+      "govern": "Irányítás"
+    }
   }
 }

@@ -1,6 +1,6 @@
 {
   "topbar": {
-    "workspaceTooltip": "Hapësira e punës: {{rruga}}\nKlikoni për të kaluar",
+    "workspaceTooltip": "Hapësira e punës: {{path}}\nKlikoni për të kaluar",
     "activeContextHint": "Konteksti aktiv - fushat mund të lidhen me variablat e tij",
     "noContext": "Asnjë kontekst",
     "git": "Git (hapësirë ​​pune)",
@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Shiriti anësor",
     "project": "Projekti",
-    "components": "Komponentët"
+    "components": "Komponentët",
+    "importJob": "Talend",
+    "importJobTitle": "Importo një punë Talend .item"
   },
   "editorTabs": {
     "ariaLabel": "Pamjet e redaktorit",
     "canvas": "Kanavacë",
     "plan": "Planifikoni",
-    "run": "Vraponi"
+    "run": "Vraponi",
+    "history": "Historiku"
   },
   "header": {
     "unsavedChanges": "ndryshime të paruajtura",
@@ -32,6 +35,9 @@
     "stopTooltip": "Ndalimi i tubacionit (F6)",
     "run": "Vraponi",
     "runTooltip": "Ekzekutimi i tubacionit (F5)",
+    "live": "Drejtpërdrejt",
+    "liveTooltip": "Parapamje e drejtpërdrejtë: ekzekuton deri te një nyje kur e zgjedh ose e redakton",
+    "liveOnTooltip": "Parapamja e drejtpërdrejtë aktive - zgjedhja ose redaktimi i një nyjeje ekzekuton pipeline-in deri te ajo",
     "save": "Ruaj",
     "saveTooltip": "Ruaj (Ctrl+S)",
     "validate": "Vërtetoni",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Përpiloni në DuckDB SQL, kopjoni në clipboard",
     "exportSql": "Eksporto si .sql",
     "exportSqlDesc": "Shkarkoni SQL-në e përpiluar si skedar",
+    "generateDocs": "Gjenero dokumentacionin",
+    "generateDocsDesc": "Një faqe HTML me çdo hap, cilësim dhe kolonë",
     "exportJson": "Eksporto si .duckle.json",
     "exportJsonDesc": "Shkarko nyjet + skajet si JSON portativ",
     "importJson": "Importo .duckle.json...",
-    "importJsonDesc": "Hapni një JSON portativ si një tubacion i ri"
+    "importJsonDesc": "Hapni një JSON portativ si një tubacion i ri",
+    "importJob": "Importo punë Talend...",
+    "importJobDesc": "Shndërro një punë Talend .item në pipeline"
   },
   "palette": {
     "sources": "Burimet",
@@ -170,7 +180,8 @@
     "ready": "[gati]",
     "consoleDesc": "Regjistri i ekzekutimit. Drejtoni një tubacion dhe statusi i secilës fazë, numri i rreshtave dhe koha - plus çdo gabim - shfaqet këtu.",
     "pipelineFinished": "Tubacioni i përfunduar",
-    "pipelineLabel": "Tubacioni"
+    "pipelineLabel": "Tubacioni",
+    "dismissError": "Mbyll gabimin"
   },
   "status": {
     "pipelineLabel": "Tubacioni:",
@@ -201,7 +212,10 @@
     "failed": "Dështoi",
     "ok": "OK",
     "colsSingular": "kol",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "rresht",
+    "rowsPlural": "rreshta",
+    "rowsIn": "{{rows}} {{unit}} në {{ms}} ms"
   },
   "common": {
     "save": "Ruaj",
@@ -214,5 +228,29 @@
     "loading": "Po ngarkohet...",
     "error": "Gabim",
     "success": "Suksese"
+  },
+  "import": {
+    "reportTitle": "Puna u importua",
+    "reportCounts": "{{translated}} nga {{total}} komponentë u shndërruan",
+    "reportNotReady": "Ky pipeline nuk është ende gati për ekzekutim. Kalo fillimisht listën më poshtë.",
+    "reportClean": "Të gjithë komponentët u shndërruan dhe asgjë nuk mbeti e pazgjidhur.",
+    "reportNeedsAttention": "Kërkon vëmendje ({{n}})",
+    "reportComponentsSeen": "Komponentët në skedarin e punës",
+    "failed": "Asgjë nuk u importua"
+  },
+  "launcher": {
+    "title": "Kreu",
+    "goHome": "Kreu",
+    "subtitle": "Zgjidh çfarë dëshiron të bësh",
+    "subtitleWs": "Hapësira e punës: {{name}}",
+    "planned": "I planifikuar",
+    "showOnStartup": "Shfaqe kur hapet Duckle",
+    "readyCount": "{{n}} të disponueshme tani",
+    "groupCount": "{{ready}} nga {{total}} gati",
+    "group": {
+      "build": "Ndërto",
+      "operate": "Opero",
+      "govern": "Qeverisje"
+    }
   }
 }

@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Stranska vrstica",
     "project": "Projekt",
-    "components": "Komponente"
+    "components": "Komponente",
+    "importJob": "Talend",
+    "importJobTitle": "Uvozi opravilo Talend .item"
   },
   "editorTabs": {
     "ariaLabel": "Pogledi urednika",
     "canvas": "Platno",
     "plan": "Načrtujte",
-    "run": "Teči"
+    "run": "Teči",
+    "history": "Zgodovina"
   },
   "header": {
     "unsavedChanges": "neshranjene spremembe",
@@ -32,6 +35,9 @@
     "stopTooltip": "Ustavi cevovod (F6)",
     "run": "Teči",
     "runTooltip": "Zaženi cevovod (F5)",
+    "live": "V živo",
+    "liveTooltip": "Predogled v živo: zažene do vozlišča, ko ga izberete ali uredite",
+    "liveOnTooltip": "Predogled v živo vklopljen - izbira ali urejanje vozlišča zažene cevovod do njega",
     "save": "Shrani",
     "saveTooltip": "Shrani (Ctrl+S)",
     "validate": "Potrdi",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Prevedi v DuckDB SQL, kopiraj v odložišče",
     "exportSql": "Izvozi kot .sql",
     "exportSqlDesc": "Prenesite prevedeni SQL kot datoteko",
+    "generateDocs": "Ustvari dokumentacijo",
+    "generateDocsDesc": "Stran HTML z vsakim korakom, nastavitvijo in stolpcem",
     "exportJson": "Izvozi kot .duckle.json",
     "exportJsonDesc": "Prenesite vozlišča + robove kot prenosni JSON",
     "importJson": "Uvozi .duckle.json ...",
-    "importJsonDesc": "Odprite prenosni JSON kot nov cevovod"
+    "importJsonDesc": "Odprite prenosni JSON kot nov cevovod",
+    "importJob": "Uvozi opravilo Talend...",
+    "importJobDesc": "Pretvori opravilo Talend .item v cevovod"
   },
   "palette": {
     "sources": "Viri",
@@ -170,7 +180,8 @@
     "ready": "[pripravljeno]",
     "consoleDesc": "Dnevnik izvajanja. Zaženite cevovod in stanje vsake stopnje, število vrstic in čas – ter morebitne napake – se prikažejo tukaj.",
     "pipelineFinished": "Cevovod končan",
-    "pipelineLabel": "Cevovod"
+    "pipelineLabel": "Cevovod",
+    "dismissError": "Zapri napako"
   },
   "status": {
     "pipelineLabel": "Cevovod:",
@@ -201,7 +212,10 @@
     "failed": "Ni uspelo",
     "ok": "OK",
     "colsSingular": "kol",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "vrstica",
+    "rowsPlural": "vrstic",
+    "rowsIn": "{{rows}} {{unit}} v {{ms}} ms"
   },
   "common": {
     "save": "Shrani",
@@ -214,5 +228,29 @@
     "loading": "Nalaganje...",
     "error": "Napaka",
     "success": "Uspeh"
+  },
+  "import": {
+    "reportTitle": "Opravilo uvoženo",
+    "reportCounts": "Pretvorjenih {{translated}} od {{total}} komponent",
+    "reportNotReady": "Ta cevovod še ni pripravljen za zagon. Najprej preglejte spodnji seznam.",
+    "reportClean": "Vse komponente pretvorjene in nič ni ostalo nerešeno.",
+    "reportNeedsAttention": "Potrebuje pozornost ({{n}})",
+    "reportComponentsSeen": "Komponente v datoteki opravila",
+    "failed": "Nič ni bilo uvoženo"
+  },
+  "launcher": {
+    "title": "Domov",
+    "goHome": "Domov",
+    "subtitle": "Izberite, kaj želite narediti",
+    "subtitleWs": "Delovni prostor: {{name}}",
+    "planned": "Načrtovano",
+    "showOnStartup": "Prikaži ob odprtju Duckle",
+    "readyCount": "{{n}} na voljo zdaj",
+    "groupCount": "{{ready}} od {{total}} pripravljenih",
+    "group": {
+      "build": "Gradnja",
+      "operate": "Delovanje",
+      "govern": "Upravljanje"
+    }
   }
 }

@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Hliðarstika",
     "project": "Verkefni",
-    "components": "Íhlutir"
+    "components": "Íhlutir",
+    "importJob": "Talend",
+    "importJobTitle": "Flytja inn Talend .item-verk"
   },
   "editorTabs": {
     "ariaLabel": "Skoðanir ritstjóra",
     "canvas": "Striga",
     "plan": "Áætlun",
-    "run": "Hlaupa"
+    "run": "Hlaupa",
+    "history": "Saga"
   },
   "header": {
     "unsavedChanges": "óvistaðar breytingar",
@@ -32,6 +35,9 @@
     "stopTooltip": "Stöðva leiðsla (F6)",
     "run": "Hlaupa",
     "runTooltip": "Keyra leiðslu (F5)",
+    "live": "Í beinni",
+    "liveTooltip": "Forskoðun í beinni: keyrir að hnút þegar þú velur hann eða breytir honum",
+    "liveOnTooltip": "Forskoðun í beinni virk - að velja eða breyta hnút keyrir leiðsluna að honum",
     "save": "Vista",
     "saveTooltip": "Vista (Ctrl+S)",
     "validate": "Staðfesta",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Settu saman í DuckDB SQL, afritaðu á klemmuspjald",
     "exportSql": "Flytja út sem .sql",
     "exportSqlDesc": "Sæktu samansetta SQL sem skrá",
+    "generateDocs": "Búa til skjölun",
+    "generateDocsDesc": "HTML-síða með hverju skrefi, stillingu og dálki",
     "exportJson": "Flytja út sem .duckle.json",
     "exportJsonDesc": "Sæktu hnúta + brúnir sem flytjanlegt JSON",
     "importJson": "Flytja inn .duckle.json...",
-    "importJsonDesc": "Opnaðu færanlegan JSON sem nýja leiðslu"
+    "importJsonDesc": "Opnaðu færanlegan JSON sem nýja leiðslu",
+    "importJob": "Flytja inn Talend-verk...",
+    "importJobDesc": "Þýða Talend .item-verk yfir í leiðslu"
   },
   "palette": {
     "sources": "Heimildir",
@@ -170,7 +180,8 @@
     "ready": "[tilbúinn]",
     "consoleDesc": "Framkvæmdaskráin. Keyrðu leiðslu og staða hvers stigs, raðafjöldi og tímasetning - ásamt öllum villum - birtist hér.",
     "pipelineFinished": "Leiðsla lokið",
-    "pipelineLabel": "Leiðsla"
+    "pipelineLabel": "Leiðsla",
+    "dismissError": "Loka villu"
   },
   "status": {
     "pipelineLabel": "Leiðsla:",
@@ -201,7 +212,10 @@
     "failed": "Mistókst",
     "ok": "Allt í lagi",
     "colsSingular": "col",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "röð",
+    "rowsPlural": "raðir",
+    "rowsIn": "{{rows}} {{unit}} á {{ms}} ms"
   },
   "common": {
     "save": "Vista",
@@ -214,5 +228,29 @@
     "loading": "Hleður...",
     "error": "Villa",
     "success": "Árangur"
+  },
+  "import": {
+    "reportTitle": "Verk flutt inn",
+    "reportCounts": "{{translated}} af {{total}} íhlutum þýddir",
+    "reportNotReady": "Þessi leiðsla er ekki tilbúin til keyrslu enn. Farðu fyrst yfir listann hér að neðan.",
+    "reportClean": "Allir íhlutir þýddir og ekkert óleyst.",
+    "reportNeedsAttention": "Þarfnast athygli ({{n}})",
+    "reportComponentsSeen": "Íhlutir í verkskránni",
+    "failed": "Ekkert var flutt inn"
+  },
+  "launcher": {
+    "title": "Heim",
+    "goHome": "Heim",
+    "subtitle": "Veldu hvað þú vilt gera",
+    "subtitleWs": "Vinnusvæði: {{name}}",
+    "planned": "Fyrirhugað",
+    "showOnStartup": "Sýna þetta þegar Duckle opnast",
+    "readyCount": "{{n}} í boði núna",
+    "groupCount": "{{ready}} af {{total}} tilbúin",
+    "group": {
+      "build": "Smíða",
+      "operate": "Reka",
+      "govern": "Stýra"
+    }
   }
 }

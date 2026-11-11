@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Хажуугийн самбар",
     "project": "Төсөл",
-    "components": "Бүрэлдэхүүн хэсгүүд"
+    "components": "Бүрэлдэхүүн хэсгүүд",
+    "importJob": "Talend",
+    "importJobTitle": "Talend .item ажлыг импортлох"
   },
   "editorTabs": {
     "ariaLabel": "Редакторын үзэл бодол",
     "canvas": "Канвас",
     "plan": "Төлөвлөгөө",
-    "run": "Гүй"
+    "run": "Гүй",
+    "history": "Түүх"
   },
   "header": {
     "unsavedChanges": "хадгалагдаагүй өөрчлөлтүүд",
@@ -32,6 +35,9 @@
     "stopTooltip": "Дамжуулах хоолойг зогсоох (F6)",
     "run": "Гүй",
     "runTooltip": "Дамжуулах хоолойг ажиллуулах (F5)",
+    "live": "Шууд",
+    "liveTooltip": "Шууд урьдчилан харах: зангилааг сонгох эсвэл засах үед тэр хүртэл ажиллуулна",
+    "liveOnTooltip": "Шууд урьдчилан харах асаалттай - зангилааг сонгох эсвэл засах нь дамжуулах шугамыг тэр хүртэл ажиллуулна",
     "save": "Хадгалах",
     "saveTooltip": "Хадгалах (Ctrl+S)",
     "validate": "Баталгаажуулах",
@@ -43,10 +49,14 @@
     "copySqlDesc": "DuckDB SQL рүү хөрвүүлэх, санах ой руу хуулах",
     "exportSql": ".sql болгон экспортлох",
     "exportSqlDesc": "Эмхэтгэсэн SQL-г файл хэлбэрээр татаж авна уу",
+    "generateDocs": "Баримт бичиг үүсгэх",
+    "generateDocsDesc": "Алхам, тохиргоо, багана бүрийг агуулсан HTML хуудас",
     "exportJson": ".duckle.json хэлбэрээр экспортлох",
     "exportJsonDesc": "Зангилаа + ирмэгийг зөөврийн JSON болгон татаж аваарай",
     "importJson": ".duckle.json импортлох...",
-    "importJsonDesc": "Зөөврийн JSON-г шинэ шугам хэлбэрээр нээнэ үү"
+    "importJsonDesc": "Зөөврийн JSON-г шинэ шугам хэлбэрээр нээнэ үү",
+    "importJob": "Talend ажлыг импортлох...",
+    "importJobDesc": "Talend .item ажлыг дамжуулах шугам болгон хөрвүүлэх"
   },
   "palette": {
     "sources": "Эх сурвалжууд",
@@ -170,7 +180,8 @@
     "ready": "[бэлэн]",
     "consoleDesc": "Гүйцэтгэлийн бүртгэл. Дамжуулах шугамыг ажиллуулж, үе шат бүрийн статус, мөрийн тоо, цаг хугацаа, түүнчлэн аливаа алдаа энд харагдана.",
     "pipelineFinished": "Шугам хоолой дууссан",
-    "pipelineLabel": "Дамжуулах хоолой"
+    "pipelineLabel": "Дамжуулах хоолой",
+    "dismissError": "Алдааг хаах"
   },
   "status": {
     "pipelineLabel": "Дамжуулах хоолой:",
@@ -201,7 +212,10 @@
     "failed": "Амжилтгүй",
     "ok": "OK",
     "colsSingular": "колон",
-    "colsPlural": "колс"
+    "colsPlural": "колс",
+    "rowsSingular": "мөр",
+    "rowsPlural": "мөр",
+    "rowsIn": "{{ms}} мс-д {{rows}} {{unit}}"
   },
   "common": {
     "save": "Хадгалах",
@@ -214,5 +228,29 @@
     "loading": "Ачааж байна...",
     "error": "Алдаа",
     "success": "Амжилт"
+  },
+  "import": {
+    "reportTitle": "Ажил импортлогдлоо",
+    "reportCounts": "{{total}} бүрэлдэхүүнээс {{translated}} хөрвүүлэгдсэн",
+    "reportNotReady": "Энэ дамжуулах шугам ажиллахад хараахан бэлэн биш байна. Эхлээд доорх жагсаалтыг шалгана уу.",
+    "reportClean": "Бүх бүрэлдэхүүнийг хөрвүүлсэн бөгөөд шийдэгдээгүй зүйл үлдээгүй.",
+    "reportNeedsAttention": "Анхаарал шаардлагатай ({{n}})",
+    "reportComponentsSeen": "Ажлын файл дахь бүрэлдэхүүнүүд",
+    "failed": "Юу ч импортлогдсонгүй"
+  },
+  "launcher": {
+    "title": "Нүүр",
+    "goHome": "Нүүр",
+    "subtitle": "Юу хийхээ сонгоно уу",
+    "subtitleWs": "Ажлын талбар: {{name}}",
+    "planned": "Төлөвлөгдсөн",
+    "showOnStartup": "Duckle нээгдэхэд үүнийг харуулах",
+    "readyCount": "Одоо {{n}} ашиглах боломжтой",
+    "groupCount": "{{total}}-аас {{ready}} бэлэн",
+    "group": {
+      "build": "Бүтээх",
+      "operate": "Ажиллуулах",
+      "govern": "Удирдах"
+    }
   }
 }

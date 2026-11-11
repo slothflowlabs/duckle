@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Бүйірлік тақта",
     "project": "Жоба",
-    "components": "Құрамдас бөліктер"
+    "components": "Құрамдас бөліктер",
+    "importJob": "Talend",
+    "importJobTitle": "Talend .item тапсырмасын импорттау"
   },
   "editorTabs": {
     "ariaLabel": "Редактор көріністері",
     "canvas": "Кенеп",
     "plan": "Жоспар",
-    "run": "Жүгіру"
+    "run": "Жүгіру",
+    "history": "Тарих"
   },
   "header": {
     "unsavedChanges": "сақталмаған өзгерістер",
@@ -32,6 +35,9 @@
     "stopTooltip": "Құбырды тоқтату (F6)",
     "run": "Жүгіру",
     "runTooltip": "Құбырды іске қосу (F5)",
+    "live": "Тікелей",
+    "liveTooltip": "Тікелей алдын ала қарау: түйінді таңдағанда немесе өңдегенде соған дейін орындайды",
+    "liveOnTooltip": "Тікелей алдын ала қарау қосулы - түйінді таңдау немесе өңдеу конвейерді соған дейін орындайды",
     "save": "Сақтау",
     "saveTooltip": "Сақтау (Ctrl+S)",
     "validate": "Тексеру",
@@ -43,10 +49,14 @@
     "copySqlDesc": "DuckDB SQL жүйесіне құрастырыңыз, алмасу буферіне көшіріңіз",
     "exportSql": ".sql ретінде экспорттау",
     "exportSqlDesc": "Құрастырылған SQL файлын жүктеп алыңыз",
+    "generateDocs": "Құжаттама жасау",
+    "generateDocsDesc": "Әр қадам, баптау және бағаны бар HTML беті",
     "exportJson": ".duckle.json ретінде экспорттау",
     "exportJsonDesc": "Түйіндерді + жиектерді портативті JSON ретінде жүктеп алыңыз",
     "importJson": ".duckle.json импорттау...",
-    "importJsonDesc": "Портативті JSON файлын жаңа конвейер ретінде ашыңыз"
+    "importJsonDesc": "Портативті JSON файлын жаңа конвейер ретінде ашыңыз",
+    "importJob": "Talend тапсырмасын импорттау...",
+    "importJobDesc": "Talend .item тапсырмасын конвейерге аудару"
   },
   "palette": {
     "sources": "Дереккөздер",
@@ -170,7 +180,8 @@
     "ready": "[дайын]",
     "consoleDesc": "Орындау журналы. Құбырды іске қосыңыз және әрбір кезеңнің күйі, жолдар саны және уақыты және кез келген қателер осы жерде көрсетіледі.",
     "pipelineFinished": "Құбыр аяқталды",
-    "pipelineLabel": "Құбыр"
+    "pipelineLabel": "Құбыр",
+    "dismissError": "Қатені жабу"
   },
   "status": {
     "pipelineLabel": "Құбыр:",
@@ -201,7 +212,10 @@
     "failed": "Сәтсіз",
     "ok": "Жарайды",
     "colsSingular": "кол",
-    "colsPlural": "колс"
+    "colsPlural": "колс",
+    "rowsSingular": "жол",
+    "rowsPlural": "жол",
+    "rowsIn": "{{ms}} мс ішінде {{rows}} {{unit}}"
   },
   "common": {
     "save": "Сақтау",
@@ -214,5 +228,29 @@
     "loading": "Жүктелуде...",
     "error": "Қате",
     "success": "Сәттілік"
+  },
+  "import": {
+    "reportTitle": "Тапсырма импортталды",
+    "reportCounts": "{{total}} компоненттің {{translated}} аударылды",
+    "reportNotReady": "Бұл конвейер әлі орындауға дайын емес. Алдымен төмендегі тізімді қарап шығыңыз.",
+    "reportClean": "Барлық компоненттер аударылды, шешілмеген ештеңе қалмады.",
+    "reportNeedsAttention": "Назар аударуды қажет етеді ({{n}})",
+    "reportComponentsSeen": "Тапсырма файлындағы компоненттер",
+    "failed": "Ештеңе импортталмады"
+  },
+  "launcher": {
+    "title": "Басты бет",
+    "goHome": "Басты бет",
+    "subtitle": "Не істегіңіз келетінін таңдаңыз",
+    "subtitleWs": "Жұмыс кеңістігі: {{name}}",
+    "planned": "Жоспарланған",
+    "showOnStartup": "Duckle ашылғанда мұны көрсету",
+    "readyCount": "Қазір {{n}} қолжетімді",
+    "groupCount": "{{total}} ішінен {{ready}} дайын",
+    "group": {
+      "build": "Құру",
+      "operate": "Пайдалану",
+      "govern": "Басқару"
+    }
   }
 }

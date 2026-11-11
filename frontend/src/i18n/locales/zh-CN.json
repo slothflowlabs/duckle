@@ -16,7 +16,9 @@
   "sidebar": {
     "ariaLabel": "侧边栏",
     "project": "项目",
-    "components": "组件"
+    "components": "组件",
+    "importJob": "Talend",
+    "importJobTitle": "导入 Talend .item 作业"
   },
   "editorTabs": {
     "ariaLabel": "编辑器视图",
@@ -33,6 +35,9 @@
     "stopTooltip": "停止管道（F6）",
     "run": "运行",
     "runTooltip": "运行管道（F5）",
+    "live": "实时",
+    "liveTooltip": "实时预览：选中或编辑节点时，运行到该节点",
+    "liveOnTooltip": "实时预览已开启 - 选中或编辑节点会把管道运行到该节点",
     "save": "保存",
     "saveTooltip": "保存（Ctrl+S）",
     "validate": "验证",
@@ -44,10 +49,14 @@
     "copySqlDesc": "编译为DuckDB SQL并复制到剪贴板",
     "exportSql": "导出为.sql文件",
     "exportSqlDesc": "将编译后的SQL下载为文件",
+    "generateDocs": "生成文档",
+    "generateDocsDesc": "包含每个步骤、设置和列的 HTML 页面",
     "exportJson": "导出为.duckle.json文件",
     "exportJsonDesc": "将节点和边下载为可移植的JSON文件",
     "importJson": "导入.duckle.json文件",
-    "importJsonDesc": "打开可移植的JSON文件作为新管道"
+    "importJsonDesc": "打开可移植的JSON文件作为新管道",
+    "importJob": "导入 Talend 作业...",
+    "importJobDesc": "将 Talend .item 作业转换为管道"
   },
   "palette": {
     "sources": "数据源",
@@ -203,7 +212,10 @@
     "failed": "失败",
     "ok": "正常",
     "colsSingular": "单列",
-    "colsPlural": "多列"
+    "colsPlural": "多列",
+    "rowsSingular": "行",
+    "rowsPlural": "行",
+    "rowsIn": "{{rows}} {{unit}}，用时 {{ms}} ms"
   },
   "common": {
     "save": "保存",
@@ -216,5 +228,29 @@
     "loading": "加载中",
     "error": "错误",
     "success": "成功"
+  },
+  "import": {
+    "reportTitle": "作业已导入",
+    "reportCounts": "已转换 {{translated}}/{{total}} 个组件",
+    "reportNotReady": "此管道尚不能运行。请先处理下方列表。",
+    "reportClean": "所有组件均已转换，没有未解决的问题。",
+    "reportNeedsAttention": "需要处理（{{n}}）",
+    "reportComponentsSeen": "作业文件中的组件",
+    "failed": "未导入任何内容"
+  },
+  "launcher": {
+    "title": "主页",
+    "goHome": "主页",
+    "subtitle": "选择你要做的事",
+    "subtitleWs": "工作区：{{name}}",
+    "planned": "计划中",
+    "showOnStartup": "Duckle 打开时显示此页",
+    "readyCount": "{{n}} 项现已可用",
+    "groupCount": "{{ready}}/{{total}} 已就绪",
+    "group": {
+      "build": "构建",
+      "operate": "运行",
+      "govern": "治理"
+    }
   }
 }

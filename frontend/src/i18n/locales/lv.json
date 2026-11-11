@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Sānjosla",
     "project": "Projekts",
-    "components": "Sastāvdaļas"
+    "components": "Sastāvdaļas",
+    "importJob": "Talend",
+    "importJobTitle": "Importēt Talend .item darbu"
   },
   "editorTabs": {
     "ariaLabel": "Redaktora skati",
     "canvas": "Audekls",
     "plan": "Plānot",
-    "run": "Skrien"
+    "run": "Skrien",
+    "history": "Vēsture"
   },
   "header": {
     "unsavedChanges": "nesaglabātās izmaiņas",
@@ -32,6 +35,9 @@
     "stopTooltip": "Apturēt cauruļvadu (F6)",
     "run": "Skrien",
     "runTooltip": "Palaist cauruļvadu (F5)",
+    "live": "Tiešraide",
+    "liveTooltip": "Tiešais priekšskatījums: izpilda līdz mezglam, kad to atlasāt vai rediģējat",
+    "liveOnTooltip": "Tiešais priekšskatījums ieslēgts - mezgla atlase vai rediģēšana izpilda konveijeru līdz tam",
     "save": "Saglabāt",
     "saveTooltip": "Saglabāt (Ctrl+S)",
     "validate": "Apstiprināt",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Kompilējiet DuckDB SQL, kopējiet starpliktuvē",
     "exportSql": "Eksportēt kā .sql",
     "exportSqlDesc": "Lejupielādējiet apkopoto SQL kā failu",
+    "generateDocs": "Ģenerēt dokumentāciju",
+    "generateDocsDesc": "HTML lapa ar katru soli, iestatījumu un kolonnu",
     "exportJson": "Eksportēt kā .duckle.json",
     "exportJsonDesc": "Lejupielādējiet mezglus + malas kā pārnēsājamu JSON",
     "importJson": "Importēt failu .duckle.json...",
-    "importJsonDesc": "Atveriet portatīvo JSON kā jaunu konveijeru"
+    "importJsonDesc": "Atveriet portatīvo JSON kā jaunu konveijeru",
+    "importJob": "Importēt Talend darbu...",
+    "importJobDesc": "Pārveidot Talend .item darbu konveijerā"
   },
   "palette": {
     "sources": "Avoti",
@@ -170,7 +180,8 @@
     "ready": "[gatavs]",
     "consoleDesc": "Izpildes žurnāls. Palaidiet cauruļvadu, un šeit tiek parādīts katra posma statuss, rindu skaits un laiks, kā arī visas kļūdas.",
     "pipelineFinished": "Cauruļvads pabeigts",
-    "pipelineLabel": "Cauruļvads"
+    "pipelineLabel": "Cauruļvads",
+    "dismissError": "Aizvērt kļūdu"
   },
   "status": {
     "pipelineLabel": "Cauruļvads:",
@@ -201,7 +212,10 @@
     "failed": "Neizdevās",
     "ok": "Labi",
     "colsSingular": "kol",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "rinda",
+    "rowsPlural": "rindas",
+    "rowsIn": "{{rows}} {{unit}} {{ms}} ms laikā"
   },
   "common": {
     "save": "Saglabāt",
@@ -214,5 +228,29 @@
     "loading": "Notiek ielāde...",
     "error": "Kļūda",
     "success": "Panākumi"
+  },
+  "import": {
+    "reportTitle": "Darbs importēts",
+    "reportCounts": "Pārveidoti {{translated}} no {{total}} komponentiem",
+    "reportNotReady": "Šis konveijers vēl nav gatavs izpildei. Vispirms izskatiet sarakstu zemāk.",
+    "reportClean": "Visi komponenti pārveidoti, nekas nav palicis neatrisināts.",
+    "reportNeedsAttention": "Nepieciešama uzmanība ({{n}})",
+    "reportComponentsSeen": "Darba faila komponenti",
+    "failed": "Nekas netika importēts"
+  },
+  "launcher": {
+    "title": "Sākums",
+    "goHome": "Sākums",
+    "subtitle": "Izvēlieties, ko vēlaties darīt",
+    "subtitleWs": "Darbvieta: {{name}}",
+    "planned": "Plānots",
+    "showOnStartup": "Rādīt šo, atverot Duckle",
+    "readyCount": "{{n}} pieejami tagad",
+    "groupCount": "{{ready}} no {{total}} gatavi",
+    "group": {
+      "build": "Veidot",
+      "operate": "Darbināt",
+      "govern": "Pārvaldīt"
+    }
   }
 }

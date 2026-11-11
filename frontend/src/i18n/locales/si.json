@@ -1,6 +1,6 @@
 {
   "topbar": {
-    "workspaceTooltip": "වැඩබිම: {{මාර්ග}}\nමාරු කිරීමට ක්ලික් කරන්න",
+    "workspaceTooltip": "වැඩබිම: {{path}}\nමාරු කිරීමට ක්ලික් කරන්න",
     "activeContextHint": "සක්‍රීය සන්දර්භය - ක්ෂේත්‍ර එහි විචල්‍යයන්ට බැඳිය හැක",
     "noContext": "සන්දර්භය නැත",
     "git": "Git (වැඩ අවකාශය)",
@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "පැති තීරුව",
     "project": "ව්යාපෘතිය",
-    "components": "සංරචක"
+    "components": "සංරචක",
+    "importJob": "Talend",
+    "importJobTitle": "Talend .item කාර්යයක් ආයාත කරන්න"
   },
   "editorTabs": {
     "ariaLabel": "සංස්කාරක දසුන්",
     "canvas": "කැන්වස්",
     "plan": "සැලසුම් කරන්න",
-    "run": "දුවන්න"
+    "run": "දුවන්න",
+    "history": "ඉතිහාසය"
   },
   "header": {
     "unsavedChanges": "ඉතිරි නොකළ වෙනස්කම්",
@@ -32,6 +35,9 @@
     "stopTooltip": "නැවතුම් නල මාර්ගය (F6)",
     "run": "දුවන්න",
     "runTooltip": "ධාවන නල මාර්ගය (F5)",
+    "live": "සජීවී",
+    "liveTooltip": "සජීවී පෙරදසුන: නෝඩයක් තෝරන විට හෝ සංස්කරණය කරන විට එතෙක් ධාවනය කරයි",
+    "liveOnTooltip": "සජීවී පෙරදසුන සක්‍රියයි - නෝඩයක් තේරීම හෝ සංස්කරණය කිරීම නල මාර්ගය එතෙක් ධාවනය කරයි",
     "save": "සුරකින්න",
     "saveTooltip": "සුරකින්න (Ctrl+S)",
     "validate": "වලංගු කරන්න",
@@ -43,10 +49,14 @@
     "copySqlDesc": "DuckDB SQL වෙත සම්පාදනය කරන්න, පසුරු පුවරුවට පිටපත් කරන්න",
     "exportSql": ".sql ලෙස අපනයනය කරන්න",
     "exportSqlDesc": "සම්පාදනය කරන ලද SQL ගොනුවක් ලෙස බාගන්න",
+    "generateDocs": "ලේඛන ජනනය කරන්න",
+    "generateDocsDesc": "සෑම පියවරක්, සැකසුමක් සහ තීරුවක් සහිත HTML පිටුවක්",
     "exportJson": ".duckle.json ලෙස අපනයනය කරන්න",
     "exportJsonDesc": "නෝඩ් + දාර අතේ ගෙන යා හැකි JSON ලෙස බාගන්න",
     "importJson": "ආනයනය කරන්න .duckle.json...",
-    "importJsonDesc": "නව නල මාර්ගයක් ලෙස අතේ ගෙන යා හැකි JSON විවෘත කරන්න"
+    "importJsonDesc": "නව නල මාර්ගයක් ලෙස අතේ ගෙන යා හැකි JSON විවෘත කරන්න",
+    "importJob": "Talend කාර්යය ආයාත කරන්න...",
+    "importJobDesc": "Talend .item කාර්යයක් නල මාර්ගයකට පරිවර්තනය කරන්න"
   },
   "palette": {
     "sources": "මූලාශ්ර",
@@ -170,7 +180,8 @@
     "ready": "[සූදානම්]",
     "consoleDesc": "ක්රියාත්මක කිරීමේ ලොගය. නල මාර්ගයක් ධාවනය කරන්න සහ එක් එක් අදියරෙහි තත්ත්වය, පේළි ගණන සහ වේලාව - සහ ඕනෑම දෝෂයක් - මෙහි දිස් වේ.",
     "pipelineFinished": "නල මාර්ගය අවසන්",
-    "pipelineLabel": "නල මාර්ගය"
+    "pipelineLabel": "නල මාර්ගය",
+    "dismissError": "දෝෂය වසන්න"
   },
   "status": {
     "pipelineLabel": "නල මාර්ගය:",
@@ -201,7 +212,10 @@
     "failed": "අසාර්ථකයි",
     "ok": "හරි",
     "colsSingular": "col",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "පේළිය",
+    "rowsPlural": "පේළි",
+    "rowsIn": "{{ms}} ms තුළ {{rows}} {{unit}}"
   },
   "common": {
     "save": "සුරකින්න",
@@ -214,5 +228,29 @@
     "loading": "පූරණය වෙමින්...",
     "error": "දෝෂයකි",
     "success": "සාර්ථකත්වය"
+  },
+  "import": {
+    "reportTitle": "කාර්යය ආයාත කළා",
+    "reportCounts": "{{total}} න් සංරචක {{translated}} ක් පරිවර්තනය කළා",
+    "reportNotReady": "මෙම නල මාර්ගය තවම ධාවනයට සූදානම් නැත. පළමුව පහත ලැයිස්තුව බලන්න.",
+    "reportClean": "සියලු සංරචක පරිවර්තනය කළ අතර විසඳා නැති කිසිවක් ඉතිරි නැත.",
+    "reportNeedsAttention": "අවධානය අවශ්‍යයි ({{n}})",
+    "reportComponentsSeen": "කාර්ය ගොනුවේ සංරචක",
+    "failed": "කිසිවක් ආයාත නොකළා"
+  },
+  "launcher": {
+    "title": "මුල් පිටුව",
+    "goHome": "මුල් පිටුව",
+    "subtitle": "ඔබට කිරීමට අවශ්‍ය දේ තෝරන්න",
+    "subtitleWs": "වැඩබිම: {{name}}",
+    "planned": "සැලසුම් කළ",
+    "showOnStartup": "Duckle විවෘත වන විට මෙය පෙන්වන්න",
+    "readyCount": "දැන් {{n}} ක් ලබා ගත හැක",
+    "groupCount": "{{total}} න් {{ready}} සූදානම්",
+    "group": {
+      "build": "ගොඩනැගීම",
+      "operate": "ක්‍රියාත්මක කිරීම",
+      "govern": "පාලනය"
+    }
   }
 }

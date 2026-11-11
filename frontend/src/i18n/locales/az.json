@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Yan panel",
     "project": "Layihə",
-    "components": "Komponentlər"
+    "components": "Komponentlər",
+    "importJob": "Talend",
+    "importJobTitle": "Talend .item işini idxal et"
   },
   "editorTabs": {
     "ariaLabel": "Redaktor baxışları",
     "canvas": "Kətan",
     "plan": "Plan",
-    "run": "Qaç"
+    "run": "Qaç",
+    "history": "Tarixçə"
   },
   "header": {
     "unsavedChanges": "saxlanmamış dəyişikliklər",
@@ -32,6 +35,9 @@
     "stopTooltip": "Boru kəmərini dayandırın (F6)",
     "run": "Qaç",
     "runTooltip": "Boru kəmərini işə salın (F5)",
+    "live": "Canlı",
+    "liveTooltip": "Canlı önizləmə: düyünü seçəndə və ya redaktə edəndə ona qədər icra edir",
+    "liveOnTooltip": "Canlı önizləmə aktivdir - düyünü seçmək və ya redaktə etmək konveyeri ona qədər icra edir",
     "save": "Saxla",
     "saveTooltip": "Saxla (Ctrl+S)",
     "validate": "Doğrulayın",
@@ -43,10 +49,14 @@
     "copySqlDesc": "DuckDB SQL-ə tərtib edin, panoya kopyalayın",
     "exportSql": ".sql kimi ixrac edin",
     "exportSqlDesc": "Tərtib edilmiş SQL-i fayl kimi yükləyin",
+    "generateDocs": "Sənədləşmə yarat",
+    "generateDocsDesc": "Hər addım, parametr və sütunla HTML səhifəsi",
     "exportJson": ".duckle.json kimi ixrac edin",
     "exportJsonDesc": "Düyünləri + kənarları portativ JSON kimi endirin",
     "importJson": ".duckle.json faylını idxal edin...",
-    "importJsonDesc": "Portativ JSON-u yeni boru kəməri kimi açın"
+    "importJsonDesc": "Portativ JSON-u yeni boru kəməri kimi açın",
+    "importJob": "Talend işini idxal et...",
+    "importJobDesc": "Talend .item işini konveyerə çevir"
   },
   "palette": {
     "sources": "Mənbələr",
@@ -170,7 +180,8 @@
     "ready": "[hazır]",
     "consoleDesc": "İcra jurnalı. Boru kəmərini işə salın və hər mərhələnin statusu, sıra sayı və vaxtı - üstəgəl istənilən səhvlər - burada görünür.",
     "pipelineFinished": "Boru kəməri tamamlandı",
-    "pipelineLabel": "Boru kəməri"
+    "pipelineLabel": "Boru kəməri",
+    "dismissError": "Xətanı bağla"
   },
   "status": {
     "pipelineLabel": "Boru kəməri:",
@@ -201,7 +212,10 @@
     "failed": "Uğursuz oldu",
     "ok": "OK",
     "colsSingular": "kol",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "sətir",
+    "rowsPlural": "sətir",
+    "rowsIn": "{{ms}} ms ərzində {{rows}} {{unit}}"
   },
   "common": {
     "save": "Saxla",
@@ -214,5 +228,29 @@
     "loading": "Yüklənir...",
     "error": "Xəta",
     "success": "Uğur"
+  },
+  "import": {
+    "reportTitle": "İş idxal edildi",
+    "reportCounts": "{{total}} komponentdən {{translated}} çevrildi",
+    "reportNotReady": "Bu konveyer hələ icraya hazır deyil. Əvvəlcə aşağıdakı siyahıya baxın.",
+    "reportClean": "Bütün komponentlər çevrildi və həll edilməmiş heç nə qalmadı.",
+    "reportNeedsAttention": "Diqqət tələb edir ({{n}})",
+    "reportComponentsSeen": "İş faylındakı komponentlər",
+    "failed": "Heç nə idxal edilmədi"
+  },
+  "launcher": {
+    "title": "Əsas səhifə",
+    "goHome": "Əsas səhifə",
+    "subtitle": "Nə etmək istədiyinizi seçin",
+    "subtitleWs": "İş sahəsi: {{name}}",
+    "planned": "Planlaşdırılıb",
+    "showOnStartup": "Duckle açılanda bunu göstər",
+    "readyCount": "{{n}} indi mövcuddur",
+    "groupCount": "{{total}} içindən {{ready}} hazırdır",
+    "group": {
+      "build": "Qurmaq",
+      "operate": "İdarə etmək",
+      "govern": "Nəzarət"
+    }
   }
 }

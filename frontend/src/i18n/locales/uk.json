@@ -105,13 +105,16 @@
   "sidebar": {
     "ariaLabel": "Бічна панель",
     "project": "Демонструвати",
-    "components": "компоненти"
+    "components": "компоненти",
+    "importJob": "Talend",
+    "importJobTitle": "Імпортувати завдання Talend .item"
   },
   "editorTabs": {
     "ariaLabel": "Види редактора",
     "canvas": "Полотно",
     "plan": "План",
-    "run": "бігти"
+    "run": "бігти",
+    "history": "Історія"
   },
   "header": {
     "unsavedChanges": "незбережені зміни",
@@ -121,6 +124,9 @@
     "stopTooltip": "Зупинка трубопроводу (F6)",
     "run": "бігти",
     "runTooltip": "Запустити конвеєр (F5)",
+    "live": "Наживо",
+    "liveTooltip": "Попередній перегляд наживо: виконує до вузла, коли ви вибираєте або редагуєте його",
+    "liveOnTooltip": "Попередній перегляд наживо увімкнено - вибір або редагування вузла виконує конвеєр до нього",
     "save": "зберегти",
     "saveTooltip": "Зберегти (Ctrl+S)",
     "validate": "Перевірити",
@@ -132,10 +138,14 @@
     "copySqlDesc": "Скомпілюйте в DuckDB SQL, скопіюйте в буфер обміну",
     "exportSql": "Експортувати як .sql",
     "exportSqlDesc": "Завантажте скомпільований SQL як файл",
+    "generateDocs": "Створити документацію",
+    "generateDocsDesc": "HTML-сторінка з кожним кроком, налаштуванням і стовпцем",
     "exportJson": "Експортуйте як .duckle.json",
     "exportJsonDesc": "Завантажте вузли + ребра як портативний JSON",
     "importJson": "Імпортувати .duckle.json...",
-    "importJsonDesc": "Відкрийте портативний JSON як новий конвеєр"
+    "importJsonDesc": "Відкрийте портативний JSON як новий конвеєр",
+    "importJob": "Імпортувати завдання Talend...",
+    "importJobDesc": "Перетворити завдання Talend .item на конвеєр"
   },
   "properties": {
     "nothingSelected": "Нічого не вибрано",
@@ -182,7 +192,8 @@
     "ready": "[готовий]",
     "consoleDesc": "Журнал виконання. Запустіть конвеєр, і тут з’явиться статус кожного етапу, кількість рядків і час, а також будь-які помилки.",
     "pipelineFinished": "Трубопровід закінчено",
-    "pipelineLabel": "Трубопровід"
+    "pipelineLabel": "Трубопровід",
+    "dismissError": "Закрити помилку"
   },
   "status": {
     "pipelineLabel": "Трубопровід:",
@@ -213,6 +224,33 @@
     "failed": "Не вдалося",
     "ok": "добре",
     "colsSingular": "кол",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "рядок",
+    "rowsPlural": "рядків",
+    "rowsIn": "{{rows}} {{unit}} за {{ms}} мс"
+  },
+  "import": {
+    "reportTitle": "Завдання імпортовано",
+    "reportCounts": "Перетворено {{translated}} з {{total}} компонентів",
+    "reportNotReady": "Цей конвеєр ще не готовий до запуску. Спершу опрацюйте список нижче.",
+    "reportClean": "Усі компоненти перетворено, нічого не залишилося невирішеним.",
+    "reportNeedsAttention": "Потребує уваги ({{n}})",
+    "reportComponentsSeen": "Компоненти у файлі завдання",
+    "failed": "Нічого не імпортовано"
+  },
+  "launcher": {
+    "title": "Головна",
+    "goHome": "Головна",
+    "subtitle": "Виберіть, що ви хочете зробити",
+    "subtitleWs": "Робочий простір: {{name}}",
+    "planned": "Заплановано",
+    "showOnStartup": "Показувати під час відкриття Duckle",
+    "readyCount": "{{n}} доступно зараз",
+    "groupCount": "{{ready}} з {{total}} готово",
+    "group": {
+      "build": "Створення",
+      "operate": "Експлуатація",
+      "govern": "Керування"
+    }
   }
 }

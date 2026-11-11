@@ -105,13 +105,16 @@
   "sidebar": {
     "ariaLabel": "Postranní panel",
     "project": "Projekt",
-    "components": "Komponenty"
+    "components": "Komponenty",
+    "importJob": "Talend",
+    "importJobTitle": "Importovat úlohu Talend .item"
   },
   "editorTabs": {
     "ariaLabel": "Pohledy editora",
     "canvas": "Plátno",
     "plan": "Plán",
-    "run": "Běh"
+    "run": "Běh",
+    "history": "Historie"
   },
   "header": {
     "unsavedChanges": "neuložené změny",
@@ -121,6 +124,9 @@
     "stopTooltip": "Zastavit potrubí (F6)",
     "run": "Běh",
     "runTooltip": "Spustit potrubí (F5)",
+    "live": "Živě",
+    "liveTooltip": "Živý náhled: po výběru nebo úpravě uzlu spustí pipeline až k němu",
+    "liveOnTooltip": "Živý náhled zapnut - výběr nebo úprava uzlu spustí pipeline až k němu",
     "save": "Uložit",
     "saveTooltip": "Uložit (Ctrl+S)",
     "validate": "Ověřit",
@@ -132,10 +138,14 @@
     "copySqlDesc": "Zkompilujte do DuckDB SQL, zkopírujte do schránky",
     "exportSql": "Exportovat jako .sql",
     "exportSqlDesc": "Stáhněte zkompilovaný SQL jako soubor",
+    "generateDocs": "Vygenerovat dokumentaci",
+    "generateDocsDesc": "HTML stránka s každým krokem, nastavením a sloupcem",
     "exportJson": "Exportovat jako .duckle.json",
     "exportJsonDesc": "Stáhněte si uzly + hrany jako přenosný JSON",
     "importJson": "Importovat .duckle.json...",
-    "importJsonDesc": "Otevřete přenosný JSON jako nový kanál"
+    "importJsonDesc": "Otevřete přenosný JSON jako nový kanál",
+    "importJob": "Importovat úlohu Talend...",
+    "importJobDesc": "Převést úlohu Talend .item na pipeline"
   },
   "properties": {
     "nothingSelected": "Nebylo vybráno nic",
@@ -182,7 +192,8 @@
     "ready": "[připraveno]",
     "consoleDesc": "Prováděcí protokol. Spusťte kanál a zde se zobrazí stav každé fáze, počet řádků a načasování – plus případné chyby.",
     "pipelineFinished": "Potrubí dokončeno",
-    "pipelineLabel": "Potrubí"
+    "pipelineLabel": "Potrubí",
+    "dismissError": "Zavřít chybu"
   },
   "status": {
     "pipelineLabel": "Potrubí:",
@@ -213,6 +224,33 @@
     "failed": "Nepodařilo se",
     "ok": "OK",
     "colsSingular": "kol",
-    "colsPlural": "sloupce"
+    "colsPlural": "sloupce",
+    "rowsSingular": "řádek",
+    "rowsPlural": "řádků",
+    "rowsIn": "{{rows}} {{unit}} za {{ms}} ms"
+  },
+  "import": {
+    "reportTitle": "Úloha importována",
+    "reportCounts": "Převedeno {{translated}} z {{total}} komponent",
+    "reportNotReady": "Tato pipeline zatím není připravena ke spuštění. Nejprve projděte seznam níže.",
+    "reportClean": "Všechny komponenty převedeny a nic nezůstalo nevyřešeno.",
+    "reportNeedsAttention": "Vyžaduje pozornost ({{n}})",
+    "reportComponentsSeen": "Komponenty v souboru úlohy",
+    "failed": "Nic nebylo importováno"
+  },
+  "launcher": {
+    "title": "Domů",
+    "goHome": "Domů",
+    "subtitle": "Vyberte, co chcete udělat",
+    "subtitleWs": "Pracovní prostor: {{name}}",
+    "planned": "Plánováno",
+    "showOnStartup": "Zobrazit při spuštění Duckle",
+    "readyCount": "{{n}} k dispozici",
+    "groupCount": "{{ready}} z {{total}} připraveno",
+    "group": {
+      "build": "Tvorba",
+      "operate": "Provoz",
+      "govern": "Správa"
+    }
   }
 }

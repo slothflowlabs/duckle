@@ -105,13 +105,16 @@
   "sidebar": {
     "ariaLabel": "Sidofält",
     "project": "Projekt",
-    "components": "Komponenter"
+    "components": "Komponenter",
+    "importJob": "Talend",
+    "importJobTitle": "Importera ett Talend .item-jobb"
   },
   "editorTabs": {
     "ariaLabel": "Redaktörsvyer",
     "canvas": "Duk",
     "plan": "Planera",
-    "run": "Sikt"
+    "run": "Sikt",
+    "history": "Historik"
   },
   "header": {
     "unsavedChanges": "osparade ändringar",
@@ -121,6 +124,9 @@
     "stopTooltip": "Stoppa pipeline (F6)",
     "run": "Sikt",
     "runTooltip": "Kör pipeline (F5)",
+    "live": "Live",
+    "liveTooltip": "Liveförhandsvisning: kör fram till en nod när du markerar eller redigerar den",
+    "liveOnTooltip": "Liveförhandsvisning på - att markera eller redigera en nod kör pipelinen fram till den",
     "save": "Spara",
     "saveTooltip": "Spara (Ctrl+S)",
     "validate": "Bekräfta",
@@ -132,10 +138,14 @@
     "copySqlDesc": "Kompilera till DuckDB SQL, kopiera till urklipp",
     "exportSql": "Exportera som .sql",
     "exportSqlDesc": "Ladda ner den kompilerade SQL-filen som en fil",
+    "generateDocs": "Generera dokumentation",
+    "generateDocsDesc": "En HTML-sida med varje steg, inställning och kolumn",
     "exportJson": "Exportera som .duckle.json",
     "exportJsonDesc": "Ladda ner noder + kanter som bärbar JSON",
     "importJson": "Importera .duckle.json...",
-    "importJsonDesc": "Öppna en bärbar JSON som en ny pipeline"
+    "importJsonDesc": "Öppna en bärbar JSON som en ny pipeline",
+    "importJob": "Importera Talend-jobb...",
+    "importJobDesc": "Översätt ett Talend .item-jobb till en pipeline"
   },
   "properties": {
     "nothingSelected": "Inget valt",
@@ -182,7 +192,8 @@
     "ready": "[redo]",
     "consoleDesc": "Utförandeloggen. Kör en pipeline och varje stegs status, radantal och timing - plus eventuella fel - visas här.",
     "pipelineFinished": "Pipeline färdig",
-    "pipelineLabel": "Rörledning"
+    "pipelineLabel": "Rörledning",
+    "dismissError": "Stäng felet"
   },
   "status": {
     "pipelineLabel": "Rörledning:",
@@ -213,6 +224,33 @@
     "failed": "Misslyckades",
     "ok": "OK",
     "colsSingular": "kol",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "rad",
+    "rowsPlural": "rader",
+    "rowsIn": "{{rows}} {{unit}} på {{ms}} ms"
+  },
+  "import": {
+    "reportTitle": "Jobb importerat",
+    "reportCounts": "{{translated}} av {{total}} komponenter översatta",
+    "reportNotReady": "Den här pipelinen är inte redo att köras än. Gå igenom listan nedan först.",
+    "reportClean": "Alla komponenter översatta och inget olöst.",
+    "reportNeedsAttention": "Kräver åtgärd ({{n}})",
+    "reportComponentsSeen": "Komponenter i jobbfilen",
+    "failed": "Inget importerades"
+  },
+  "launcher": {
+    "title": "Hem",
+    "goHome": "Hem",
+    "subtitle": "Välj vad du vill göra",
+    "subtitleWs": "Arbetsyta: {{name}}",
+    "planned": "Planerad",
+    "showOnStartup": "Visa detta när Duckle öppnas",
+    "readyCount": "{{n}} tillgängliga nu",
+    "groupCount": "{{ready}} av {{total}} klara",
+    "group": {
+      "build": "Bygg",
+      "operate": "Drift",
+      "govern": "Styrning"
+    }
   }
 }

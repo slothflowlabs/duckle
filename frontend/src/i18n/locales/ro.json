@@ -105,13 +105,16 @@
   "sidebar": {
     "ariaLabel": "Bara laterală",
     "project": "Proiect",
-    "components": "Componente"
+    "components": "Componente",
+    "importJob": "Talend",
+    "importJobTitle": "Importă un job Talend .item"
   },
   "editorTabs": {
     "ariaLabel": "Vizualizări ale editorului",
     "canvas": "Pânză",
     "plan": "Plan",
-    "run": "Fugi"
+    "run": "Fugi",
+    "history": "Istoric"
   },
   "header": {
     "unsavedChanges": "modificări nesalvate",
@@ -121,6 +124,9 @@
     "stopTooltip": "Opriți conducta (F6)",
     "run": "Fugi",
     "runTooltip": "Rulați conducta (F5)",
+    "live": "Live",
+    "liveTooltip": "Previzualizare live: rulează până la un nod când îl selectezi sau îl editezi",
+    "liveOnTooltip": "Previzualizare live activă - selectarea sau editarea unui nod rulează pipeline-ul până la el",
     "save": "Salva",
     "saveTooltip": "Salvați (Ctrl+S)",
     "validate": "Valida",
@@ -132,10 +138,14 @@
     "copySqlDesc": "Compilați în DuckDB SQL, copiați în clipboard",
     "exportSql": "Exportați ca .sql",
     "exportSqlDesc": "Descărcați SQL-ul compilat ca fișier",
+    "generateDocs": "Generează documentația",
+    "generateDocsDesc": "O pagină HTML cu fiecare pas, setare și coloană",
     "exportJson": "Exportați ca .duckle.json",
     "exportJsonDesc": "Descărcați noduri + margini ca JSON portabil",
     "importJson": "Importă .duckle.json...",
-    "importJsonDesc": "Deschideți un JSON portabil ca o conductă nouă"
+    "importJsonDesc": "Deschideți un JSON portabil ca o conductă nouă",
+    "importJob": "Importă job Talend...",
+    "importJobDesc": "Transformă un job Talend .item într-un pipeline"
   },
   "properties": {
     "nothingSelected": "Nimic selectat",
@@ -182,7 +192,8 @@
     "ready": "[gata]",
     "consoleDesc": "Jurnalul de execuție. Rulați o conductă și starea fiecărei etape, numărul de rânduri și calendarul - plus orice erori - apar aici.",
     "pipelineFinished": "Conductă terminată",
-    "pipelineLabel": "Conductă"
+    "pipelineLabel": "Conductă",
+    "dismissError": "Închide eroarea"
   },
   "status": {
     "pipelineLabel": "Conductă:",
@@ -213,6 +224,33 @@
     "failed": "A eșuat",
     "ok": "Bine",
     "colsSingular": "col",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "rând",
+    "rowsPlural": "rânduri",
+    "rowsIn": "{{rows}} {{unit}} în {{ms}} ms"
+  },
+  "import": {
+    "reportTitle": "Job importat",
+    "reportCounts": "{{translated}} din {{total}} componente transformate",
+    "reportNotReady": "Acest pipeline nu este încă gata de rulare. Parcurge mai întâi lista de mai jos.",
+    "reportClean": "Toate componentele transformate și nimic nerezolvat.",
+    "reportNeedsAttention": "Necesită atenție ({{n}})",
+    "reportComponentsSeen": "Componente din fișierul job-ului",
+    "failed": "Nu s-a importat nimic"
+  },
+  "launcher": {
+    "title": "Acasă",
+    "goHome": "Acasă",
+    "subtitle": "Alege ce vrei să faci",
+    "subtitleWs": "Spațiu de lucru: {{name}}",
+    "planned": "Planificat",
+    "showOnStartup": "Afișează la deschiderea Duckle",
+    "readyCount": "{{n}} disponibile acum",
+    "groupCount": "{{ready}} din {{total}} gata",
+    "group": {
+      "build": "Construire",
+      "operate": "Operare",
+      "govern": "Guvernanță"
+    }
   }
 }

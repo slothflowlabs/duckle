@@ -1,6 +1,6 @@
 {
   "topbar": {
-    "workspaceTooltip": "Arbejdsområde: {{sti}}\nKlik for at skifte",
+    "workspaceTooltip": "Arbejdsområde: {{path}}\nKlik for at skifte",
     "activeContextHint": "Aktiv kontekst - felter kan binde til dets variabler",
     "noContext": "Ingen sammenhæng",
     "git": "Git (arbejdsområde)",
@@ -10,28 +10,34 @@
     "switchLight": "Skift til lystilstand",
     "switchDark": "Skift til mørk tilstand",
     "themeAriaToggle": "Skift tema",
-    "runtime": "køretid: {{navn}}",
+    "runtime": "køretid: {{name}}",
     "languageAriaLabel": "Vælg sprog"
   },
   "sidebar": {
     "ariaLabel": "Sidebjælke",
     "project": "Projekt",
-    "components": "Komponenter"
+    "components": "Komponenter",
+    "importJob": "Talend",
+    "importJobTitle": "Importér et Talend .item-job"
   },
   "editorTabs": {
     "ariaLabel": "Editor visninger",
     "canvas": "Lærred",
     "plan": "Plan",
-    "run": "Løbe"
+    "run": "Løbe",
+    "history": "Historik"
   },
   "header": {
     "unsavedChanges": "ikke-gemte ændringer",
-    "closeTab": "Luk {{navn}}",
+    "closeTab": "Luk {{name}}",
     "newPipeline": "Ny rørledning",
     "stop": "Stop",
     "stopTooltip": "Stop rørledning (F6)",
     "run": "Løbe",
     "runTooltip": "Kør rørledning (F5)",
+    "live": "Live",
+    "liveTooltip": "Live-forhåndsvisning: kør frem til en node, når du vælger eller redigerer den",
+    "liveOnTooltip": "Live-forhåndsvisning til - når du vælger eller redigerer en node, køres pipelinen frem til den",
     "save": "Spare",
     "saveTooltip": "Gem (Ctrl+S)",
     "validate": "Valider",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Kompiler til DuckDB SQL, kopier til udklipsholder",
     "exportSql": "Eksporter som .sql",
     "exportSqlDesc": "Download den kompilerede SQL som en fil",
+    "generateDocs": "Generér dokumentation",
+    "generateDocsDesc": "En HTML-side med hvert trin, hver indstilling og hver kolonne",
     "exportJson": "Eksporter som .duckle.json",
     "exportJsonDesc": "Download noder + edges som bærbar JSON",
     "importJson": "Importer .duckle.json...",
-    "importJsonDesc": "Åbn en bærbar JSON som en ny pipeline"
+    "importJsonDesc": "Åbn en bærbar JSON som en ny pipeline",
+    "importJob": "Importér Talend-job...",
+    "importJobDesc": "Oversæt et Talend .item-job til en pipeline"
   },
   "palette": {
     "sources": "Kilder",
@@ -170,7 +180,8 @@
     "ready": "[parat]",
     "consoleDesc": "Udførelsesloggen. Kør en pipeline, og hver fases status, rækkeantal og timing - plus eventuelle fejl - vises her.",
     "pipelineFinished": "Rørledningen færdig",
-    "pipelineLabel": "Rørledning"
+    "pipelineLabel": "Rørledning",
+    "dismissError": "Luk fejl"
   },
   "status": {
     "pipelineLabel": "Rørledning:",
@@ -201,7 +212,10 @@
     "failed": "Mislykkedes",
     "ok": "OK",
     "colsSingular": "col",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "række",
+    "rowsPlural": "rækker",
+    "rowsIn": "{{rows}} {{unit}} på {{ms}} ms"
   },
   "common": {
     "save": "Spare",
@@ -214,5 +228,29 @@
     "loading": "Indlæser...",
     "error": "Fejl",
     "success": "Succes"
+  },
+  "import": {
+    "reportTitle": "Job importeret",
+    "reportCounts": "{{translated}} af {{total}} komponenter oversat",
+    "reportNotReady": "Denne pipeline er ikke klar til at køre endnu. Gå listen nedenfor igennem først.",
+    "reportClean": "Alle komponenter er oversat, og intet er uafklaret.",
+    "reportNeedsAttention": "Kræver opmærksomhed ({{n}})",
+    "reportComponentsSeen": "Komponenter i jobfilen",
+    "failed": "Intet blev importeret"
+  },
+  "launcher": {
+    "title": "Hjem",
+    "goHome": "Hjem",
+    "subtitle": "Vælg, hvad du vil gøre",
+    "subtitleWs": "Arbejdsområde: {{name}}",
+    "planned": "Planlagt",
+    "showOnStartup": "Vis dette, når Duckle åbner",
+    "readyCount": "{{n}} tilgængelige nu",
+    "groupCount": "{{ready}} af {{total}} klar",
+    "group": {
+      "build": "Byg",
+      "operate": "Drift",
+      "govern": "Styring"
+    }
   }
 }

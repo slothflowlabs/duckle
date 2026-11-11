@@ -1,6 +1,6 @@
 {
   "topbar": {
-    "workspaceTooltip": "Pracovný priestor: {{cesta}}\nKliknutím prepnete",
+    "workspaceTooltip": "Pracovný priestor: {{path}}\nKliknutím prepnete",
     "activeContextHint": "Aktívny kontext – polia sa môžu viazať na jeho premenné",
     "noContext": "Bez kontextu",
     "git": "Git (pracovný priestor)",
@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Bočný panel",
     "project": "Projekt",
-    "components": "Komponenty"
+    "components": "Komponenty",
+    "importJob": "Talend",
+    "importJobTitle": "Importovať úlohu Talend .item"
   },
   "editorTabs": {
     "ariaLabel": "Zobrazenia editora",
     "canvas": "Plátno",
     "plan": "Plán",
-    "run": "Bežať"
+    "run": "Bežať",
+    "history": "História"
   },
   "header": {
     "unsavedChanges": "neuložené zmeny",
@@ -32,6 +35,9 @@
     "stopTooltip": "Zastaviť potrubie (F6)",
     "run": "Bežať",
     "runTooltip": "Spustiť kanál (F5)",
+    "live": "Naživo",
+    "liveTooltip": "Živý náhľad: po výbere alebo úprave uzla spustí pipeline až po neho",
+    "liveOnTooltip": "Živý náhľad zapnutý - výber alebo úprava uzla spustí pipeline až po neho",
     "save": "Uložiť",
     "saveTooltip": "Uložiť (Ctrl+S)",
     "validate": "Overiť",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Kompilujte do DuckDB SQL, skopírujte do schránky",
     "exportSql": "Exportovať ako .sql",
     "exportSqlDesc": "Stiahnite si skompilovaný SQL ako súbor",
+    "generateDocs": "Vygenerovať dokumentáciu",
+    "generateDocsDesc": "HTML stránka s každým krokom, nastavením a stĺpcom",
     "exportJson": "Exportovať ako .duckle.json",
     "exportJsonDesc": "Stiahnite si uzly + okraje ako prenosný JSON",
     "importJson": "Importovať súbor .duckle.json...",
-    "importJsonDesc": "Otvorte prenosný JSON ako nový kanál"
+    "importJsonDesc": "Otvorte prenosný JSON ako nový kanál",
+    "importJob": "Importovať úlohu Talend...",
+    "importJobDesc": "Previesť úlohu Talend .item na pipeline"
   },
   "palette": {
     "sources": "Zdroje",
@@ -170,7 +180,8 @@
     "ready": "[pripravený]",
     "consoleDesc": "Denník vykonávania. Spustite kanál a tu sa zobrazí stav každej fázy, počet riadkov a načasovanie – plus všetky chyby.",
     "pipelineFinished": "Potrubie dokončené",
-    "pipelineLabel": "Potrubie"
+    "pipelineLabel": "Potrubie",
+    "dismissError": "Zavrieť chybu"
   },
   "status": {
     "pipelineLabel": "Potrubie:",
@@ -201,7 +212,10 @@
     "failed": "Nepodarilo sa",
     "ok": "OK",
     "colsSingular": "kol",
-    "colsPlural": "stĺpce"
+    "colsPlural": "stĺpce",
+    "rowsSingular": "riadok",
+    "rowsPlural": "riadkov",
+    "rowsIn": "{{rows}} {{unit}} za {{ms}} ms"
   },
   "common": {
     "save": "Uložiť",
@@ -214,5 +228,29 @@
     "loading": "Načítava sa...",
     "error": "Chyba",
     "success": "Úspech"
+  },
+  "import": {
+    "reportTitle": "Úloha importovaná",
+    "reportCounts": "Prevedených {{translated}} z {{total}} komponentov",
+    "reportNotReady": "Táto pipeline zatiaľ nie je pripravená na spustenie. Najprv prejdite zoznam nižšie.",
+    "reportClean": "Všetky komponenty prevedené a nič nezostalo nevyriešené.",
+    "reportNeedsAttention": "Vyžaduje pozornosť ({{n}})",
+    "reportComponentsSeen": "Komponenty v súbore úlohy",
+    "failed": "Nič sa neimportovalo"
+  },
+  "launcher": {
+    "title": "Domov",
+    "goHome": "Domov",
+    "subtitle": "Vyberte, čo chcete urobiť",
+    "subtitleWs": "Pracovný priestor: {{name}}",
+    "planned": "Plánované",
+    "showOnStartup": "Zobraziť pri otvorení Duckle",
+    "readyCount": "{{n}} k dispozícii",
+    "groupCount": "{{ready}} z {{total}} pripravených",
+    "group": {
+      "build": "Tvorba",
+      "operate": "Prevádzka",
+      "govern": "Správa"
+    }
   }
 }

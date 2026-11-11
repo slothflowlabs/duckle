@@ -105,22 +105,28 @@
   "sidebar": {
     "ariaLabel": "Bar sisi",
     "project": "Projek",
-    "components": "Komponen"
+    "components": "Komponen",
+    "importJob": "Talend",
+    "importJobTitle": "Import kerja Talend .item"
   },
   "editorTabs": {
     "ariaLabel": "Pandangan editor",
     "canvas": "Kanvas",
     "plan": "Rancang",
-    "run": "Lari"
+    "run": "Lari",
+    "history": "Sejarah"
   },
   "header": {
     "unsavedChanges": "perubahan yang belum disimpan",
-    "closeTab": "Tutup {{nama}}",
+    "closeTab": "Tutup {{name}}",
     "newPipeline": "Saluran paip baharu",
     "stop": "Berhenti",
     "stopTooltip": "Hentikan saluran paip (F6)",
     "run": "Lari",
     "runTooltip": "Jalankan saluran paip (F5)",
+    "live": "Langsung",
+    "liveTooltip": "Pratonton langsung: jalankan hingga satu nod apabila anda memilih atau menyuntingnya",
+    "liveOnTooltip": "Pratonton langsung dihidupkan - memilih atau menyunting nod menjalankan saluran paip hingga nod itu",
     "save": "Jimat",
     "saveTooltip": "Simpan (Ctrl+S)",
     "validate": "Sahkan",
@@ -132,10 +138,14 @@
     "copySqlDesc": "Susun ke DuckDB SQL, salin ke papan keratan",
     "exportSql": "Eksport sebagai .sql",
     "exportSqlDesc": "Muat turun SQL yang disusun sebagai fail",
+    "generateDocs": "Jana dokumentasi",
+    "generateDocsDesc": "Halaman HTML dengan setiap langkah, tetapan dan lajur",
     "exportJson": "Eksport sebagai .duckle.json",
     "exportJsonDesc": "Muat turun nod + tepi sebagai JSON mudah alih",
     "importJson": "Import .duckle.json...",
-    "importJsonDesc": "Buka JSON mudah alih sebagai saluran paip baharu"
+    "importJsonDesc": "Buka JSON mudah alih sebagai saluran paip baharu",
+    "importJob": "Import kerja Talend...",
+    "importJobDesc": "Terjemah kerja Talend .item kepada saluran paip"
   },
   "properties": {
     "nothingSelected": "Tiada apa-apa yang dipilih",
@@ -182,7 +192,8 @@
     "ready": "[bersedia]",
     "consoleDesc": "Log pelaksanaan. Jalankan saluran paip dan status setiap peringkat, kiraan baris dan masa - serta sebarang ralat - muncul di sini.",
     "pipelineFinished": "Talian paip selesai",
-    "pipelineLabel": "Saluran paip"
+    "pipelineLabel": "Saluran paip",
+    "dismissError": "Tutup ralat"
   },
   "status": {
     "pipelineLabel": "Saluran paip:",
@@ -213,6 +224,33 @@
     "failed": "gagal",
     "ok": "OK",
     "colsSingular": "kol",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "baris",
+    "rowsPlural": "baris",
+    "rowsIn": "{{rows}} {{unit}} dalam {{ms}} ms"
+  },
+  "import": {
+    "reportTitle": "Kerja diimport",
+    "reportCounts": "{{translated}} daripada {{total}} komponen diterjemah",
+    "reportNotReady": "Saluran paip ini belum sedia untuk dijalankan. Selesaikan senarai di bawah dahulu.",
+    "reportClean": "Semua komponen diterjemah dan tiada yang belum diselesaikan.",
+    "reportNeedsAttention": "Perlu perhatian ({{n}})",
+    "reportComponentsSeen": "Komponen dalam fail kerja",
+    "failed": "Tiada apa-apa diimport"
+  },
+  "launcher": {
+    "title": "Utama",
+    "goHome": "Utama",
+    "subtitle": "Pilih apa yang anda mahu lakukan",
+    "subtitleWs": "Ruang kerja: {{name}}",
+    "planned": "Dirancang",
+    "showOnStartup": "Tunjukkan ini apabila Duckle dibuka",
+    "readyCount": "{{n}} tersedia sekarang",
+    "groupCount": "{{ready}} daripada {{total}} sedia",
+    "group": {
+      "build": "Bina",
+      "operate": "Kendali",
+      "govern": "Tadbir"
+    }
   }
 }

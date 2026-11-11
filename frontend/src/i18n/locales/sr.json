@@ -1,6 +1,6 @@
 {
   "topbar": {
-    "workspaceTooltip": "Радни простор: {{пут}}\nКликните за пребацивање",
+    "workspaceTooltip": "Радни простор: {{path}}\nКликните за пребацивање",
     "activeContextHint": "Активни контекст – поља се могу везати за његове променљиве",
     "noContext": "Без контекста",
     "git": "Гит (радни простор)",
@@ -10,28 +10,34 @@
     "switchLight": "Пребаците на светлосни режим",
     "switchDark": "Пребаците се на тамни режим",
     "themeAriaToggle": "Пребаци тему",
-    "runtime": "време извођења: {{наме}}",
+    "runtime": "време извођења: {{name}}",
     "languageAriaLabel": "Изаберите језик"
   },
   "sidebar": {
     "ariaLabel": "Бочна трака",
     "project": "Пројекат",
-    "components": "Компоненте"
+    "components": "Компоненте",
+    "importJob": "Talend",
+    "importJobTitle": "Увези Talend .item посао"
   },
   "editorTabs": {
     "ariaLabel": "Прегледи уредника",
     "canvas": "Цанвас",
     "plan": "План",
-    "run": "Трчи"
+    "run": "Трчи",
+    "history": "Историја"
   },
   "header": {
     "unsavedChanges": "несачуване промене",
-    "closeTab": "Затвори {{наме}}",
+    "closeTab": "Затвори {{name}}",
     "newPipeline": "Нови цевовод",
     "stop": "Стани",
     "stopTooltip": "Заустави цевовод (Ф6)",
     "run": "Трчи",
     "runTooltip": "Покрени цевовод (Ф5)",
+    "live": "Уживо",
+    "liveTooltip": "Преглед уживо: покреће до чвора када га изаберете или уредите",
+    "liveOnTooltip": "Преглед уживо укључен - избор или уређивање чвора покреће цевовод до њега",
     "save": "Сачувај",
     "saveTooltip": "Сачувај (Цтрл+С)",
     "validate": "Потврди",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Компајлирајте у ДуцкДБ СКЛ, копирајте у међуспремник",
     "exportSql": "Извези као .скл",
     "exportSqlDesc": "Преузмите преведени СКЛ као датотеку",
+    "generateDocs": "Генериши документацију",
+    "generateDocsDesc": "HTML страница са сваким кораком, подешавањем и колоном",
     "exportJson": "Извези као .дуцкле.јсон",
     "exportJsonDesc": "Преузмите чворове + ивице као преносиви ЈСОН",
     "importJson": "Увези .дуцкле.јсон...",
-    "importJsonDesc": "Отворите преносиви ЈСОН као нови цевовод"
+    "importJsonDesc": "Отворите преносиви ЈСОН као нови цевовод",
+    "importJob": "Увези Talend посао...",
+    "importJobDesc": "Претвори Talend .item посао у цевовод"
   },
   "palette": {
     "sources": "Извори",
@@ -170,7 +180,8 @@
     "ready": "[спреман]",
     "consoleDesc": "Дневник извршења. Покрените цевовод и статус сваке фазе, број редова и тајминг - плус све грешке - се појављују овде.",
     "pipelineFinished": "Цевовод је завршен",
-    "pipelineLabel": "Цевовод"
+    "pipelineLabel": "Цевовод",
+    "dismissError": "Затвори грешку"
   },
   "status": {
     "pipelineLabel": "Цевовод:",
@@ -201,7 +212,10 @@
     "failed": "Није успело",
     "ok": "ОК",
     "colsSingular": "цол",
-    "colsPlural": "цолс"
+    "colsPlural": "цолс",
+    "rowsSingular": "ред",
+    "rowsPlural": "редова",
+    "rowsIn": "{{rows}} {{unit}} за {{ms}} ms"
   },
   "common": {
     "save": "Сачувај",
@@ -214,5 +228,29 @@
     "loading": "Учитавање...",
     "error": "Грешка",
     "success": "Успех"
+  },
+  "import": {
+    "reportTitle": "Посао увезен",
+    "reportCounts": "Претворено {{translated}} од {{total}} компоненти",
+    "reportNotReady": "Овај цевовод још није спреман за покретање. Прво прођите кроз листу испод.",
+    "reportClean": "Све компоненте су претворене и ништа није остало нерешено.",
+    "reportNeedsAttention": "Захтева пажњу ({{n}})",
+    "reportComponentsSeen": "Компоненте у датотеци посла",
+    "failed": "Ништа није увезено"
+  },
+  "launcher": {
+    "title": "Почетна",
+    "goHome": "Почетна",
+    "subtitle": "Изаберите шта желите да урадите",
+    "subtitleWs": "Радни простор: {{name}}",
+    "planned": "Планирано",
+    "showOnStartup": "Прикажи ово када се Duckle отвори",
+    "readyCount": "{{n}} доступно сада",
+    "groupCount": "{{ready}} од {{total}} спремно",
+    "group": {
+      "build": "Изградња",
+      "operate": "Рад",
+      "govern": "Управљање"
+    }
   }
 }

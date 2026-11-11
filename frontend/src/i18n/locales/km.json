@@ -1,6 +1,6 @@
 {
   "topbar": {
-    "workspaceTooltip": "កន្លែងធ្វើការ៖ {{ផ្លូវ}}\nចុច​ដើម្បី​ប្ដូរ",
+    "workspaceTooltip": "កន្លែងធ្វើការ៖ {{path}}\nចុច​ដើម្បី​ប្ដូរ",
     "activeContextHint": "បរិបទសកម្ម - វាលអាចភ្ជាប់ជាមួយអថេររបស់វា។",
     "noContext": "គ្មានបរិបទ",
     "git": "Git (កន្លែងធ្វើការ)",
@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "របារចំហៀង",
     "project": "គម្រោង",
-    "components": "សមាសធាតុ"
+    "components": "សមាសធាតុ",
+    "importJob": "Talend",
+    "importJobTitle": "នាំចូលការងារ Talend .item"
   },
   "editorTabs": {
     "ariaLabel": "ទស្សនៈរបស់អ្នកនិពន្ធ",
     "canvas": "ផ្ទាំងក្រណាត់",
     "plan": "ផែនការ",
-    "run": "រត់"
+    "run": "រត់",
+    "history": "ប្រវត្តិ"
   },
   "header": {
     "unsavedChanges": "ការផ្លាស់ប្តូរដែលមិនបានរក្សាទុក",
@@ -32,6 +35,9 @@
     "stopTooltip": "បញ្ឈប់បំពង់បង្ហូរប្រេង (F6)",
     "run": "រត់",
     "runTooltip": "ដំណើរការបំពង់ (F5)",
+    "live": "ផ្ទាល់",
+    "liveTooltip": "មើលជាមុនផ្ទាល់៖ ដំណើរការរហូតដល់ថ្នាំងមួយ នៅពេលអ្នកជ្រើស ឬកែសម្រួលវា",
+    "liveOnTooltip": "មើលជាមុនផ្ទាល់បានបើក - ការជ្រើស ឬកែសម្រួលថ្នាំងមួយ ដំណើរការបំពង់ទិន្នន័យរហូតដល់វា",
     "save": "រក្សាទុក",
     "saveTooltip": "រក្សាទុក (Ctrl+S)",
     "validate": "ធ្វើឱ្យមានសុពលភាព",
@@ -43,10 +49,14 @@
     "copySqlDesc": "ចងក្រងទៅ DuckDB SQL ចម្លងទៅក្ដារតម្បៀតខ្ទាស់",
     "exportSql": "នាំចេញជា .sql",
     "exportSqlDesc": "ទាញយក SQL ដែលបានចងក្រងជាឯកសារ",
+    "generateDocs": "បង្កើតឯកសារ",
+    "generateDocsDesc": "ទំព័រ HTML ដែលមានគ្រប់ជំហាន ការកំណត់ និងជួរឈរ",
     "exportJson": "នាំចេញជា .duckle.json",
     "exportJsonDesc": "ទាញយក nodes + edges ជា JSON ចល័ត",
     "importJson": "នាំចូល .duckle.json...",
-    "importJsonDesc": "បើក JSON ចល័តជាបំពង់ថ្មី។"
+    "importJsonDesc": "បើក JSON ចល័តជាបំពង់ថ្មី។",
+    "importJob": "នាំចូលការងារ Talend...",
+    "importJobDesc": "បម្លែងការងារ Talend .item ទៅជាបំពង់ទិន្នន័យ"
   },
   "palette": {
     "sources": "ប្រភព",
@@ -170,7 +180,8 @@
     "ready": "[រួចរាល់]",
     "consoleDesc": "កំណត់ហេតុប្រតិបត្តិ។ ដំណើរការបំពង់បង្ហូរប្រេង ហើយស្ថានភាពដំណាក់កាលនីមួយៗ ចំនួនជួរដេក និងពេលវេលា - បូកនឹងកំហុសណាមួយ - បង្ហាញនៅទីនេះ។",
     "pipelineFinished": "បំពង់បានបញ្ចប់",
-    "pipelineLabel": "បំពង់"
+    "pipelineLabel": "បំពង់",
+    "dismissError": "បិទកំហុស"
   },
   "status": {
     "pipelineLabel": "បំពង់៖",
@@ -201,7 +212,10 @@
     "failed": "បរាជ័យ",
     "ok": "យល់ព្រម",
     "colsSingular": "col",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "ជួរ",
+    "rowsPlural": "ជួរ",
+    "rowsIn": "{{rows}} {{unit}} ក្នុងរយៈពេល {{ms}} ms"
   },
   "common": {
     "save": "រក្សាទុក",
@@ -214,5 +228,29 @@
     "loading": "កំពុង​ផ្ទុក...",
     "error": "កំហុស",
     "success": "ជោគជ័យ"
+  },
+  "import": {
+    "reportTitle": "បាននាំចូលការងារ",
+    "reportCounts": "បានបម្លែងសមាសធាតុ {{translated}} ក្នុងចំណោម {{total}}",
+    "reportNotReady": "បំពង់ទិន្នន័យនេះមិនទាន់រួចរាល់សម្រាប់ដំណើរការទេ។ សូមពិនិត្យបញ្ជីខាងក្រោមជាមុនសិន។",
+    "reportClean": "បានបម្លែងសមាសធាតុទាំងអស់ ហើយគ្មានអ្វីដែលមិនទាន់ដោះស្រាយទេ។",
+    "reportNeedsAttention": "ត្រូវការការយកចិត្តទុកដាក់ ({{n}})",
+    "reportComponentsSeen": "សមាសធាតុក្នុងឯកសារការងារ",
+    "failed": "គ្មានអ្វីត្រូវបាននាំចូលទេ"
+  },
+  "launcher": {
+    "title": "ទំព័រដើម",
+    "goHome": "ទំព័រដើម",
+    "subtitle": "ជ្រើសអ្វីដែលអ្នកចង់ធ្វើ",
+    "subtitleWs": "កន្លែងធ្វើការ៖ {{name}}",
+    "planned": "បានគ្រោងទុក",
+    "showOnStartup": "បង្ហាញនេះនៅពេល Duckle បើក",
+    "readyCount": "មាន {{n}} អាចប្រើបានឥឡូវនេះ",
+    "groupCount": "រួចរាល់ {{ready}} ក្នុងចំណោម {{total}}",
+    "group": {
+      "build": "បង្កើត",
+      "operate": "ដំណើរការ",
+      "govern": "គ្រប់គ្រង"
+    }
   }
 }

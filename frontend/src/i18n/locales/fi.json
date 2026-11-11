@@ -1,6 +1,6 @@
 {
   "topbar": {
-    "workspaceTooltip": "Työtila: {{polku}}\nNapsauta vaihtaaksesi",
+    "workspaceTooltip": "Työtila: {{path}}\nNapsauta vaihtaaksesi",
     "activeContextHint": "Aktiivinen konteksti - kentät voivat sitoutua sen muuttujiin",
     "noContext": "Ei kontekstia",
     "git": "Git (työtila)",
@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Sivupalkki",
     "project": "Projekti",
-    "components": "Komponentit"
+    "components": "Komponentit",
+    "importJob": "Talend",
+    "importJobTitle": "Tuo Talendin .item-työ"
   },
   "editorTabs": {
     "ariaLabel": "Toimittajan näkymät",
     "canvas": "Kangas",
     "plan": "Suunnitelma",
-    "run": "Juokse"
+    "run": "Juokse",
+    "history": "Historia"
   },
   "header": {
     "unsavedChanges": "tallentamattomat muutokset",
@@ -32,6 +35,9 @@
     "stopTooltip": "Pysäytä putki (F6)",
     "run": "Juokse",
     "runTooltip": "Suorita putki (F5)",
+    "live": "Live",
+    "liveTooltip": "Live-esikatselu: suorita solmuun asti, kun valitset tai muokkaat sitä",
+    "liveOnTooltip": "Live-esikatselu päällä - solmun valitseminen tai muokkaaminen suorittaa putken siihen asti",
     "save": "Tallentaa",
     "saveTooltip": "Tallenna (Ctrl+S)",
     "validate": "Vahvista",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Kääntää DuckDB SQL:ään, kopioi leikepöydälle",
     "exportSql": "Vie .sql-muodossa",
     "exportSqlDesc": "Lataa käännetty SQL tiedostona",
+    "generateDocs": "Luo dokumentaatio",
+    "generateDocsDesc": "HTML-sivu, jossa on jokainen vaihe, asetus ja sarake",
     "exportJson": "Vie .duckle.json-muodossa",
     "exportJsonDesc": "Lataa solmut + reunat kannettavana JSON-muodossa",
     "importJson": "Tuo .duckle.json...",
-    "importJsonDesc": "Avaa kannettava JSON uutena liukuhihnana"
+    "importJsonDesc": "Avaa kannettava JSON uutena liukuhihnana",
+    "importJob": "Tuo Talend-työ...",
+    "importJobDesc": "Muunna Talendin .item-työ putkeksi"
   },
   "palette": {
     "sources": "Lähteet",
@@ -170,7 +180,8 @@
     "ready": "[valmis]",
     "consoleDesc": "Toteutusloki. Suorita liukuhihna ja kunkin vaiheen tila, rivien määrä ja ajoitus - sekä mahdolliset virheet - näkyvät täällä.",
     "pipelineFinished": "Putkilinja valmis",
-    "pipelineLabel": "Putkilinja"
+    "pipelineLabel": "Putkilinja",
+    "dismissError": "Sulje virhe"
   },
   "status": {
     "pipelineLabel": "Putkilinja:",
@@ -201,7 +212,10 @@
     "failed": "Epäonnistui",
     "ok": "OK",
     "colsSingular": "kol",
-    "colsPlural": "sarakkeet"
+    "colsPlural": "sarakkeet",
+    "rowsSingular": "rivi",
+    "rowsPlural": "riviä",
+    "rowsIn": "{{rows}} {{unit}} ajassa {{ms}} ms"
   },
   "common": {
     "save": "Tallentaa",
@@ -214,5 +228,29 @@
     "loading": "Ladataan...",
     "error": "Virhe",
     "success": "Menestys"
+  },
+  "import": {
+    "reportTitle": "Työ tuotu",
+    "reportCounts": "{{translated}}/{{total}} komponenttia muunnettu",
+    "reportNotReady": "Tämä putki ei ole vielä valmis suoritettavaksi. Käy ensin läpi alla oleva luettelo.",
+    "reportClean": "Kaikki komponentit muunnettu, eikä mitään jäänyt ratkaisematta.",
+    "reportNeedsAttention": "Vaatii huomiota ({{n}})",
+    "reportComponentsSeen": "Työtiedoston komponentit",
+    "failed": "Mitään ei tuotu"
+  },
+  "launcher": {
+    "title": "Aloitus",
+    "goHome": "Aloitus",
+    "subtitle": "Valitse, mitä haluat tehdä",
+    "subtitleWs": "Työtila: {{name}}",
+    "planned": "Suunnitteilla",
+    "showOnStartup": "Näytä tämä, kun Duckle avataan",
+    "readyCount": "{{n}} saatavilla nyt",
+    "groupCount": "{{ready}}/{{total}} valmiina",
+    "group": {
+      "build": "Rakenna",
+      "operate": "Käytä",
+      "govern": "Hallinnoi"
+    }
   }
 }

@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "الشريط الجانبي",
     "project": "مشروع",
-    "components": "مكونات"
+    "components": "مكونات",
+    "importJob": "Talend",
+    "importJobTitle": "استيراد مهمة Talend بصيغة .item"
   },
   "editorTabs": {
     "ariaLabel": "مشاهدات المحرر",
     "canvas": "نظام Canvas",
     "plan": "خطة",
-    "run": "اجري"
+    "run": "اجري",
+    "history": "السجل"
   },
   "header": {
     "unsavedChanges": "لم يتم حفظ التغييرات ",
@@ -32,6 +35,9 @@
     "stopTooltip": "إيقاف خط الأنابيب (F6)",
     "run": "تشغيل",
     "runTooltip": "تشغيل خط الأنابيب (F5)",
+    "live": "مباشر",
+    "liveTooltip": "معاينة مباشرة: التشغيل حتى عقدة عند تحديدها أو تحريرها",
+    "liveOnTooltip": "المعاينة المباشرة مفعّلة - تحديد عقدة أو تحريرها يشغّل خط الأنابيب حتى تلك العقدة",
     "save": "حفظ",
     "saveTooltip": "حفظ (Ctrl+S)",
     "validate": "التحقق من الجدوى",
@@ -43,10 +49,14 @@
     "copySqlDesc": "التحويل البرمجي إلى DuckDB SQL، والنسخ إلى الحافظة",
     "exportSql": "تصدير بتنسيق .sql",
     "exportSqlDesc": "تنزيل SQL المترجمة كملف",
+    "generateDocs": "إنشاء التوثيق",
+    "generateDocsDesc": "صفحة HTML تتضمن كل خطوة وإعداد وعمود",
     "exportJson": "تصدير باسم .duckle.json",
     "exportJsonDesc": "قم بتنزيل العقد + الحواف كجسون محمول",
     "importJson": "استيراد .duckle.json...",
-    "importJsonDesc": "فتح JSON محمول كخط أنابيب جديد"
+    "importJsonDesc": "فتح JSON محمول كخط أنابيب جديد",
+    "importJob": "استيراد مهمة Talend...",
+    "importJobDesc": "تحويل مهمة Talend بصيغة .item إلى خط أنابيب"
   },
   "palette": {
     "sources": "المصادر",
@@ -170,7 +180,8 @@
     "ready": "جاهز",
     "consoleDesc": "سجل التنفيذ. قم بتشغيل خط أنابيب وستظهر حالة كل مرحلة وعدد الصفوف والتوقيت - بالإضافة إلى أي أخطاء - هنا.",
     "pipelineFinished": "تم الانتهاء من خط الأنابيب",
-    "pipelineLabel": "الإمداد"
+    "pipelineLabel": "الإمداد",
+    "dismissError": "إغلاق الخطأ"
   },
   "status": {
     "pipelineLabel": "الإمداد",
@@ -201,7 +212,10 @@
     "failed": "فشل",
     "ok": "مؤكد",
     "colsSingular": "مضيق بين قمتين",
-    "colsPlural": "اعمدة"
+    "colsPlural": "اعمدة",
+    "rowsSingular": "صف",
+    "rowsPlural": "صفوف",
+    "rowsIn": "{{rows}} {{unit}} في {{ms}} ms"
   },
   "common": {
     "save": "[ترجمة المصطلح: Save]",
@@ -214,5 +228,29 @@
     "loading": "جاري التحميل...",
     "error": "خطأ",
     "success": "ناجحة"
+  },
+  "import": {
+    "reportTitle": "تم استيراد المهمة",
+    "reportCounts": "تم تحويل {{translated}} من أصل {{total}} مكوّنًا",
+    "reportNotReady": "خط الأنابيب هذا ليس جاهزًا للتشغيل بعد. راجع القائمة أدناه أولًا.",
+    "reportClean": "تم تحويل كل المكوّنات ولم يبقَ شيء دون حل.",
+    "reportNeedsAttention": "يحتاج إلى مراجعة ({{n}})",
+    "reportComponentsSeen": "المكوّنات في ملف المهمة",
+    "failed": "لم يُستورد أي شيء"
+  },
+  "launcher": {
+    "title": "الرئيسية",
+    "goHome": "الرئيسية",
+    "subtitle": "اختر ما تريد القيام به",
+    "subtitleWs": "مساحة العمل: {{name}}",
+    "planned": "مخطط له",
+    "showOnStartup": "عرض هذا عند فتح Duckle",
+    "readyCount": "{{n}} متاح الآن",
+    "groupCount": "{{ready}} من {{total}} جاهز",
+    "group": {
+      "build": "البناء",
+      "operate": "التشغيل",
+      "govern": "الحوكمة"
+    }
   }
 }

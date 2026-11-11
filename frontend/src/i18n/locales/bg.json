@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Странична лента",
     "project": "Проект",
-    "components": "Компоненти"
+    "components": "Компоненти",
+    "importJob": "Talend",
+    "importJobTitle": "Импортиране на задача Talend .item"
   },
   "editorTabs": {
     "ariaLabel": "Изгледи на редактора",
     "canvas": "Платно",
     "plan": "Планирайте",
-    "run": "Бягай"
+    "run": "Бягай",
+    "history": "История"
   },
   "header": {
     "unsavedChanges": "незапазени промени",
@@ -32,6 +35,9 @@
     "stopTooltip": "Спрете тръбопровода (F6)",
     "run": "Бягай",
     "runTooltip": "Изпълнение на тръбопровод (F5)",
+    "live": "На живо",
+    "liveTooltip": "Преглед на живо: изпълнява до възел, когато го изберете или редактирате",
+    "liveOnTooltip": "Прегледът на живо е включен - изборът или редактирането на възел изпълнява конвейера до него",
     "save": "Запазване",
     "saveTooltip": "Запазване (Ctrl+S)",
     "validate": "Валидирайте",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Компилирайте в DuckDB SQL, копирайте в клипборда",
     "exportSql": "Експортиране като .sql",
     "exportSqlDesc": "Изтеглете компилирания SQL като файл",
+    "generateDocs": "Генериране на документация",
+    "generateDocsDesc": "HTML страница с всяка стъпка, настройка и колона",
     "exportJson": "Експортирайте като .duckle.json",
     "exportJsonDesc": "Изтеглете възли + ръбове като преносим JSON",
     "importJson": "Импортиране на .duckle.json...",
-    "importJsonDesc": "Отворете преносим JSON като нов конвейер"
+    "importJsonDesc": "Отворете преносим JSON като нов конвейер",
+    "importJob": "Импортиране на задача Talend...",
+    "importJobDesc": "Преобразуване на задача Talend .item в конвейер"
   },
   "palette": {
     "sources": "Източници",
@@ -170,7 +180,8 @@
     "ready": "[готов]",
     "consoleDesc": "Дневникът на изпълнението. Пуснете конвейер и състоянието на всеки етап, броят на редовете и времето - плюс всички грешки - се появяват тук.",
     "pipelineFinished": "Тръбопроводът е завършен",
-    "pipelineLabel": "Тръбопровод"
+    "pipelineLabel": "Тръбопровод",
+    "dismissError": "Затвори грешката"
   },
   "status": {
     "pipelineLabel": "Тръбопровод:",
@@ -201,7 +212,10 @@
     "failed": "Неуспешно",
     "ok": "добре",
     "colsSingular": "полк",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "ред",
+    "rowsPlural": "реда",
+    "rowsIn": "{{rows}} {{unit}} за {{ms}} ms"
   },
   "common": {
     "save": "Запазване",
@@ -214,5 +228,29 @@
     "loading": "Зареждане...",
     "error": "Грешка",
     "success": "Успех"
+  },
+  "import": {
+    "reportTitle": "Задачата е импортирана",
+    "reportCounts": "Преобразувани {{translated}} от {{total}} компонента",
+    "reportNotReady": "Този конвейер още не е готов за изпълнение. Първо преминете през списъка по-долу.",
+    "reportClean": "Всички компоненти са преобразувани и нищо не е останало нерешено.",
+    "reportNeedsAttention": "Изисква внимание ({{n}})",
+    "reportComponentsSeen": "Компоненти във файла на задачата",
+    "failed": "Нищо не беше импортирано"
+  },
+  "launcher": {
+    "title": "Начало",
+    "goHome": "Начало",
+    "subtitle": "Изберете какво искате да направите",
+    "subtitleWs": "Работно пространство: {{name}}",
+    "planned": "Планирано",
+    "showOnStartup": "Показвай това при отваряне на Duckle",
+    "readyCount": "{{n}} налични сега",
+    "groupCount": "{{ready}} от {{total}} готови",
+    "group": {
+      "build": "Изграждане",
+      "operate": "Експлоатация",
+      "govern": "Управление"
+    }
   }
 }

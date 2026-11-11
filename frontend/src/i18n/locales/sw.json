@@ -10,19 +10,22 @@
     "switchLight": "Badilisha kwa hali ya mwanga",
     "switchDark": "Badili hadi hali ya giza",
     "themeAriaToggle": "Geuza mandhari",
-    "runtime": "muda wa utekelezaji: {{jina}}",
+    "runtime": "muda wa utekelezaji: {{name}}",
     "languageAriaLabel": "Chagua lugha"
   },
   "sidebar": {
     "ariaLabel": "Upau wa kando",
     "project": "Mradi",
-    "components": "Vipengele"
+    "components": "Vipengele",
+    "importJob": "Talend",
+    "importJobTitle": "Ingiza kazi ya Talend .item"
   },
   "editorTabs": {
     "ariaLabel": "Maoni ya wahariri",
     "canvas": "Turubai",
     "plan": "Mpango",
-    "run": "Kimbia"
+    "run": "Kimbia",
+    "history": "Historia"
   },
   "header": {
     "unsavedChanges": "mabadiliko ambayo hayajahifadhiwa",
@@ -32,6 +35,9 @@
     "stopTooltip": "Simamisha bomba (F6)",
     "run": "Kimbia",
     "runTooltip": "Kuendesha bomba (F5)",
+    "live": "Moja kwa moja",
+    "liveTooltip": "Onyesho la moja kwa moja: endesha hadi nodi unapoichagua au kuihariri",
+    "liveOnTooltip": "Onyesho la moja kwa moja limewashwa - kuchagua au kuhariri nodi huendesha bomba la data hadi kwake",
     "save": "Hifadhi",
     "saveTooltip": "Hifadhi (Ctrl+S)",
     "validate": "Thibitisha",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Unganisha kwa DuckDB SQL, nakili kwenye ubao wa kunakili",
     "exportSql": "Hamisha kama .sql",
     "exportSqlDesc": "Pakua SQL iliyokusanywa kama faili",
+    "generateDocs": "Tengeneza nyaraka",
+    "generateDocsDesc": "Ukurasa wa HTML wenye kila hatua, mpangilio na safu wima",
     "exportJson": "Hamisha kama .duckle.json",
     "exportJsonDesc": "Pakua nodi + kingo kama JSON inayobebeka",
     "importJson": "Leta .duckle.json...",
-    "importJsonDesc": "Fungua JSON inayobebeka kama bomba mpya"
+    "importJsonDesc": "Fungua JSON inayobebeka kama bomba mpya",
+    "importJob": "Ingiza kazi ya Talend...",
+    "importJobDesc": "Badilisha kazi ya Talend .item kuwa bomba la data"
   },
   "palette": {
     "sources": "Vyanzo",
@@ -170,7 +180,8 @@
     "ready": "[tayari]",
     "consoleDesc": "Rekodi ya utekelezaji. Tekeleza bomba na hali ya kila hatua, hesabu ya safu mlalo, na muda - pamoja na hitilafu zozote - inaonekana hapa.",
     "pipelineFinished": "Bomba limekamilika",
-    "pipelineLabel": "Bomba"
+    "pipelineLabel": "Bomba",
+    "dismissError": "Funga hitilafu"
   },
   "status": {
     "pipelineLabel": "Bomba:",
@@ -201,7 +212,10 @@
     "failed": "Imeshindwa",
     "ok": "Sawa",
     "colsSingular": "col",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "mstari",
+    "rowsPlural": "mistari",
+    "rowsIn": "{{rows}} {{unit}} kwa {{ms}} ms"
   },
   "common": {
     "save": "Hifadhi",
@@ -214,5 +228,29 @@
     "loading": "Inapakia...",
     "error": "Hitilafu",
     "success": "Mafanikio"
+  },
+  "import": {
+    "reportTitle": "Kazi imeingizwa",
+    "reportCounts": "Vipengele {{translated}} kati ya {{total}} vimebadilishwa",
+    "reportNotReady": "Bomba hili la data bado halijawa tayari kuendeshwa. Pitia kwanza orodha iliyo hapa chini.",
+    "reportClean": "Vipengele vyote vimebadilishwa na hakuna kilichobaki bila kutatuliwa.",
+    "reportNeedsAttention": "Inahitaji uangalizi ({{n}})",
+    "reportComponentsSeen": "Vipengele kwenye faili ya kazi",
+    "failed": "Hakuna kilichoingizwa"
+  },
+  "launcher": {
+    "title": "Nyumbani",
+    "goHome": "Nyumbani",
+    "subtitle": "Chagua unachotaka kufanya",
+    "subtitleWs": "Eneo la kazi: {{name}}",
+    "planned": "Imepangwa",
+    "showOnStartup": "Onyesha hii Duckle inapofunguka",
+    "readyCount": "{{n}} zinapatikana sasa",
+    "groupCount": "{{ready}} kati ya {{total}} tayari",
+    "group": {
+      "build": "Jenga",
+      "operate": "Endesha",
+      "govern": "Simamia"
+    }
   }
 }

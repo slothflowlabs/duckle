@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Sidebar",
     "project": "Proyecto",
-    "components": "Componentes"
+    "components": "Componentes",
+    "importJob": "Talend",
+    "importJobTitle": "Importar un trabajo .item de Talend"
   },
   "editorTabs": {
     "ariaLabel": "Vistas del editor",
     "canvas": "Lienzo",
     "plan": "Plan",
-    "run": "Ejecutar"
+    "run": "Ejecutar",
+    "history": "Historial"
   },
   "header": {
     "unsavedChanges": "Cambios no guardados",
@@ -32,6 +35,9 @@
     "stopTooltip": "Tubería de parada (F6)",
     "run": "Ejecutar",
     "runTooltip": "Ejecutar tubería (F5)",
+    "live": "En vivo",
+    "liveTooltip": "Vista previa en vivo: ejecuta hasta un nodo al seleccionarlo o editarlo",
+    "liveOnTooltip": "Vista previa en vivo activada - seleccionar o editar un nodo ejecuta el pipeline hasta él",
     "save": "Guardar",
     "saveTooltip": "Guardar (Ctrl+S)",
     "validate": "Validar",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Compilar a DuckDB SQL, copiar al portapapeles",
     "exportSql": "Exportar como .sql",
     "exportSqlDesc": "Descargar el SQL compilado como un archivo",
+    "generateDocs": "Generar documentación",
+    "generateDocsDesc": "Una página HTML con cada paso, ajuste y columna",
     "exportJson": "Exportar como .duckle.json",
     "exportJsonDesc": "Descargar nodos + bordes como JSON portátil",
     "importJson": "Importar .duckle.json...",
-    "importJsonDesc": "Abrir un JSON portátil como un nuevo canal"
+    "importJsonDesc": "Abrir un JSON portátil como un nuevo canal",
+    "importJob": "Importar trabajo de Talend...",
+    "importJobDesc": "Convertir un trabajo .item de Talend en un pipeline"
   },
   "palette": {
     "sources": "Origenes",
@@ -170,7 +180,8 @@
     "ready": "Listo",
     "consoleDesc": "El registro de ejecución. Ejecute una canalización y el estado, el recuento de filas y el tiempo de cada etapa, además de cualquier error, aparecerán aquí.",
     "pipelineFinished": "Tubería terminada",
-    "pipelineLabel": "Tubería"
+    "pipelineLabel": "Tubería",
+    "dismissError": "Descartar error"
   },
   "status": {
     "pipelineLabel": "Pipeline:",
@@ -201,7 +212,10 @@
     "failed": "Error",
     "ok": "OK",
     "colsSingular": "COLLADO",
-    "colsPlural": "Columnas"
+    "colsPlural": "Columnas",
+    "rowsSingular": "fila",
+    "rowsPlural": "filas",
+    "rowsIn": "{{rows}} {{unit}} en {{ms}} ms"
   },
   "common": {
     "save": "Guardar",
@@ -214,5 +228,29 @@
     "loading": "Cargando...",
     "error": "Error",
     "success": "Realizado con éxito"
+  },
+  "import": {
+    "reportTitle": "Trabajo importado",
+    "reportCounts": "{{translated}} de {{total}} componentes convertidos",
+    "reportNotReady": "Este pipeline aún no está listo para ejecutarse. Revisa primero la lista de abajo.",
+    "reportClean": "Todos los componentes convertidos y nada pendiente de resolver.",
+    "reportNeedsAttention": "Requiere atención ({{n}})",
+    "reportComponentsSeen": "Componentes en el archivo del trabajo",
+    "failed": "No se importó nada"
+  },
+  "launcher": {
+    "title": "Inicio",
+    "goHome": "Inicio",
+    "subtitle": "Elige qué quieres hacer",
+    "subtitleWs": "Espacio de trabajo: {{name}}",
+    "planned": "Previsto",
+    "showOnStartup": "Mostrar al abrir Duckle",
+    "readyCount": "{{n}} disponibles ahora",
+    "groupCount": "{{ready}} de {{total}} listos",
+    "group": {
+      "build": "Crear",
+      "operate": "Operar",
+      "govern": "Gobernar"
+    }
   }
 }

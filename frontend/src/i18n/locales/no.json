@@ -1,6 +1,6 @@
 {
   "topbar": {
-    "workspaceTooltip": "Arbeidsområde: {{bane}}\nKlikk for å bytte",
+    "workspaceTooltip": "Arbeidsområde: {{path}}\nKlikk for å bytte",
     "activeContextHint": "Aktiv kontekst - felt kan binde seg til variablene",
     "noContext": "Ingen kontekst",
     "git": "Git (arbeidsområde)",
@@ -10,19 +10,22 @@
     "switchLight": "Bytt til lysmodus",
     "switchDark": "Bytt til mørk modus",
     "themeAriaToggle": "Bytt tema",
-    "runtime": "kjøretid: {{navn}}",
+    "runtime": "kjøretid: {{name}}",
     "languageAriaLabel": "Velg språk"
   },
   "sidebar": {
     "ariaLabel": "Sidefelt",
     "project": "Prosjekt",
-    "components": "Komponenter"
+    "components": "Komponenter",
+    "importJob": "Talend",
+    "importJobTitle": "Importer en Talend .item-jobb"
   },
   "editorTabs": {
     "ariaLabel": "Redaktørvisninger",
     "canvas": "Lerret",
     "plan": "Plan",
-    "run": "Løp"
+    "run": "Løp",
+    "history": "Historikk"
   },
   "header": {
     "unsavedChanges": "ulagrede endringer",
@@ -32,6 +35,9 @@
     "stopTooltip": "Stopp rørledning (F6)",
     "run": "Løp",
     "runTooltip": "Kjør rørledning (F5)",
+    "live": "Live",
+    "liveTooltip": "Live-forhåndsvisning: kjør fram til en node når du velger eller redigerer den",
+    "liveOnTooltip": "Live-forhåndsvisning på - å velge eller redigere en node kjører pipelinen fram til den",
     "save": "Spare",
     "saveTooltip": "Lagre (Ctrl+S)",
     "validate": "Bekreft",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Kompiler til DuckDB SQL, kopier til utklippstavlen",
     "exportSql": "Eksporter som .sql",
     "exportSqlDesc": "Last ned den kompilerte SQL-en som en fil",
+    "generateDocs": "Generer dokumentasjon",
+    "generateDocsDesc": "En HTML-side med hvert trinn, hver innstilling og hver kolonne",
     "exportJson": "Eksporter som .duckle.json",
     "exportJsonDesc": "Last ned noder + edges som bærbar JSON",
     "importJson": "Importer .duckle.json...",
-    "importJsonDesc": "Åpne en bærbar JSON som en ny pipeline"
+    "importJsonDesc": "Åpne en bærbar JSON som en ny pipeline",
+    "importJob": "Importer Talend-jobb...",
+    "importJobDesc": "Oversett en Talend .item-jobb til en pipeline"
   },
   "palette": {
     "sources": "Kilder",
@@ -170,7 +180,8 @@
     "ready": "[ferdig]",
     "consoleDesc": "Utførelsesloggen. Kjør en pipeline, og hver trinns status, radantall og timing – pluss eventuelle feil – vises her.",
     "pipelineFinished": "Rørledningen ferdig",
-    "pipelineLabel": "Rørledning"
+    "pipelineLabel": "Rørledning",
+    "dismissError": "Lukk feilen"
   },
   "status": {
     "pipelineLabel": "Rørledning:",
@@ -201,7 +212,10 @@
     "failed": "Mislyktes",
     "ok": "OK",
     "colsSingular": "kol",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "rad",
+    "rowsPlural": "rader",
+    "rowsIn": "{{rows}} {{unit}} på {{ms}} ms"
   },
   "common": {
     "save": "Spare",
@@ -214,5 +228,29 @@
     "loading": "Laster inn...",
     "error": "Feil",
     "success": "Suksess"
+  },
+  "import": {
+    "reportTitle": "Jobb importert",
+    "reportCounts": "{{translated}} av {{total}} komponenter oversatt",
+    "reportNotReady": "Denne pipelinen er ikke klar til å kjøre ennå. Gå gjennom listen nedenfor først.",
+    "reportClean": "Alle komponenter er oversatt, og ingenting er uløst.",
+    "reportNeedsAttention": "Trenger oppmerksomhet ({{n}})",
+    "reportComponentsSeen": "Komponenter i jobbfilen",
+    "failed": "Ingenting ble importert"
+  },
+  "launcher": {
+    "title": "Hjem",
+    "goHome": "Hjem",
+    "subtitle": "Velg hva du vil gjøre",
+    "subtitleWs": "Arbeidsområde: {{name}}",
+    "planned": "Planlagt",
+    "showOnStartup": "Vis dette når Duckle åpnes",
+    "readyCount": "{{n}} tilgjengelige nå",
+    "groupCount": "{{ready}} av {{total}} klare",
+    "group": {
+      "build": "Bygg",
+      "operate": "Drift",
+      "govern": "Styring"
+    }
   }
 }

@@ -10,7 +10,7 @@
     "switchLight": "Lumipat sa light mode",
     "switchDark": "Lumipat sa dark mode",
     "themeAriaToggle": "I - toggle ang tema",
-    "runtime": "username: {{username}}",
+    "runtime": "runtime: {{name}}",
     "languageAriaLabel": "Pumili ng wika"
   },
   "palette": {
@@ -105,13 +105,16 @@
   "sidebar": {
     "ariaLabel": "Sidebar",
     "project": "Proyekto",
-    "components": "Mga bahagi"
+    "components": "Mga bahagi",
+    "importJob": "Talend",
+    "importJobTitle": "Mag-import ng Talend .item na job"
   },
   "editorTabs": {
     "ariaLabel": "Mga view ng editor",
     "canvas": "Canvas",
     "plan": "Plano",
-    "run": "Takbo"
+    "run": "Takbo",
+    "history": "Kasaysayan"
   },
   "header": {
     "unsavedChanges": "hindi na-save na mga pagbabago",
@@ -121,6 +124,9 @@
     "stopTooltip": "Ihinto ang pipeline (F6)",
     "run": "Takbo",
     "runTooltip": "Patakbuhin ang pipeline (F5)",
+    "live": "Live",
+    "liveTooltip": "Live preview: patakbuhin hanggang sa isang node kapag pinili o in-edit mo ito",
+    "liveOnTooltip": "Naka-on ang live preview - ang pagpili o pag-edit ng node ay nagpapatakbo ng pipeline hanggang doon",
     "save": "I-save",
     "saveTooltip": "I-save (Ctrl+S)",
     "validate": "Patunayan",
@@ -132,10 +138,14 @@
     "copySqlDesc": "Mag-compile sa DuckDB SQL, kopyahin sa clipboard",
     "exportSql": "I-export bilang .sql",
     "exportSqlDesc": "I-download ang pinagsama-samang SQL bilang isang file",
+    "generateDocs": "Gumawa ng dokumentasyon",
+    "generateDocsDesc": "Isang HTML na pahina na may bawat hakbang, setting at column",
     "exportJson": "I-export bilang .duckle.json",
     "exportJsonDesc": "Mag-download ng mga node + edge bilang portable JSON",
     "importJson": "Mag-import ng .duckle.json...",
-    "importJsonDesc": "Magbukas ng portable JSON bilang bagong pipeline"
+    "importJsonDesc": "Magbukas ng portable JSON bilang bagong pipeline",
+    "importJob": "Mag-import ng Talend job...",
+    "importJobDesc": "Isalin ang isang Talend .item na job sa isang pipeline"
   },
   "properties": {
     "nothingSelected": "Walang napili",
@@ -182,7 +192,8 @@
     "ready": "[handa na]",
     "consoleDesc": "Ang execution log. Magpatakbo ng pipeline at lalabas dito ang status, row count, at timing ng bawat yugto - kasama ang anumang mga error.",
     "pipelineFinished": "Tapos na ang pipeline",
-    "pipelineLabel": "Pipeline"
+    "pipelineLabel": "Pipeline",
+    "dismissError": "Isara ang error"
   },
   "status": {
     "pipelineLabel": "Pipeline:",
@@ -213,6 +224,33 @@
     "failed": "Nabigo",
     "ok": "OK",
     "colsSingular": "col",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "hanay",
+    "rowsPlural": "hanay",
+    "rowsIn": "{{rows}} {{unit}} sa {{ms}} ms"
+  },
+  "import": {
+    "reportTitle": "Na-import ang job",
+    "reportCounts": "{{translated}} sa {{total}} na component ang naisalin",
+    "reportNotReady": "Hindi pa handang patakbuhin ang pipeline na ito. Tapusin muna ang listahan sa ibaba.",
+    "reportClean": "Naisalin ang lahat ng component at walang natirang hindi nalutas.",
+    "reportNeedsAttention": "Kailangang tingnan ({{n}})",
+    "reportComponentsSeen": "Mga component sa job file",
+    "failed": "Walang na-import"
+  },
+  "launcher": {
+    "title": "Home",
+    "goHome": "Home",
+    "subtitle": "Piliin ang gusto mong gawin",
+    "subtitleWs": "Lugar ng trabaho: {{name}}",
+    "planned": "Nakaplano",
+    "showOnStartup": "Ipakita ito kapag binuksan ang Duckle",
+    "readyCount": "{{n}} magagamit na ngayon",
+    "groupCount": "{{ready}} sa {{total}} ang handa",
+    "group": {
+      "build": "Bumuo",
+      "operate": "Magpatakbo",
+      "govern": "Pamahalaan"
+    }
   }
 }

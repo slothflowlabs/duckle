@@ -1,6 +1,6 @@
 {
   "topbar": {
-    "workspaceTooltip": "Spás oibre: {{conair}}\nCliceáil chun athrú",
+    "workspaceTooltip": "Spás oibre: {{path}}\nCliceáil chun athrú",
     "activeContextHint": "Comhthéacs gníomhach - is féidir le réimsí ceangal lena athróga",
     "noContext": "Gan comhthéacs",
     "git": "Git (spás oibre)",
@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Barra Taoibh",
     "project": "Tionscadal",
-    "components": "Comhpháirteanna"
+    "components": "Comhpháirteanna",
+    "importJob": "Talend",
+    "importJobTitle": "Iompórtáil jab .item Talend"
   },
   "editorTabs": {
     "ariaLabel": "Radhairc eagarthóir",
     "canvas": "Canbhás",
     "plan": "Plean",
-    "run": "Rith"
+    "run": "Rith",
+    "history": "Stair"
   },
   "header": {
     "unsavedChanges": "athruithe gan sábháil",
@@ -32,6 +35,9 @@
     "stopTooltip": "Stop píblíne (F6)",
     "run": "Rith",
     "runTooltip": "Rith píblíne (F5)",
+    "live": "Beo",
+    "liveTooltip": "Réamhamharc beo: rith go dtí nód nuair a roghnaíonn nó a chuireann tú in eagar é",
+    "liveOnTooltip": "Réamhamharc beo ar siúl - ritheann roghnú nó eagarthóireacht nóid an píblíne go dtí é",
     "save": "Sábháil",
     "saveTooltip": "Sábháil (Ctrl+S)",
     "validate": "Bailíochtaigh",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Tiomsaigh chuig DuckDB SQL, cóipeáil chuig an ngearrthaisce",
     "exportSql": "Easpórtáil mar .sql",
     "exportSqlDesc": "Íosluchtaigh sql tiomsaithe mar chomhad",
+    "generateDocs": "Gin doiciméadú",
+    "generateDocsDesc": "Leathanach HTML le gach céim, socrú agus colún",
     "exportJson": "Easpórtáil mar .duckle.json",
     "exportJsonDesc": "Íoslódáil nóid + imill mar JSON iniompartha",
     "importJson": "Iompórtáil .duckle.json...",
-    "importJsonDesc": "Oscail JSON iniompartha mar phíblíne nua"
+    "importJsonDesc": "Oscail JSON iniompartha mar phíblíne nua",
+    "importJob": "Iompórtáil jab Talend...",
+    "importJobDesc": "Aistrigh jab .item Talend go píblíne"
   },
   "palette": {
     "sources": "Foinsí",
@@ -170,7 +180,8 @@
     "ready": "[réidh]",
     "consoleDesc": "An logáil forghníomhaithe. Rith píblíne agus tá stádas, comhaireamh rónna agus uainiú gach céime - móide aon earráidí - le feiceáil anseo.",
     "pipelineFinished": "Píblíne críochnaithe",
-    "pipelineLabel": "Píblíne"
+    "pipelineLabel": "Píblíne",
+    "dismissError": "Ruaig an earráid"
   },
   "status": {
     "pipelineLabel": "Píblíne:",
@@ -201,7 +212,10 @@
     "failed": "Theip",
     "ok": "ceart go leor",
     "colsSingular": "col",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "ró",
+    "rowsPlural": "rónna",
+    "rowsIn": "{{rows}} {{unit}} i {{ms}} ms"
   },
   "common": {
     "save": "Sábháil",
@@ -214,5 +228,29 @@
     "loading": "Á lódáil...",
     "error": "Earráid",
     "success": "Rath"
+  },
+  "import": {
+    "reportTitle": "Jab iompórtáilte",
+    "reportCounts": "{{translated}} as {{total}} comhpháirt aistrithe",
+    "reportNotReady": "Níl an píblíne seo réidh le rith fós. Téigh tríd an liosta thíos ar dtús.",
+    "reportClean": "Gach comhpháirt aistrithe agus níl aon rud gan réiteach.",
+    "reportNeedsAttention": "Aird de dhíth ({{n}})",
+    "reportComponentsSeen": "Comhpháirteanna i gcomhad an jab",
+    "failed": "Níor iompórtáladh aon rud"
+  },
+  "launcher": {
+    "title": "Baile",
+    "goHome": "Baile",
+    "subtitle": "Roghnaigh cad ba mhaith leat a dhéanamh",
+    "subtitleWs": "Spás oibre: {{name}}",
+    "planned": "Beartaithe",
+    "showOnStartup": "Taispeáin é seo nuair a osclaíonn Duckle",
+    "readyCount": "{{n}} ar fáil anois",
+    "groupCount": "{{ready}} as {{total}} réidh",
+    "group": {
+      "build": "Tóg",
+      "operate": "Oibrigh",
+      "govern": "Rialaigh"
+    }
   }
 }

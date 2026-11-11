@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Bar ochr",
     "project": "Prosiect",
-    "components": "Cydrannau"
+    "components": "Cydrannau",
+    "importJob": "Talend",
+    "importJobTitle": "Mewnforio swydd .item Talend"
   },
   "editorTabs": {
     "ariaLabel": "Golygfeydd y golygydd",
     "canvas": "Cynfas",
     "plan": "Cynllun",
-    "run": "Rhedeg"
+    "run": "Rhedeg",
+    "history": "Hanes"
   },
   "header": {
     "unsavedChanges": "newidiadau heb eu cadw",
@@ -32,6 +35,9 @@
     "stopTooltip": "Piblinell stopio (F6)",
     "run": "Rhedeg",
     "runTooltip": "Rhedeg piblinell (F5)",
+    "live": "Byw",
+    "liveTooltip": "Rhagolwg byw: rhedeg hyd at nod pan fyddwch yn ei ddewis neu'n ei olygu",
+    "liveOnTooltip": "Rhagolwg byw ymlaen - mae dewis neu olygu nod yn rhedeg y biblinell hyd ato",
     "save": "Arbed",
     "saveTooltip": "Cadw (Ctrl+S)",
     "validate": "Dilysu",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Llunio i DuckDB SQL, copi i'r clipfwrdd",
     "exportSql": "Allforio fel .sql",
     "exportSqlDesc": "Lawrlwythwch y SQL a luniwyd fel ffeil",
+    "generateDocs": "Creu dogfennaeth",
+    "generateDocsDesc": "Tudalen HTML gyda phob cam, gosodiad a cholofn",
     "exportJson": "Allforio fel .duckle.json",
     "exportJsonDesc": "Dadlwythwch nodau + ymylon fel JSON cludadwy",
     "importJson": "Mewnforio .duckle.json...",
-    "importJsonDesc": "Agorwch JSON cludadwy fel piblinell newydd"
+    "importJsonDesc": "Agorwch JSON cludadwy fel piblinell newydd",
+    "importJob": "Mewnforio swydd Talend...",
+    "importJobDesc": "Trosi swydd .item Talend yn biblinell"
   },
   "palette": {
     "sources": "Ffynonellau",
@@ -170,7 +180,8 @@
     "ready": "[barod]",
     "consoleDesc": "Y log gweithredu. Rhedeg piblinell a statws pob cam, cyfrif rhes, ac amseriad - ynghyd ag unrhyw wallau - yn ymddangos yma.",
     "pipelineFinished": "Piblinell wedi gorffen",
-    "pipelineLabel": "Piblinell"
+    "pipelineLabel": "Piblinell",
+    "dismissError": "Cau'r gwall"
   },
   "status": {
     "pipelineLabel": "Piblinell:",
@@ -201,7 +212,10 @@
     "failed": "Wedi methu",
     "ok": "iawn",
     "colsSingular": "col",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "rhes",
+    "rowsPlural": "rhesi",
+    "rowsIn": "{{rows}} {{unit}} mewn {{ms}} ms"
   },
   "common": {
     "save": "Arbed",
@@ -214,5 +228,29 @@
     "loading": "Wrthi'n llwytho...",
     "error": "Gwall",
     "success": "Llwyddiant"
+  },
+  "import": {
+    "reportTitle": "Swydd wedi'i mewnforio",
+    "reportCounts": "{{translated}} o {{total}} cydran wedi'u trosi",
+    "reportNotReady": "Nid yw'r biblinell hon yn barod i redeg eto. Ewch drwy'r rhestr isod yn gyntaf.",
+    "reportClean": "Pob cydran wedi'i throsi a dim byd heb ei ddatrys.",
+    "reportNeedsAttention": "Angen sylw ({{n}})",
+    "reportComponentsSeen": "Cydrannau yn ffeil y swydd",
+    "failed": "Ni fewnforiwyd dim"
+  },
+  "launcher": {
+    "title": "Cartref",
+    "goHome": "Cartref",
+    "subtitle": "Dewiswch beth rydych am ei wneud",
+    "subtitleWs": "Gweithle: {{name}}",
+    "planned": "Ar y gweill",
+    "showOnStartup": "Dangos hwn pan fydd Duckle yn agor",
+    "readyCount": "{{n}} ar gael nawr",
+    "groupCount": "{{ready}} o {{total}} yn barod",
+    "group": {
+      "build": "Adeiladu",
+      "operate": "Gweithredu",
+      "govern": "Llywodraethu"
+    }
   }
 }

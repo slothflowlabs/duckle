@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Bočna traka",
     "project": "Projekt",
-    "components": "Komponente"
+    "components": "Komponente",
+    "importJob": "Talend",
+    "importJobTitle": "Uvezi Talend .item posao"
   },
   "editorTabs": {
     "ariaLabel": "Pregledi urednika",
     "canvas": "Platno",
     "plan": "Plan",
-    "run": "Trčanje"
+    "run": "Trčanje",
+    "history": "Povijest"
   },
   "header": {
     "unsavedChanges": "nespremljene promjene",
@@ -32,6 +35,9 @@
     "stopTooltip": "Zaustavi cjevovod (F6)",
     "run": "Trčanje",
     "runTooltip": "Pokreni cjevovod (F5)",
+    "live": "Uživo",
+    "liveTooltip": "Pregled uživo: pokreni do čvora kad ga odabereš ili urediš",
+    "liveOnTooltip": "Pregled uživo uključen - odabir ili uređivanje čvora pokreće pipeline do njega",
     "save": "Uštedjeti",
     "saveTooltip": "Spremi (Ctrl+S)",
     "validate": "Potvrdi",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Prevedi u DuckDB SQL, kopiraj u međuspremnik",
     "exportSql": "Izvezi kao .sql",
     "exportSqlDesc": "Preuzmite kompajlirani SQL kao datoteku",
+    "generateDocs": "Generiraj dokumentaciju",
+    "generateDocsDesc": "HTML stranica sa svakim korakom, postavkom i stupcem",
     "exportJson": "Izvezi kao .duckle.json",
     "exportJsonDesc": "Preuzmite čvorove + rubove kao prijenosni JSON",
     "importJson": "Uvezi .duckle.json...",
-    "importJsonDesc": "Otvorite prijenosni JSON kao novi cjevovod"
+    "importJsonDesc": "Otvorite prijenosni JSON kao novi cjevovod",
+    "importJob": "Uvezi Talend posao...",
+    "importJobDesc": "Pretvori Talend .item posao u pipeline"
   },
   "palette": {
     "sources": "Izvori",
@@ -170,7 +180,8 @@
     "ready": "[spreman]",
     "consoleDesc": "Dnevnik izvršenja. Pokrenite cjevovod i ovdje će se pojaviti status svake faze, broj redaka i vrijeme - plus sve pogreške.",
     "pipelineFinished": "Cjevovod završen",
-    "pipelineLabel": "Cjevovod"
+    "pipelineLabel": "Cjevovod",
+    "dismissError": "Zatvori pogrešku"
   },
   "status": {
     "pipelineLabel": "Cjevovod:",
@@ -201,7 +212,10 @@
     "failed": "neuspješno",
     "ok": "U REDU",
     "colsSingular": "kol",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "redak",
+    "rowsPlural": "redaka",
+    "rowsIn": "{{rows}} {{unit}} za {{ms}} ms"
   },
   "common": {
     "save": "Uštedjeti",
@@ -214,5 +228,29 @@
     "loading": "Učitavanje...",
     "error": "Greška",
     "success": "Uspjeh"
+  },
+  "import": {
+    "reportTitle": "Posao uvezen",
+    "reportCounts": "Pretvoreno {{translated}} od {{total}} komponenti",
+    "reportNotReady": "Ovaj pipeline još nije spreman za pokretanje. Najprije prođi kroz popis u nastavku.",
+    "reportClean": "Sve komponente su pretvorene i ništa nije ostalo neriješeno.",
+    "reportNeedsAttention": "Treba pažnju ({{n}})",
+    "reportComponentsSeen": "Komponente u datoteci posla",
+    "failed": "Ništa nije uvezeno"
+  },
+  "launcher": {
+    "title": "Početna",
+    "goHome": "Početna",
+    "subtitle": "Odaberi što želiš napraviti",
+    "subtitleWs": "Radni prostor: {{name}}",
+    "planned": "Planirano",
+    "showOnStartup": "Prikaži ovo kad se Duckle otvori",
+    "readyCount": "{{n}} dostupno sada",
+    "groupCount": "{{ready}} od {{total}} spremno",
+    "group": {
+      "build": "Izrada",
+      "operate": "Rad",
+      "govern": "Upravljanje"
+    }
   }
 }

@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Name",
     "project": "Project",
-    "components": "घटक:"
+    "components": "घटक:",
+    "importJob": "Talend",
+    "importJobTitle": "Talend .item जॉब आयात करें"
   },
   "editorTabs": {
     "ariaLabel": "संपादक दृश्य",
     "canvas": "केनवस",
     "plan": "प्लान",
-    "run": "चलाएँ"
+    "run": "चलाएँ",
+    "history": "इतिहास"
   },
   "header": {
     "unsavedChanges": "उपयोगिता",
@@ -32,6 +35,9 @@
     "stopTooltip": "स्टॉप पाइपलाइन (F6)",
     "run": "चलाएँ",
     "runTooltip": "रन पाइपलाइन (F5)",
+    "live": "लाइव",
+    "liveTooltip": "लाइव पूर्वावलोकन: किसी नोड को चुनने या संपादित करने पर उस तक चलाएँ",
+    "liveOnTooltip": "लाइव पूर्वावलोकन चालू - किसी नोड को चुनने या संपादित करने पर पाइपलाइन उस तक चलती है",
     "save": "सहेजें",
     "saveTooltip": "सेव करें (Ctrl+S)",
     "validate": "वैलिडेट करें",
@@ -43,10 +49,14 @@
     "copySqlDesc": "DuckDB SQL में कम्पाइल करें, क्लिपबोर्ड पर कॉपी करें",
     "exportSql": ".sql के रूप में निर्यात करें",
     "exportSqlDesc": "संकलित SQL को फ़ाइल के रूप में डाउनलोड करें",
+    "generateDocs": "दस्तावेज़ बनाएँ",
+    "generateDocsDesc": "हर चरण, सेटिंग और कॉलम वाला एक HTML पेज",
     "exportJson": ".duckle.json के रूप में निर्यात करें",
     "exportJsonDesc": "पोर्टेबल JSON के रूप में नोड्स + किनारों को डाउनलोड करें",
     "importJson": ".duckle.json आयात करें...",
-    "importJsonDesc": "एक पोर्टेबल JSON को एक नई पाइपलाइन के रूप में खोलें"
+    "importJsonDesc": "एक पोर्टेबल JSON को एक नई पाइपलाइन के रूप में खोलें",
+    "importJob": "Talend जॉब आयात करें...",
+    "importJobDesc": "Talend .item जॉब को पाइपलाइन में बदलें"
   },
   "palette": {
     "sources": "स्रोत",
@@ -170,7 +180,8 @@
     "ready": "तैयार",
     "consoleDesc": "निष्पादन लॉग। एक पाइपलाइन चलाएं और प्रत्येक चरण की स्थिति, पंक्ति गिनती और समय - साथ ही कोई भी त्रुटि - यहां दिखाई देती है।",
     "pipelineFinished": "पाइपलाइन पूरी हो गई है",
-    "pipelineLabel": "पाइपलाइन"
+    "pipelineLabel": "पाइपलाइन",
+    "dismissError": "त्रुटि बंद करें"
   },
   "status": {
     "pipelineLabel": "पाइपलाइन",
@@ -201,7 +212,10 @@
     "failed": "विफल",
     "ok": "ठीक",
     "colsSingular": "रंग",
-    "colsPlural": "कॉल"
+    "colsPlural": "कॉल",
+    "rowsSingular": "पंक्ति",
+    "rowsPlural": "पंक्तियाँ",
+    "rowsIn": "{{ms}} ms में {{rows}} {{unit}}"
   },
   "common": {
     "save": "सहेजें",
@@ -214,5 +228,29 @@
     "loading": "लोड कर रहा है...",
     "error": "इस वीडियो को कैसे बनाया जाए?",
     "success": "सफल"
+  },
+  "import": {
+    "reportTitle": "जॉब आयात हो गया",
+    "reportCounts": "{{total}} में से {{translated}} घटक बदले गए",
+    "reportNotReady": "यह पाइपलाइन अभी चलने के लिए तैयार नहीं है। पहले नीचे दी गई सूची देखें।",
+    "reportClean": "सभी घटक बदल गए और कुछ भी अनसुलझा नहीं बचा।",
+    "reportNeedsAttention": "ध्यान देने की ज़रूरत ({{n}})",
+    "reportComponentsSeen": "जॉब फ़ाइल में घटक",
+    "failed": "कुछ भी आयात नहीं हुआ"
+  },
+  "launcher": {
+    "title": "होम",
+    "goHome": "होम",
+    "subtitle": "चुनें कि आप क्या करना चाहते हैं",
+    "subtitleWs": "कार्यक्षेत्र: {{name}}",
+    "planned": "नियोजित",
+    "showOnStartup": "Duckle खुलने पर यह दिखाएँ",
+    "readyCount": "{{n}} अभी उपलब्ध",
+    "groupCount": "{{total}} में से {{ready}} तैयार",
+    "group": {
+      "build": "बनाएँ",
+      "operate": "चलाएँ",
+      "govern": "नियंत्रण"
+    }
   }
 }

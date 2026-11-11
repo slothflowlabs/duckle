@@ -105,13 +105,16 @@
   "sidebar": {
     "ariaLabel": "סרגל צד",
     "project": "פּרוֹיֶקט",
-    "components": "רכיבים"
+    "components": "רכיבים",
+    "importJob": "Talend",
+    "importJobTitle": "ייבוא משימת Talend בפורמט .item"
   },
   "editorTabs": {
     "ariaLabel": "תצוגות עורך",
     "canvas": "בַּד",
     "plan": "לְתַכְנֵן",
-    "run": "לָרוּץ"
+    "run": "לָרוּץ",
+    "history": "היסטוריה"
   },
   "header": {
     "unsavedChanges": "שינויים שלא נשמרו",
@@ -121,6 +124,9 @@
     "stopTooltip": "עצירת צינור (F6)",
     "run": "לָרוּץ",
     "runTooltip": "הפעלת צינור (F5)",
+    "live": "חי",
+    "liveTooltip": "תצוגה מקדימה חיה: הרצה עד צומת כשבוחרים או עורכים אותו",
+    "liveOnTooltip": "תצוגה מקדימה חיה פעילה - בחירה או עריכה של צומת מריצה את הצינור עד אליו",
     "save": "לְהַצִיל",
     "saveTooltip": "שמור (Ctrl+S)",
     "validate": "לְאַמֵת",
@@ -132,10 +138,14 @@
     "copySqlDesc": "הידור ל-DuckDB SQL, העתק ללוח",
     "exportSql": "ייצא כ-‎.sql",
     "exportSqlDesc": "הורד את ה-SQL המהודר כקובץ",
+    "generateDocs": "יצירת תיעוד",
+    "generateDocsDesc": "דף HTML עם כל שלב, הגדרה ועמודה",
     "exportJson": "ייצא כ-.duckle.json",
     "exportJsonDesc": "הורד צמתים + קצוות כ-JSON נייד",
     "importJson": "ייבוא ​​‎.duckle.json...",
-    "importJsonDesc": "פתח JSON נייד כצינור חדש"
+    "importJsonDesc": "פתח JSON נייד כצינור חדש",
+    "importJob": "ייבוא משימת Talend...",
+    "importJobDesc": "המרת משימת Talend בפורמט .item לצינור"
   },
   "properties": {
     "nothingSelected": "שום דבר לא נבחר",
@@ -182,7 +192,8 @@
     "ready": "[מוּכָן]",
     "consoleDesc": "יומן הביצוע. הפעל צינור והסטטוס, ספירת השורות והתזמון של כל שלב - בתוספת שגיאות כלשהן - מופיעים כאן.",
     "pipelineFinished": "צינור הסתיים",
-    "pipelineLabel": "צינור"
+    "pipelineLabel": "צינור",
+    "dismissError": "סגירת השגיאה"
   },
   "status": {
     "pipelineLabel": "צינור:",
@@ -213,6 +224,33 @@
     "failed": "נִכשָׁל",
     "ok": "בְּסֵדֶר",
     "colsSingular": "קול",
-    "colsPlural": "קולס"
+    "colsPlural": "קולס",
+    "rowsSingular": "שורה",
+    "rowsPlural": "שורות",
+    "rowsIn": "{{rows}} {{unit}} ב-{{ms}} ms"
+  },
+  "import": {
+    "reportTitle": "המשימה יובאה",
+    "reportCounts": "{{translated}} מתוך {{total}} רכיבים הומרו",
+    "reportNotReady": "הצינור הזה עדיין לא מוכן להרצה. עברו קודם על הרשימה שלמטה.",
+    "reportClean": "כל הרכיבים הומרו ולא נותר דבר לא פתור.",
+    "reportNeedsAttention": "דורש תשומת לב ({{n}})",
+    "reportComponentsSeen": "רכיבים בקובץ המשימה",
+    "failed": "לא יובא דבר"
+  },
+  "launcher": {
+    "title": "בית",
+    "goHome": "בית",
+    "subtitle": "בחרו מה ברצונכם לעשות",
+    "subtitleWs": "סביבת עבודה: {{name}}",
+    "planned": "מתוכנן",
+    "showOnStartup": "הצג זאת כש-Duckle נפתח",
+    "readyCount": "{{n}} זמינים כעת",
+    "groupCount": "{{ready}} מתוך {{total}} מוכנים",
+    "group": {
+      "build": "בנייה",
+      "operate": "תפעול",
+      "govern": "ממשל"
+    }
   }
 }

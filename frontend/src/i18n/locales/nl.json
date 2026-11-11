@@ -105,22 +105,28 @@
   "sidebar": {
     "ariaLabel": "Zijbalk",
     "project": "Project",
-    "components": "Componenten"
+    "components": "Componenten",
+    "importJob": "Talend",
+    "importJobTitle": "Een Talend .item-job importeren"
   },
   "editorTabs": {
     "ariaLabel": "Editor-weergaven",
     "canvas": "Canvas",
     "plan": "Plan",
-    "run": "Loop"
+    "run": "Loop",
+    "history": "Geschiedenis"
   },
   "header": {
     "unsavedChanges": "niet-opgeslagen wijzigingen",
-    "closeTab": "Sluit {{naam}}",
+    "closeTab": "Sluit {{name}}",
     "newPipeline": "Nieuwe pijpleiding",
     "stop": "Stop",
     "stopTooltip": "Pijpleiding stoppen (F6)",
     "run": "Loop",
     "runTooltip": "Pijplijn uitvoeren (F5)",
+    "live": "Live",
+    "liveTooltip": "Livevoorbeeld: voer uit tot een knooppunt wanneer je het selecteert of bewerkt",
+    "liveOnTooltip": "Livevoorbeeld aan - een knooppunt selecteren of bewerken voert de pipeline uit tot dat knooppunt",
     "save": "Redden",
     "saveTooltip": "Opslaan (Ctrl+S)",
     "validate": "Valideer",
@@ -132,10 +138,14 @@
     "copySqlDesc": "Compileren naar DuckDB SQL, kopiëren naar klembord",
     "exportSql": "Exporteren als .sql",
     "exportSqlDesc": "Download de gecompileerde SQL als bestand",
+    "generateDocs": "Documentatie genereren",
+    "generateDocsDesc": "Een HTML-pagina met elke stap, instelling en kolom",
     "exportJson": "Exporteer als .ducle.json",
     "exportJsonDesc": "Download knooppunten + randen als draagbare JSON",
     "importJson": "Importeer .ducle.json...",
-    "importJsonDesc": "Open een draagbare JSON als een nieuwe pijplijn"
+    "importJsonDesc": "Open een draagbare JSON als een nieuwe pijplijn",
+    "importJob": "Talend-job importeren...",
+    "importJobDesc": "Een Talend .item-job omzetten naar een pipeline"
   },
   "properties": {
     "nothingSelected": "Niets geselecteerd",
@@ -182,7 +192,8 @@
     "ready": "[klaar]",
     "consoleDesc": "Het uitvoeringslogboek. Voer een pijplijn uit en de status, het aantal rijen en de timing van elke fase (plus eventuele fouten) worden hier weergegeven.",
     "pipelineFinished": "Pijpleiding klaar",
-    "pipelineLabel": "Pijpleiding"
+    "pipelineLabel": "Pijpleiding",
+    "dismissError": "Fout sluiten"
   },
   "status": {
     "pipelineLabel": "Pijpleiding:",
@@ -213,6 +224,33 @@
     "failed": "Mislukt",
     "ok": "OK",
     "colsSingular": "kol",
-    "colsPlural": "col"
+    "colsPlural": "col",
+    "rowsSingular": "rij",
+    "rowsPlural": "rijen",
+    "rowsIn": "{{rows}} {{unit}} in {{ms}} ms"
+  },
+  "import": {
+    "reportTitle": "Job geïmporteerd",
+    "reportCounts": "{{translated}} van {{total}} componenten omgezet",
+    "reportNotReady": "Deze pipeline is nog niet klaar om te draaien. Werk eerst de lijst hieronder af.",
+    "reportClean": "Alle componenten omgezet en niets onopgelost.",
+    "reportNeedsAttention": "Vraagt aandacht ({{n}})",
+    "reportComponentsSeen": "Componenten in het jobbestand",
+    "failed": "Er is niets geïmporteerd"
+  },
+  "launcher": {
+    "title": "Start",
+    "goHome": "Start",
+    "subtitle": "Kies wat je wilt doen",
+    "subtitleWs": "Werkruimte: {{name}}",
+    "planned": "Gepland",
+    "showOnStartup": "Toon dit wanneer Duckle opent",
+    "readyCount": "{{n}} nu beschikbaar",
+    "groupCount": "{{ready}} van {{total}} klaar",
+    "group": {
+      "build": "Bouwen",
+      "operate": "Beheren",
+      "govern": "Governance"
+    }
   }
 }

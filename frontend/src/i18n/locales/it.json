@@ -10,7 +10,7 @@
     "switchLight": "Passa alla modalità light",
     "switchDark": "Passa alla modalità dark",
     "themeAriaToggle": "Attiva tema scuro",
-    "runtime": "tempo di esecuzione: {{nome}}",
+    "runtime": "tempo di esecuzione: {{name}}",
     "languageAriaLabel": "Scegli lingua"
   },
   "palette": {
@@ -105,22 +105,28 @@
   "sidebar": {
     "ariaLabel": "Barra laterale",
     "project": "Progetto",
-    "components": "Componenti"
+    "components": "Componenti",
+    "importJob": "Talend",
+    "importJobTitle": "Importa un job Talend .item"
   },
   "editorTabs": {
     "ariaLabel": "Viste dell'editor",
     "canvas": "Tela",
     "plan": "Piano",
-    "run": "Correre"
+    "run": "Correre",
+    "history": "Cronologia"
   },
   "header": {
     "unsavedChanges": "modifiche non salvate",
-    "closeTab": "Chiudi {{nome}}",
+    "closeTab": "Chiudi {{name}}",
     "newPipeline": "Nuovo gasdotto",
     "stop": "Ferma",
     "stopTooltip": "Interrompere la pipeline (F6)",
     "run": "Esegui",
     "runTooltip": "Esegui pipeline (F5)",
+    "live": "Live",
+    "liveTooltip": "Anteprima live: esegue fino a un nodo quando lo selezioni o lo modifichi",
+    "liveOnTooltip": "Anteprima live attiva - selezionare o modificare un nodo esegue la pipeline fino a quel nodo",
     "save": "Salva",
     "saveTooltip": "Salva (Ctrl+S)",
     "validate": "Convalidare",
@@ -132,10 +138,14 @@
     "copySqlDesc": "Compila in DuckDB SQL, copia negli appunti",
     "exportSql": "Esporta come .sql",
     "exportSqlDesc": "Scarica l'SQL compilato come file",
+    "generateDocs": "Genera documentazione",
+    "generateDocsDesc": "Una pagina HTML con ogni passaggio, impostazione e colonna",
     "exportJson": "Esporta come .duckle.json",
     "exportJsonDesc": "Scarica nodi e bordi come JSON portatile",
     "importJson": "Importa .duckle.json...",
-    "importJsonDesc": "Apri un JSON portatile come nuova pipeline"
+    "importJsonDesc": "Apri un JSON portatile come nuova pipeline",
+    "importJob": "Importa job Talend...",
+    "importJobDesc": "Converti un job Talend .item in una pipeline"
   },
   "properties": {
     "nothingSelected": "Niente selezionato",
@@ -182,7 +192,8 @@
     "ready": "[pronto]",
     "consoleDesc": "Il registro dell'esecuzione. Esegui una pipeline e lo stato, il conteggio delle righe e i tempi di ogni fase, oltre a eventuali errori, verranno visualizzati qui.",
     "pipelineFinished": "Conduttura terminata",
-    "pipelineLabel": "Conduttura"
+    "pipelineLabel": "Conduttura",
+    "dismissError": "Ignora errore"
   },
   "status": {
     "pipelineLabel": "Conduttura:",
@@ -213,6 +224,33 @@
     "failed": "Fallito",
     "ok": "OK",
     "colsSingular": "col",
-    "colsPlural": "col"
+    "colsPlural": "col",
+    "rowsSingular": "riga",
+    "rowsPlural": "righe",
+    "rowsIn": "{{rows}} {{unit}} in {{ms}} ms"
+  },
+  "import": {
+    "reportTitle": "Job importato",
+    "reportCounts": "{{translated}} componenti su {{total}} convertiti",
+    "reportNotReady": "Questa pipeline non è ancora pronta per l'esecuzione. Completa prima l'elenco qui sotto.",
+    "reportClean": "Tutti i componenti convertiti e nulla da risolvere.",
+    "reportNeedsAttention": "Da verificare ({{n}})",
+    "reportComponentsSeen": "Componenti nel file del job",
+    "failed": "Non è stato importato nulla"
+  },
+  "launcher": {
+    "title": "Home",
+    "goHome": "Home",
+    "subtitle": "Scegli cosa vuoi fare",
+    "subtitleWs": "Spazio di lavoro: {{name}}",
+    "planned": "Pianificato",
+    "showOnStartup": "Mostra all'apertura di Duckle",
+    "readyCount": "{{n}} disponibili ora",
+    "groupCount": "{{ready}} di {{total}} pronti",
+    "group": {
+      "build": "Crea",
+      "operate": "Gestisci",
+      "govern": "Governa"
+    }
   }
 }

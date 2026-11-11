@@ -105,22 +105,28 @@
   "sidebar": {
     "ariaLabel": "Bilah samping",
     "project": "Proyek",
-    "components": "Komponen"
+    "components": "Komponen",
+    "importJob": "Talend",
+    "importJobTitle": "Impor job Talend .item"
   },
   "editorTabs": {
     "ariaLabel": "Tampilan editor",
     "canvas": "Kanvas",
     "plan": "Rencana",
-    "run": "Berlari"
+    "run": "Berlari",
+    "history": "Riwayat"
   },
   "header": {
     "unsavedChanges": "perubahan yang belum disimpan",
-    "closeTab": "Tutup {{nama}}",
+    "closeTab": "Tutup {{name}}",
     "newPipeline": "Pipa baru",
     "stop": "Berhenti",
     "stopTooltip": "Hentikan pipa (F6)",
     "run": "Berlari",
     "runTooltip": "Jalankan pipa (F5)",
+    "live": "Langsung",
+    "liveTooltip": "Pratinjau langsung: jalankan hingga sebuah node saat Anda memilih atau mengeditnya",
+    "liveOnTooltip": "Pratinjau langsung aktif - memilih atau mengedit node menjalankan pipeline hingga node itu",
     "save": "Menyimpan",
     "saveTooltip": "Simpan (Ctrl+S)",
     "validate": "Mengesahkan",
@@ -132,10 +138,14 @@
     "copySqlDesc": "Kompilasi ke DuckDB SQL, salin ke clipboard",
     "exportSql": "Ekspor sebagai .sql",
     "exportSqlDesc": "Unduh SQL yang dikompilasi sebagai file",
+    "generateDocs": "Buat dokumentasi",
+    "generateDocsDesc": "Halaman HTML berisi setiap langkah, pengaturan, dan kolom",
     "exportJson": "Ekspor sebagai .duckle.json",
     "exportJsonDesc": "Unduh node + edge sebagai JSON portabel",
     "importJson": "Impor .duckle.json...",
-    "importJsonDesc": "Buka JSON portabel sebagai saluran baru"
+    "importJsonDesc": "Buka JSON portabel sebagai saluran baru",
+    "importJob": "Impor job Talend...",
+    "importJobDesc": "Terjemahkan job Talend .item menjadi pipeline"
   },
   "properties": {
     "nothingSelected": "Tidak ada yang dipilih",
@@ -182,7 +192,8 @@
     "ready": "[siap]",
     "consoleDesc": "Log eksekusi. Jalankan alur dan status setiap tahap, jumlah baris, dan waktu - ditambah kesalahan apa pun - muncul di sini.",
     "pipelineFinished": "Saluran pipa selesai",
-    "pipelineLabel": "Saluran pipa"
+    "pipelineLabel": "Saluran pipa",
+    "dismissError": "Tutup galat"
   },
   "status": {
     "pipelineLabel": "Saluran pipa:",
@@ -213,6 +224,33 @@
     "failed": "Gagal",
     "ok": "OKE",
     "colsSingular": "kol",
-    "colsPlural": "kol"
+    "colsPlural": "kol",
+    "rowsSingular": "baris",
+    "rowsPlural": "baris",
+    "rowsIn": "{{rows}} {{unit}} dalam {{ms}} ms"
+  },
+  "import": {
+    "reportTitle": "Job diimpor",
+    "reportCounts": "{{translated}} dari {{total}} komponen diterjemahkan",
+    "reportNotReady": "Pipeline ini belum siap dijalankan. Selesaikan dulu daftar di bawah.",
+    "reportClean": "Semua komponen diterjemahkan dan tidak ada yang belum terselesaikan.",
+    "reportNeedsAttention": "Perlu perhatian ({{n}})",
+    "reportComponentsSeen": "Komponen dalam file job",
+    "failed": "Tidak ada yang diimpor"
+  },
+  "launcher": {
+    "title": "Beranda",
+    "goHome": "Beranda",
+    "subtitle": "Pilih apa yang ingin Anda lakukan",
+    "subtitleWs": "Ruang kerja: {{name}}",
+    "planned": "Direncanakan",
+    "showOnStartup": "Tampilkan ini saat Duckle dibuka",
+    "readyCount": "{{n}} tersedia sekarang",
+    "groupCount": "{{ready}} dari {{total}} siap",
+    "group": {
+      "build": "Bangun",
+      "operate": "Operasikan",
+      "govern": "Tata kelola"
+    }
   }
 }

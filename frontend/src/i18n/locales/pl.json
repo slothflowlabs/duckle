@@ -105,13 +105,16 @@
   "sidebar": {
     "ariaLabel": "Pasek boczny",
     "project": "Projekt",
-    "components": "Komponenty"
+    "components": "Komponenty",
+    "importJob": "Talend",
+    "importJobTitle": "Importuj zadanie Talend .item"
   },
   "editorTabs": {
     "ariaLabel": "Poglądy redaktora",
     "canvas": "Płótno",
     "plan": "Plan",
-    "run": "Uruchomić"
+    "run": "Uruchomić",
+    "history": "Historia"
   },
   "header": {
     "unsavedChanges": "niezapisane zmiany",
@@ -121,6 +124,9 @@
     "stopTooltip": "Zatrzymaj rurociąg (F6)",
     "run": "Uruchomić",
     "runTooltip": "Uruchom potok (F5)",
+    "live": "Na żywo",
+    "liveTooltip": "Podgląd na żywo: uruchamia do węzła, gdy go zaznaczysz lub edytujesz",
+    "liveOnTooltip": "Podgląd na żywo włączony - zaznaczenie lub edycja węzła uruchamia potok do tego węzła",
     "save": "Ratować",
     "saveTooltip": "Zapisz (Ctrl+S)",
     "validate": "Uprawomocnić",
@@ -132,10 +138,14 @@
     "copySqlDesc": "Skompiluj do DuckDB SQL, skopiuj do schowka",
     "exportSql": "Eksportuj jako .sql",
     "exportSqlDesc": "Pobierz skompilowany SQL jako plik",
+    "generateDocs": "Generuj dokumentację",
+    "generateDocsDesc": "Strona HTML z każdym krokiem, ustawieniem i kolumną",
     "exportJson": "Eksportuj jako .duckle.json",
     "exportJsonDesc": "Pobierz węzły i krawędzie jako przenośny plik JSON",
     "importJson": "Importuj plik .duckle.json...",
-    "importJsonDesc": "Otwórz przenośny plik JSON jako nowy potok"
+    "importJsonDesc": "Otwórz przenośny plik JSON jako nowy potok",
+    "importJob": "Importuj zadanie Talend...",
+    "importJobDesc": "Przekształć zadanie Talend .item w potok"
   },
   "properties": {
     "nothingSelected": "Nic nie zostało wybrane",
@@ -182,7 +192,8 @@
     "ready": "[gotowy]",
     "consoleDesc": "Dziennik wykonania. Uruchom potok, a tutaj pojawi się stan każdego etapu, liczba wierszy i czas, a także wszelkie błędy.",
     "pipelineFinished": "Rurociąg gotowy",
-    "pipelineLabel": "Rurociąg"
+    "pipelineLabel": "Rurociąg",
+    "dismissError": "Zamknij błąd"
   },
   "status": {
     "pipelineLabel": "Rurociąg:",
@@ -213,6 +224,33 @@
     "failed": "Przegrany",
     "ok": "OK",
     "colsSingular": "przełęcz",
-    "colsPlural": "kol"
+    "colsPlural": "kol",
+    "rowsSingular": "wiersz",
+    "rowsPlural": "wierszy",
+    "rowsIn": "{{rows}} {{unit}} w {{ms}} ms"
+  },
+  "import": {
+    "reportTitle": "Zadanie zaimportowane",
+    "reportCounts": "Przekształcono {{translated}} z {{total}} komponentów",
+    "reportNotReady": "Ten potok nie jest jeszcze gotowy do uruchomienia. Najpierw przejdź przez listę poniżej.",
+    "reportClean": "Wszystkie komponenty przekształcone i nic nie pozostało nierozwiązane.",
+    "reportNeedsAttention": "Wymaga uwagi ({{n}})",
+    "reportComponentsSeen": "Komponenty w pliku zadania",
+    "failed": "Niczego nie zaimportowano"
+  },
+  "launcher": {
+    "title": "Start",
+    "goHome": "Start",
+    "subtitle": "Wybierz, co chcesz zrobić",
+    "subtitleWs": "Obszar roboczy: {{name}}",
+    "planned": "Planowane",
+    "showOnStartup": "Pokazuj przy otwieraniu Duckle",
+    "readyCount": "{{n}} dostępnych teraz",
+    "groupCount": "{{ready}} z {{total}} gotowych",
+    "group": {
+      "build": "Tworzenie",
+      "operate": "Eksploatacja",
+      "govern": "Nadzór"
+    }
   }
 }

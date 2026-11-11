@@ -105,13 +105,16 @@
   "sidebar": {
     "ariaLabel": "سائڈبار",
     "project": "پروجیکٹ",
-    "components": "اجزاء"
+    "components": "اجزاء",
+    "importJob": "Talend",
+    "importJobTitle": "Talend کی .item جاب درآمد کریں"
   },
   "editorTabs": {
     "ariaLabel": "ایڈیٹر کے خیالات",
     "canvas": "کینوس",
     "plan": "منصوبہ",
-    "run": "دوڑو"
+    "run": "دوڑو",
+    "history": "تاریخچہ"
   },
   "header": {
     "unsavedChanges": "غیر محفوظ شدہ تبدیلیاں",
@@ -121,6 +124,9 @@
     "stopTooltip": "سٹاپ پائپ لائن (F6)",
     "run": "دوڑو",
     "runTooltip": "پائپ لائن چلائیں (F5)",
+    "live": "لائیو",
+    "liveTooltip": "لائیو پیش نظارہ: کسی نوڈ کو منتخب یا ترمیم کرنے پر اس تک چلائیں",
+    "liveOnTooltip": "لائیو پیش نظارہ آن ہے - کسی نوڈ کو منتخب یا ترمیم کرنا پائپ لائن کو اس تک چلاتا ہے",
     "save": "محفوظ کریں۔",
     "saveTooltip": "محفوظ کریں (Ctrl+S)",
     "validate": "توثیق کریں۔",
@@ -132,10 +138,14 @@
     "copySqlDesc": "DuckDB SQL میں مرتب کریں، کلپ بورڈ پر کاپی کریں۔",
     "exportSql": ".sql کے بطور برآمد کریں۔",
     "exportSqlDesc": "مرتب کردہ ایس کیو ایل کو بطور فائل ڈاؤن لوڈ کریں۔",
+    "generateDocs": "دستاویزات بنائیں",
+    "generateDocsDesc": "ہر مرحلے، ترتیب اور کالم کے ساتھ ایک HTML صفحہ",
     "exportJson": ".duckle.json کے بطور برآمد کریں۔",
     "exportJsonDesc": "نوڈس + کناروں کو پورٹیبل JSON کے بطور ڈاؤن لوڈ کریں۔",
     "importJson": "duckle.json درآمد کریں...",
-    "importJsonDesc": "پورٹیبل JSON کو ایک نئی پائپ لائن کے طور پر کھولیں۔"
+    "importJsonDesc": "پورٹیبل JSON کو ایک نئی پائپ لائن کے طور پر کھولیں۔",
+    "importJob": "Talend جاب درآمد کریں...",
+    "importJobDesc": "Talend کی .item جاب کو پائپ لائن میں تبدیل کریں"
   },
   "properties": {
     "nothingSelected": "کچھ بھی منتخب نہیں کیا گیا۔",
@@ -182,7 +192,8 @@
     "ready": "[تیار]",
     "consoleDesc": "عمل درآمد لاگ۔ ایک پائپ لائن چلائیں اور ہر مرحلے کی حیثیت، قطار کی گنتی، اور وقت - نیز کوئی خرابی - یہاں ظاہر ہوتی ہے۔",
     "pipelineFinished": "پائپ لائن ختم",
-    "pipelineLabel": "پائپ لائن"
+    "pipelineLabel": "پائپ لائن",
+    "dismissError": "خرابی بند کریں"
   },
   "status": {
     "pipelineLabel": "پائپ لائن:",
@@ -213,6 +224,33 @@
     "failed": "ناکام",
     "ok": "ٹھیک ہے",
     "colsSingular": "کرنل",
-    "colsPlural": "کالز"
+    "colsPlural": "کالز",
+    "rowsSingular": "قطار",
+    "rowsPlural": "قطاریں",
+    "rowsIn": "{{rows}} {{unit}} {{ms}} ms میں"
+  },
+  "import": {
+    "reportTitle": "جاب درآمد ہو گئی",
+    "reportCounts": "{{total}} میں سے {{translated}} اجزاء تبدیل ہوئے",
+    "reportNotReady": "یہ پائپ لائن ابھی چلنے کے لیے تیار نہیں۔ پہلے نیچے دی گئی فہرست دیکھیں۔",
+    "reportClean": "تمام اجزاء تبدیل ہو گئے اور کچھ بھی حل طلب نہیں رہا۔",
+    "reportNeedsAttention": "توجہ درکار ہے ({{n}})",
+    "reportComponentsSeen": "جاب فائل میں اجزاء",
+    "failed": "کچھ بھی درآمد نہیں ہوا"
+  },
+  "launcher": {
+    "title": "ہوم",
+    "goHome": "ہوم",
+    "subtitle": "منتخب کریں کہ آپ کیا کرنا چاہتے ہیں",
+    "subtitleWs": "کام کی جگہ: {{name}}",
+    "planned": "منصوبہ بند",
+    "showOnStartup": "Duckle کھلنے پر یہ دکھائیں",
+    "readyCount": "{{n}} ابھی دستیاب",
+    "groupCount": "{{total}} میں سے {{ready}} تیار",
+    "group": {
+      "build": "تعمیر",
+      "operate": "چلانا",
+      "govern": "نگرانی"
+    }
   }
 }

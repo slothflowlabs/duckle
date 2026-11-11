@@ -1,6 +1,6 @@
 {
   "topbar": {
-    "workspaceTooltip": "Espai de treball: {{camí}}\nFeu clic per canviar",
+    "workspaceTooltip": "Espai de treball: {{path}}\nFeu clic per canviar",
     "activeContextHint": "Context actiu: els camps es poden unir a les seves variables",
     "noContext": "Sense context",
     "git": "Git (espai de treball)",
@@ -10,19 +10,22 @@
     "switchLight": "Canvia al mode de llum",
     "switchDark": "Canvia al mode fosc",
     "themeAriaToggle": "Canvia el tema",
-    "runtime": "temps d'execució: {{nom}}",
+    "runtime": "temps d'execució: {{name}}",
     "languageAriaLabel": "Trieu l'idioma"
   },
   "sidebar": {
     "ariaLabel": "Barra lateral",
     "project": "Projecte",
-    "components": "Components"
+    "components": "Components",
+    "importJob": "Talend",
+    "importJobTitle": "Importa un treball .item de Talend"
   },
   "editorTabs": {
     "ariaLabel": "Visualitzacions de l'editor",
     "canvas": "Tela",
     "plan": "Pla",
-    "run": "Corre"
+    "run": "Corre",
+    "history": "Historial"
   },
   "header": {
     "unsavedChanges": "canvis no desats",
@@ -32,6 +35,9 @@
     "stopTooltip": "Atura la canonada (F6)",
     "run": "Corre",
     "runTooltip": "Executar la canonada (F5)",
+    "live": "En directe",
+    "liveTooltip": "Previsualització en directe: executa fins a un node quan el selecciones o l'edites",
+    "liveOnTooltip": "Previsualització en directe activada - seleccionar o editar un node executa el pipeline fins a aquest node",
     "save": "Desa",
     "saveTooltip": "Desa (Ctrl+S)",
     "validate": "Valida",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Compilar a DuckDB SQL, copiar al porta-retalls",
     "exportSql": "Exporta com a .sql",
     "exportSqlDesc": "Baixeu l'SQL compilat com a fitxer",
+    "generateDocs": "Genera la documentació",
+    "generateDocsDesc": "Una pàgina HTML amb cada pas, configuració i columna",
     "exportJson": "Exporta com a .duckle.json",
     "exportJsonDesc": "Baixeu nodes + vores com a JSON portàtil",
     "importJson": "Importa .duckle.json...",
-    "importJsonDesc": "Obriu un JSON portàtil com a canalització nova"
+    "importJsonDesc": "Obriu un JSON portàtil com a canalització nova",
+    "importJob": "Importa un treball de Talend...",
+    "importJobDesc": "Tradueix un treball .item de Talend a un pipeline"
   },
   "palette": {
     "sources": "Fonts",
@@ -170,7 +180,8 @@
     "ready": "[preparat]",
     "consoleDesc": "El registre d'execució. Executeu una canalització i l'estat de cada etapa, el recompte de files i el temps (a més dels errors) apareixen aquí.",
     "pipelineFinished": "Conducte acabat",
-    "pipelineLabel": "Gasoducte"
+    "pipelineLabel": "Gasoducte",
+    "dismissError": "Descarta l'error"
   },
   "status": {
     "pipelineLabel": "Conducte:",
@@ -201,7 +212,10 @@
     "failed": "Ha fallat",
     "ok": "D'acord",
     "colsSingular": "col",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "fila",
+    "rowsPlural": "files",
+    "rowsIn": "{{rows}} {{unit}} en {{ms}} ms"
   },
   "common": {
     "save": "Desa",
@@ -214,5 +228,29 @@
     "loading": "Carregant...",
     "error": "Error",
     "success": "Èxit"
+  },
+  "import": {
+    "reportTitle": "Treball importat",
+    "reportCounts": "{{translated}} de {{total}} components traduïts",
+    "reportNotReady": "Aquest pipeline encara no està a punt per executar-se. Revisa primer la llista de sota.",
+    "reportClean": "Tots els components traduïts i res pendent de resoldre.",
+    "reportNeedsAttention": "Cal revisar ({{n}})",
+    "reportComponentsSeen": "Components del fitxer del treball",
+    "failed": "No s'ha importat res"
+  },
+  "launcher": {
+    "title": "Inici",
+    "goHome": "Inici",
+    "subtitle": "Tria què vols fer",
+    "subtitleWs": "Espai de treball: {{name}}",
+    "planned": "Previst",
+    "showOnStartup": "Mostra-ho quan s'obri Duckle",
+    "readyCount": "{{n}} disponibles ara",
+    "groupCount": "{{ready}} de {{total}} a punt",
+    "group": {
+      "build": "Crear",
+      "operate": "Operar",
+      "govern": "Governar"
+    }
   }
 }

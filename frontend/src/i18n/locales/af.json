@@ -1,6 +1,6 @@
 {
   "topbar": {
-    "workspaceTooltip": "Werkspasie: {{pad}}\nKlik om oor te skakel",
+    "workspaceTooltip": "Werkspasie: {{path}}\nKlik om oor te skakel",
     "activeContextHint": "Aktiewe konteks - velde kan aan sy veranderlikes bind",
     "noContext": "Geen konteks nie",
     "git": "Git (werkspasie)",
@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Sybalk",
     "project": "Projek",
-    "components": "Komponente"
+    "components": "Komponente",
+    "importJob": "Talend",
+    "importJobTitle": "Voer 'n Talend .item-taak in"
   },
   "editorTabs": {
     "ariaLabel": "Redakteur-aansigte",
     "canvas": "Canvas",
     "plan": "Beplan",
-    "run": "Hardloop"
+    "run": "Hardloop",
+    "history": "Geskiedenis"
   },
   "header": {
     "unsavedChanges": "ongestoorde veranderinge",
@@ -32,6 +35,9 @@
     "stopTooltip": "Stop pyplyn (F6)",
     "run": "Hardloop",
     "runTooltip": "Loop pyplyn (F5)",
+    "live": "Regstreeks",
+    "liveTooltip": "Regstreekse voorskou: voer uit tot by 'n nodus wanneer jy dit kies of wysig",
+    "liveOnTooltip": "Regstreekse voorskou aan - om 'n nodus te kies of te wysig, voer die pyplyn tot daar uit",
     "save": "Stoor",
     "saveTooltip": "Stoor (Ctrl+S)",
     "validate": "Valideer",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Stel saam na DuckDB SQL, kopieer na knipbord",
     "exportSql": "Voer uit as .sql",
     "exportSqlDesc": "Laai die saamgestelde SQL as 'n lêer af",
+    "generateDocs": "Genereer dokumentasie",
+    "generateDocsDesc": "'n HTML-bladsy met elke stap, instelling en kolom",
     "exportJson": "Voer uit as .duckle.json",
     "exportJsonDesc": "Laai nodusse + rande af as draagbare JSON",
     "importJson": "Voer .duckle.json in...",
-    "importJsonDesc": "Maak 'n draagbare JSON oop as 'n nuwe pyplyn"
+    "importJsonDesc": "Maak 'n draagbare JSON oop as 'n nuwe pyplyn",
+    "importJob": "Voer Talend-taak in...",
+    "importJobDesc": "Vertaal 'n Talend .item-taak na 'n pyplyn"
   },
   "palette": {
     "sources": "Bronne",
@@ -170,7 +180,8 @@
     "ready": "[gereed]",
     "consoleDesc": "Die uitvoering log. Begin 'n pyplyn en elke stadium se status, rytelling en tydsberekening - plus enige foute - verskyn hier.",
     "pipelineFinished": "Pyplyn klaar",
-    "pipelineLabel": "Pyplyn"
+    "pipelineLabel": "Pyplyn",
+    "dismissError": "Maak fout toe"
   },
   "status": {
     "pipelineLabel": "Pyplyn:",
@@ -201,7 +212,10 @@
     "failed": "Misluk",
     "ok": "OK",
     "colsSingular": "kol",
-    "colsPlural": "kole"
+    "colsPlural": "kole",
+    "rowsSingular": "ry",
+    "rowsPlural": "rye",
+    "rowsIn": "{{rows}} {{unit}} in {{ms}} ms"
   },
   "common": {
     "save": "Stoor",
@@ -214,5 +228,29 @@
     "loading": "Laai tans...",
     "error": "Fout",
     "success": "Sukses"
+  },
+  "import": {
+    "reportTitle": "Taak ingevoer",
+    "reportCounts": "{{translated}} van {{total}} komponente vertaal",
+    "reportNotReady": "Hierdie pyplyn is nog nie gereed om uit te voer nie. Werk eers deur die lys hieronder.",
+    "reportClean": "Elke komponent is vertaal en niks is onopgelos nie.",
+    "reportNeedsAttention": "Vereis aandag ({{n}})",
+    "reportComponentsSeen": "Komponente in die taaklêer",
+    "failed": "Niks is ingevoer nie"
+  },
+  "launcher": {
+    "title": "Tuis",
+    "goHome": "Tuis",
+    "subtitle": "Kies wat jy wil doen",
+    "subtitleWs": "Werkspasie: {{name}}",
+    "planned": "Beplan",
+    "showOnStartup": "Wys dit wanneer Duckle oopmaak",
+    "readyCount": "{{n}} nou beskikbaar",
+    "groupCount": "{{ready}} van {{total}} gereed",
+    "group": {
+      "build": "Bou",
+      "operate": "Bedryf",
+      "govern": "Beheer"
+    }
   }
 }

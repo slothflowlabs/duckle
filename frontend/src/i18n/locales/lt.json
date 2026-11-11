@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Šoninė juosta",
     "project": "Projektas",
-    "components": "Komponentai"
+    "components": "Komponentai",
+    "importJob": "Talend",
+    "importJobTitle": "Importuoti Talend .item užduotį"
   },
   "editorTabs": {
     "ariaLabel": "Redaktoriaus rodiniai",
     "canvas": "Drobė",
     "plan": "Planuoti",
-    "run": "Bėk"
+    "run": "Bėk",
+    "history": "Istorija"
   },
   "header": {
     "unsavedChanges": "neišsaugotus pakeitimus",
@@ -32,6 +35,9 @@
     "stopTooltip": "Sustabdyti dujotiekį (F6)",
     "run": "Bėk",
     "runTooltip": "Vykdyti dujotiekį (F5)",
+    "live": "Tiesiogiai",
+    "liveTooltip": "Tiesioginė peržiūra: vykdo iki mazgo, kai jį pasirenkate ar redaguojate",
+    "liveOnTooltip": "Tiesioginė peržiūra įjungta - pasirinkus ar redaguojant mazgą konvejeris vykdomas iki jo",
     "save": "Išsaugoti",
     "saveTooltip": "Išsaugoti (Ctrl+S)",
     "validate": "Patvirtinti",
@@ -43,10 +49,14 @@
     "copySqlDesc": "Kompiliuoti į DuckDB SQL, nukopijuoti į mainų sritį",
     "exportSql": "Eksportuoti kaip .sql",
     "exportSqlDesc": "Atsisiųskite sukompiliuotą SQL kaip failą",
+    "generateDocs": "Generuoti dokumentaciją",
+    "generateDocsDesc": "HTML puslapis su kiekvienu žingsniu, nustatymu ir stulpeliu",
     "exportJson": "Eksportuoti kaip .duckle.json",
     "exportJsonDesc": "Atsisiųskite mazgus + kraštus kaip nešiojamąjį JSON",
     "importJson": "Importuoti .duckle.json...",
-    "importJsonDesc": "Atidarykite nešiojamąjį JSON kaip naują dujotiekį"
+    "importJsonDesc": "Atidarykite nešiojamąjį JSON kaip naują dujotiekį",
+    "importJob": "Importuoti Talend užduotį...",
+    "importJobDesc": "Paversti Talend .item užduotį konvejeriu"
   },
   "palette": {
     "sources": "Šaltiniai",
@@ -170,7 +180,8 @@
     "ready": "[paruošta]",
     "consoleDesc": "Vykdymo žurnalas. Vykdykite konvejerį ir čia bus rodoma kiekvieno etapo būsena, eilučių skaičius ir laikas bei visos klaidos.",
     "pipelineFinished": "Dujotiekis baigtas",
-    "pipelineLabel": "Dujotiekis"
+    "pipelineLabel": "Dujotiekis",
+    "dismissError": "Uždaryti klaidą"
   },
   "status": {
     "pipelineLabel": "Dujotiekis:",
@@ -201,7 +212,10 @@
     "failed": "Nepavyko",
     "ok": "Gerai",
     "colsSingular": "plk",
-    "colsPlural": "sk"
+    "colsPlural": "sk",
+    "rowsSingular": "eilutė",
+    "rowsPlural": "eilutės",
+    "rowsIn": "{{rows}} {{unit}} per {{ms}} ms"
   },
   "common": {
     "save": "Išsaugoti",
@@ -214,5 +228,29 @@
     "loading": "Įkeliama...",
     "error": "Klaida",
     "success": "Sėkmės"
+  },
+  "import": {
+    "reportTitle": "Užduotis importuota",
+    "reportCounts": "Paversta {{translated}} iš {{total}} komponentų",
+    "reportNotReady": "Šis konvejeris dar neparuoštas vykdyti. Pirmiausia peržiūrėkite sąrašą žemiau.",
+    "reportClean": "Visi komponentai paversti, nieko neliko neišspręsta.",
+    "reportNeedsAttention": "Reikia dėmesio ({{n}})",
+    "reportComponentsSeen": "Užduoties failo komponentai",
+    "failed": "Nieko neimportuota"
+  },
+  "launcher": {
+    "title": "Pradžia",
+    "goHome": "Pradžia",
+    "subtitle": "Pasirinkite, ką norite daryti",
+    "subtitleWs": "Darbo sritis: {{name}}",
+    "planned": "Planuojama",
+    "showOnStartup": "Rodyti tai atidarius Duckle",
+    "readyCount": "{{n}} pasiekiama dabar",
+    "groupCount": "{{ready}} iš {{total}} paruošta",
+    "group": {
+      "build": "Kūrimas",
+      "operate": "Valdymas",
+      "govern": "Priežiūra"
+    }
   }
 }

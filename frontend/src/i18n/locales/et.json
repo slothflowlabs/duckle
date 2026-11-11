@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "Külgriba",
     "project": "Projekt",
-    "components": "Komponendid"
+    "components": "Komponendid",
+    "importJob": "Talend",
+    "importJobTitle": "Impordi Talendi .item-töö"
   },
   "editorTabs": {
     "ariaLabel": "Toimetaja vaated",
     "canvas": "Lõuend",
     "plan": "Plaan",
-    "run": "Jookse"
+    "run": "Jookse",
+    "history": "Ajalugu"
   },
   "header": {
     "unsavedChanges": "salvestamata muudatused",
@@ -32,6 +35,9 @@
     "stopTooltip": "Peata torujuhe (F6)",
     "run": "Jookse",
     "runTooltip": "Käivita konveier (F5)",
+    "live": "Otse",
+    "liveTooltip": "Otse-eelvaade: sõlme valimisel või muutmisel käivitatakse töövoog kuni selle sõlmeni",
+    "liveOnTooltip": "Otse-eelvaade sees - sõlme valimine või muutmine käivitab töövoo kuni selle sõlmeni",
     "save": "Salvesta",
     "saveTooltip": "Salvesta (Ctrl+S)",
     "validate": "Kinnitage",
@@ -43,10 +49,14 @@
     "copySqlDesc": "DuckDB SQL-i kompileerimine, lõikelauale kopeerimine",
     "exportSql": "Ekspordi .sql-vormingus",
     "exportSqlDesc": "Laadige kompileeritud SQL failina alla",
+    "generateDocs": "Loo dokumentatsioon",
+    "generateDocsDesc": "HTML-leht iga sammu, sätte ja veeruga",
     "exportJson": "Ekspordi failina .duckle.json",
     "exportJsonDesc": "Laadige sõlmed + servad alla kaasaskantava JSON-ina",
     "importJson": "Importige fail .duckle.json...",
-    "importJsonDesc": "Avage kaasaskantav JSON uue torujuhtmena"
+    "importJsonDesc": "Avage kaasaskantav JSON uue torujuhtmena",
+    "importJob": "Impordi Talendi töö...",
+    "importJobDesc": "Teisenda Talendi .item-töö töövooks"
   },
   "palette": {
     "sources": "Allikad",
@@ -170,7 +180,8 @@
     "ready": "[valmis]",
     "consoleDesc": "Täitmise logi. Käivitage konveier ja siin kuvatakse iga etapi olek, ridade arv ja ajastus ning kõik vead.",
     "pipelineFinished": "Torujuhe valmis",
-    "pipelineLabel": "Torujuhe"
+    "pipelineLabel": "Torujuhe",
+    "dismissError": "Sulge viga"
   },
   "status": {
     "pipelineLabel": "Torujuhe:",
@@ -201,7 +212,10 @@
     "failed": "Ebaõnnestunud",
     "ok": "OK",
     "colsSingular": "kol",
-    "colsPlural": "veerg"
+    "colsPlural": "veerg",
+    "rowsSingular": "rida",
+    "rowsPlural": "rida",
+    "rowsIn": "{{rows}} {{unit}} {{ms}} ms-ga"
   },
   "common": {
     "save": "Salvesta",
@@ -214,5 +228,29 @@
     "loading": "Laadimine...",
     "error": "Viga",
     "success": "Edu"
+  },
+  "import": {
+    "reportTitle": "Töö imporditud",
+    "reportCounts": "{{translated}} komponenti {{total}}-st teisendatud",
+    "reportNotReady": "See töövoog ei ole veel käivitamiseks valmis. Vaata esmalt läbi allolev loend.",
+    "reportClean": "Kõik komponendid on teisendatud ja midagi ei jäänud lahendamata.",
+    "reportNeedsAttention": "Vajab tähelepanu ({{n}})",
+    "reportComponentsSeen": "Tööfaili komponendid",
+    "failed": "Midagi ei imporditud"
+  },
+  "launcher": {
+    "title": "Avaleht",
+    "goHome": "Avaleht",
+    "subtitle": "Vali, mida soovid teha",
+    "subtitleWs": "Tööruum: {{name}}",
+    "planned": "Plaanis",
+    "showOnStartup": "Näita seda Duckle'i avamisel",
+    "readyCount": "{{n}} saadaval",
+    "groupCount": "{{ready}} / {{total}} valmis",
+    "group": {
+      "build": "Loomine",
+      "operate": "Käitamine",
+      "govern": "Haldus"
+    }
   }
 }

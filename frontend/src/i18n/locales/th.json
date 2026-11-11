@@ -105,22 +105,28 @@
   "sidebar": {
     "ariaLabel": "แถบด้านข้าง",
     "project": "โครงการ",
-    "components": "ส่วนประกอบ"
+    "components": "ส่วนประกอบ",
+    "importJob": "Talend",
+    "importJobTitle": "นำเข้างาน Talend .item"
   },
   "editorTabs": {
     "ariaLabel": "มุมมองบรรณาธิการ",
     "canvas": "ผ้าใบ",
     "plan": "วางแผน",
-    "run": "วิ่ง"
+    "run": "วิ่ง",
+    "history": "ประวัติ"
   },
   "header": {
     "unsavedChanges": "การเปลี่ยนแปลงที่ยังไม่ได้บันทึก",
-    "closeTab": "ปิด {{ชื่อ}}",
+    "closeTab": "ปิด {{name}}",
     "newPipeline": "ไปป์ไลน์ใหม่",
     "stop": "หยุด",
     "stopTooltip": "หยุดไปป์ไลน์ (F6)",
     "run": "วิ่ง",
     "runTooltip": "เรียกใช้ไปป์ไลน์ (F5)",
+    "live": "สด",
+    "liveTooltip": "แสดงตัวอย่างสด: รันจนถึงโหนดเมื่อคุณเลือกหรือแก้ไขโหนดนั้น",
+    "liveOnTooltip": "เปิดแสดงตัวอย่างสดอยู่ - การเลือกหรือแก้ไขโหนดจะรันไปป์ไลน์จนถึงโหนดนั้น",
     "save": "บันทึก",
     "saveTooltip": "บันทึก (Ctrl+S)",
     "validate": "ตรวจสอบความถูกต้อง",
@@ -132,10 +138,14 @@
     "copySqlDesc": "คอมไพล์เป็น DuckDB SQL คัดลอกไปยังคลิปบอร์ด",
     "exportSql": "ส่งออกเป็น .sql",
     "exportSqlDesc": "ดาวน์โหลด SQL ที่คอมไพล์แล้วเป็นไฟล์",
+    "generateDocs": "สร้างเอกสาร",
+    "generateDocsDesc": "หน้า HTML ที่มีทุกขั้นตอน การตั้งค่า และคอลัมน์",
     "exportJson": "ส่งออกเป็น .duckle.json",
     "exportJsonDesc": "ดาวน์โหลดโหนด + Edge เป็น JSON แบบพกพา",
     "importJson": "นำเข้า .duckle.json...",
-    "importJsonDesc": "เปิด JSON แบบพกพาเป็นไปป์ไลน์ใหม่"
+    "importJsonDesc": "เปิด JSON แบบพกพาเป็นไปป์ไลน์ใหม่",
+    "importJob": "นำเข้างาน Talend...",
+    "importJobDesc": "แปลงงาน Talend .item เป็นไปป์ไลน์"
   },
   "properties": {
     "nothingSelected": "ไม่ได้เลือกอะไร",
@@ -182,7 +192,8 @@
     "ready": "[พร้อม]",
     "consoleDesc": "บันทึกการดำเนินการ เรียกใช้ไปป์ไลน์และสถานะ จำนวนแถว และเวลาของแต่ละขั้นตอน รวมถึงข้อผิดพลาดใดๆ จะปรากฏที่นี่",
     "pipelineFinished": "วางท่อเสร็จแล้ว",
-    "pipelineLabel": "ไปป์ไลน์"
+    "pipelineLabel": "ไปป์ไลน์",
+    "dismissError": "ปิดข้อผิดพลาด"
   },
   "status": {
     "pipelineLabel": "ไปป์ไลน์:",
@@ -213,6 +224,33 @@
     "failed": "ล้มเหลว",
     "ok": "ตกลง",
     "colsSingular": "พ.อ",
-    "colsPlural": "คอลัมน์"
+    "colsPlural": "คอลัมน์",
+    "rowsSingular": "แถว",
+    "rowsPlural": "แถว",
+    "rowsIn": "{{rows}} {{unit}} ใน {{ms}} ms"
+  },
+  "import": {
+    "reportTitle": "นำเข้างานแล้ว",
+    "reportCounts": "แปลงแล้ว {{translated}} จาก {{total}} ส่วนประกอบ",
+    "reportNotReady": "ไปป์ไลน์นี้ยังไม่พร้อมรัน ตรวจสอบรายการด้านล่างก่อน",
+    "reportClean": "แปลงส่วนประกอบครบทุกตัวและไม่มีอะไรค้างแก้ไข",
+    "reportNeedsAttention": "ต้องตรวจสอบ ({{n}})",
+    "reportComponentsSeen": "ส่วนประกอบในไฟล์งาน",
+    "failed": "ไม่ได้นำเข้าอะไรเลย"
+  },
+  "launcher": {
+    "title": "หน้าแรก",
+    "goHome": "หน้าแรก",
+    "subtitle": "เลือกสิ่งที่คุณต้องการทำ",
+    "subtitleWs": "พื้นที่ทำงาน: {{name}}",
+    "planned": "วางแผนไว้",
+    "showOnStartup": "แสดงหน้านี้เมื่อเปิด Duckle",
+    "readyCount": "พร้อมใช้งานตอนนี้ {{n}} รายการ",
+    "groupCount": "พร้อม {{ready}} จาก {{total}}",
+    "group": {
+      "build": "สร้าง",
+      "operate": "ดำเนินการ",
+      "govern": "กำกับดูแล"
+    }
   }
 }

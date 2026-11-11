@@ -105,13 +105,16 @@
   "sidebar": {
     "ariaLabel": "Πλαϊνή γραμμή",
     "project": "Σχέδιο",
-    "components": "εξαρτήματα"
+    "components": "εξαρτήματα",
+    "importJob": "Talend",
+    "importJobTitle": "Εισαγωγή εργασίας Talend .item"
   },
   "editorTabs": {
     "ariaLabel": "Προβολές συντάκτη",
     "canvas": "Καμβάς",
     "plan": "Σχέδιο",
-    "run": "Τρέξιμο"
+    "run": "Τρέξιμο",
+    "history": "Ιστορικό"
   },
   "header": {
     "unsavedChanges": "μη αποθηκευμένες αλλαγές",
@@ -121,6 +124,9 @@
     "stopTooltip": "Διακοπή αγωγού (F6)",
     "run": "Τρέξιμο",
     "runTooltip": "Run pipeline (F5)",
+    "live": "Ζωντανά",
+    "liveTooltip": "Ζωντανή προεπισκόπηση: εκτέλεση έως έναν κόμβο όταν τον επιλέγετε ή τον επεξεργάζεστε",
+    "liveOnTooltip": "Ζωντανή προεπισκόπηση ενεργή - η επιλογή ή επεξεργασία ενός κόμβου εκτελεί τη ροή έως αυτόν",
     "save": "Εκτός",
     "saveTooltip": "Αποθήκευση (Ctrl+S)",
     "validate": "Επικυρώνω",
@@ -132,10 +138,14 @@
     "copySqlDesc": "Μεταγλώττιση στο DuckDB SQL, αντιγραφή στο πρόχειρο",
     "exportSql": "Εξαγωγή ως .sql",
     "exportSqlDesc": "Κάντε λήψη της μεταγλωττισμένης SQL ως αρχείου",
+    "generateDocs": "Δημιουργία τεκμηρίωσης",
+    "generateDocsDesc": "Μια σελίδα HTML με κάθε βήμα, ρύθμιση και στήλη",
     "exportJson": "Εξαγωγή ως .duckle.json",
     "exportJsonDesc": "Λήψη κόμβων + άκρων ως φορητό JSON",
     "importJson": "Εισαγωγή .duckle.json...",
-    "importJsonDesc": "Ανοίξτε ένα φορητό JSON ως νέο αγωγό"
+    "importJsonDesc": "Ανοίξτε ένα φορητό JSON ως νέο αγωγό",
+    "importJob": "Εισαγωγή εργασίας Talend...",
+    "importJobDesc": "Μετατροπή μιας εργασίας Talend .item σε ροή δεδομένων"
   },
   "properties": {
     "nothingSelected": "Τίποτα επιλεγμένο",
@@ -182,7 +192,8 @@
     "ready": "[έτοιμος]",
     "consoleDesc": "Το αρχείο καταγραφής εκτέλεσης. Εκτελέστε μια διοχέτευση και η κατάσταση κάθε σταδίου, ο αριθμός σειρών και ο χρονισμός - συν τυχόν σφάλματα - εμφανίζονται εδώ.",
     "pipelineFinished": "Ο αγωγός ολοκληρώθηκε",
-    "pipelineLabel": "Γραμμή σωλήνων"
+    "pipelineLabel": "Γραμμή σωλήνων",
+    "dismissError": "Απόρριψη σφάλματος"
   },
   "status": {
     "pipelineLabel": "Γραμμή σωλήνων:",
@@ -213,6 +224,33 @@
     "failed": "Αποτυχημένος",
     "ok": "ΕΝΤΑΞΕΙ",
     "colsSingular": "διάσελο",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "γραμμή",
+    "rowsPlural": "γραμμές",
+    "rowsIn": "{{rows}} {{unit}} σε {{ms}} ms"
+  },
+  "import": {
+    "reportTitle": "Η εργασία εισήχθη",
+    "reportCounts": "Μετατράπηκαν {{translated}} από {{total}} στοιχεία",
+    "reportNotReady": "Αυτή η ροή δεν είναι ακόμη έτοιμη για εκτέλεση. Περάστε πρώτα από τη λίστα παρακάτω.",
+    "reportClean": "Όλα τα στοιχεία μετατράπηκαν και δεν έμεινε τίποτα ανεπίλυτο.",
+    "reportNeedsAttention": "Χρειάζεται προσοχή ({{n}})",
+    "reportComponentsSeen": "Στοιχεία στο αρχείο της εργασίας",
+    "failed": "Δεν εισήχθη τίποτα"
+  },
+  "launcher": {
+    "title": "Αρχική",
+    "goHome": "Αρχική",
+    "subtitle": "Επιλέξτε τι θέλετε να κάνετε",
+    "subtitleWs": "Χώρος εργασίας: {{name}}",
+    "planned": "Προγραμματισμένο",
+    "showOnStartup": "Εμφάνιση κατά το άνοιγμα του Duckle",
+    "readyCount": "{{n}} διαθέσιμα τώρα",
+    "groupCount": "{{ready}} από {{total}} έτοιμα",
+    "group": {
+      "build": "Δημιουργία",
+      "operate": "Λειτουργία",
+      "govern": "Διακυβέρνηση"
+    }
   }
 }

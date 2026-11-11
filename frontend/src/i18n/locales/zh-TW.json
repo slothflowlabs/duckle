@@ -16,13 +16,16 @@
   "sidebar": {
     "ariaLabel": "側邊欄",
     "project": "Project",
-    "components": "組件"
+    "components": "組件",
+    "importJob": "Talend",
+    "importJobTitle": "匯入 Talend .item 作業"
   },
   "editorTabs": {
     "ariaLabel": "編輯器檢視次數",
     "canvas": "Canvas",
     "plan": "方案",
-    "run": "運作"
+    "run": "運作",
+    "history": "歷史記錄"
   },
   "header": {
     "unsavedChanges": "未儲存的變更",
@@ -32,6 +35,9 @@
     "stopTooltip": "停止管道（ F6 ）",
     "run": "運作",
     "runTooltip": "運行管道（ F5 ）",
+    "live": "即時",
+    "liveTooltip": "即時預覽：選取或編輯節點時，執行到該節點",
+    "liveOnTooltip": "即時預覽已開啟 - 選取或編輯節點會將管道執行到該節點",
     "save": "Submit",
     "saveTooltip": "儲存 (Ctrl+S)",
     "validate": "驗證",
@@ -43,10 +49,14 @@
     "copySqlDesc": "編譯成DuckDB SQL ，複製到剪貼簿",
     "exportSql": "匯出為.sql",
     "exportSqlDesc": "將已編譯的SQL下載為檔案",
+    "generateDocs": "產生文件",
+    "generateDocsDesc": "包含每個步驟、設定與欄位的 HTML 頁面",
     "exportJson": "匯出為.duckle.json",
     "exportJsonDesc": "將節點+邊緣下載為可攜式JSON",
     "importJson": "匯入.duckle.json...",
-    "importJsonDesc": "開啟可攜式JSON作為新管線"
+    "importJsonDesc": "開啟可攜式JSON作為新管線",
+    "importJob": "匯入 Talend 作業...",
+    "importJobDesc": "將 Talend .item 作業轉換為管道"
   },
   "palette": {
     "sources": "來源",
@@ -170,7 +180,8 @@
     "ready": "準備就緒",
     "consoleDesc": "執行記錄。執行管線，此處會顯示每個階段的狀態、行數和時間以及任何錯誤。",
     "pipelineFinished": "管道已完成",
-    "pipelineLabel": "商機漏斗"
+    "pipelineLabel": "商機漏斗",
+    "dismissError": "關閉錯誤"
   },
   "status": {
     "pipelineLabel": "商機漏斗",
@@ -201,7 +212,10 @@
     "failed": "失敗",
     "ok": "OK",
     "colsSingular": "欄",
-    "colsPlural": "行欄位(Columns)"
+    "colsPlural": "行欄位(Columns)",
+    "rowsSingular": "列",
+    "rowsPlural": "列",
+    "rowsIn": "{{rows}} {{unit}}，耗時 {{ms}} ms"
   },
   "common": {
     "save": "Submit",
@@ -214,5 +228,29 @@
     "loading": "Loading…",
     "error": "錯誤",
     "success": "成功"
+  },
+  "import": {
+    "reportTitle": "作業已匯入",
+    "reportCounts": "已轉換 {{translated}}/{{total}} 個組件",
+    "reportNotReady": "此管道尚無法執行。請先處理下方清單。",
+    "reportClean": "所有組件皆已轉換，沒有未解決的項目。",
+    "reportNeedsAttention": "需要處理（{{n}}）",
+    "reportComponentsSeen": "作業檔案中的組件",
+    "failed": "未匯入任何內容"
+  },
+  "launcher": {
+    "title": "首頁",
+    "goHome": "首頁",
+    "subtitle": "選擇你要做的事",
+    "subtitleWs": "工作空間：{{name}}",
+    "planned": "規劃中",
+    "showOnStartup": "Duckle 開啟時顯示此頁",
+    "readyCount": "{{n}} 項現已可用",
+    "groupCount": "{{ready}}/{{total}} 已就緒",
+    "group": {
+      "build": "建置",
+      "operate": "營運",
+      "govern": "治理"
+    }
   }
 }

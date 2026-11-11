@@ -105,13 +105,16 @@
   "sidebar": {
     "ariaLabel": "نوار کناری",
     "project": "پروژه",
-    "components": "اجزاء"
+    "components": "اجزاء",
+    "importJob": "Talend",
+    "importJobTitle": "وارد کردن کار Talend با پسوند .item"
   },
   "editorTabs": {
     "ariaLabel": "دیدگاه های ویرایشگر",
     "canvas": "بوم",
     "plan": "برنامه ریزی کنید",
-    "run": "اجرا کنید"
+    "run": "اجرا کنید",
+    "history": "تاریخچه"
   },
   "header": {
     "unsavedChanges": "تغییرات ذخیره نشده",
@@ -121,6 +124,9 @@
     "stopTooltip": "توقف خط لوله (F6)",
     "run": "اجرا کنید",
     "runTooltip": "اجرای خط لوله (F5)",
+    "live": "زنده",
+    "liveTooltip": "پیش‌نمایش زنده: هنگام انتخاب یا ویرایش یک گره، تا همان گره اجرا می‌کند",
+    "liveOnTooltip": "پیش‌نمایش زنده روشن است - انتخاب یا ویرایش یک گره، خط لوله را تا همان گره اجرا می‌کند",
     "save": "ذخیره کنید",
     "saveTooltip": "ذخیره (Ctrl+S)",
     "validate": "اعتبار سنجی",
@@ -132,10 +138,14 @@
     "copySqlDesc": "کامپایل در DuckDB SQL، کپی کردن در کلیپ بورد",
     "exportSql": "صادرات به عنوان sql",
     "exportSqlDesc": "SQL کامپایل شده را به صورت فایل دانلود کنید",
+    "generateDocs": "ساخت مستندات",
+    "generateDocsDesc": "یک صفحهٔ HTML با همهٔ گام‌ها، تنظیمات و ستون‌ها",
     "exportJson": "صادرات به عنوان duckle.json",
     "exportJsonDesc": "گره ها + لبه ها را به عنوان JSON قابل حمل بارگیری کنید",
     "importJson": "وارد کردن .duckle.json...",
-    "importJsonDesc": "یک JSON قابل حمل را به عنوان خط لوله جدید باز کنید"
+    "importJsonDesc": "یک JSON قابل حمل را به عنوان خط لوله جدید باز کنید",
+    "importJob": "وارد کردن کار Talend...",
+    "importJobDesc": "تبدیل یک کار Talend با پسوند .item به خط لوله"
   },
   "properties": {
     "nothingSelected": "چیزی انتخاب نشده است",
@@ -182,7 +192,8 @@
     "ready": "[آماده]",
     "consoleDesc": "گزارش اجرا یک خط لوله را اجرا کنید و وضعیت هر مرحله، تعداد ردیف و زمان بندی - به اضافه هر گونه خطا - در اینجا ظاهر می شود.",
     "pipelineFinished": "خط لوله تمام شد",
-    "pipelineLabel": "خط لوله"
+    "pipelineLabel": "خط لوله",
+    "dismissError": "بستن خطا"
   },
   "status": {
     "pipelineLabel": "خط لوله:",
@@ -213,6 +224,33 @@
     "failed": "شکست خورد",
     "ok": "باشه",
     "colsSingular": "سرهنگ",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "rowsSingular": "سطر",
+    "rowsPlural": "سطر",
+    "rowsIn": "{{rows}} {{unit}} در {{ms}} ms"
+  },
+  "import": {
+    "reportTitle": "کار وارد شد",
+    "reportCounts": "{{translated}} از {{total}} جزء تبدیل شد",
+    "reportNotReady": "این خط لوله هنوز برای اجرا آماده نیست. ابتدا فهرست زیر را بررسی کنید.",
+    "reportClean": "همهٔ اجزا تبدیل شدند و چیزی حل‌نشده باقی نماند.",
+    "reportNeedsAttention": "نیازمند بررسی ({{n}})",
+    "reportComponentsSeen": "اجزای موجود در فایل کار",
+    "failed": "چیزی وارد نشد"
+  },
+  "launcher": {
+    "title": "خانه",
+    "goHome": "خانه",
+    "subtitle": "انتخاب کنید چه کاری می‌خواهید انجام دهید",
+    "subtitleWs": "فضای کاری: {{name}}",
+    "planned": "برنامه‌ریزی‌شده",
+    "showOnStartup": "نمایش این صفحه هنگام باز شدن Duckle",
+    "readyCount": "{{n}} مورد اکنون در دسترس است",
+    "groupCount": "{{ready}} از {{total}} آماده",
+    "group": {
+      "build": "ساخت",
+      "operate": "اجرا",
+      "govern": "حاکمیت"
+    }
   }
 }
