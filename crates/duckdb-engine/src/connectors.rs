@@ -17642,6 +17642,10 @@ impl DuckdbEngine {
     /// when it is missing, checks the columns match by name, then appends
     /// through the delta extension.
     pub(crate) fn run_delta_sink(&self, db: &Path, spec: &plan::DeltaSinkSpec) -> Result<String, EngineError> {
+        // The delta extension can only INSERT, and only into a local table.
+        if spec.mode != "append" || spec.path.contains("://") {
+            return self.run_delta_sidecar(db, spec);
+        }
         let config = |m: String| EngineError::Config(format!("snk.delta: {m}"));
         let table_dir = std::path::Path::new(&spec.path);
         let log_dir = table_dir.join("_delta_log");
@@ -17795,6 +17799,72 @@ impl DuckdbEngine {
             return Err(e);
         }
         Ok(format!("delta: appended to {}{}", spec.path, if created { " (created it)" } else { "" }))
+    }
+
+    /// snk.delta writes the delta extension cannot make (upsert, update, delete,
+    /// and any table on object storage), through the duckle-delta sidecar. The input
+    /// crosses as a Parquet file and the request on stdin, so storage credentials
+    /// never reach a command line.
+    fn run_delta_sidecar(&self, db: &Path, spec: &plan::DeltaSinkSpec) -> Result<String, EngineError> {
+        let view = plan::quote_ident(&spec.from_view);
+        // The same refusal a local create makes, before anything is written: a type
+        // Delta has no column for is named, not turned into something else. The
+        // delete flag is never written, so its type does not matter.
+        let unsupported: Vec<String> = self
+            .run_rows(Some(db), &format!("DESCRIBE SELECT * FROM {view};"))?
+            .iter()
+            .filter_map(|r| {
+                let name = r.get("column_name")?.as_str()?;
+                let ty = r.get("column_type")?.as_str()?;
+                (Some(name) != spec.delete_column.as_deref() && duckdb_type_to_delta(ty).is_none())
+                    .then(|| format!("{name} ({ty})"))
+            })
+            .collect();
+        if !unsupported.is_empty() {
+            return Err(EngineError::Config(format!(
+                "snk.delta: Delta has no column type for {} - cast it upstream (to VARCHAR, for example) before this node",
+                unsupported.join(", ")
+            )));
+        }
+        let db_name = db.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        // Its own name per call: two runs in one process must never share it.
+        let parquet = db.with_file_name(format!("{db_name}.delta-{}.parquet", uuid::Uuid::new_v4()));
+        let parquet_sql = parquet.to_string_lossy().replace('\\', "/").replace('\'', "''");
+        let answer = self
+            .run(Some(db), &format!("COPY (SELECT * FROM {view}) TO '{parquet_sql}' (FORMAT PARQUET);"), false)
+            .and_then(|_| {
+                let request = serde_json::json!({
+                    "table": spec.path,
+                    "source": parquet.to_string_lossy(),
+                    "mode": spec.mode,
+                    "keys": spec.keys,
+                    "deleteColumn": spec.delete_column,
+                    "deleteValue": spec.delete_value,
+                    "createIfMissing": spec.create_if_missing,
+                    "partitionBy": spec.partition_by,
+                    "storageOptions": spec
+                        .storage_options
+                        .iter()
+                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                        .collect::<serde_json::Map<String, serde_json::Value>>(),
+                });
+                run_delta_bin(&request)
+            });
+        let _ = std::fs::remove_file(&parquet);
+        let a = answer?;
+        let n = |k: &str| a.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+        let version = a.get("version").and_then(|v| v.as_i64()).unwrap_or(0);
+        let created = if a.get("created").and_then(|v| v.as_bool()) == Some(true) { ", created it" } else { "" };
+        Ok(match spec.mode.as_str() {
+            "append" => format!("delta: appended {} rows to {} (version {version}{created})", n("inserted"), spec.path),
+            mode => format!(
+                "delta: {mode} into {}: {} inserted, {} updated, {} deleted (version {version}{created})",
+                spec.path,
+                n("inserted"),
+                n("updated"),
+                n("deleted")
+            ),
+        })
     }
 
     /// Best-effort type of a column from a sample non-null row, e.g.
@@ -18957,6 +19027,71 @@ fn resolve_lance_bin() -> String {
         }
     }
     "duckle-lance".to_string()
+}
+
+/// Resolve the duckle-delta sidecar, in duckle-lance's order: DUCKLE_DELTA_BIN ->
+/// a binary next to the running executable (the shipped sidecar) -> PATH. It owns
+/// delta-rs, whose DataFusion and arrow stay out of the engine.
+fn resolve_delta_bin() -> String {
+    if let Ok(env) = std::env::var("DUCKLE_DELTA_BIN") {
+        if !env.is_empty() && Path::new(&env).exists() {
+            return env;
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for name in ["duckle-delta", "duckle-delta.exe"] {
+                let p = dir.join(name);
+                if p.exists() {
+                    return p.to_string_lossy().into_owned();
+                }
+            }
+        }
+    }
+    "duckle-delta".to_string()
+}
+
+/// One request to duckle-delta: JSON in on stdin, one JSON answer out on stdout.
+fn run_delta_bin(request: &serde_json::Value) -> Result<serde_json::Value, EngineError> {
+    use std::io::Write as _;
+    let mut cmd = std::process::Command::new(resolve_delta_bin());
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = cmd.spawn().map_err(|e| {
+        EngineError::Query(format!(
+            "snk.delta: cannot run duckle-delta: {e} (set DUCKLE_DELTA_BIN or bundle the sidecar)"
+        ))
+    })?;
+    // The sidecar reads all of stdin before writing anything, and the request is
+    // small, so writing it whole before reading cannot deadlock on a full pipe.
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(request.to_string().as_bytes())
+            .map_err(|e| EngineError::Query(format!("snk.delta: cannot send the request to duckle-delta: {e}")))?;
+    }
+    let out = child
+        .wait_with_output()
+        .map_err(|e| EngineError::Query(format!("snk.delta: duckle-delta did not finish: {e}")))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let answer = stdout.lines().rev().find_map(|l| serde_json::from_str::<serde_json::Value>(l.trim()).ok());
+    match answer {
+        Some(a) if a.get("ok").and_then(|v| v.as_bool()) == Some(true) => Ok(a),
+        Some(a) => Err(EngineError::Query(format!(
+            "snk.delta: {}",
+            a.get("error").and_then(|v| v.as_str()).unwrap_or("duckle-delta failed")
+        ))),
+        None => Err(EngineError::Query(format!(
+            "snk.delta: duckle-delta gave no answer (exit {}): {}",
+            out.status.code().map_or("?".to_string(), |c| c.to_string()),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))),
+    }
 }
 
 /// Whether a script asks for the whole table rather than a row at a time.

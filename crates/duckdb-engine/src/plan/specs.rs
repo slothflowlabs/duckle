@@ -101,6 +101,19 @@ pub struct DeltaSinkSpec {
     /// Partition columns for a table this sink creates. An existing table
     /// keeps the partitioning it was made with.
     pub partition_by: Vec<String>,
+    /// append | upsert | update | delete. A local append goes through DuckDB's
+    /// delta extension; every other write goes through the duckle-delta sidecar
+    /// (delta-rs), because the extension can only INSERT and only locally.
+    pub mode: String,
+    /// The key for upsert, update and delete (`conflictColumns`).
+    pub keys: Vec<String>,
+    /// With upsert: a row whose value here is `delete_value` deletes the matching
+    /// row instead. A control column: never written to the table.
+    pub delete_column: Option<String>,
+    pub delete_value: Option<String>,
+    /// delta-rs storage options for a table on object storage (azure_client_id,
+    /// aws_region, ...). The runner's AZURE_* / AWS_* / GOOGLE_* variables apply too.
+    pub storage_options: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]

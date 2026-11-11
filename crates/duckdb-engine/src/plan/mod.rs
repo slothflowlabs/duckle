@@ -2784,13 +2784,39 @@ fn build_stage(
             .map(|p| p.trim().trim_end_matches(['/', '\\']).to_string())
             .filter(|p| !p.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: path required (the table's directory)", component_id)))?;
-        // A table on object storage means writing its first commit there too,
-        // and that has not been run against real storage yet. Refused rather
-        // than shipped untested.
-        if path.contains("://") {
+        // Object storage goes through the duckle-delta sidecar (delta-rs), only to the
+        // stores it is built for and tested against; anything else is refused by name.
+        let lower = path.to_ascii_lowercase();
+        if path.contains("://")
+            && !["abfss://", "abfs://", "az://", "s3://", "s3a://", "gs://"].iter().any(|s| lower.starts_with(s))
+        {
             return Err(EngineError::Config(format!(
-                "{}: writes to a local table directory for now; '{}' is remote. Write locally and copy, or use the Iceberg or DuckLake sink for object storage",
+                "{}: '{}' is not a place a Delta table can be written here; use a local directory or an abfss:// (OneLake, ADLS), az://, s3:// or gs:// URL",
                 component_id, path
+            )));
+        }
+        let mode = string_prop(&props, "mode")
+            .map(|m| m.trim().to_ascii_lowercase())
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| "append".to_string());
+        if !matches!(mode.as_str(), "append" | "upsert" | "update" | "delete") {
+            return Err(EngineError::Config(format!(
+                "{}: mode is append, upsert, update or delete, not '{}'",
+                component_id, mode
+            )));
+        }
+        let keys = columns_list(&props, "conflictColumns");
+        if mode != "append" && keys.is_empty() {
+            return Err(EngineError::Config(format!(
+                "{}: {} matches rows by key; set conflictColumns",
+                component_id, mode
+            )));
+        }
+        let delete_column = string_prop(&props, "deleteColumn").filter(|s| !s.trim().is_empty());
+        if delete_column.is_some() && mode != "upsert" {
+            return Err(EngineError::Config(format!(
+                "{}: deleteColumn applies to upsert, not {}",
+                component_id, mode
             )));
         }
         delta_sink = Some(DeltaSinkSpec {
@@ -2798,6 +2824,11 @@ fn build_stage(
             path,
             create_if_missing: props.get("createIfMissing").and_then(|v| v.as_bool()).unwrap_or(true),
             partition_by: columns_list(&props, "partitionBy"),
+            mode,
+            keys,
+            delete_column,
+            delete_value: string_prop(&props, "deleteValue").filter(|s| !s.is_empty()),
+            storage_options: builders::kv_pairs(&props, "storageOptions"),
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.snowflake" {

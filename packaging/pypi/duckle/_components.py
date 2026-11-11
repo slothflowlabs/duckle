@@ -356,8 +356,8 @@ COMPONENTS = {
     },
     'snk.delta': {
         'kind': 'sink',
-        'summary': 'Append to a local Delta Lake table, creating it from the input columns on first use. Columns are matched by name and a mismatch is refused, never dropped or filled with NULL.',
-        'params': ['path', 'createIfMissing', 'partitionBy'],
+        'summary': 'Append, upsert, update or delete by key in a Delta Lake table, local or on OneLake, ADLS, S3 or GCS, creating it from the input columns on first use. Columns are matched by name and a mismatch is refused, never dropped or filled with NULL.',
+        'params': ['path', 'createIfMissing', 'partitionBy', 'mode', 'conflictColumns', 'deleteColumn', 'deleteValue', 'storageOptions'],
     },
     'snk.dhis2': {
         'kind': 'sink',

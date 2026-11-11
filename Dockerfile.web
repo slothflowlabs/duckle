@@ -81,6 +81,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cp /app/target/release/duckle-runner /usr/local/bin/duckle-runner \
     && cp /app/target/release/duckle-lance /usr/local/bin/duckle-lance
 
+# duckle-delta, the Delta Lake sidecar behind snk.delta's upsert / update / delete
+# and object-storage writes. Its own workspace and lockfile, built from its
+# manifest into the same cached target dir, and in its own invocation for the
+# memory reason above: it links DataFusion too.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    CARGO_TARGET_DIR=/app/target cargo build --release --locked --manifest-path crates/duckle-delta/Cargo.toml \
+    && cp /app/target/release/duckle-delta /usr/local/bin/duckle-delta
+
 # 3) Runtime: runner + the built frontend + the DuckDB CLI.
 FROM debian:bookworm-slim
 ARG DUCKDB_VERSION=2.0.0
@@ -120,6 +129,7 @@ RUN apt-get update \
 RUN duckdb :memory: -c "INSTALL httpfs; INSTALL azure; INSTALL sqlite; INSTALL postgres; INSTALL mysql; INSTALL excel; INSTALL iceberg; INSTALL delta; INSTALL ducklake; INSTALL vss; INSTALL fts; INSTALL inet;"
 COPY --from=runner /usr/local/bin/duckle-runner /usr/local/bin/duckle-runner
 COPY --from=runner /usr/local/bin/duckle-lance /usr/local/bin/duckle-lance
+COPY --from=runner /usr/local/bin/duckle-delta /usr/local/bin/duckle-delta
 COPY --from=frontend /app/frontend/dist-web /app/dist-web
 # Feature parity with the desktop app: DuckDB engine and its extensions, the
 # LanceDB/Vortex sidecar, and a Python interpreter for code.python.
@@ -138,7 +148,8 @@ COPY --from=frontend /app/frontend/dist-web /app/dist-web
 # declares uv.lock with nothing installed now refuses loudly instead of running
 # quietly on the wrong interpreter.
 ENV DUCKLE_DUCKDB_BIN=/usr/local/bin/duckdb \
-    DUCKLE_LANCE_BIN=/usr/local/bin/duckle-lance
+    DUCKLE_LANCE_BIN=/usr/local/bin/duckle-lance \
+    DUCKLE_DELTA_BIN=/usr/local/bin/duckle-delta
 VOLUME ["/workspace"]
 EXPOSE 8080
 # /healthz needs no credential and says only "ok", so orchestrators can check

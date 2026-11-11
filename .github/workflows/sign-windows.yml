@@ -38,7 +38,7 @@
 # ends up with one architecture signed and the other not.
 #
 # Signing the outer exe does NOT sign the embedded sidecars: duckle-runner.exe,
-# duckle-mcp.exe and duckle-lance.exe are staged into apps/desktop/bin/ and
+# duckle-mcp.exe, duckle-lance.exe and duckle-delta.exe are staged into apps/desktop/bin/ and
 # embedded with include_bytes! + zstd, so the copies extracted at run time stay
 # unsigned. Signing those needs a round trip inside each build leg, before the
 # desktop build embeds them.

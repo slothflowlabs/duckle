@@ -24,6 +24,7 @@ fn main() {
     embed_runner_linux();
     embed_mcp();
     embed_lance();
+    embed_delta();
 
     tauri_build::build()
 }
@@ -79,6 +80,37 @@ fn embed_lance() {
         );
     }
     println!("cargo:rustc-env=DUCKLE_EMBEDDED_LANCE={}", dst.display());
+    println!("cargo:rerun-if-changed={}", staged.display());
+}
+
+/// Locate a prebuilt `duckle-delta` (the Delta Lake sidecar) and expose its bytes
+/// via include_bytes!(env!("DUCKLE_EMBEDDED_DELTA")). OPTIONAL and NOT built here,
+/// for duckle-lance's reason: delta-rs pulls DataFusion, and it lives in its own
+/// workspace (crates/duckle-delta). CI builds it and stages it to apps/desktop/bin/.
+/// When absent an empty file is embedded so the desktop still builds; snk.delta's
+/// upsert / update / delete and object-storage writes then fall back to a
+/// duckle-delta on PATH or DUCKLE_DELTA_BIN.
+fn embed_delta() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let name = if target_os == "windows" {
+        "duckle-delta.exe"
+    } else {
+        "duckle-delta"
+    };
+    let staged = std::path::Path::new(&manifest_dir).join("bin").join(name);
+    let dst = std::path::Path::new(&out_dir).join("embedded-delta.bin");
+    if staged.exists() {
+        compress_to(&staged, &dst);
+    } else {
+        std::fs::write(&dst, [])
+            .unwrap_or_else(|e| panic!("write empty embedded-delta: {}", e));
+        println!(
+            "cargo:warning=duckle-delta not staged (apps/desktop/bin/{name}); Delta upsert/update/delete and object-storage writes will need a duckle-delta on PATH or DUCKLE_DELTA_BIN. CI stages it."
+        );
+    }
+    println!("cargo:rustc-env=DUCKLE_EMBEDDED_DELTA={}", dst.display());
     println!("cargo:rerun-if-changed={}", staged.display());
 }
 

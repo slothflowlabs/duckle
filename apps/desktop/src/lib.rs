@@ -60,6 +60,12 @@ const EMBEDDED_MCP: &[u8] = include_bytes!(env!("DUCKLE_EMBEDDED_MCP"));
 /// back to a duckle-lance on PATH.
 const EMBEDDED_LANCE: &[u8] = include_bytes!(env!("DUCKLE_EMBEDDED_LANCE"));
 
+/// The Delta Lake sidecar (duckle-delta), embedded the same way (build.rs
+/// embed_delta). Staged to a temp stub + DUCKLE_DELTA_BIN at startup so snk.delta's
+/// upsert / update / delete and object-storage writes work out of the box; absent
+/// -> the engine falls back to a duckle-delta on PATH.
+const EMBEDDED_DELTA: &[u8] = include_bytes!(env!("DUCKLE_EMBEDDED_DELTA"));
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// The GDK backend to ask for before GTK starts on Linux, or why there is no
 /// window to open. Takes DISPLAY, WAYLAND_DISPLAY and GDK_BACKEND as set.
@@ -183,6 +189,13 @@ pub fn run() {
                 match staged_lance() {
                     Ok(p) => std::env::set_var("DUCKLE_LANCE_BIN", p),
                     Err(e) => tracing::warn!("duckle-lance staging failed: {e}"),
+                }
+            }
+            // The Delta Lake sidecar, likewise.
+            if !EMBEDDED_DELTA.is_empty() {
+                match staged_delta() {
+                    Ok(p) => std::env::set_var("DUCKLE_DELTA_BIN", p),
+                    Err(e) => tracing::warn!("duckle-delta staging failed: {e}"),
                 }
             }
             // Boot the scheduler. The `.setup` hook runs on the main
@@ -1704,6 +1717,13 @@ fn staged_stub() -> Result<PathBuf, String> {
 fn staged_lance() -> Result<PathBuf, String> {
     let suffix = if cfg!(windows) { ".exe" } else { "" };
     stage_stub_bytes(EMBEDDED_LANCE, suffix, "lance-")
+}
+
+/// Write the embedded Delta Lake sidecar to a temp stub + return its path, for
+/// snk.delta. Caller checks EMBEDDED_DELTA is non-empty first.
+fn staged_delta() -> Result<PathBuf, String> {
+    let suffix = if cfg!(windows) { ".exe" } else { "" };
+    stage_stub_bytes(EMBEDDED_DELTA, suffix, "delta-")
 }
 
 /// Write the embedded LINUX runner bytes to a temp stub file and return the

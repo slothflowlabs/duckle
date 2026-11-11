@@ -184,15 +184,119 @@ fn a_type_delta_cannot_hold_is_refused_at_create() {
     assert!(!Path::new(&table).join("_delta_log").exists(), "no half-made table is left");
 }
 
-/// Remote tables are refused until a remote write has been tested.
+/// Object storage is written only through the stores the sidecar is built for and
+/// tested against (OneLake/ADLS, S3, GCS); any other scheme is refused by name.
 #[test]
-fn a_remote_path_is_refused_for_now() {
+fn a_remote_path_outside_the_supported_stores_is_refused() {
     let (engine, _) = engine_or_skip!();
     let tmp = tempfile::tempdir().unwrap();
     let csv = write(tmp.path(), "a.csv", "id\n1\n");
-    let r = engine.execute_pipeline(&pipeline(&csv, "s3://bucket/orders", json!({})));
+    let r = engine.execute_pipeline(&pipeline(&csv, "https://example.com/orders", json!({})));
     assert_ne!(r.status, "ok");
-    assert!(r.error.unwrap_or_default().contains("local"));
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("https://example.com/orders") && err.contains("abfss://"), "{err}");
+}
+
+/// The duckle-delta sidecar, which makes the writes the delta extension cannot.
+fn sidecar() -> bool {
+    std::env::var("DUCKLE_DELTA_BIN").ok().filter(|b| Path::new(b).exists()).is_some()
+}
+
+macro_rules! sidecar_or_skip {
+    () => {
+        if !sidecar() {
+            eprintln!("skipping: set DUCKLE_DELTA_BIN to a duckle-delta to run");
+            return;
+        }
+    };
+}
+
+fn rows_of(bin: &str, table: &str) -> Vec<Value> {
+    read(bin, &format!("SELECT * FROM delta_scan('{table}') ORDER BY id"))
+}
+
+/// Upsert, update and delete by key, on a table the extension created, each read
+/// back through delta-kernel rather than through the sidecar that wrote it.
+#[test]
+fn upsert_update_and_delete_by_key() {
+    let (engine, bin) = engine_or_skip!();
+    sidecar_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let table = path(tmp.path(), "t");
+    let seed = write(tmp.path(), "a.csv", "id,name\n1,a\n2,b\n3,c\n");
+    let r = engine.execute_pipeline(&pipeline(&seed, &table, json!({})));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+
+    let keyed = |mode: &str| json!({ "mode": mode, "conflictColumns": ["id"] });
+    let up = write(tmp.path(), "b.csv", "id,name\n2,B\n4,d\n");
+    let r = engine.execute_pipeline(&pipeline(&up, &table, keyed("upsert")));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        rows_of(&bin, &table),
+        json!([{"id":1,"name":"a"},{"id":2,"name":"B"},{"id":3,"name":"c"},{"id":4,"name":"d"}]).as_array().unwrap().clone()
+    );
+
+    let upd = write(tmp.path(), "c.csv", "id,name\n3,C\n9,z\n");
+    let r = engine.execute_pipeline(&pipeline(&upd, &table, keyed("update")));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        rows_of(&bin, &table),
+        json!([{"id":1,"name":"a"},{"id":2,"name":"B"},{"id":3,"name":"C"},{"id":4,"name":"d"}]).as_array().unwrap().clone(),
+        "update changes 3 and does not insert 9"
+    );
+
+    let del = write(tmp.path(), "d.csv", "id\n1\n4\n");
+    let r = engine.execute_pipeline(&pipeline(&del, &table, keyed("delete")));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        rows_of(&bin, &table),
+        json!([{"id":2,"name":"B"},{"id":3,"name":"C"}]).as_array().unwrap().clone()
+    );
+}
+
+/// With upsert, a row flagged in deleteColumn deletes its match, and the flag
+/// column never reaches the table.
+#[test]
+fn a_delete_column_deletes_flagged_rows_and_is_not_written() {
+    let (engine, bin) = engine_or_skip!();
+    sidecar_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let table = path(tmp.path(), "t");
+    let seed = write(tmp.path(), "a.csv", "id,name\n1,a\n2,b\n");
+    assert_eq!(engine.execute_pipeline(&pipeline(&seed, &table, json!({}))).status, "ok");
+    let cdc = write(tmp.path(), "b.csv", "id,name,op\n1,a,delete\n2,B,\n3,c,upsert\n");
+    let props = json!({ "mode": "upsert", "conflictColumns": ["id"], "deleteColumn": "op" });
+    let r = engine.execute_pipeline(&pipeline(&cdc, &table, props));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        rows_of(&bin, &table),
+        json!([{"id":2,"name":"B"},{"id":3,"name":"c"}]).as_array().unwrap().clone()
+    );
+    let cols: Vec<Value> = read(&bin, &format!("DESCRIBE SELECT * FROM delta_scan('{table}')"))
+        .iter()
+        .map(|c| c["column_name"].clone())
+        .collect();
+    assert_eq!(cols, vec![json!("id"), json!("name")]);
+}
+
+/// The keyed modes refuse a configuration they cannot carry out, before running.
+#[test]
+fn a_keyed_mode_says_what_it_is_missing() {
+    let (engine, _) = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write(tmp.path(), "a.csv", "id,op\n1,x\n");
+    let table = path(tmp.path(), "t");
+    for (props, needle) in [
+        (json!({ "mode": "upsert" }), "conflictColumns"),
+        (json!({ "mode": "merge", "conflictColumns": ["id"] }), "append, upsert, update or delete"),
+        (json!({ "mode": "update", "conflictColumns": ["id"], "deleteColumn": "op" }), "deleteColumn applies to upsert"),
+    ] {
+        let r = engine.execute_pipeline(&pipeline(&csv, &table, props.clone()));
+        assert_ne!(r.status, "ok", "{props}");
+        let err = r.error.unwrap_or_default();
+        assert!(err.contains(needle), "{props}: {err}");
+    }
+    assert!(!Path::new(&table).exists(), "nothing was written");
 }
 
 /// src.delta reads a table as it was: at a version (`asOfVersion`), or at a

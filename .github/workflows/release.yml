@@ -277,6 +277,35 @@ jobs:
             cp "$base/duckle-lance" apps/desktop/bin/duckle-lance
           fi
 
+      # Build the Delta Lake sidecar (duckle-delta) and stage it the same way, so
+      # snk.delta's upsert / update / delete and object-storage writes work out of
+      # the box. It is its own workspace with its own lockfile, so it builds from
+      # its manifest into its own target dir, which is then dropped: the desktop
+      # build below needs only the staged binary. Best-effort and skipped on Linux
+      # arm64 for duckle-lance's reason (DataFusion exhausts that runner); without
+      # it those writes fall back to a duckle-delta on PATH / DUCKLE_DELTA_BIN.
+      - name: Build duckle-delta (Delta Lake sidecar)
+        if: ${{ !(runner.os == 'Linux' && runner.arch == 'ARM64') }}
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -e
+          m=crates/duckle-delta/Cargo.toml
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo build --release --locked --target "${{ matrix.target }}" --manifest-path "$m"
+            base="crates/duckle-delta/target/${{ matrix.target }}/release"
+          else
+            cargo build --release --locked --manifest-path "$m"
+            base="crates/duckle-delta/target/release"
+          fi
+          mkdir -p apps/desktop/bin
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$base/duckle-delta.exe" apps/desktop/bin/duckle-delta.exe
+          else
+            cp "$base/duckle-delta" apps/desktop/bin/duckle-delta
+          fi
+          rm -rf crates/duckle-delta/target
+
       # The runner/mcp/lance binaries are already staged into apps/desktop/bin/,
       # so their release-runner build tree (multi-GB, lance pulls DataFusion +
       # Vortex + Arrow) is dead weight for the desktop build below, which writes a

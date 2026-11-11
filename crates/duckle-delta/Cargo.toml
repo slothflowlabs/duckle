@@ -1,0 +1,42 @@
+[package]
+name = "duckle-delta"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Delta Lake writes the DuckDB delta extension cannot make: MERGE, UPDATE and
+# DELETE, and any write to a table on object storage (OneLake, ADLS, S3, GCS).
+# Its own binary for the reason duckle-lance is one: delta-rs brings DataFusion
+# and an arrow of its own, and both stay out of the engine.
+
+# Its own workspace and lockfile, too. deltalake-aws pins `time = "=0.3.53"` and
+# the engine's boa_engine needs `^0.3.55`, so the two cannot share a lockfile;
+# and inside the main workspace delta-rs re-resolved arrow and brotli versions
+# that the engine and duckle-lance ship with. Build it with
+# `cargo build --manifest-path crates/duckle-delta/Cargo.toml`.
+[workspace]
+
+[[bin]]
+name = "duckle-delta"
+path = "src/main.rs"
+
+[dependencies]
+deltalake = { version = "1.1.2", default-features = false, features = ["rustls", "datafusion", "azure", "s3", "gcs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+# DataFusion's debug info runs to gigabytes and a test build never steps into it.
+[profile.dev]
+debug = false
+
+# The desktop app embeds this binary, so it is built as small as duckle-lance:
+# the root workspace's release-runner profile, which this workspace cannot inherit.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

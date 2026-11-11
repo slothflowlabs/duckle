@@ -1,0 +1,60 @@
+name: Delta Lake sidecar
+
+# duckle-delta is its own workspace with its own lockfile, so the main CI's
+# `cargo test --workspace` never builds it. Here its tests run against local
+# tables and against real object storage: S3 through MinIO and Azure Blob
+# through Azurite. (ci.yml also builds it on Linux so the engine's snk.delta
+# tests drive it end to end.)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/duckle-delta/**"
+      - ".github/workflows/delta-sidecar.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/duckle-delta/**"
+      - ".github/workflows/delta-sidecar.yml"
+
+jobs:
+  test:
+    # Pinned like every Rust-building job: ubuntu-latest moved to 26.04.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android \
+            /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/.ghcup || true
+          df -h /
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/duckle-delta
+
+      - name: Start MinIO (S3) and Azurite (Azure Blob)
+        run: |
+          # The MinIO image ci.yml uses, by digest.
+          MINIO=cgr.dev/chainguard/minio@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
+          for i in 1 2 3; do docker pull "$MINIO" && break; sleep 5; done
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=admin -e MINIO_ROOT_PASSWORD=password \
+            "$MINIO" server /data
+          docker run -d --name azurite -p 10000:10000 \
+            mcr.microsoft.com/azure-storage/azurite:3.33.0 \
+            azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck --loose
+          for i in $(seq 1 30); do curl -sf http://localhost:9000/minio/health/live && break; sleep 2; done
+          AWS_ACCESS_KEY_ID=admin AWS_SECRET_ACCESS_KEY=password AWS_DEFAULT_REGION=us-east-1 \
+            aws --endpoint-url http://localhost:9000 s3 mb s3://delta
+          for i in $(seq 1 30); do
+            az storage container create -n delta --connection-string "UseDevelopmentStorage=true" && break
+            sleep 2
+          done
+
+      - name: Test (local tables, S3, Azure Blob)
+        env:
+          DUCKLE_DELTA_S3_ENDPOINT: http://localhost:9000
+          DUCKLE_DELTA_AZURITE: "1"
+        run: cargo test --locked --manifest-path crates/duckle-delta/Cargo.toml -- --nocapture

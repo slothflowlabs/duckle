@@ -160,7 +160,7 @@ How a sink writes, and what it does with rows it cannot.
 | `snk.huggingface` | - | - | - |
 | `snk.iceberg` | append, overwrite | - | - |
 | `snk.ducklake` | overwrite, append, truncate, upsert, merge | - | - |
-| `snk.delta` | - | - | - |
+| `snk.delta` | append, upsert, update, delete | - | - |
 | `snk.postgres` | overwrite, append, upsert, truncate | - | - |
 | `snk.cockroach` | overwrite, append, upsert, truncate | - | - |
 | `snk.mysql` | overwrite, append, upsert, truncate | - | - |

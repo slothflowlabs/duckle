@@ -2449,15 +2449,44 @@ function synthLakehouseSource(comp: ComponentDef): ComponentManifest {
 function synthLakehouseSink(comp: ComponentDef): ComponentManifest {
     if (comp.id === 'snk.iceberg') return base(comp, icebergSections(true));
     if (comp.id === 'snk.delta') {
-        // Append-only: DuckDB's delta extension appends to a table but cannot
-        // replace one, so there is no overwrite mode to offer.
+        // A local append goes through DuckDB's delta extension. Upsert, update,
+        // delete and any table on object storage go through the duckle-delta
+        // sidecar (delta-rs): the extension can only INSERT, and only locally.
+        // There is no overwrite mode: neither path replaces a table.
         return base(comp, [
             {
                 label: 'Table',
                 fields: [
-                    { key: 'path', label: 'Table directory', kind: 'text', required: true, placeholder: '/data/lake/orders', description: 'The Delta table directory, the one holding _delta_log. Local paths for now: a table on object storage is refused until writing there has been tested.' },
+                    { key: 'path', label: 'Table', kind: 'text', required: true, placeholder: '/data/lake/orders  or  abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse.Lakehouse/Tables/orders', description: 'The Delta table: a local directory (the one holding _delta_log), or a URL on OneLake or ADLS (abfss://), Azure Blob (az://), S3 (s3://) or GCS (gs://).' },
                     { key: 'createIfMissing', label: 'Create the table if missing', kind: 'bool', defaultValue: true, description: 'Creates the table from the input columns and their types on the first run. Off, a missing table is an error, so a mistyped path cannot quietly start a new table.' },
                     { key: 'partitionBy', label: 'Partition by columns', kind: 'columns', description: 'For a table this node creates: one directory per value (region=eu/), recorded in the Delta log so readers prune by it. An existing table keeps the partitioning it was made with. At least one column must stay out of the partitioning.' },
+                ],
+            },
+            {
+                label: 'Write',
+                fields: [
+                    {
+                        key: 'mode',
+                        label: 'Write mode',
+                        kind: 'select',
+                        defaultValue: 'append',
+                        options: [
+                            { label: 'Append', value: 'append' },
+                            { label: 'Upsert (update matches, insert the rest)', value: 'upsert' },
+                            { label: 'Update matches only', value: 'update' },
+                            { label: 'Delete matches', value: 'delete' },
+                        ],
+                        description: 'Upsert, update and delete match rows on the key columns and commit as one Delta MERGE. The input must name every table column for append and upsert; update may name only the columns it changes; delete reads only the keys.',
+                    },
+                    { key: 'conflictColumns', label: 'Key columns', kind: 'columns', visibleWhen: { key: 'mode', equals: ['upsert', 'update', 'delete'] }, description: 'The columns that identify a row. Required for upsert, update and delete.' },
+                    { key: 'deleteColumn', label: 'Delete flag column (optional)', kind: 'text', placeholder: '_change_type', visibleWhen: { key: 'mode', equals: 'upsert' }, description: 'A row whose value here equals the delete value deletes its match instead of upserting it, so a change feed can be applied as it comes. The column itself is never written.' },
+                    { key: 'deleteValue', label: 'Delete value', kind: 'text', placeholder: 'delete', visibleWhen: { key: 'mode', equals: 'upsert' }, description: 'Compared as text. Empty means "delete".' },
+                ],
+            },
+            {
+                label: 'Object storage',
+                fields: [
+                    { key: 'storageOptions', label: 'Storage options', kind: 'key-value', description: 'For a table on object storage, delta-rs storage options: azure_tenant_id and azure_client_id for a OneLake or ADLS service principal, use_azure_cli = true after az login, aws_region for S3. Keep secrets out of the pipeline: the runner\'s own AZURE_*, AWS_* and GOOGLE_* environment variables (AZURE_CLIENT_SECRET, AWS_SECRET_ACCESS_KEY) are read as well. S3 has no atomic rename, so concurrent writers need aws_s3_locking_provider = dynamodb; a single writer can set aws_s3_allow_unsafe_rename = true.' },
                 ],
             },
         ]);

@@ -209,6 +209,16 @@ jobs:
           # above - check a known output actually landed on disk.
           test -s examples/flow-control/output/by_region/North.csv
 
+      - name: Build the Delta Lake sidecar for snk.delta's tests (Linux)
+        # duckle-delta is its own workspace, so `cargo test --workspace` neither
+        # builds nor tests it (delta-sidecar.yml does). The engine's snk.delta
+        # tests drive it through DUCKLE_DELTA_BIN and skip without it; one OS is
+        # enough to keep that path exercised without DataFusion on all three.
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --locked --manifest-path crates/duckle-delta/Cargo.toml
+          echo "DUCKLE_DELTA_BIN=$PWD/crates/duckle-delta/target/debug/duckle-delta" >> "$GITHUB_ENV"
+
       - name: Test
         # Exclude duckle-lance: the LanceDB sidecar pulls lancedb + DataFusion and
         # needs protoc to build. It is built separately (with protoc) in the
