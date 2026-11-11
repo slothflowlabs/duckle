@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" preserveAspectRatio="xMidYMid meet" fill="none" role="img" aria-label="Duckle - the local-first data studio">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" preserveAspectRatio="xMidYMid meet" fill="none" role="img" aria-label="Duckle - the open-source data studio">
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#FF7A45"/>
@@ -24,7 +24,7 @@
 
   <!-- tagline + subtitle -->
   <text x="216" y="166" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="23" font-weight="700" fill="#cfe0ff">Clean data in. Smart data out.</text>
-  <text x="216" y="198" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="15" font-weight="400" fill="#8290a8">Visual, local-first ETL. Read files, databases, and the cloud,</text>
+  <text x="216" y="198" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="15" font-weight="400" fill="#8290a8">Visual, open-source ETL. Read files, databases, and the cloud,</text>
   <text x="216" y="220" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="15" font-weight="400" fill="#8290a8">reshape with 40+ transforms, land clean data anywhere.</text>
   <text x="216" y="250" font-family="'Segoe UI', system-ui, Arial, sans-serif" font-size="13" font-weight="600" fill="#5f6b82">~65 MB desktop app . no servers . runs on DuckDB</text>
 
