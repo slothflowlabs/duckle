@@ -78,7 +78,7 @@
     "localTag": "Lokal",
     "checking": "Sinusuri ang AI engine...",
     "installTitle": "I - install ang Duckie AI Assistant",
-    "installBody": "Ang pato ay nagda - download ng isang maliit na lokal na modelo (~ 1.1 GB) kaya ang katulong ay ganap na tumatakbo sa iyong makina - walang mga key ng API, walang mga tawag sa ulap.",
+    "installBody": "Ang Duckle ay nagda-download ng isang maliit na lokal na modelo (~ 1.1 GB) kaya ang katulong ay ganap na tumatakbo sa iyong makina - walang mga key ng API, walang mga tawag sa ulap.",
     "installCta": "I - install (~ 1.1 GB)",
     "installFailedTitle": "Nabigo ang pag - install",
     "retry": "Subukang muli",
@@ -113,7 +113,7 @@
     "ariaLabel": "Mga view ng editor",
     "canvas": "Canvas",
     "plan": "Plano",
-    "run": "Takbo",
+    "run": "Pagpapatakbo",
     "history": "Kasaysayan"
   },
   "header": {
@@ -122,7 +122,7 @@
     "newPipeline": "Bagong pipeline",
     "stop": "Tumigil ka",
     "stopTooltip": "Ihinto ang pipeline (F6)",
-    "run": "Takbo",
+    "run": "Patakbuhin",
     "runTooltip": "Patakbuhin ang pipeline (F5)",
     "live": "Live",
     "liveTooltip": "Live preview: patakbuhin hanggang sa isang node kapag pinili o in-edit mo ito",

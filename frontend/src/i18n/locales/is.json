@@ -24,7 +24,7 @@
     "ariaLabel": "Skoðanir ritstjóra",
     "canvas": "Striga",
     "plan": "Áætlun",
-    "run": "Hlaupa",
+    "run": "Keyrsla",
     "history": "Saga"
   },
   "header": {
@@ -33,7 +33,7 @@
     "newPipeline": "Ný leiðsla",
     "stop": "Hættu",
     "stopTooltip": "Stöðva leiðsla (F6)",
-    "run": "Hlaupa",
+    "run": "Keyra",
     "runTooltip": "Keyra leiðslu (F5)",
     "live": "Í beinni",
     "liveTooltip": "Forskoðun í beinni: keyrir að hnút þegar þú velur hann eða breytir honum",
@@ -208,7 +208,7 @@
     "custom": "Sérsniðin",
     "needsConfig": "Nauðsynlegir reiti vantar - opnaðu Basic flipann til að stilla",
     "disabled": "fatlaður",
-    "running": "Hlaupandi",
+    "running": "Í keyrslu",
     "failed": "Mistókst",
     "ok": "Allt í lagi",
     "colsSingular": "col",

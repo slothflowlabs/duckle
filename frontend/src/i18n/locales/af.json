@@ -24,7 +24,7 @@
     "ariaLabel": "Redakteur-aansigte",
     "canvas": "Canvas",
     "plan": "Beplan",
-    "run": "Hardloop",
+    "run": "Uitvoering",
     "history": "Geskiedenis"
   },
   "header": {
@@ -33,7 +33,7 @@
     "newPipeline": "Nuwe pyplyn",
     "stop": "Stop",
     "stopTooltip": "Stop pyplyn (F6)",
-    "run": "Hardloop",
+    "run": "Voer uit",
     "runTooltip": "Loop pyplyn (F5)",
     "live": "Regstreeks",
     "liveTooltip": "Regstreekse voorskou: voer uit tot by 'n nodus wanneer jy dit kies of wysig",
@@ -157,7 +157,7 @@
     "noSchema": "Nog geen skema nie",
     "noSchemaDesc": "Begin skema outodetectie (Skema-oortjie) of koppel 'n stroomop-nodus om voorbeelddata hier te sien.",
     "noSample": "Geen voorbeeldrye nie",
-    "noSampleDescHtml": "Klik <b>Outoopsporing</b> op die Skema-oortjie om 'n monster te trek, of hardloop die pyplyn om dit in te vul."
+    "noSampleDescHtml": "Klik <b>Outoopsporing</b> op die Skema-oortjie om 'n monster te trek, of voer die pyplyn uit om dit in te vul."
   },
   "bottom": {
     "problems": "Probleme",
@@ -172,7 +172,7 @@
     "noRunYet": "Nog geen lopende uitset nie",
     "noRunYetDesc": "Druk F5 of klik Run om die pyplyn uit te voer. Logs, per-nodus rytellings en uitvoeringstye stroom hier.",
     "runSucceeded": "Run het geslaag",
-    "runFailed": "Hardloop het misluk",
+    "runFailed": "Uitvoering het misluk",
     "nodesLabel": "nodusse",
     "rowsWritten": "rye geskryf",
     "total": "totaal",
@@ -208,7 +208,7 @@
     "custom": "Pasgemaak",
     "needsConfig": "Vereiste velde ontbreek - maak die Basiese-oortjie oop om op te stel",
     "disabled": "gestremd",
-    "running": "Hardloop",
+    "running": "Word uitgevoer",
     "failed": "Misluk",
     "ok": "OK",
     "colsSingular": "kol",
