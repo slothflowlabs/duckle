@@ -4423,7 +4423,7 @@ Yes. Duckle executes on the embedded DuckDB engine, so there is no vendor wareho
 <details>
 <summary><b>How is Duckle different from Airbyte, dbt, or Talend?</b></summary>
 
-Airbyte focuses on hosted extract-and-load connectors; dbt focuses on SQL transformation; Talend is a heavyweight GUI suite (its free Open Studio edition was discontinued in early 2026). Duckle is a single open engine that does extract, transform, and load together - write it in Python, wire it from connectors, or draw it on a canvas - compiles to DuckDB SQL, and can also run dbt on DuckDB inside the same tool. One format, one engine, running on your own infrastructure rather than a vendor's, with no per-row billing.
+Airbyte focuses on hosted extract-and-load connectors; dbt focuses on SQL transformation; Talend is a heavyweight GUI suite (its free Open Studio edition reached end of life on 31 January 2024). Duckle is a single open engine that does extract, transform, and load together - write it in Python, wire it from connectors, or draw it on a canvas - compiles to DuckDB SQL, and can also run dbt on DuckDB inside the same tool. One format, one engine, running on your own infrastructure rather than a vendor's, with no per-row billing.
 
 </details>
 
