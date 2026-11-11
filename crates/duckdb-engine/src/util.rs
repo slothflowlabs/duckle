@@ -39,7 +39,7 @@ pub fn is_secret_prop_key(key: &str) -> bool {
     // and deploying and tells the author to replace a public URL with
     // ${ENV:NAME}. Matched as whole keys, because the needle list cannot
     // express "token but not tokenUrl".
-    const NAMES_SOMETHING_PUBLIC: [&str; 8] = [
+    const NAMES_SOMETHING_PUBLIC: [&str; 9] = [
         "tokenurl",
         "saslmechanism",
         "saslusername",
@@ -48,6 +48,9 @@ pub fn is_secret_prop_key(key: &str) -> bool {
         "maxoutputtokens",
         "inputusdpermilliontokens",
         "outputusdpermilliontokens",
+        // A DuckLake catalog parameter: the NAME of a stored secret, which the form
+        // recommends over typing the password. A pair name, as is_secret_pair_name reads it.
+        "meta_secret",
     ];
     if NAMES_SOMETHING_PUBLIC.contains(&k.as_str()) {
         return false;
@@ -58,14 +61,67 @@ pub fn is_secret_prop_key(key: &str) -> bool {
 /// What a lowercased property key contains when it holds a credential. Public
 /// so the build bundler refines this list rather than keeping its own copy:
 /// its copy had lost `passphrase`, and bundled an SSH key's passphrase as typed.
-pub const SECRET_NEEDLES: [&str; 19] = [
+pub const SECRET_NEEDLES: [&str; 21] = [
     "password", "passwd", "passphrase", "secret", "token", "apikey", "api_key",
     "privatekey", "private_key", "accesskey", "access_key", "accountkey",
+    // The object-store options delta-rs takes: `azure_storage_account_key` (alias
+    // `azure_storage_master_key`) and `google_service_account_key`.
+    "account_key", "master_key",
     "clientsecret", "client_secret", "connectionstring", "connection_string",
     // `connString` on the PostgreSQL and MySQL nodes: a whole DSN, password and all.
     "connstring",
     "sas", "credential",
 ];
+
+/// HTTP headers that carry a credential, spelled the way [`is_secret_pair_name`] reads
+/// a name.
+pub const SECRET_HEADERS: [&str; 3] = ["authorization", "proxy_authorization", "cookie"];
+
+/// The key-value properties whose pairs NAME something - a header, a driver or storage
+/// option, a parameter - so a name like `Authorization` or `azure_storage_account_key`
+/// says its value is a credential. The other key-value fields pair COLUMNS (join keys,
+/// rules, expressions), where a column called `api_key` is data, and refusing a deploy
+/// over it would be the over-match NAMES_SOMETHING_PUBLIC exists to prevent.
+/// tests/prop_contract.rs makes every key-value field the forms declare take a side.
+pub const NAMED_PAIR_PROPS: [&str; 7] = [
+    "headers",
+    "readOptions",
+    "attachOptions",
+    "storageOptions",
+    "options",
+    "parameters",
+    "contextVariables",
+];
+
+/// A key-value pair whose name says its value is a credential: a name a property key
+/// would be refused under, or a header that carries one. Header names spell words with
+/// hyphens (`X-API-Key`), so a hyphen reads as an underscore.
+pub fn is_secret_pair_name(name: &str) -> bool {
+    let n = name.trim().to_ascii_lowercase().replace('-', "_");
+    SECRET_HEADERS.contains(&n.as_str()) || is_secret_prop_key(&n)
+}
+
+/// A pair holding a credential as typed. An empty value is unfilled, and one carrying a
+/// `${...}` reference is not the secret but where it comes from: a header writes its
+/// scheme in front of the reference, `Bearer ${ENV:API_TOKEN}`.
+pub fn is_typed_pair_secret(name: &str, value: &str) -> bool {
+    let v = value.trim();
+    let reference = v.find("${").is_some_and(|at| v[at..].contains('}'));
+    is_secret_pair_name(name) && !v.is_empty() && !reference
+}
+
+/// The pairs of a node's [`NAMED_PAIR_PROPS`] as (property, name, value), read the way
+/// the builders read them.
+fn named_pairs(props: &JsonValue) -> Vec<(&'static str, String, String)> {
+    NAMED_PAIR_PROPS
+        .iter()
+        .flat_map(|prop| {
+            crate::plan::kv_pairs(props, prop)
+                .into_iter()
+                .map(move |(name, value)| (*prop, name, value))
+        })
+        .collect()
+}
 
 /// The passwords written into URLs in `text`, as in `mongodb://user:PASSWORD@host`.
 ///
@@ -120,8 +176,10 @@ pub fn literal_secrets(doc: &serde_json::Value) -> Vec<String> {
             .and_then(|l| l.as_str())
             .or_else(|| node.get("id").and_then(|i| i.as_str()))
             .unwrap_or("a node");
-        let Some(props) = data.and_then(|d| d.get("properties")).and_then(|p| p.as_object())
-        else {
+        let Some(properties) = data.and_then(|d| d.get("properties")) else {
+            continue;
+        };
+        let Some(props) = properties.as_object() else {
             continue;
         };
         for (key, value) in props {
@@ -141,6 +199,14 @@ pub fn literal_secrets(doc: &serde_json::Value) -> Vec<String> {
                 continue;
             }
             out.push(format!("{label} / {key}"));
+        }
+        // A key-value field names its credential in each pair, not in the property key.
+        for (prop, name, value) in named_pairs(properties) {
+            if is_typed_pair_secret(&name, &value)
+                || (!is_secret_pair_name(&name) && !url_passwords(&value).is_empty())
+            {
+                out.push(format!("{label} / {prop}.{name}"));
+            }
         }
     }
     out
@@ -272,6 +338,24 @@ pub(crate) fn collect_secrets(doc: &PipelineDoc, workspace: Option<&std::path::P
                         out.push(Secret {
                             value: s.to_string(),
                             placeholder: secret_placeholder(key),
+                        });
+                    }
+                }
+            }
+        }
+        // The pairs of a key-value field, each named by its own `key`.
+        if let Some(properties) = node.data.properties.as_ref() {
+            for (_, name, value) in named_pairs(properties) {
+                if is_typed_pair_secret(&name, &value) {
+                    out.push(Secret {
+                        placeholder: secret_placeholder(&name),
+                        value,
+                    });
+                } else if !is_secret_pair_name(&name) {
+                    for password in url_passwords(&value) {
+                        out.push(Secret {
+                            value: password.to_string(),
+                            placeholder: secret_placeholder(&format!("{name}Password")),
                         });
                     }
                 }
@@ -1837,6 +1921,161 @@ mod tests {
         assert_eq!(said, "could not reach mongodb://app:${DUCKLE_URI_PASSWORD}@db:27017/shop");
     }
 
+    /// A key-value field names its own credential in each pair: an `Authorization` header,
+    /// a Delta table's `azure_storage_account_key`. The scan read only top-level string
+    /// properties, so a credential typed into a pair went to the server as typed.
+    #[test]
+    fn a_credential_in_a_header_or_option_pair_is_refused_at_deploy() {
+        let doc = serde_json::json!({
+            "nodes": [
+                { "id": "n1", "data": { "label": "Orders API", "properties": {
+                    "headers": [
+                        { "key": "Accept", "value": "application/json" },
+                        { "key": "Authorization", "value": "Bearer abc123" },
+                        { "key": "X-API-Key", "value": "k-456" }
+                    ] } } },
+                { "id": "n2", "data": { "label": "Lake", "properties": {
+                    "storageOptions": {
+                        "azure_storage_account_name": "acct",
+                        "azure_storage_account_key": "c2VjcmV0"
+                    } } } },
+                { "id": "n3", "data": { "label": "Child run", "properties": {
+                    "parameters": [{ "key": "source", "value": "postgres://app:Url-typed@db:5432/orders" }]
+                } } }
+            ]
+        });
+
+        let mut found = literal_secrets(&doc);
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                "Child run / parameters.source",
+                "Lake / storageOptions.azure_storage_account_key",
+                "Orders API / headers.Authorization",
+                "Orders API / headers.X-API-Key",
+            ],
+            "found: {found:?}"
+        );
+    }
+
+    /// The fix the refusal asks for is a reference, and a header writes its scheme in
+    /// front of one. Refusing `Bearer ${ENV:API_TOKEN}` would refuse the fix itself.
+    #[test]
+    fn a_pair_written_as_a_reference_or_left_empty_is_not_refused() {
+        let doc = serde_json::json!({
+            "nodes": [{ "id": "n", "data": { "label": "n", "properties": {
+                "headers": [{ "key": "Authorization", "value": "Bearer ${ENV:API_TOKEN}" }],
+                "parameters": [
+                    { "key": "db_password", "value": "${context.pgpass}" },
+                    { "key": "db_user", "value": "app" }
+                ],
+                "storageOptions": [{ "key": "azure_storage_account_key", "value": "" }]
+            } } }]
+        });
+        assert!(literal_secrets(&doc).is_empty(), "{:?}", literal_secrets(&doc));
+    }
+
+    /// DuckLake's catalog parameters point at a stored secret by NAME, `META_SECRET`, which
+    /// the form recommends over typing the password. Refusing it would refuse the fix.
+    #[test]
+    fn a_stored_secret_named_in_a_catalog_parameter_is_not_a_credential() {
+        let doc = serde_json::json!({
+            "nodes": [{ "id": "n", "data": { "label": "Lake", "properties": {
+                "attachOptions": [
+                    { "key": "META_SECRET", "value": "pg_catalog_login" },
+                    { "key": "META_PASSWORD", "value": "Pw-typed" }
+                ]
+            } } }]
+        });
+        assert_eq!(literal_secrets(&doc), ["Lake / attachOptions.META_PASSWORD"]);
+    }
+
+    /// Some key-value fields pair COLUMNS: join keys, column expressions. A column called
+    /// `api_key` is data, and refusing to deploy a join on it is the over-match
+    /// NAMES_SOMETHING_PUBLIC exists to prevent.
+    #[test]
+    fn a_pair_that_maps_columns_is_not_a_credential() {
+        let doc = serde_json::json!({
+            "nodes": [{ "id": "n", "data": { "label": "n", "properties": {
+                "multipleKeys": [{ "key": "api_key", "value": "api_key" }],
+                "expressions": [{ "key": "token_count", "value": "length(tokens)" }]
+            } } }]
+        });
+        assert!(literal_secrets(&doc).is_empty(), "{:?}", literal_secrets(&doc));
+    }
+
+    #[test]
+    fn a_credential_in_a_pair_is_scrubbed_from_run_output() {
+        let doc: crate::PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [{ "id": "r", "position": { "x": 0, "y": 0 }, "data": { "label": "Orders API",
+                "componentId": "src.rest", "properties": {
+                    "url": "https://api.example.com/orders",
+                    "headers": [{ "key": "Authorization", "value": "Bearer abc123" }],
+                    "parameters": [{ "key": "source", "value": "postgres://app:Url-typed@db/orders" }]
+                } } }],
+            "edges": []
+        }))
+        .unwrap();
+        let said = super::redact_secret_values(
+            "401 from https://api.example.com/orders, sent Authorization: Bearer abc123 for postgres://app:Url-typed@db/orders",
+            &super::collect_secrets(&doc, None),
+        );
+        assert_eq!(
+            said,
+            "401 from https://api.example.com/orders, sent Authorization: ${DUCKLE_AUTHORIZATION} \
+             for postgres://app:${DUCKLE_SOURCE_PASSWORD}@db/orders"
+        );
+    }
+
+    /// delta-rs names the Azure account key `azure_storage_account_key` (alias
+    /// `azure_storage_master_key`) and a GCS key `google_service_account_key`. The needles
+    /// knew `accountkey`, the camelCase form, only.
+    #[test]
+    fn the_snake_case_account_keys_object_stores_use_are_credentials() {
+        for key in [
+            "azure_storage_account_key",
+            "azure_storage_master_key",
+            "google_service_account_key",
+        ] {
+            assert!(is_secret_prop_key(key), "{key} holds a credential");
+        }
+        assert!(
+            !is_secret_prop_key("azure_storage_account_name"),
+            "an account name is not a credential"
+        );
+    }
+
+    /// The names a pair gives a credential under: a property key's, an HTTP header's, and
+    /// the object-store options delta-rs takes. Header names spell words with hyphens.
+    #[test]
+    fn the_headers_and_options_that_carry_a_credential_are_known_by_name() {
+        for name in [
+            "Authorization",
+            "Proxy-Authorization",
+            "Cookie",
+            "X-API-Key",
+            "api-key",
+            "X-Auth-Token",
+            "azure_storage_account_key",
+            "aws_secret_access_key",
+        ] {
+            assert!(is_secret_pair_name(name), "{name} holds a credential");
+        }
+        for name in [
+            "Accept",
+            "Content-Type",
+            "User-Agent",
+            "azure_storage_account_name",
+            "azure_client_id",
+            "aws_region",
+            "use_azure_cli",
+            "aws_s3_allow_unsafe_rename",
+        ] {
+            assert!(!is_secret_pair_name(name), "{name} is not a credential");
+        }
+    }
+
     /// The shapes that must not panic or report: no nodes, no data, no properties.
     #[test]
     fn a_pipeline_with_nothing_to_scan_reports_nothing() {
@@ -1852,8 +2091,8 @@ mod tests {
     }
 
     use super::{
-        finalize_xlsx_whitespace, infer_avro_nullable_field, is_secret_prop_key, literal_secrets,
-        stream_xml_rows, walk_xml_to_rows,
+        finalize_xlsx_whitespace, infer_avro_nullable_field, is_secret_pair_name,
+        is_secret_prop_key, literal_secrets, stream_xml_rows, walk_xml_to_rows,
     };
     use serde_json::json;
     use std::io::{Read, Write};

@@ -18,7 +18,11 @@
 import { readFileSync } from 'node:fs';
 import { getManifest } from '../src/workflow-ui/fields/component-manifests';
 import { PALETTE } from '../src/workflow-ui/palette-data';
-import { NAMES_SOMETHING_PUBLIC as TS_PUBLIC, SECRET_NEEDLES as TS_NEEDLES } from '../src/secret-keys';
+import {
+    NAMES_SOMETHING_PUBLIC as TS_PUBLIC,
+    SECRET_HEADERS as TS_HEADERS,
+    SECRET_NEEDLES as TS_NEEDLES,
+} from '../src/secret-keys';
 
 // The runner passes this. `import.meta.url` cannot be used: esbuild bundles
 // this file into a temp directory, so it would resolve relative to there - the
@@ -49,6 +53,7 @@ if (fnAt < 0) throw new Error('is_secret_prop_key not found in util.rs');
 const NOT_SECRET = arrayAfter('const NAMES_SOMETHING_PUBLIC');
 const NEEDLES = arrayAfter('pub const SECRET_NEEDLES');
 if (NEEDLES.length < 10) throw new Error(`only parsed ${NEEDLES.length} needles from util.rs`);
+const HEADERS = arrayAfter('pub const SECRET_HEADERS');
 
 // Generated pipeline documentation withholds by the same rule, from a copy of these
 // lists in src/secret-keys.ts. A copy that drifted would put a credential into a page
@@ -58,6 +63,7 @@ if (NEEDLES.length < 10) throw new Error(`only parsed ${NEEDLES.length} needles 
     const drift: string[] = [];
     if (sorted(TS_NEEDLES) !== sorted(NEEDLES)) drift.push(`SECRET_NEEDLES\n    util.rs:        ${sorted(NEEDLES)}\n    secret-keys.ts: ${sorted(TS_NEEDLES)}`);
     if (sorted(TS_PUBLIC) !== sorted(NOT_SECRET)) drift.push(`NAMES_SOMETHING_PUBLIC\n    util.rs:        ${sorted(NOT_SECRET)}\n    secret-keys.ts: ${sorted(TS_PUBLIC)}`);
+    if (sorted(TS_HEADERS) !== sorted(HEADERS)) drift.push(`SECRET_HEADERS\n    util.rs:        ${sorted(HEADERS)}\n    secret-keys.ts: ${sorted(TS_HEADERS)}`);
     if (drift.length) {
         console.error(`\nsrc/secret-keys.ts no longer matches is_secret_prop_key in util.rs:\n  ${drift.join('\n  ')}`);
         process.exit(1);

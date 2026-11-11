@@ -16,7 +16,10 @@ use duckle_duckdb_engine::context::{self, substitute_deep};
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::Engine as _;
-use duckle_duckdb_engine::{is_secret_prop_key, url_passwords, PipelineDoc, SECRET_NEEDLES};
+use duckle_duckdb_engine::{
+    is_secret_prop_key, is_typed_pair_secret, url_passwords, PipelineDoc, NAMED_PAIR_PROPS,
+    SECRET_NEEDLES,
+};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -258,9 +261,22 @@ fn collect_node_secrets(
     secret_values: &[String],
     out: &mut Vec<Detected>,
 ) {
+    // S4: a key-value field names its credential in each pair rather than in a key,
+    // which S1's needles may not know (`Authorization`).
+    let pairs_named = parent_key.is_some_and(|p| NAMED_PAIR_PROPS.contains(&p));
     match value {
         JsonValue::Object(map) => {
             for (k, v) in map {
+                // S4, written `{name: value}`.
+                if pairs_named {
+                    if let Some(s) = v.as_str().filter(|s| is_typed_pair_secret(k, s)) {
+                        out.push(Detected {
+                            value: s.to_string(),
+                            key: key_namer(k),
+                            node_id: node_id.to_string(),
+                        });
+                    }
+                }
                 // S1: a secret-named key with a non-empty string value. The
                 // key is unambiguously a credential field, so redact (and
                 // leak-guard) its value regardless of length - the
@@ -281,6 +297,20 @@ fn collect_node_secrets(
         }
         JsonValue::Array(arr) => {
             for v in arr {
+                // S4, written `[{key, value}]`: the pair's own `key` names its value.
+                if pairs_named {
+                    let name = v.get("key").and_then(JsonValue::as_str);
+                    let s = v.get("value").and_then(JsonValue::as_str);
+                    if let (Some(name), Some(s)) = (name, s) {
+                        if is_typed_pair_secret(name, s) {
+                            out.push(Detected {
+                                value: s.to_string(),
+                                key: key_namer(name),
+                                node_id: node_id.to_string(),
+                            });
+                        }
+                    }
+                }
                 collect_node_secrets(v, parent_key, node_id, secret_values, out);
             }
         }
@@ -1214,6 +1244,49 @@ mod tests {
         let bundled = serde_json::to_string(&doc).unwrap();
         assert!(!bundled.contains("s3cret-pw"), "bundled as typed: {bundled}");
         assert!(bundled.contains("mongodb://app:${ENV:URI_PASSWORD}@db:27017/shop"), "{bundled}");
+    }
+
+    /// A header or option pair names its own credential, and in `[{key, value}]` the
+    /// object key is only `value`, so the bundle carried the credential as typed.
+    #[test]
+    fn a_credential_in_a_header_or_option_pair_is_not_left_in_the_bundle() {
+        // Both shapes the forms write: `[{key, value}]` and `{name: value}`.
+        let mut doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [{
+                "id": "r", "position": { "x": 0, "y": 0 },
+                "data": { "label": "r", "componentId": "src.rest", "properties": {
+                    "headers": [
+                        { "key": "Authorization", "value": "Bearer Hdr-typed-7" },
+                        { "key": "Accept", "value": "application/json" }
+                    ],
+                    "storageOptions": { "azure_storage_account_key": "Opt-typed-8" },
+                    "multipleKeys": [{ "key": "api_key", "value": "api_key" }]
+                } }
+            }, {
+                "id": "h", "position": { "x": 0, "y": 0 },
+                "data": { "label": "h", "componentId": "src.http", "properties": {
+                    "headers": { "X-API-Key": "Obj-typed-9" }
+                } }
+            }],
+            "edges": []
+        }))
+        .unwrap();
+        let (_, replacements) = build_key_map(&doc, &[]);
+        redact_doc(&mut doc, &replacements);
+        let bundled = serde_json::to_string(&doc).unwrap();
+        for typed in ["Hdr-typed-7", "Opt-typed-8", "Obj-typed-9"] {
+            assert!(!bundled.contains(typed), "bundled as typed: {bundled}");
+        }
+        assert!(bundled.contains(r#""value":"${ENV:AUTHORIZATION}""#), "{bundled}");
+        assert!(bundled.contains(r#""X-API-Key":"${ENV:X_API_KEY}""#), "{bundled}");
+        assert!(
+            bundled.contains(r#""azure_storage_account_key":"${ENV:AZURE_STORAGE_ACCOUNT_KEY}""#),
+            "{bundled}"
+        );
+        assert!(
+            bundled.contains("application/json") && bundled.contains(r#""value":"api_key""#),
+            "only the credential is replaced: {bundled}"
+        );
     }
     use super::*;
     use sha2::{Digest, Sha256};

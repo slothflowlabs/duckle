@@ -21,7 +21,7 @@ import { isSecretField } from './workflow-ui/fields/PrimitiveFields';
 import { resolveOutputSchema } from './schema-resolve';
 import { deriveNodeSubtitle } from './node-subtitle';
 import { discoverParams, pipelineRunFields } from './run-resolve';
-import { isSecretPropKey } from './secret-keys';
+import { isSecretPairName, isSecretPropKey } from './secret-keys';
 
 export type DocInput = {
     /** The pipeline's name, as the project tree shows it. */
@@ -49,9 +49,8 @@ function scrub(text: string): string {
         .replace(/\b(password|passwd|pwd)\s*=\s*('[^']*'|"[^"]*"|[^\s;&]+)/gi, '$1=(secret)');
 }
 
-/** A key, header or pair name whose value is a credential. */
-const sensitiveName = (name: string) =>
-    isSecretPropKey(name) || /^(proxy-)?authorization$|^cookie$|api[-_]?key/i.test(name);
+/** A key, header or pair name whose value is a credential, by the engine's rule. */
+const sensitiveName = isSecretPairName;
 
 /** `${ENV:NAME}` is not the secret but where it comes from. */
 const isReference = (v: unknown) => typeof v === 'string' && /^\$\{[^}]+\}$/.test(v.trim());

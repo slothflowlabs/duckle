@@ -1036,3 +1036,54 @@ fn every_field_the_form_calls_a_secret_is_one_the_redactor_knows() {
          {unprotected:?}"
     );
 }
+
+/// A key-value field either NAMES things in its pairs - headers, driver and storage
+/// options, parameters - so a pair called `Authorization` holds a credential, or pairs
+/// COLUMNS, where a column called `api_key` is data. The engine scans the first kind for
+/// typed-in credentials (NAMED_PAIR_PROPS) and leaves the second alone. A new key-value
+/// field has to take a side: left out of both, a credential typed into it would be
+/// neither refused at deploy nor scrubbed from a log, and nothing would say so.
+#[test]
+fn every_key_value_field_is_scanned_for_credentials_or_pairs_columns() {
+    // key = column, value = column / expression / check.
+    const PAIRS_COLUMNS: &[&str] = &["multipleKeys", "expressions", "columns", "rules", "branches"];
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("duckle-mcp")
+        .join("catalog.json");
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("catalog")).expect("json");
+    let mut key_value: BTreeSet<String> = BTreeSet::new();
+    for c in v["components"].as_array().expect("components") {
+        for section in c["manifest"]["sections"].as_array().into_iter().flatten() {
+            for f in section["fields"].as_array().into_iter().flatten() {
+                if f["kind"] == "key-value" {
+                    key_value.insert(f["key"].as_str().expect("a field key").to_string());
+                }
+            }
+        }
+    }
+    assert!(
+        key_value.len() >= 10,
+        "only {} key-value fields found, so this check has stopped matching",
+        key_value.len()
+    );
+
+    let scanned = duckle_duckdb_engine::NAMED_PAIR_PROPS;
+    let unplaced: Vec<&String> = key_value
+        .iter()
+        .filter(|k| !scanned.contains(&k.as_str()) && !PAIRS_COLUMNS.contains(&k.as_str()))
+        .collect();
+    assert!(
+        unplaced.is_empty(),
+        "these key-value fields are neither scanned for credentials (NAMED_PAIR_PROPS in \
+         util.rs) nor listed here as pairing columns: {unplaced:?}"
+    );
+    let stale: Vec<&&str> = scanned
+        .iter()
+        .chain(PAIRS_COLUMNS)
+        .filter(|k| !key_value.contains(**k))
+        .collect();
+    assert!(stale.is_empty(), "no component declares these key-value fields: {stale:?}");
+}

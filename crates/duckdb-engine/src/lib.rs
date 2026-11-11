@@ -98,7 +98,10 @@ pub use connectors::remote_fingerprint;
 mod run_log;
 mod util;
 pub(crate) use util::*;
-pub use util::{is_secret_prop_key, literal_secrets, url_passwords, SECRET_NEEDLES};
+pub use util::{
+    is_secret_prop_key, is_typed_pair_secret, literal_secrets, url_passwords, NAMED_PAIR_PROPS,
+    SECRET_NEEDLES,
+};
 pub use history::{append_run_record, load_run_history, record_run, RunRecord};
 pub use plan::{CompiledPipeline, PipelineDoc, Stage, StageKind};
 

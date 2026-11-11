@@ -9,7 +9,8 @@ use crate::catalog;
 use duckle_duckdb_engine::format::strip_bom;
 use duckle_duckdb_engine::trust::{declared_columns, looks_like_pii, structural_risks};
 use duckle_duckdb_engine::{
-    compile_pipeline_sql, is_secret_prop_key, url_passwords, DuckdbEngine, PipelineDoc,
+    compile_pipeline_sql, is_secret_prop_key, is_typed_pair_secret, url_passwords, DuckdbEngine,
+    PipelineDoc, NAMED_PAIR_PROPS,
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1987,6 +1988,9 @@ fn mask_pipeline_secrets(v: &mut Value) {
     match v {
         Value::Object(obj) => {
             for (key, val) in obj.iter_mut() {
+                if NAMED_PAIR_PROPS.contains(&key.as_str()) {
+                    mask_pairs(val);
+                }
                 match val {
                     Value::String(s) if is_secret_prop_key(key) => {
                         let t = s.trim();
@@ -2012,17 +2016,69 @@ fn mask_pipeline_secrets(v: &mut Value) {
     }
 }
 
+/// Hide the credentials of a key-value field, which names each one in its pair rather
+/// than in a key: `[{key: "Authorization", value}]` or `{"Authorization": value}`.
+fn mask_pairs(v: &mut Value) {
+    fn hide(name: &str, value: &mut Value) {
+        if let Value::String(s) = value {
+            if is_typed_pair_secret(name, s) {
+                *s = SECRET_MASK.to_string();
+            }
+        }
+    }
+    match v {
+        Value::Array(items) => {
+            for item in items.iter_mut() {
+                let Some(name) = item.get("key").and_then(Value::as_str).map(str::to_string) else {
+                    continue;
+                };
+                if let Some(value) = item.get_mut("value") {
+                    hide(&name, value);
+                }
+            }
+        }
+        Value::Object(map) => map.iter_mut().for_each(|(name, value)| hide(name, value)),
+        _ => {}
+    }
+}
+
+/// The name of the first pair of a key-value field that holds the mask.
+fn masked_pair(v: &Value) -> Option<String> {
+    let masked = |name: &str, value: &Value| {
+        value
+            .as_str()
+            .is_some_and(|s| s.trim() == SECRET_MASK && is_typed_pair_secret(name, s))
+    };
+    match v {
+        Value::Array(items) => items.iter().find_map(|item| {
+            let name = item.get("key")?.as_str()?;
+            masked(name, item.get("value")?).then(|| name.to_string())
+        }),
+        Value::Object(map) => map
+            .iter()
+            .find_map(|(name, value)| masked(name, value).then(|| name.clone())),
+        _ => None,
+    }
+}
+
 /// The first field holding the mask read_pipeline shows.
 fn first_masked_secret(v: &Value) -> Option<String> {
     match v {
-        Value::Object(obj) => obj.iter().find_map(|(key, val)| match val {
-            Value::String(s)
-                if (is_secret_prop_key(key) && s.trim() == SECRET_MASK)
-                    || url_passwords(s).contains(&SECRET_MASK) =>
-            {
-                Some(key.clone())
+        Value::Object(obj) => obj.iter().find_map(|(key, val)| {
+            if NAMED_PAIR_PROPS.contains(&key.as_str()) {
+                if let Some(name) = masked_pair(val) {
+                    return Some(format!("{key}.{name}"));
+                }
             }
-            other => first_masked_secret(other),
+            match val {
+                Value::String(s)
+                    if (is_secret_prop_key(key) && s.trim() == SECRET_MASK)
+                        || url_passwords(s).contains(&SECRET_MASK) =>
+                {
+                    Some(key.clone())
+                }
+                other => first_masked_secret(other),
+            }
         }),
         Value::Array(items) => items.iter().find_map(first_masked_secret),
         _ => None,
@@ -2860,6 +2916,67 @@ mod secret_masking {
 
         assert_eq!(shown["password"], "***", "{shown}");
         assert_eq!(shown["host"], "db");
+    }
+
+    /// A key-value field names its credential in each pair, `{key: "Authorization",
+    /// value: ...}`, so a header or storage option typed in came back as typed.
+    #[test]
+    fn read_pipeline_hides_a_credential_in_a_header_or_option_pair() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("api.json");
+        write(
+            &path,
+            // Both shapes the forms write: `{name: value}` and `[{key, value}]`.
+            &json!({ "nodes": [{ "id": "api", "data": { "label": "api", "properties": {
+                "headers": {
+                    "Authorization": "Bearer Hdr-typed-5",
+                    "Accept": "application/json",
+                    "X-API-Key": "${ENV:ORDERS_KEY}"
+                },
+                "storageOptions": [
+                    { "key": "azure_storage_account_key", "value": "Opt-typed-6" },
+                    { "key": "azure_storage_account_name", "value": "acct" }
+                ],
+                "multipleKeys": [{ "key": "api_key", "value": "api_key" }]
+            } } }], "edges": [] }),
+        );
+        let p = path.to_string_lossy().to_string();
+
+        let shown = t_read_pipeline(&json!({ "path": p })).unwrap();
+
+        let text = shown.to_string();
+        for typed in ["Hdr-typed-5", "Opt-typed-6"] {
+            assert!(!text.contains(typed), "read_pipeline returned {typed}: {text}");
+        }
+        let props = node_in(&shown, "api")["data"]["properties"].clone();
+        assert_eq!(props["headers"]["Authorization"], "***");
+        assert_eq!(props["headers"]["Accept"], "application/json");
+        assert_eq!(props["headers"]["X-API-Key"], "${ENV:ORDERS_KEY}");
+        assert_eq!(props["storageOptions"][0]["value"], "***");
+        assert_eq!(props["storageOptions"][1]["value"], "acct");
+        assert_eq!(
+            props["multipleKeys"][0]["value"],
+            "api_key",
+            "a join column is not a credential"
+        );
+
+        // Sent back as shown, either mask would replace the real value.
+        let real_options = json!([{ "key": "azure_storage_account_name", "value": "acct" }]);
+        let real_headers = json!({ "Accept": "application/json" });
+        for (field, keep, with) in [
+            ("headers.Authorization", "storageOptions", real_options),
+            ("storageOptions.azure_storage_account_key", "headers", real_headers),
+        ] {
+            let mut sent = node_in(&shown, "api").clone();
+            sent["data"]["properties"][keep] = with;
+            let err = t_update_pipeline(
+                &json!({ "path": p, "patch": { "nodes": [sent] }, "validate": false }),
+            )
+            .expect_err("the masked pair was written");
+            assert!(err.contains(field) && err.contains("***"), "{err}");
+        }
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(on_disk.contains("Hdr-typed-5") && on_disk.contains("Opt-typed-6"), "{on_disk}");
     }
 
     /// The mask must never reach the file. update_pipeline writes what it is

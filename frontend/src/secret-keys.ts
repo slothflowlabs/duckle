@@ -11,9 +11,13 @@
 export const SECRET_NEEDLES = [
     'password', 'passwd', 'passphrase', 'secret', 'token', 'apikey', 'api_key',
     'privatekey', 'private_key', 'accesskey', 'access_key', 'accountkey',
+    'account_key', 'master_key',
     'clientsecret', 'client_secret', 'connectionstring', 'connection_string',
     'connstring', 'sas', 'credential',
 ];
+
+/** HTTP headers that carry a credential, spelled as isSecretPairName reads a name. */
+export const SECRET_HEADERS = ['authorization', 'proxy_authorization', 'cookie'];
 
 /** Whole keys the needles would swallow that name something public, a token URL say. */
 export const NAMES_SOMETHING_PUBLIC = [
@@ -25,6 +29,7 @@ export const NAMES_SOMETHING_PUBLIC = [
     'maxoutputtokens',
     'inputusdpermilliontokens',
     'outputusdpermilliontokens',
+    'meta_secret',
 ];
 
 export function isSecretPropKey(key: string): boolean {
@@ -33,4 +38,13 @@ export function isSecretPropKey(key: string): boolean {
     if (k === 'pat') return true;
     if (NAMES_SOMETHING_PUBLIC.includes(k)) return false;
     return SECRET_NEEDLES.some(n => k.includes(n));
+}
+
+/**
+ * A key-value pair's name that says its value is a credential: `is_secret_pair_name`
+ * in util.rs. Header names spell words with hyphens (`X-API-Key`), read as underscores.
+ */
+export function isSecretPairName(name: string): boolean {
+    const n = name.trim().toLowerCase().replace(/-/g, '_');
+    return SECRET_HEADERS.includes(n) || isSecretPropKey(n);
 }
