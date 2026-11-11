@@ -37,7 +37,7 @@
     "targets": [],
     "category": "DeveloperTool",
     "shortDescription": "Embedded, ultra-fast data engineering platform.",
-    "longDescription": "Duckle is an open-source, local-first ETL/ELT/streaming platform with a drag-and-drop UI and native execution speed.",
+    "longDescription": "Duckle is open-source ETL/ELT and streaming for pipelines you own: build them on a drag-and-drop canvas, run them at native speed on DuckDB, and deploy them to your own servers or cloud.",
     "copyright": "Copyright 2026 SlothFlowLabs",
     "publisher": "SlothFlowLabs",
     "icon": [

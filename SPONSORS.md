@@ -10,9 +10,9 @@
 
 </div>
 
-Duckle is a free, open-source, local-first ETL / ELT studio: drag a pipeline
-onto the canvas, run it at native speed through DuckDB, and own your data end to
-end. No cloud, no servers, no lock-in.
+Duckle is a free, open-source ETL / ELT studio for pipelines you own: drag a
+pipeline onto the canvas, run it at native speed through DuckDB, and deploy it to
+your own servers or cloud. No vendor cloud, no lock-in.
 
 It is built in the open, clean-room, and given away for free. Sponsorship is what
 lets that continue: it pays for the time to ship connectors, keep the engine
