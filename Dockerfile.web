@@ -53,8 +53,14 @@ WORKDIR /app
 #    sidecar's crates join the build set.
 #  - unixodbc-dev: the runner links the engine with the teradata (ODBC) feature
 #    on Linux, so the linker needs libodbc (-lodbc) to resolve.
+#  - libsqlite3-dev OUT: the runner links the SQLite that rusqlite bundles
+#    (3.54.1, which carries the fix for RUSTSEC-2026-0459). This base image ships
+#    its own libsqlite3-dev, 3.40.1, and with it installed the release link of the
+#    runner failed on `sqlite3_set_clientdata`, an API SQLite added in 3.44.
+#    Removing it leaves the bundled build as the only SQLite there is to link.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates unzip clang libclang-dev unixodbc-dev \
+    && apt-get remove -y libsqlite3-dev \
     && curl -fsSL -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v28.3/protoc-28.3-linux-x86_64.zip \
     && unzip -o /tmp/protoc.zip -d /usr/local \
     && rm /tmp/protoc.zip && rm -rf /var/lib/apt/lists/*

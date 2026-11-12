@@ -352,6 +352,19 @@ mod tests {
         AuthStore::in_memory().expect("opens")
     }
 
+    /// RUSTSEC-2026-0459 is fixed by the SQLite that rusqlite bundles (3.54.1).
+    /// The fix is only real if that is the SQLite this binary runs: a build that
+    /// links an operating system's own, older SQLite keeps the hole while the
+    /// lockfile says otherwise.
+    #[test]
+    fn the_sqlite_this_binary_runs_is_the_patched_bundled_one() {
+        assert!(
+            rusqlite::version_number() >= 3_054_001,
+            "linked SQLite {} is older than the patched 3.54.1",
+            rusqlite::version()
+        );
+    }
+
     /// Two servers started together on one workspace: the second died with
     /// "database is locked" before it served a request. Switching the journal to
     /// WAL takes an exclusive lock, and it ran before the busy timeout was set,
