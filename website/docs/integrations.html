@@ -91,8 +91,8 @@
 <div class="wrap intg-page">
   <div class="intg-head">
     <span class="eyebrow">Integrations</span>
-    <h1>Move data from 188 connectors</h1>
-    <p class="lead">107 sources and 68 destinations you can use today. Open source, so you can read exactly how each one works. Search the catalogue or filter by category and direction. Sources read in, destinations write out.</p>
+    <h1>Move data from 202 connectors</h1>
+    <p class="lead">125 sources and 77 destinations you can use today. Open source, so you can read exactly how each one works. Search the catalogue or filter by category and direction. Sources read in, destinations write out.</p>
   </div>
 
   <div class="intg-layout">
@@ -297,7 +297,7 @@ function render(){
         '<span class="intg-meta"><span class="intg-name">' + esc(x.n) + '</span>' +
         '<span class="intg-kind">' + kindLabel(x.k) + '</span></span></div>').join('')
     : '<div class="intg-empty">No connectors match. Try a different search or category.</div>';
-  document.getElementById('intgCount').textContent = list.length + ' of ' + INTG.length + ' connectors';
+  document.getElementById('intgCount').textContent = list.length + ' of ' + INTG.length + ' systems';
 }
 
 document.getElementById('intgCats').addEventListener('click', e => {

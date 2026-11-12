@@ -2,7 +2,7 @@
    Learn Duckle - cinematic no-scroll player engine
    Scenes are stepped manually (Prev/Next or arrow keys). Each scene animates
    in on arrival via GSAP. Quiz scenes gate advance. Component-grid scenes are
-   generated from window.CATALOG (all 359 components). Degrades without GSAP.
+   generated from window.CATALOG (every component in the catalog). Degrades without GSAP.
    ========================================================================== */
 (function () {
   "use strict";

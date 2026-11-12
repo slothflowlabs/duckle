@@ -74,7 +74,7 @@ See exactly what will run, before it runs:
 p.explain()   # prints the compiled SQL, one block per stage
 ```
 
-## 360+ components, not 10 file formats
+## 421 components, not 10 file formats
 
 Component ids map onto attribute paths, so anything in the catalog is reachable:
 
@@ -84,7 +84,7 @@ duckle.xf.geo.reproject(geomColumn="geom", targetCrs="EPSG:3857")
 duckle.snk.salesforce.bulk(operation="upsert", externalIdField="Ext__c")
 ```
 
-104 sources, 66 sinks and 138 transforms: Postgres, MySQL, Oracle, SQL Server, Snowflake, Databricks, Teradata, SAP OData, Salesforce (including Bulk API 2.0), Kafka, WebSocket, S3, SFTP, IMAP, LanceDB and more.
+125 sources, 77 sinks and 145 transforms: Postgres, MySQL, Oracle, SQL Server, Snowflake, Databricks, Teradata, SAP OData, Salesforce (including Bulk API 2.0), Kafka, WebSocket, S3, SFTP, IMAP, LanceDB and more.
 
 ```python
 duckle.component_ids(contains="salesforce")

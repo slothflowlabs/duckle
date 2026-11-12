@@ -210,6 +210,20 @@ mkdirSync(site, { recursive: true })
 writeFileSync(join(site, 'llms.txt'), index, 'utf8')
 writeFileSync(join(site, 'llms-full.txt'), full, 'utf8')
 
+// The Learn course (learn.html) draws a card for every component from
+// window.CATALOG. That file was a one-off snapshot and had fallen 62
+// components behind the product, so it is written from the same catalog too.
+// Rows are [id, label, summary, flag], grouped by family; the flag is
+// a(vailable), p(lanned) or v (preview), as learn.js reads it.
+const FAMILY = { source: 'source', transform: 'transform', sink: 'sink', quality: 'quality', control: 'control', custom: 'code' }
+const FLAG = { available: 'a', planned: 'p', preview: 'v' }
+const course = { source: [], transform: [], sink: [], quality: [], control: [], code: [] }
+for (const c of all) {
+    const family = FAMILY[c.kind]
+    if (family) course[family].push([c.id, c.label, c.summary ?? '', FLAG[c.availability] ?? 'a'])
+}
+writeFileSync(join(site, 'assets', 'js', 'catalog.data.js'), 'window.CATALOG=' + JSON.stringify(course) + ';', 'utf8')
+
 console.log(
     `build-llms: wrote llms.txt (${index.length} bytes) and llms-full.txt (${full.length} bytes) ` +
     `from ${n.total} components (${n.available} available: ${n.sources} sources, ${n.sinks} sinks, ${n.transforms} transforms)`
