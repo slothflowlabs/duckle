@@ -7,7 +7,8 @@
 //! path like any other source.
 //!
 //! What only a faker library knows, the names and addresses of fourteen locales, it supplies
-//! at compile time as a POOL of values, and a row picks from the pool with `hash(i, salt)`.
+//! at compile time as a POOL of values, and a row picks from the pool with
+//! `hash(xor(i, salt))`.
 //! That has consequences worth stating:
 //!
 //! - The same seed gives the same rows, always and on every machine, which is what makes a
@@ -288,8 +289,13 @@ struct Column<'a> {
 impl Column<'_> {
     /// `hash(...)` for this row, salted by what it is for. The key is the column's name
     /// unless the value is meant to be shared with another column.
+    ///
+    /// The salt goes INTO the hashed value. DuckDB's two-argument `hash(i, salt)` keeps the
+    /// row's low bits tied across salts, so every column with the same power-of-two number
+    /// of values moved in lockstep with every other: a 4-value pick beside a 4-value pick
+    /// showed 4 of the 16 pairs.
     fn hash(&self, key: &str) -> String {
-        format!("hash(i, {}::UBIGINT)", salt(self.seed, key))
+        format!("hash(xor(i::UBIGINT, {}::UBIGINT))", salt(self.seed, key))
     }
 
     fn own_hash(&self, suffix: &str) -> String {

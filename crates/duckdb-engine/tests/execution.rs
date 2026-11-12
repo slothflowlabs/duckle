@@ -27807,10 +27807,42 @@ fn a_bad_generator_says_which_column_is_wrong() {
 }
 
 #[test]
+fn a_generators_columns_do_not_move_in_lockstep() {
+    // Each column draws from a hash of the row and a salt of its own. DuckDB's
+    // two-argument hash(i, salt) kept the row's low bits tied across salts, so
+    // columns with the same power-of-two number of values moved in lockstep: a
+    // 4-region pick and a 4-way status pick gave every order in one region the
+    // same status. Over 1,000 rows two independent 4-value columns show all 16
+    // pairs, and two booleans all 4; in lockstep they show 4 and 2.
+    let engine = engine_or_skip!();
+    let rows = generated_rows(&engine, json!({
+        "rowCount": 1000, "seed": "independence",
+        "columns": [
+            { "name": "region", "generator": "pick", "values": ["n", "s", "e", "w"] },
+            { "name": "status", "generator": "pick", "values": ["a", "b", "c", "d"] },
+            { "name": "flag", "generator": "boolean" },
+            { "name": "other", "generator": "boolean" },
+        ],
+    }));
+    let picks: std::collections::BTreeSet<(String, String)> = rows
+        .iter()
+        .map(|r| (r["region"].to_string(), r["status"].to_string()))
+        .collect();
+    assert_eq!(picks.len(), 16, "two 4-value columns should show every pair: {:?}", picks);
+    let flags: std::collections::BTreeSet<(String, String)> = rows
+        .iter()
+        .map(|r| (r["flag"].to_string(), r["other"].to_string()))
+        .collect();
+    assert_eq!(flags.len(), 4, "two booleans should show every pair: {:?}", flags);
+}
+
+#[test]
 fn the_rows_for_a_seed_are_pinned() {
     // The promise a test leans on: one seed, one set of rows. Two things could break it
     // without any code here changing, a DuckDB upgrade moving hash() and a new `fake` moving
     // its lists. Either one fails this, and then it is a decision rather than a surprise.
+    // Moved once on purpose: the salt went into the hashed value so that columns stop
+    // moving in lockstep (a_generators_columns_do_not_move_in_lockstep).
     let engine = engine_or_skip!();
     let rows = generated_rows(&engine, json!({
         "rowCount": 3, "seed": "pin",
@@ -27825,8 +27857,8 @@ fn the_rows_for_a_seed_are_pinned() {
         Value::from(rows),
         json!([
             { "id": "ff6a876d-fd18-4fca-b6bb-96c016b186b9", "who": "Joanny Turner", "city": "Elizabethport", "age": 34 },
-            { "id": "b951f6c2-68a9-4d69-b080-e76f8300c41a", "who": "Mozell Crooks", "city": "Kundeborough", "age": 85 },
-            { "id": "e27f879b-d67a-4a8c-abae-96363dd303ff", "who": "Sierra Herman", "city": "Elyssaland", "age": 81 },
+            { "id": "6a02a728-a24c-4efa-a813-c8a12df3c009", "who": "Diamond Botsford", "city": "Lake Rocio Mantemouth", "age": 34 },
+            { "id": "31a62fe9-06f2-4978-848f-36ed0602a825", "who": "Stephan Muller", "city": "Rosariostad", "age": 80 },
         ])
     );
 }
