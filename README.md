@@ -335,6 +335,8 @@ A worked example using the bundled `samples/orders.csv` data.
 - Add a **Group By** before the sink to aggregate. Re-run. Sub-second on small data.
 - Right-click the canvas to **Add note** for whoever reads the pipeline next, or turn on **Snap to grid**. Select several nodes and right-click one to align or distribute them.
 - Select several nodes and right-click one to **Group** them: a named, coloured frame that moves its steps with it. Drag a group by its header, double-click the label to rename it, and use the arrow to **collapse** it to a card; links into and out of a collapsed group are drawn to the card. Deleting a group keeps its steps. Groups are saved in the pipeline file beside the nodes, and a run never reads them.
+- After a run, click a link to see the rows that went down it in the **Output** panel. A link from a step's main output shows that step's rows; a link from a **reject** or switch-case port shows the rows that port sent, which no step's preview holds.
+- Right-click a link and **Set breakpoint…** to give it a SQL condition, such as `amount < 0`. A run you start in the editor stops after the link's source step when any row going down the link matches, shows the rows that did, and runs nothing past it. Scheduled, headless and deployed runs ignore breakpoints, so a pipeline can be deployed with them still set.
 - Right-click the pipeline in the project tree and choose **Generate documentation…** for one HTML page with every step, setting and column, in the order they run. Credentials are left out, so the page can be shared.
 - Cancel mid-run with the **Stop** button - the DuckDB process is killed cleanly.
 - Save your work: **Cmd/Ctrl-S** writes a JSON pipeline file to your workspace folder.

@@ -519,7 +519,8 @@ async fn run_pipeline(
     workspace_path: Option<String>,
     params: Option<std::collections::HashMap<String, String>>,
 ) -> Result<RunResult, String> {
-    let engine = engine()?.for_new_run();
+    // A run started in the editor stops at breakpoints on links; nothing else does.
+    let engine = engine()?.for_new_run().with_breakpoints();
     *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = Some(engine.clone());
     // Resolve ${ENV:NAME} from the OS environment before running, so canvas runs
     // see process env vars like the headless runner does (issue #137). The
@@ -639,7 +640,8 @@ async fn run_pipeline_partial(
     params: Option<std::collections::HashMap<String, String>>,
     preview_rows: Option<usize>,
 ) -> Result<RunResult, String> {
-    let engine = engine()?.for_new_run();
+    // A run started in the editor stops at breakpoints on links; nothing else does.
+    let engine = engine()?.for_new_run().with_breakpoints();
     // #372: a run-to-here that is mapping its target may keep more of its rows
     // than the 100 every step keeps. Only the target grows.
     let engine = match preview_rows {

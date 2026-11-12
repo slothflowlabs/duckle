@@ -735,6 +735,8 @@ mod tests {
             duration_ms: 1234,
             nodes: Default::default(),
             preview: Vec::new(),
+            link_previews: Vec::new(),
+            stopped_at: None,
             error: error.map(str::to_string),
             category: None,
             unchanged: false,

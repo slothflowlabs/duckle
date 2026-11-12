@@ -153,6 +153,11 @@ pub struct EdgeData {
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition: Option<String>,
+    /// A SQL condition on the rows that go down this link. A run that asks for
+    /// breakpoints (an editor run) stops after the link's source step when any
+    /// row matches it; every other run ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub breakpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -1551,7 +1551,9 @@ fn run_stream(
     stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
     stream.flush().map_err(|e| e.to_string())?;
 
-    let engine = DuckdbEngine::new(state.duckdb.clone());
+    // The web editor runs through here, so this run stops at breakpoints on
+    // links; a scheduled run of the same file does not ask, and runs on.
+    let engine = DuckdbEngine::new(state.duckdb.clone()).with_breakpoints();
     // #372: a run-to-here that is mapping its target may ask to keep more of its
     // rows than the 100 every step keeps. Only the target grows; a full run has
     // none, so the engine ignores it there.
@@ -4404,6 +4406,8 @@ fn alerts_notify(state: &State, pipeline_id: &str, status: &str, duration_ms: u6
         duration_ms,
         nodes: Default::default(),
         preview: Vec::new(),
+        link_previews: Vec::new(),
+        stopped_at: None,
         category: error.as_deref().map(duckle_duckdb_engine::error_category::categorize_error)
             .map(str::to_string),
         error,
@@ -8108,6 +8112,67 @@ mod tests {
         assert_eq!(result["status"], "ok", "{result}");
         assert_eq!(rows("f"), Some(250), "the mapped node keeps the rows asked for");
         assert_eq!(rows("s"), Some(100), "the step above it keeps the usual 100");
+    }
+
+    /// A breakpoint is for the person debugging in the editor, and the web editor
+    /// runs through here, so a run started here stops at one. A scheduled run of
+    /// the same file goes through the engine without asking, and runs on.
+    #[test]
+    fn a_web_editor_run_stops_at_a_breakpoint() {
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN").ok().filter(|b| std::path::Path::new(b).exists())
+        else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = super::plain_workspace(tmp.path());
+        std::fs::write(ws.join("in.csv"), "id,amount\n1,5\n2,-3\n").unwrap();
+        let state = WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from(bin),
+            dist: ws.clone(),
+            host: "127.0.0.1".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "127.0.0.1", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
+        };
+        let csv = ws.join("in.csv").to_string_lossy().replace('\\', "/");
+        let out = ws.join("out.csv").to_string_lossy().replace('\\', "/");
+        let run = serde_json::json!({
+            "pipeline": {
+                "nodes": [
+                    { "id": "s", "position": { "x": 0, "y": 0 },
+                      "data": { "label": "s", "componentId": "src.csv", "properties": { "path": csv, "hasHeader": true } } },
+                    { "id": "k", "position": { "x": 0, "y": 0 },
+                      "data": { "label": "k", "componentId": "snk.csv", "properties": { "path": out, "hasHeader": true } } }
+                ],
+                "edges": [{ "id": "e", "source": "s", "target": "k",
+                            "data": { "connectionType": "main", "breakpoint": "amount < 0" } }]
+            },
+        });
+        let owner = state.console.identify(Some("Bearer s3cret"), None).expect("the owner signs in");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = serde_json::to_vec(&run).unwrap();
+        let text = std::thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let (mut stream, _) = listener.accept().unwrap();
+                super::run_stream(&mut stream, &state, &owner, &body)
+            });
+            let mut conn = std::net::TcpStream::connect(addr).unwrap();
+            let mut text = String::new();
+            let _ = std::io::Read::read_to_string(&mut conn, &mut text);
+            server.join().unwrap().expect("the stream completes");
+            text
+        });
+        let result: serde_json::Value = text
+            .split("event: result\ndata: ")
+            .nth(1)
+            .and_then(|rest| serde_json::from_str(rest.lines().next().unwrap_or("")).ok())
+            .unwrap_or_else(|| panic!("no result in the stream: {text}"));
+        assert_eq!(result["status"], "stopped", "{result}");
+        assert_eq!(result["stopped_at"]["edge_id"], "e", "{result}");
+        assert!(!ws.join("out.csv").exists(), "the sink past the breakpoint was written");
     }
 
     /// An editor run, and so its saved state, was named after the pipeline's

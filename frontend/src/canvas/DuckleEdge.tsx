@@ -12,6 +12,8 @@ export type DuckleEdgeData = {
     connectionType: ConnectionType;
     label?: string;
     condition?: string;
+    /** A SQL condition an editor run stops at when a row going down this link matches it. */
+    breakpoint?: string;
 };
 
 export type DuckleEdgeType = Edge<DuckleEdgeData, 'duckle'>;
@@ -43,7 +45,7 @@ export default function DuckleEdge(props: EdgeProps<DuckleEdgeType>) {
 
     const type = (data?.connectionType ?? 'main') as ConnectionType;
     const meta = metaFor(type);
-    const showLabel = Boolean(meta.badge || data?.label || data?.condition);
+    const showLabel = Boolean(meta.badge || data?.label || data?.condition || data?.breakpoint);
 
     const sourceStatus = useRunStatus(source);
     const targetStatus = useRunStatus(target);
@@ -97,6 +99,14 @@ export default function DuckleEdge(props: EdgeProps<DuckleEdgeType>) {
                         {data?.condition ? (
                             <span className="edge-label-cond" title={data.condition}>
                                 {truncate(data.condition, 40)}
+                            </span>
+                        ) : null}
+                        {data?.breakpoint ? (
+                            <span
+                                className="edge-label-breakpoint"
+                                title={'Breakpoint: an editor run stops here when a row matches ' + data.breakpoint}
+                            >
+                                {truncate(data.breakpoint, 32)}
                             </span>
                         ) : null}
                     </div>

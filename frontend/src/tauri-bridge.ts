@@ -131,6 +131,20 @@ export type NodePreview = {
     sql_types?: string[];
 };
 
+/** A link's rows from a port other than `main`; `node_id` is the step the link leaves. */
+export type LinkPreview = NodePreview & { port: string };
+
+/** A breakpoint that matched: its link, condition, how many rows matched and the first of them. */
+export type BreakpointHit = {
+    edge_id: string;
+    source: string;
+    target: string;
+    port: string;
+    condition: string;
+    matched: number;
+    preview: NodePreview;
+};
+
 export type RunLogLine = {
     node_id: string;
     level: 'info' | 'warn' | 'error';
@@ -138,10 +152,16 @@ export type RunLogLine = {
 };
 
 export type RunResult = {
-    status: 'ok' | 'error' | 'cancelled';
+    /** 'stopped': an editor run stopped at a breakpoint on a link (see stopped_at). */
+    status: 'ok' | 'error' | 'cancelled' | 'stopped';
     duration_ms: number;
     nodes: Record<string, NodeRunStatus>;
     preview: NodePreview[];
+    /** The rows a link carried when they are not its step's own preview: what a
+     *  reject, filter or switch-case port sent on. */
+    link_previews?: LinkPreview[];
+    /** Where an editor run stopped at a breakpoint, and the rows that matched. */
+    stopped_at?: BreakpointHit;
     error?: string;
     /** Coarse bucket of `error` (see NodeRunStatus.category). */
     category?: string;

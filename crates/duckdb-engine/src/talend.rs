@@ -1463,6 +1463,7 @@ fn reroute(im: &mut Import, local: &std::collections::BTreeSet<String>) -> usize
                     connection_type: "on-subjob-ok".into(),
                     label: None,
                     condition: None,
+                    breakpoint: None,
                 }),
             });
         }
@@ -3103,6 +3104,7 @@ pub fn import_item(xml: &str, job_name: &str) -> Result<Import, String> {
                 // different outputs arrive as three identical edges.
                 label: c.connector.as_deref().and_then(named_port),
                 condition: None,
+                breakpoint: None,
             }),
         })
         .collect();
@@ -3491,6 +3493,7 @@ fn set_context_at_run_time(
                     connection_type: "main".into(),
                     label: None,
                     condition: None,
+                    breakpoint: None,
                 }),
             });
         }
@@ -3668,6 +3671,7 @@ fn read_loop_rows_from_their_list(
                     connection_type: "main".into(),
                     label: None,
                     condition: None,
+                    breakpoint: None,
                 }),
             });
         }
@@ -4017,6 +4021,7 @@ fn rewire_parallel_joins(mut edges: Vec<PipelineEdge>, connections: &[Conn]) -> 
                     connection_type: "on-subjob-ok".into(),
                     label: None,
                     condition: None,
+                    breakpoint: None,
                 }),
             });
         }
@@ -4104,6 +4109,7 @@ fn anchor_subjob_links_at_their_end(mut edges: Vec<PipelineEdge>) -> Vec<Pipelin
                     connection_type: "on-subjob-ok".into(),
                     label: None,
                     condition: None,
+                    breakpoint: None,
                 }),
             });
             moved = true;
@@ -4224,6 +4230,7 @@ fn chain_declared_subjobs(
                     connection_type: "on-subjob-ok".into(),
                     label: None,
                     condition: None,
+                    breakpoint: None,
                 }),
             });
         }
@@ -4668,6 +4675,7 @@ mod tests {
                 connection_type: kind.into(),
                 label: None,
                 condition: None,
+                breakpoint: None,
             }),
         }
     }

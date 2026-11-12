@@ -97,6 +97,8 @@ import StatusBar from './workflow-ui/StatusBar';
 import NewPipelineModal, { type PipelineTemplate } from './workflow-ui/NewPipelineModal';
 import ConfirmModal from './workflow-ui/ConfirmModal';
 import EdgeEditorModal from './canvas/EdgeEditorModal';
+import BreakpointModal from './canvas/BreakpointModal';
+import { linkPort, linkRows, withBreakpoint } from './link-rows';
 import VisualMapperModal, {
     type MapperState,
     type MappingRow,
@@ -1259,6 +1261,11 @@ export default function App() {
     );
 
     const [editingEdgeId, setEditingEdgeId] = useState<string | null>(null);
+    // A breakpoint being set on a link, and the one link selected on its own,
+    // whose rows from the last run the Output panel shows.
+    const [breakpointEdgeId, setBreakpointEdgeId] = useState<string | null>(null);
+    const [inspectedEdgeId, setInspectedEdgeId] = useState<string | null>(null);
+    const [openOutputRequest, setOpenOutputRequest] = useState(0);
     const editingEdge = useMemo(
         () => (editingEdgeId ? edges.find(e => e.id === editingEdgeId) ?? null : null),
         [editingEdgeId, edges],
@@ -1296,6 +1303,8 @@ export default function App() {
     const handleSelectionChange = useCallback((params: OnSelectionChangeParams) => {
         const sel = params.nodes.find(n => n.type !== 'note' && n.type !== 'frame') ?? null;
         setSelectedId(sel?.id ?? null);
+        // One link on its own: the Output panel shows what it carried.
+        setInspectedEdgeId(params.nodes.length === 0 && params.edges.length === 1 ? params.edges[0].id : null);
         // Live mode: previewing whatever node you click makes the toggle feel
         // alive (run up to it + animate). Skip sinks (a run to a sink writes and
         // has no preview rows). Debounced so click-dragging a marquee selection
@@ -1689,6 +1698,37 @@ export default function App() {
         for (const n of nodes) m[n.id] = n.data.label;
         return m;
     }, [nodes]);
+
+    // A link as people read it: "Read orders -> Keep paid", with its port when not main.
+    const linkLabel = useCallback(
+        (e: Edge) => {
+            const port = linkPort(e);
+            return `${nodeLabels[e.source] ?? e.source} → ${nodeLabels[e.target] ?? e.target}${port === 'main' ? '' : ` (${port})`}`;
+        },
+        [nodeLabels],
+    );
+    const inspectedLink = useMemo(() => {
+        const edge = inspectedEdgeId ? edges.find(e => e.id === inspectedEdgeId) : undefined;
+        const preview = edge ? linkRows(shownRunResult, edge) : null;
+        return edge && preview ? { label: linkLabel(edge), preview } : null;
+    }, [inspectedEdgeId, edges, shownRunResult, linkLabel]);
+    // Clicking a link after a run opens the Output panel on its rows.
+    useEffect(() => {
+        if (inspectedLink) setOpenOutputRequest(n => n + 1);
+    }, [inspectedLink?.preview]);
+
+    const breakpointEdge = breakpointEdgeId ? edges.find(e => e.id === breakpointEdgeId) ?? null : null;
+    const handleEdgeBreakpoint = useCallback(
+        (edgeId: string, remove?: boolean) => {
+            if (!remove) {
+                setBreakpointEdgeId(edgeId);
+                return;
+            }
+            setEdges(es => withBreakpoint(es, edgeId, ''));
+            markDirty();
+        },
+        [setEdges, markDirty],
+    );
 
     // Which nodes' previews show in the Output panel: terminal nodes (the
     // pipeline's actual results) plus any Log Rows node, which prints its
@@ -2950,6 +2990,7 @@ export default function App() {
                         onEdgeChangeType={handleEdgeChangeType}
                         onEdgeDelete={handleEdgeDelete}
                         onEdgeEdit={handleEdgeEdit}
+                        onEdgeBreakpoint={handleEdgeBreakpoint}
                         nodeAutodetectAvailable={nodeAutodetectAvailable}
                         onSaveBeforeTests={saveActive}
                     />
@@ -2980,6 +3021,8 @@ export default function App() {
                 isRunning={isRunning}
                 nodeLabels={nodeLabels}
                 terminalNodeIds={terminalNodeIds}
+                link={inspectedLink}
+                openOutputRequest={openOutputRequest}
                 validation={validation}
                 openProblemsRequest={validateRequest}
             />
@@ -3069,6 +3112,19 @@ export default function App() {
                         }
                         setSetupChoice(choice);
                     }}
+                />
+            ) : null}
+
+            {breakpointEdge ? (
+                <BreakpointModal
+                    linkLabel={linkLabel(breakpointEdge)}
+                    condition={(breakpointEdge.data as { breakpoint?: string } | undefined)?.breakpoint ?? ''}
+                    onSave={condition => {
+                        setEdges(es => withBreakpoint(es, breakpointEdge.id, condition));
+                        setBreakpointEdgeId(null);
+                        markDirty();
+                    }}
+                    onCancel={() => setBreakpointEdgeId(null)}
                 />
             ) : null}
 

@@ -54,6 +54,7 @@ type Props = {
     onEdgeChangeType: (edgeId: string, newType: ConnectionType) => void;
     onEdgeDelete: (edgeId: string) => void;
     onEdgeEdit: (edgeId: string) => void;
+    onEdgeBreakpoint: (edgeId: string, remove?: boolean) => void;
     nodeAutodetectAvailable: (nodeId: string) => boolean;
     onSaveBeforeTests: () => Promise<void>;
 };
@@ -83,6 +84,7 @@ export default function EditorTabs({
     onEdgeChangeType,
     onEdgeDelete,
     onEdgeEdit,
+    onEdgeBreakpoint,
     nodeAutodetectAvailable,
     onSaveBeforeTests,
 }: Props) {
@@ -150,6 +152,7 @@ export default function EditorTabs({
                         onEdgeChangeType={onEdgeChangeType}
                         onEdgeDelete={onEdgeDelete}
                         onEdgeEdit={onEdgeEdit}
+                        onEdgeBreakpoint={onEdgeBreakpoint}
                         nodeAutodetectAvailable={nodeAutodetectAvailable}
                     />
                 </div>

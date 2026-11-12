@@ -474,6 +474,8 @@ mod tests {
             duration_ms: 1,
             nodes,
             preview: vec![],
+            link_previews: Vec::new(),
+            stopped_at: None,
             error: None,
             category: None,
         };

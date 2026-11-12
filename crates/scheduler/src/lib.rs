@@ -261,6 +261,8 @@ fn failed_run(started: DateTime<Utc>, error: &str) -> RunResult {
         duration_ms: Utc::now().signed_duration_since(started).num_milliseconds().max(0) as u64,
         nodes: Default::default(),
         preview: Vec::new(),
+        link_previews: Vec::new(),
+        stopped_at: None,
         category: Some(duckle_duckdb_engine::error_category::categorize_error(error).to_string()),
         error: Some(error.to_string()),
     unchanged: false,
@@ -648,6 +650,8 @@ impl Scheduler {
             duration_ms: elapsed,
             nodes: Default::default(),
             preview: Vec::new(),
+            link_previews: Vec::new(),
+            stopped_at: None,
             category: None,
             error: (!broken.is_empty())
                 .then(|| format!("Plan '{}' - {}", plan.id, broken.join("; "))),
@@ -773,6 +777,8 @@ impl Scheduler {
             duration_ms: elapsed,
             nodes: Default::default(),
             preview: Vec::new(),
+            link_previews: Vec::new(),
+            stopped_at: None,
             category: Some(
                 duckle_duckdb_engine::error_category::categorize_error(&e).to_string(),
             ),

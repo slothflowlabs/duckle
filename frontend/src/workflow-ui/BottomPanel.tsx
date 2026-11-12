@@ -29,6 +29,10 @@ export type Props = {
     terminalNodeIds: string[];
     validation: ValidationResult;
     openProblemsRequest?: number;
+    /** The one link selected on the canvas and the rows it carried in the last run. */
+    link?: { label: string; preview: NodePreview } | null;
+    /** Bumped to bring the Output tab forward, as clicking a link after a run does. */
+    openOutputRequest?: number;
 };
 
 export default function BottomPanel({
@@ -38,6 +42,8 @@ export default function BottomPanel({
     terminalNodeIds,
     validation,
     openProblemsRequest,
+    link,
+    openOutputRequest,
 }: Props) {
     const { t } = useTranslation();
     const [tab, setTab] = useState<TabId>('problems');
@@ -58,6 +64,13 @@ export default function BottomPanel({
             setCollapsed(false);
         }
     }, [runResult, isRunning]);
+
+    useEffect(() => {
+        if (openOutputRequest && openOutputRequest > 0) {
+            setTab('output');
+            setCollapsed(false);
+        }
+    }, [openOutputRequest]);
 
     // Auto-expand Problems tab when Validate is clicked.
     useEffect(() => {
@@ -165,6 +178,7 @@ export default function BottomPanel({
                             isRunning={isRunning}
                             nodeLabels={nodeLabels}
                             terminalNodeIds={terminalNodeIds}
+                            link={link}
                         />
                     ) : null}
                     {tab === 'console' ? (
@@ -254,11 +268,13 @@ function OutputTab({
     isRunning,
     nodeLabels,
     terminalNodeIds,
+    link,
 }: {
     runResult: RunResult | null;
     isRunning: boolean;
     nodeLabels: Record<string, string>;
     terminalNodeIds: string[];
+    link?: { label: string; preview: NodePreview } | null;
 }) {
     const { t } = useTranslation();
     // Let the user dismiss the run-error banner. Reset on every new run
@@ -302,7 +318,11 @@ function OutputTab({
             <div className="bottom-output-summary">
                 <span className={'bottom-status status-' + runResult.status}>
                     {runResult.status === 'ok' ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
-                    {runResult.status === 'ok' ? t('bottom.runSucceeded') : t('bottom.runFailed')}
+                    {runResult.status === 'ok'
+                        ? t('bottom.runSucceeded')
+                        : runResult.status === 'stopped'
+                          ? 'Stopped at a breakpoint'
+                          : t('bottom.runFailed')}
                 </span>
                 <span className="bottom-output-stat">
                     <b>{totals.nodeCount}</b> {t('bottom.nodesLabel')}
@@ -340,6 +360,14 @@ function OutputTab({
                     </div>
                 ))}
             </div>
+            {runResult.stopped_at ? (
+                <div className="bottom-output-stopped-banner">
+                    Stopped after <b>{nodeLabels[runResult.stopped_at.source] ?? runResult.stopped_at.source}</b>: on the link to{' '}
+                    <b>{nodeLabels[runResult.stopped_at.target] ?? runResult.stopped_at.target}</b>,{' '}
+                    {runResult.stopped_at.matched.toLocaleString()} row{runResult.stopped_at.matched === 1 ? '' : 's'} match{' '}
+                    <code>{runResult.stopped_at.condition}</code>. Nothing past the link ran.
+                </div>
+            ) : null}
             {runResult.error && !errorDismissed ? (
                 <div className="bottom-output-error-banner">
                     <span className="bottom-output-error-banner-text">
@@ -356,8 +384,20 @@ function OutputTab({
                     </button>
                 </div>
             ) : null}
-            {terminalPreviews.length > 0 ? (
+            {link || runResult.stopped_at || terminalPreviews.length > 0 ? (
                 <div className="bottom-output-previews">
+                    {link ? <PreviewTable preview={link.preview} label={'Link · ' + link.label} /> : null}
+                    {runResult.stopped_at ? (
+                        <PreviewTable
+                            preview={runResult.stopped_at.preview}
+                            label={
+                                'Rows that matched the breakpoint · ' +
+                                (nodeLabels[runResult.stopped_at.source] ?? runResult.stopped_at.source) +
+                                ' → ' +
+                                (nodeLabels[runResult.stopped_at.target] ?? runResult.stopped_at.target)
+                            }
+                        />
+                    ) : null}
                     {terminalPreviews.map(p => (
                         <PreviewTable key={p.node_id} preview={p} label={nodeLabels[p.node_id]} />
                     ))}

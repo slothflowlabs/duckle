@@ -28,6 +28,7 @@ import { pipelinesUsingConnections } from '../src/connection-usage';
 import { arrange } from '../src/canvas/arrange';
 import { pipelineDocument } from '../src/pipeline-doc';
 import { parseWkt } from '../src/geo/wkt';
+import { linkPort, linkRows, withBreakpoint } from '../src/link-rows';
 import {
     edgesForDisplay,
     frameRect,
@@ -73,6 +74,7 @@ import {
     watermarkClear,
     watermarkList,
     watermarkSet,
+    type RunResult,
     type Schedule,
 } from '../src/tauri-bridge';
 
@@ -2067,6 +2069,48 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     check('groups: making a group is an undo step', isStep(withGroups([]), withGroups([g])), 'undo did not take the group away');
     check('groups: renaming a group is an undo step', isStep(withGroups([g]), withGroups([{ ...g, label: 'Read' }])), 'undo did not restore the name');
     check('groups: collapsing a group is an undo step', isStep(withGroups([g]), withGroups([{ ...g, collapsed: true }])), 'undo did not expand it');
+}
+
+// ---------------------------------------------------------------------------
+// After a run, a link shows the rows that went down it. A link from `main`
+// carries its step's own preview; a reject, filter or switch-case port sends
+// other rows, which the run reports per port. A breakpoint is a condition on a
+// link, and setting or clearing one must leave the rest of the link alone.
+// ---------------------------------------------------------------------------
+{
+    const own = { node_id: 'f', columns: [], rows: [{ id: 1 }] };
+    const refused = { node_id: 'f', port: 'reject', columns: [], rows: [{ id: 2 }] };
+    const result = {
+        status: 'ok',
+        duration_ms: 1,
+        nodes: {},
+        preview: [own, { node_id: 'k', columns: [], rows: [] }],
+        link_previews: [refused],
+    } as unknown as RunResult;
+    check('links: an edge with no handle leaves from main', linkPort({ sourceHandle: undefined }) === 'main' && linkPort({ sourceHandle: 'reject' }) === 'reject', 'wrong port');
+    check('links: a main link shows its step\'s own rows', linkRows(result, { source: 'f', sourceHandle: 'main' }) === own, JSON.stringify(linkRows(result, { source: 'f', sourceHandle: 'main' })));
+    check('links: a reject link shows the rows its port sent', linkRows(result, { source: 'f', sourceHandle: 'reject' }) === refused, JSON.stringify(linkRows(result, { source: 'f', sourceHandle: 'reject' })));
+    check('links: a port the run kept nothing for has no rows', linkRows(result, { source: 'f', sourceHandle: 'case_1' }) === null, 'invented rows');
+    check('links: before any run there are no rows', linkRows(null, { source: 'f', sourceHandle: 'main' }) === null, 'invented rows');
+
+    const edges = [
+        { id: 'e1', source: 'f', target: 'k', data: { connectionType: 'main', label: 'paid', condition: 'x > 1' } },
+        { id: 'e2', source: 'k', target: 'z', data: { connectionType: 'main' } },
+    ] as Edge[];
+    const set = withBreakpoint(edges, 'e1', '  amount < 0 ');
+    const data = set[0].data as Record<string, unknown>;
+    check(
+        'links: a breakpoint is set on its link, trimmed, and the rest of the link is kept',
+        data.breakpoint === 'amount < 0' && data.label === 'paid' && data.condition === 'x > 1' && data.connectionType === 'main',
+        JSON.stringify(data),
+    );
+    check('links: the other links are untouched', set[1] === edges[1], 'rewrote another link');
+    const cleared = withBreakpoint(set, 'e1', '   ');
+    check(
+        'links: a blank condition takes the breakpoint off',
+        !('breakpoint' in (cleared[0].data as Record<string, unknown>)) && (cleared[0].data as Record<string, unknown>).label === 'paid',
+        JSON.stringify(cleared[0].data),
+    );
 }
 
 if (failures.length) {

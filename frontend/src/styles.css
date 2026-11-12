@@ -1716,6 +1716,25 @@ textarea:focus-visible {
     background: rgba(196, 168, 90, 0.14);
 }
 
+/* A breakpoint on a link: a red dot and its condition. */
+.edge-label-breakpoint {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    font-size: 0.6923rem;
+    color: var(--danger);
+}
+
+.edge-label-breakpoint::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--danger);
+    box-shadow: 0 0 0 2px var(--bg-1);
+}
+
 .edge-label-cond {
     color: var(--text-3);
     font-size: 0.7692rem;
@@ -3963,6 +3982,20 @@ html[dir='rtl'] .topbar-lang {
     font-size: 0.7692rem;
 }
 
+.bottom-output-stopped-banner {
+    margin: 8px 12px;
+    padding: 8px 12px;
+    border: 1px solid var(--warn);
+    border-radius: var(--radius-sm);
+    background: var(--bg-2);
+    color: var(--text-1);
+    font-size: 0.8462rem;
+}
+
+.bottom-output-stopped-banner code {
+    color: var(--danger);
+}
+
 .bottom-preview-more {
     padding: 6px 12px;
     color: var(--text-3);
@@ -5996,6 +6029,13 @@ select.modal-select:focus {
     background: rgba(255, 77, 109, 0.1);
     color: var(--danger);
     border: 1px solid rgba(255, 77, 109, 0.3);
+}
+
+/* Stopped at a breakpoint: not a failure, and not done either. */
+.bottom-status.status-stopped {
+    background: rgba(251, 191, 36, 0.1);
+    color: var(--warn);
+    border: 1px solid rgba(251, 191, 36, 0.3);
 }
 
 .bottom-output-stat b {

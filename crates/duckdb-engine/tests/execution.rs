@@ -16423,6 +16423,237 @@ fn a_geometry_previews_as_wkt_with_its_crs_on_both_execution_paths() {
     }
 }
 
+/// The rows a run reports for one link that leaves `source` from `port`.
+fn link_rows<'a>(r: &'a duckle_duckdb_engine::RunResult, source: &str, port: &str) -> Option<&'a Vec<Value>> {
+    r.link_previews
+        .iter()
+        .find(|l| l.preview.node_id == source && l.port == port)
+        .map(|l| &l.preview.rows)
+}
+
+#[test]
+fn a_reject_link_carries_the_rows_its_step_refused_on_both_paths() {
+    // After a run a link shows the rows that went down it. A main-port link
+    // carries its source step's own preview; a reject port sends DIFFERENT rows,
+    // which no preview held. A full run of these steps batches and a run-to-here
+    // goes a stage at a time, so both paths are held to the same answer.
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let csv = write_file(ws, "orders.csv", "id,status\n1,paid\n2,pending\n3,paid\n4,refunded\n");
+    let pipeline = json!([
+        node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+        node("f", "xf.filter", json!({ "predicate": "status = 'paid'" })),
+        node("ok", "snk.csv", json!({ "path": out_path(ws, "paid.csv"), "hasHeader": true })),
+        node("bad", "snk.csv", json!({ "path": out_path(ws, "refused.csv"), "hasHeader": true })),
+    ]);
+    let edges = json!([
+        main_edge("e1", "s", "f"),
+        main_edge("e2", "f", "ok"),
+        port_edge("e3", "f", "reject", "bad"),
+    ]);
+    for target in [None, Some("bad")] {
+        let r = engine.execute_pipeline_with_events(&doc(pipeline.clone(), edges.clone()), target, Some("Links"), |_| {});
+        assert_eq!(r.status, "ok", "run (target {target:?}) failed: {:?}", r.error);
+        let ids: Vec<i64> = link_rows(&r, "f", "reject")
+            .unwrap_or_else(|| panic!("no rows for the reject link (target {target:?})"))
+            .iter()
+            .filter_map(|row| row["id"].as_i64())
+            .collect();
+        assert_eq!(ids, vec![2, 4], "the reject link carries the rows the filter refused (target {target:?})");
+        assert!(
+            link_rows(&r, "f", "main").is_none(),
+            "a main link is its step's own preview, not a second copy (target {target:?})"
+        );
+    }
+}
+
+#[test]
+fn a_switch_case_link_carries_the_rows_of_its_case() {
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let csv = write_file(ws, "amounts.csv", "id,amount\n1,50\n2,150\n3,250\n4,80\n");
+    let pipeline = json!([
+        node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+        node("sw", "ctl.switch", json!({ "branches": { "high": "amount > 100", "low": "amount <= 100" } })),
+        node("kh", "snk.csv", json!({ "path": out_path(ws, "high.csv"), "hasHeader": true })),
+        node("kl", "snk.csv", json!({ "path": out_path(ws, "low.csv"), "hasHeader": true })),
+    ]);
+    let edges = json!([
+        main_edge("e1", "s", "sw"),
+        port_edge("e2", "sw", "case_1", "kh"),
+        port_edge("e3", "sw", "case_2", "kl"),
+    ]);
+    for target in [None, Some("kh")] {
+        let r = engine.execute_pipeline_with_events(&doc(pipeline.clone(), edges.clone()), target, Some("Cases"), |_| {});
+        assert_eq!(r.status, "ok", "run (target {target:?}) failed: {:?}", r.error);
+        let ids: Vec<i64> = link_rows(&r, "sw", "case_1")
+            .unwrap_or_else(|| panic!("no rows for the case_1 link (target {target:?})"))
+            .iter()
+            .filter_map(|row| row["id"].as_i64())
+            .collect();
+        assert_eq!(ids, vec![2, 3], "case_1 carries the high amounts (target {target:?})");
+    }
+}
+
+#[test]
+fn a_tagged_column_is_masked_on_a_link_too() {
+    // #301: every inspection surface is masked, and a link's rows are one. They
+    // are masked by the tags of the step the link leaves, as its own preview is.
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let csv = write_file(ws, "people.csv", "id,token\n1,sk-live-1\n2,sk-live-2\n");
+    let mut f = node("f", "xf.filter", json!({ "predicate": "id = 1" }));
+    f["data"]["schema"] = json!([
+        { "name": "id", "type": "int64" },
+        { "name": "token", "type": "string", "tags": ["secret"] }
+    ]);
+    let pipeline = json!([
+        node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+        f,
+        node("bad", "snk.csv", json!({ "path": out_path(ws, "refused.csv"), "hasHeader": true })),
+    ]);
+    let edges = json!([main_edge("e1", "s", "f"), port_edge("e2", "f", "reject", "bad")]);
+    let r = engine.execute_pipeline_with_events(&doc(pipeline, edges), None, Some("Masked"), |_| {});
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let rows = link_rows(&r, "f", "reject").expect("rows for the reject link");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["token"], "***", "a secret must never reach a link's rows: {}", rows[0]);
+    assert_eq!(rows[0]["id"], 2, "an untagged column is untouched: {}", rows[0]);
+}
+
+/// s -> f -> k, with `condition` as the breakpoint on the link from f to k.
+fn breakpoint_pipeline(ws: &Path, condition: &str) -> PipelineDoc {
+    let csv = write_file(ws, "amounts.csv", "id,amount\n1,50\n2,-5\n3,70\n4,-1\n");
+    doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("f", "xf.filter", json!({ "predicate": "amount <> 0" })),
+            node("k", "snk.csv", json!({ "path": out_path(ws, "out.csv"), "hasHeader": true })),
+        ]),
+        json!([
+            main_edge("e1", "s", "f"),
+            { "id": "e2", "source": "f", "target": "k", "sourceHandle": "main", "targetHandle": "main",
+              "data": { "connectionType": "main", "breakpoint": condition } }
+        ]),
+    )
+}
+
+#[test]
+fn a_breakpoint_stops_an_editor_run_at_the_link_whose_rows_match() {
+    // Talend's trace debug: a condition on a link stops the run when a row that
+    // went down it matches, and shows those rows, before any step downstream
+    // reads them. The step past the link never runs, so its file is not written.
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let r = engine.clone().with_breakpoints().execute_pipeline_with_events(
+        &breakpoint_pipeline(ws, "amount < 0"),
+        None,
+        Some("Stops"),
+        |_| {},
+    );
+    assert_eq!(r.status, "stopped", "{:?}", r.error);
+    let hit = r.stopped_at.as_ref().expect("where it stopped");
+    assert_eq!((hit.edge_id.as_str(), hit.source.as_str(), hit.target.as_str()), ("e2", "f", "k"));
+    assert_eq!(hit.matched, 2, "two rows went down the link with a negative amount");
+    let ids: Vec<i64> = hit.preview.rows.iter().filter_map(|row| row["id"].as_i64()).collect();
+    assert_eq!(ids, vec![2, 4], "the rows that matched are the ones shown");
+    assert_eq!(r.nodes.get("f").map(|s| s.status.as_str()), Some("ok"), "the step before the link ran");
+    // Its count is normally taken by the sink below it, which a stopped run never
+    // reaches; the run report must still say how many rows the step produced.
+    assert_eq!(r.nodes.get("f").and_then(|s| s.rows), Some(4), "the stopped-after step has its row count");
+    assert_eq!(r.nodes.get("k").map(|s| s.status.as_str()), Some("skipped"), "the step past the link did not");
+    assert!(!ws.join("out.csv").exists(), "a stopped run wrote the sink past its breakpoint");
+}
+
+#[test]
+fn the_rows_a_breakpoint_stopped_on_are_masked() {
+    // #301: they are one more inspection surface, masked by the tags of the step
+    // the link leaves, as that step's own preview is.
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let csv = write_file(ws, "people.csv", "id,token\n1,sk-live-1\n2,sk-live-2\n");
+    let mut f = node("f", "xf.filter", json!({ "predicate": "id > 0" }));
+    f["data"]["schema"] = json!([
+        { "name": "id", "type": "int64" },
+        { "name": "token", "type": "string", "tags": ["secret"] }
+    ]);
+    let pipeline = json!([
+        node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+        f,
+        node("k", "snk.csv", json!({ "path": out_path(ws, "out.csv"), "hasHeader": true })),
+    ]);
+    let edges = json!([
+        main_edge("e1", "s", "f"),
+        { "id": "e2", "source": "f", "target": "k", "data": { "connectionType": "main", "breakpoint": "id = 2" } }
+    ]);
+    let r = engine.with_breakpoints().execute_pipeline_with_events(&doc(pipeline, edges), None, Some("MaskedStop"), |_| {});
+    assert_eq!(r.status, "stopped", "{:?}", r.error);
+    let rows = &r.stopped_at.as_ref().expect("where it stopped").preview.rows;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["token"], "***", "a secret must never reach the rows a breakpoint shows: {}", rows[0]);
+}
+
+#[test]
+fn a_run_that_did_not_ask_for_breakpoints_runs_straight_through_them() {
+    // The same file, scheduled or run headless, must not stop: a breakpoint is
+    // for the person debugging in the editor, not for the run that ships data.
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let r = engine.execute_pipeline_with_events(&breakpoint_pipeline(ws, "amount < 0"), None, Some("Through"), |_| {});
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert!(r.stopped_at.is_none());
+    assert!(ws.join("out.csv").exists(), "the sink was not written");
+}
+
+#[test]
+fn a_breakpoint_that_matches_nothing_lets_the_run_finish() {
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let r = engine.with_breakpoints().execute_pipeline_with_events(
+        &breakpoint_pipeline(ws, "amount > 1000"),
+        None,
+        Some("Nothing"),
+        |_| {},
+    );
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert!(r.stopped_at.is_none());
+    assert!(ws.join("out.csv").exists(), "the sink was not written");
+}
+
+#[test]
+fn a_breakpoint_that_cannot_be_checked_fails_the_run_and_says_which() {
+    // A condition with a mistake in it must not pass silently: a breakpoint that
+    // can never fire looks exactly like one that found nothing.
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let r = engine.with_breakpoints().execute_pipeline_with_events(
+        &breakpoint_pipeline(ws, "no_such_column < 0"),
+        None,
+        Some("Broken"),
+        |_| {},
+    );
+    assert_eq!(r.status, "error");
+    let error = r.error.unwrap_or_default();
+    assert!(error.contains("breakpoint") && error.contains("f") && error.contains("k"), "{error}");
+    assert!(!ws.join("out.csv").exists(), "a run that could not check its breakpoint went on to write");
+}
+
 #[test]
 fn batched_view_row_error_is_attributed_to_the_view_not_the_sink() {
     // audit pass-3: in the batched executor a view whose body errors on

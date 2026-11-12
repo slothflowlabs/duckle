@@ -188,6 +188,8 @@ pub struct DuckdbEngine {
     /// #372: preview rows kept for the target of a partial run when more than
     /// [`PREVIEW_ROW_LIMIT`] were asked for. See [`DuckdbEngine::with_target_preview_rows`].
     target_preview_rows: Option<usize>,
+    /// Whether this run stops at breakpoints on links. See [`DuckdbEngine::with_breakpoints`].
+    breakpoints: bool,
     /// Substitutions a job passes to everything it runs, however deep.
     ///
     /// A job's return file is named by whoever called it, but the rows may be written from
@@ -431,6 +433,7 @@ impl DuckdbEngine {
         Self {
             previews: true,
             target_preview_rows: None,
+            breakpoints: false,
             bin,
             inherited_subs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             cancel: Arc::new(AtomicBool::new(false)),
@@ -544,6 +547,14 @@ impl DuckdbEngine {
         self
     }
 
+    /// Stop at breakpoints on links (see `EdgeData::breakpoint`). Only the editors
+    /// ask for this: a scheduled, headless or deployed run of the same file must
+    /// run straight through, so the default is to ignore them.
+    pub fn with_breakpoints(mut self) -> Self {
+        self.breakpoints = true;
+        self
+    }
+
     /// Preview rows to keep for one step: the usual [`PREVIEW_ROW_LIMIT`], or what
     /// a run-to-here asked for when this step is its target (#372).
     fn preview_limit(&self, node_id: &str, target: Option<&str>) -> usize {
@@ -566,6 +577,8 @@ impl DuckdbEngine {
             previews: self.previews,
             // Asked for by one run-to-here, for one node: never carried into the next run.
             target_preview_rows: None,
+            // An editor asks for breakpoints run by run; a new run starts without.
+            breakpoints: false,
             // A new run is a new identity; carrying the previous one forward
             // would file this run's log lines under that run.
             run_id: None,
@@ -594,6 +607,7 @@ impl DuckdbEngine {
             cancel: Arc::clone(&self.cancel),
             previews: false,
             target_preview_rows: None,
+            breakpoints: false,
             run_id: None,
             artifacts: Arc::new(std::sync::Mutex::new(Vec::new())),
             outputs: Arc::new(std::sync::Mutex::new(Default::default())),
@@ -1956,7 +1970,11 @@ impl DuckdbEngine {
                             .map(|p| std::path::Path::new(p).exists())
                             .unwrap_or(false))
         };
+        // A run with breakpoints goes a stage at a time: the batched path is one
+        // DuckDB script, with nowhere between stages to stop.
+        let armed = self.armed_breakpoints(doc);
         let batchable = target.is_none()
+            && armed.is_empty()
             && compiled.stages.len() >= 2
             && compiled.stages.iter().all(&stage_batchable);
 
@@ -2004,6 +2022,8 @@ impl DuckdbEngine {
                 &EndOfRun::from_doc(doc),
                 &mut on_event,
             );
+            let mut r = r;
+            r.link_previews = self.link_previews(&db_path, doc, &r.nodes);
             return r;
         }
 
@@ -2118,6 +2138,7 @@ impl DuckdbEngine {
             direct_sink_for.keys().map(|k| k.as_str()).collect();
         let counted_by_sink = views_counted_by_sink(&compiled.stages, &direct_sink_sources);
 
+        let mut stopped_at: Option<BreakpointHit> = None;
         for stage in &compiled.stages {
             if self.cancel.load(Ordering::Relaxed) {
                 was_cancelled = true;
@@ -3122,10 +3143,12 @@ impl DuckdbEngine {
                         // A view whose rows a self-counting sink is about to
                         // write skips its own COUNT(*) and keeps its preview;
                         // the figure arrives when that sink reports.
+                        // A run with breakpoints can stop before the sink that
+                        // would have counted this view, so it counts itself.
                         StageKind::View => self.count_and_preview(
                             &db_path,
                             &stage.node_id,
-                            !counted_by_sink.contains(stage.node_id.as_str()),
+                            !counted_by_sink.contains(stage.node_id.as_str()) || !armed.is_empty(),
                             counts_need_every_column,
                             self.preview_limit(&stage.node_id, target),
                         ),
@@ -3267,10 +3290,35 @@ impl DuckdbEngine {
             if incomplete_reason.is_some() {
                 break;
             }
+            // A breakpoint on a link leaving this step stops the run here when a
+            // row that went down the link matches, before any step downstream
+            // reads one. A condition that cannot be checked fails the run: a
+            // breakpoint that could never fire looks just like one that found nothing.
+            let finished = nodes
+                .get(&stage.node_id)
+                .is_some_and(|s| s.status == "ok" || s.status == "unchanged");
+            if finished && !armed.is_empty() {
+                match self.breakpoint_hit(&db_path, &armed, &stage.node_id) {
+                    Ok(Some(hit)) => {
+                        stopped_at = Some(hit);
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        overall_error = Some(redact_secret_values(&e, &redact_secrets));
+                        break;
+                    }
+                }
+            }
         }
         // Every stage after the stop is recorded as skipped, so the run report
         // says which work did not happen rather than simply omitting it.
-        if incomplete_reason.is_some() {
+        if incomplete_reason.is_some() || stopped_at.is_some() {
+            let why = if stopped_at.is_some() {
+                "not run: the run stopped at a breakpoint"
+            } else {
+                "not run: an earlier stage stopped at its budget"
+            };
             for stage in &compiled.stages {
                 if nodes.contains_key(&stage.node_id) {
                     continue;
@@ -3281,7 +3329,7 @@ impl DuckdbEngine {
                         status: "skipped".into(),
                         kind: None,
                         component: Some(stage.component_id.clone()),
-                        note: Some("not run: an earlier stage stopped at its budget".into()),
+                        note: Some(why.into()),
                         rows: None,
                         duration_ms: None,
                         error: None,
@@ -3300,6 +3348,8 @@ impl DuckdbEngine {
             "cancelled"
         } else if overall_error.is_some() {
             "error"
+        } else if stopped_at.is_some() {
+            "stopped"
         } else {
             "ok"
         };
@@ -3408,6 +3458,12 @@ impl DuckdbEngine {
         // a preview useful for debugging and none of them is the sensitive part.
         let mut preview = preview;
         mask::mask_previews(&mut preview, &mask::tags_from_doc(doc));
+        let link_previews = self.link_previews(&db_path, doc, &nodes);
+        // The rows a breakpoint stopped on are masked like any other preview.
+        let stopped_at = stopped_at.map(|mut hit| {
+            mask::mask_previews(std::slice::from_mut(&mut hit.preview), &mask::tags_from_doc(doc));
+            hit
+        });
         let unchanged = run_was_unchanged(&nodes);
         RunResult {
             cache_keys,
@@ -3415,6 +3471,8 @@ impl DuckdbEngine {
             duration_ms: total_start.elapsed().as_millis() as u64,
             nodes,
             preview,
+            link_previews,
+            stopped_at,
             error: overall_error,
             category,
             unchanged,
@@ -4057,6 +4115,8 @@ impl DuckdbEngine {
             duration_ms,
             nodes,
             preview,
+            link_previews: Vec::new(),
+            stopped_at: None,
             error: overall_error,
             category,
             unchanged,
@@ -4158,6 +4218,126 @@ fn count_projection(every_column: bool) -> &'static str {
             .and_then(|v| v.as_u64().or_else(|| v.as_i64().map(|x| x.max(0) as u64)))
             .unwrap_or(0);
         Ok(n)
+    }
+
+    /// The breakpoints this run stops at: none unless it asked for them (see
+    /// [`DuckdbEngine::with_breakpoints`]), and only links whose condition is not blank.
+    fn armed_breakpoints(&self, doc: &PipelineDoc) -> Vec<ArmedBreakpoint> {
+        if !self.breakpoints {
+            return Vec::new();
+        }
+        doc.edges
+            .iter()
+            .filter_map(|e| {
+                let condition = e.data.as_ref()?.breakpoint.as_deref()?.trim();
+                if condition.is_empty() {
+                    return None;
+                }
+                Some(ArmedBreakpoint {
+                    edge_id: e.id.clone(),
+                    source: e.source.clone(),
+                    target: e.target.clone(),
+                    port: e.source_handle.as_deref().map(plan::canonical_port).unwrap_or("main").to_string(),
+                    condition: condition.to_string(),
+                })
+            })
+            .collect()
+    }
+
+    /// Whether a breakpoint on a link leaving `step` matches any of the rows that
+    /// went down that link: how many did, and the first of them. Err when its
+    /// condition cannot be checked, which the caller reports rather than skips.
+    fn breakpoint_hit(&self, db: &Path, armed: &[ArmedBreakpoint], step: &str) -> Result<Option<BreakpointHit>, String> {
+        for bp in armed.iter().filter(|b| b.source == step) {
+            let q = plan::quote_ident(&plan::output_table_ref(&bp.source, Some(&bp.port)));
+            let cond = &bp.condition;
+            let sql = format!(
+                "SELECT count(*) AS n FROM {q} WHERE ({cond}); SELECT * FROM (DESCRIBE {q}); \
+                 SELECT * FROM {q} WHERE ({cond}) LIMIT {PREVIEW_ROW_LIMIT};"
+            );
+            let text = self.run(Some(db), &sql, true).map_err(|e| {
+                format!(
+                    "The breakpoint on the link {} -> {} could not be checked ({}): {}",
+                    bp.source, bp.target, bp.condition, e
+                )
+            })?;
+            let arrays = parse_json_arrays(&text);
+            let matched = arrays
+                .first()
+                .and_then(|a| a.first())
+                .and_then(|r| r.get("n"))
+                .and_then(|v| v.as_u64().or_else(|| v.as_i64().map(|x| x.max(0) as u64)))
+                .unwrap_or(0);
+            if matched == 0 {
+                continue;
+            }
+            let schema_rows = arrays.get(1).cloned().unwrap_or_default();
+            return Ok(Some(BreakpointHit {
+                edge_id: bp.edge_id.clone(),
+                source: bp.source.clone(),
+                target: bp.target.clone(),
+                port: bp.port.clone(),
+                condition: bp.condition.clone(),
+                matched,
+                preview: NodePreview {
+                    node_id: bp.source.clone(),
+                    columns: schema_rows.iter().filter_map(parse_describe_row).collect(),
+                    rows: arrays.get(2).cloned().unwrap_or_default(),
+                    sql_types: schema_rows.iter().filter_map(describe_row_sql_type).collect(),
+                },
+            }));
+        }
+        Ok(None)
+    }
+
+    /// The rows that went down each link leaving a port other than `main`, read
+    /// from the run's database after its steps ran. A main-port link carries its
+    /// step's own preview, so it is not repeated.
+    ///
+    /// Read after the run rather than inside it: the batched path is one DuckDB
+    /// script under -bail, where a read that failed would fail the run, and the
+    /// rows of a link must never be able to do that. A port whose rows cannot be
+    /// read simply has none. Masked by the tags of the step the link leaves, the
+    /// same rule as that step's own preview (#301).
+    fn link_previews(
+        &self,
+        db: &Path,
+        doc: &PipelineDoc,
+        ran: &std::collections::BTreeMap<String, NodeRunStatus>,
+    ) -> Vec<LinkPreview> {
+        if !self.previews {
+            return Vec::new();
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut out = Vec::new();
+        for edge in &doc.edges {
+            let port = edge.source_handle.as_deref().map(plan::canonical_port).unwrap_or("main");
+            let finished = ran
+                .get(&edge.source)
+                .is_some_and(|s| s.status == "ok" || s.status == "unchanged");
+            if port == "main" || !finished || !seen.insert((edge.source.clone(), port.to_string())) {
+                continue;
+            }
+            let q = plan::quote_ident(&plan::output_table_ref(&edge.source, Some(port)));
+            let sql = format!("SELECT * FROM (DESCRIBE {q}); SELECT * FROM {q} LIMIT {PREVIEW_ROW_LIMIT};");
+            let Ok(text) = self.run(Some(db), &sql, true) else { continue };
+            let arrays = parse_json_arrays(&text);
+            let Some(schema_rows) = arrays.first() else { continue };
+            out.push(LinkPreview {
+                port: port.to_string(),
+                preview: NodePreview {
+                    node_id: edge.source.clone(),
+                    columns: schema_rows.iter().filter_map(parse_describe_row).collect(),
+                    rows: arrays.get(1).cloned().unwrap_or_default(),
+                    sql_types: schema_rows.iter().filter_map(describe_row_sql_type).collect(),
+                },
+            });
+        }
+        let tags = mask::tags_from_doc(doc);
+        for link in &mut out {
+            mask::mask_previews(std::slice::from_mut(&mut link.preview), &tags);
+        }
+        out
     }
 
     /// Count + schema + preview for a view stage's relation in ONE duckdb
@@ -8016,6 +8196,15 @@ pub struct RunResult {
     pub duration_ms: u64,
     pub nodes: std::collections::BTreeMap<String, NodeRunStatus>,
     pub preview: Vec<NodePreview>,
+    /// The rows a link carried when they are not its source step's own preview:
+    /// what a reject, filter or switch-case port sent on. A main-port link carries
+    /// the step's entry in `preview`, so it is not repeated here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub link_previews: Vec<LinkPreview>,
+    /// Where a run that asked for breakpoints stopped, and the rows that made it
+    /// stop. Present only when `status` is "stopped".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped_at: Option<BreakpointHit>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// Coarse bucket of `error` (see error_category) - present only on failure.
@@ -8063,6 +8252,8 @@ impl RunResult {
             duration_ms: start.elapsed().as_millis() as u64,
             nodes: Default::default(),
             preview: Vec::new(),
+            link_previews: Vec::new(),
+            stopped_at: None,
             error: Some(error),
             category: Some(category.into()),
             // A failure is never "nothing to do".
@@ -8270,6 +8461,40 @@ pub struct NodePreview {
     /// not part of the declared-schema vocabulary.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sql_types: Vec<String>,
+}
+
+/// A breakpoint a run will stop at: a link and the condition on its rows.
+struct ArmedBreakpoint {
+    edge_id: String,
+    source: String,
+    target: String,
+    port: String,
+    condition: String,
+}
+
+/// A breakpoint that matched: the link it is on, its condition, how many of the
+/// link's rows matched, and the first of them. `preview.node_id` is the step the
+/// link leaves, so that step's masking rules apply to these rows too.
+#[derive(Debug, Serialize)]
+pub struct BreakpointHit {
+    pub edge_id: String,
+    pub source: String,
+    pub target: String,
+    pub port: String,
+    pub condition: String,
+    pub matched: u64,
+    pub preview: NodePreview,
+}
+
+/// The rows that went down one link from a port other than `main` (see
+/// [`RunResult::link_previews`]). `preview.node_id` is the step the link leaves,
+/// so the masking rules for that step apply to these rows as to its own.
+#[derive(Debug, Serialize)]
+pub struct LinkPreview {
+    /// The port as the link names it: `reject`, `filter`, `case_1`, `default`.
+    pub port: String,
+    #[serde(flatten)]
+    pub preview: NodePreview,
 }
 
 /// Schema + rows from a single read-only query ([`Engine::query`]). The

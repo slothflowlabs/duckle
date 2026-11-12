@@ -43,6 +43,8 @@ import {
     FlaskConical,
     Workflow,
     FoldVertical,
+    CircleDot,
+    CircleOff,
     Group,
     Palette,
     UnfoldVertical,
@@ -161,6 +163,8 @@ type Props = {
     onEdgeChangeType: (edgeId: string, newType: ConnectionType) => void;
     onEdgeDelete: (edgeId: string) => void;
     onEdgeEdit: (edgeId: string) => void;
+    /** Open the breakpoint of a link for editing, or take it off. */
+    onEdgeBreakpoint: (edgeId: string, remove?: boolean) => void;
     nodeAutodetectAvailable: (nodeId: string) => boolean;
     /** Active pipeline id - used to remember pan/zoom per pipeline. */
     pipelineId?: string | null;
@@ -184,6 +188,7 @@ function CanvasInner({
     onEdgeChangeType,
     onEdgeDelete,
     onEdgeEdit,
+    onEdgeBreakpoint,
     nodeAutodetectAvailable,
     pipelineId,
 }: Props) {
@@ -840,6 +845,7 @@ function CanvasInner({
             if (edge.id.startsWith(PROXY_EDGE)) return;
             const currentType = (edge.data as { connectionType?: ConnectionType } | undefined)
                 ?.connectionType ?? 'main';
+            const breakpoint = (edge.data as { breakpoint?: string } | undefined)?.breakpoint;
             const items: MenuItem[] = [
                 {
                     kind: 'header',
@@ -854,6 +860,24 @@ function CanvasInner({
                     shortcut: 'Dbl-click',
                     onClick: () => onEdgeEdit(edge.id),
                 },
+                {
+                    kind: 'item',
+                    key: 'breakpoint',
+                    label: breakpoint ? 'Edit breakpoint…' : 'Set breakpoint…',
+                    icon: <CircleDot size={ICON_SIZE} />,
+                    onClick: () => onEdgeBreakpoint(edge.id),
+                },
+                ...(breakpoint
+                    ? [
+                          {
+                              kind: 'item',
+                              key: 'breakpoint-off',
+                              label: 'Remove breakpoint',
+                              icon: <CircleOff size={ICON_SIZE} />,
+                              onClick: () => onEdgeBreakpoint(edge.id, true),
+                          } as MenuItem,
+                      ]
+                    : []),
                 { kind: 'separator', key: 's0' },
                 ...CONNECTION_TYPES.map((t): MenuItem => ({
                     kind: 'item',
@@ -875,7 +899,7 @@ function CanvasInner({
             ];
             menu.open(e, items);
         },
-        [menu, onEdgeChangeType, onEdgeDelete, onEdgeEdit],
+        [menu, onEdgeChangeType, onEdgeDelete, onEdgeEdit, onEdgeBreakpoint],
     );
 
     const handlePaneContextMenu = useCallback(
