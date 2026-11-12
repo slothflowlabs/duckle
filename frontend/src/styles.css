@@ -2069,6 +2069,17 @@ textarea:focus-visible {
     pointer-events: auto;
 }
 
+/* React Flow writes `visibility: visible` and `pointer-events: all` onto every
+   node it has measured, as inline styles, and a value set on an element wins
+   over the `hidden` and `none` it would inherit. So a hidden tab's canvas went
+   on drawing its steps over the tab in front (plainly so over Tests) and
+   catching clicks meant for it. Everything inside an inactive panel is hidden
+   and inert, whatever it says about itself. */
+.tab-panel:not(.tab-panel-active) * {
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
 /* Empty state ------------------------------------------------------------- */
 .empty-state {
     height: 100%;
