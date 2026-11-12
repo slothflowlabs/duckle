@@ -74,8 +74,8 @@ jobs:
       - name: Site component index is in sync with the catalog
         run: |
           node website/scripts/build-llms.mjs
-          git diff --exit-code -- website/llms.txt website/llms-full.txt website/assets/js/catalog.data.js || {
-            echo "::error::website/llms.txt or the Learn course's catalog.data.js is stale. Run:"
+          git diff --exit-code -- website/llms.txt website/llms-full.txt website/assets/js/catalog.data.js website/docs/components.html || {
+            echo "::error::A website file generated from the component catalog (llms.txt, the Learn course data or docs/components.html) is stale. Run:"
             echo "::error::  node website/scripts/build-llms.mjs"
             echo "::error::and commit the result."
             exit 1

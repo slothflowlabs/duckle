@@ -1,5 +1,6 @@
 // Generates website/llms.txt and website/llms-full.txt from the committed
-// component catalog (crates/duckle-mcp/catalog.json).
+// component catalog (crates/duckle-mcp/catalog.json), along with the Learn
+// course's component data and the component reference page (see the end).
 //
 // Why generate rather than hand-write: llms.txt was maintained by hand and had
 // drifted badly (it advertised 345 available components, 104 sources and 59
@@ -223,6 +224,95 @@ for (const c of all) {
     if (family) course[family].push([c.id, c.label, c.summary ?? '', FLAG[c.availability] ?? 'a'])
 }
 writeFileSync(join(site, 'assets', 'js', 'catalog.data.js'), 'window.CATALOG=' + JSON.stringify(course) + ';', 'utf8')
+
+// The component reference (docs/components.html) lists every component,
+// grouped the way the editor's palette groups them. It was hand-written,
+// listed families of systems rather than components, and had fallen behind,
+// so the parts that list or count components are written here, between the
+// BEGIN/END GENERATED markers. The rest of the page stays hand-written.
+const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+const total = kind => by(kind, all).length
+const status = availability => all.filter(c => c.availability === availability).length
+const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+const ICON = {
+    source: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>',
+    transform: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg>',
+    sink: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>',
+}
+
+const referenceSummary = [
+    `<p class="lead">Duckle ships ${n.total} components across six kinds - ${total('source')} sources (<code>src.*</code>), ${total('transform')} transforms (<code>xf.*</code>), ${total('sink')} sinks (<code>snk.*</code>), ${total('quality')} data-quality validators (<code>qa.*</code>), ${total('control')} control-flow nodes (<code>ctl.*</code>), and ${total('custom')} code runners (<code>code.*</code>). Of these, ${n.available} are available today; the ${status('preview')} in preview and the ${status('planned')} planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>`,
+    '',
+    '<div class="grid cols-3">',
+    `  <div class="card"><span class="ico">${ICON.source}</span><h3>${total('source')} sources</h3><p>Files, lakehouse, databases, warehouses, object storage, streaming, SaaS APIs, NoSQL, vector DBs and more, all under <code>src.*</code>.</p></div>`,
+    `  <div class="card"><span class="ico">${ICON.transform}</span><h3>${total('transform')} transforms</h3><p>Fields, rows, aggregates, joins, windows, strings, dates, JSON, arrays, CDC/SCD, AI and search, all under <code>xf.*</code>.</p></div>`,
+    `  <div class="card"><span class="ico">${ICON.sink}</span><h3>${total('sink')} sinks</h3><p>Files, databases, warehouses, object storage, vector DBs, messaging and comms, all under <code>snk.*</code> with universal write modes.</p></div>`,
+    '</div>',
+].join('\n')
+
+// `home` is the palette category a kind lives in. A group from any other
+// category (the SaaS connectors, say, which are sources) is headed with its
+// category too, so a reader can find it in the palette.
+const SECTIONS = [
+    { kind: 'source', title: 'Sources', prefix: 'src.*', home: 'Sources',
+      intro: 'Sources read data into a pipeline. Connection-backed sources reuse saved, encrypted connections; file sources accept paths, globs and object-storage URIs.' },
+    { kind: 'transform', title: 'Transforms', prefix: 'xf.*', home: 'Transforms',
+      intro: 'Transforms reshape, combine and enrich rows between sources and sinks. The visual Map node (<code>xf.map</code>) joins a main input to up to 3 lookups with per-output expressions and a filter.' },
+    { kind: 'sink', title: 'Sinks', prefix: 'snk.*', home: 'Sinks',
+      intro: 'Sinks write pipeline output to a destination. All sinks support the same write modes.' },
+    { kind: 'quality', title: 'Data quality', prefix: 'qa.*', home: 'Data Quality',
+      intro: 'Validators split their input: passing rows continue on the main port, while failures route to a reject port for quarantine or re-processing.' },
+    { kind: 'control', title: 'Control flow', prefix: 'ctl.*', home: 'Control Flow',
+      intro: `Control-flow nodes orchestrate execution, branching, concurrency and error handling across a pipeline (${total('control')} total).` },
+    { kind: 'custom', title: 'Code', prefix: 'code.*', home: 'Custom Code',
+      intro: `Code runners drop down to custom logic when a visual node is not enough (${total('custom')} total).` },
+]
+const BADGE = { preview: 'Preview', planned: 'Planned' }
+
+const referenceSection = ({ kind, title, prefix, home, intro }) => {
+    const groups = new Map()
+    for (const c of all.filter(c => c.kind === kind)) {
+        const heading = c.category === home ? c.group : `${c.category}: ${c.group}`
+        if (!groups.has(heading)) groups.set(heading, [])
+        groups.get(heading).push(c)
+    }
+    // The id sits under the name, and each table scrolls inside its own box,
+    // so the page fits a phone: a third column, or the odd description word
+    // too long to wrap, otherwise pushed the whole page sideways.
+    const tables = [...groups].map(([heading, list]) => [
+        `<h3 id="${slug(`${title} ${heading}`)}">${esc(heading)} (${list.length})</h3>`,
+        '<div style="overflow-x:auto">',
+        '<table>',
+        '  <thead><tr><th>Component</th><th>What it does</th></tr></thead>',
+        '  <tbody>',
+        ...list.map(c => {
+            const badge = BADGE[c.availability] ? ` <span class="chip">${BADGE[c.availability]}</span>` : ''
+            const what = esc(summaryOf(c)).replace(/`([^`]+)`/g, '<code>$1</code>')
+            return `    <tr><td>${esc(c.label)}${badge}<br><code>${esc(c.id)}</code></td><td>${what}</td></tr>`
+        }),
+        '  </tbody>',
+        '</table>',
+        '</div>',
+    ].join('\n'))
+    return [`<h2 id="${slug(title)}">${title} <code>${prefix}</code></h2>`, `<p>${intro}</p>`, ...tables].join('\n\n')
+}
+
+const referencePath = join(site, 'docs', 'components.html')
+let reference = readFileSync(referencePath, 'utf8')
+const eol = reference.includes('\r\n') ? '\r\n' : '\n'
+const fill = (name, body) => {
+    const begin = `<!-- BEGIN GENERATED ${name} (website/scripts/build-llms.mjs writes this from the component catalog; edit it there) -->`
+    const end = `<!-- END GENERATED ${name} -->`
+    const from = reference.indexOf(begin)
+    const to = reference.indexOf(end)
+    if (from < 0 || to < from) throw new Error(`docs/components.html has lost its ${name} markers`)
+    reference = reference.slice(0, from + begin.length) + eol + body.replace(/\n/g, eol) + eol + reference.slice(to)
+}
+fill('summary', referenceSummary)
+fill('tables', SECTIONS.map(referenceSection).join('\n\n'))
+// The page's meta descriptions and structured data carry the total too.
+reference = reference.replace(/\b\d+ sources, transforms, sinks/g, `${n.total} sources, transforms, sinks`)
+writeFileSync(referencePath, reference, 'utf8')
 
 console.log(
     `build-llms: wrote llms.txt (${index.length} bytes) and llms-full.txt (${full.length} bytes) ` +

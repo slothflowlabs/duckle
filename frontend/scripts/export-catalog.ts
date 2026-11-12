@@ -8,7 +8,7 @@
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { ALL_COMPONENTS } from '../src/workflow-ui/palette-data';
+import { PALETTE } from '../src/workflow-ui/palette-data';
 import { portsForComponent } from '../src/workflow-ui/fields/manifest-synth';
 import { getManifest } from '../src/workflow-ui/fields/component-manifests';
 
@@ -22,15 +22,24 @@ import { getManifest } from '../src/workflow-ui/fields/component-manifests';
 // catalog is what duckle-mcp serves to AI agents via list_components and
 // get_component_schema, those agents were being handed property names that
 // silently produce a no-op node.
-const components = ALL_COMPONENTS.map((c) => ({
-    id: c.id,
-    label: c.label,
-    kind: c.kind,
-    availability: c.availability,
-    summary: c.summary ?? '',
-    ports: portsForComponent(c),
-    manifest: getManifest(c.id) ?? null,
-}));
+// Each component carries the palette category and group it sits in, so a reader
+// of the catalog (the website's component reference, an agent) can group the
+// components the way the editor does. The order is the palette's, as before.
+const components = PALETTE.flatMap((category) =>
+    category.groups.flatMap((group) =>
+        group.components.map((c) => ({
+            id: c.id,
+            label: c.label,
+            kind: c.kind,
+            availability: c.availability,
+            summary: c.summary ?? '',
+            category: category.label,
+            group: group.label,
+            ports: portsForComponent(c),
+            manifest: getManifest(c.id) ?? null,
+        })),
+    ),
+);
 
 const catalog = {
     version: '1',
