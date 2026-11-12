@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 421 components, 404 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 202 connectors (125 sources / 77 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 423 components, 406 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 204 connectors (126 sources / 78 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 21 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -81,7 +81,7 @@ Every component, by id. `src.*` reads, `snk.*` writes, `xf.*` transforms,
 `qa.*` checks, `ctl.*` controls flow, `code.*` runs your own code. Entries
 marked [planned] or [preview] are not usable yet.
 
-### Sources (read) (134)
+### Sources (read) (135)
 
 - `src.access` Microsoft Access: Read an Access database (.accdb / .mdb): a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver, Linux and macOS through mdbtools. Text, currency, yes/no and dates keep their types
 - `src.adbc` ADBC (Arrow): Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options
@@ -106,6 +106,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.delta` Delta Lake: Read Delta Lake tables via DuckDB delta_scan
 - `src.dhis2` DHIS2: DHIS2 Web API source - thin alias over src.rest. Auth: pick API key, set authHeader to Authorization, and put "ApiToken d2pat_..." (2.37+) or "Basic <user:password>" in the token field; plain Basic works too. Set responsePath per endpoint, since DHIS2 uses a different envelope for each: /api/dataValueSets -> /dataValues (unpaged); metadata lists like /api/organisationUnits or /api/dataElements -> the camelCase plural name, with paginationType page + pageSize; /api/tracker/trackedEntities -> the plural type name on 2.41+ but "instances" on 2.38-2.40. Raw /api/analytics is NOT supported: it returns headers[] plus positional rows[][] rather than record objects - use /api/analytics/dataValueSet.json (responsePath /dataValues) instead. Writing back to DHIS2 is not supported yet: the generic REST sink cannot chunk an import and discards the import summary, and DHIS2 returns HTTP 200 even when every record is rejected
 - `src.discord` Discord: Discord REST. Bot token in Authorization header (prefix `Bot `). No native pagination on most endpoints; use `?limit=N&before=ID` patterns. responsePath empty (responses are top-level arrays). Base URL https://discord.com/api/v10
+- `src.druid` Apache Druid: Run Druid SQL against a Router or Broker (POST /druid/v2/sql). Columns are typed from the SQL types Druid reports, an empty result included, and a result cut off mid-stream fails the run instead of loading part of it
 - `src.duckdb` DuckDB: Read a table from a DuckDB file
 - `src.ducklake` DuckLake: Read tables from a DuckLake catalog (DuckDB native lakehouse)
 - `src.ducklake.changes` DuckLake CDC: Change-data-feed source: reads table_changes() since the last consumed snapshot (saved in workspace state), emitting row-level insert / delete / update_preimage / update_postimage with a change_type column. True incremental CDC for DuckLake-managed tables
@@ -218,7 +219,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.yaml` YAML: Read a YAML file as a table. Top-level YAML arrays become one row per element; non-array docs become a single row. Suits config-data ETL (Helm values, GitHub Actions matrices) not bulk logs
 - `src.zendesk` Zendesk: Zendesk Support REST. Basic auth (email/token + API token). Cursor pagination via `meta.after_cursor` + `page[after]` param. responsePath /tickets (or whatever resource)
 
-### Destinations (write) (82)
+### Destinations (write) (83)
 
 - `snk.access` Microsoft Access: Write a table into an Access database (.accdb / .mdb), creating the file and the table when missing. Append or overwrite in one transaction; an empty upstream leaves the table alone. Windows only, through the Microsoft Access ODBC driver
 - `snk.avro` Avro: Write rows as an Apache Avro container file via the pure-Rust `apache-avro` crate. Schema is inferred from the first row's column types (long / double / string / boolean) - or supply a JSON Avro schema via the schemaJson field to override. recordName names the inferred record (default `Row`)
@@ -234,6 +235,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.db2` IBM DB2: Write to IBM DB2 through the IBM Data Server ODBC driver. Creates the table if missing from the upstream column types; Append adds rows, Overwrite clears it first. Booleans land in SMALLINT as 1/0, which DB2 for z/OS also accepts. No upsert
 - `snk.delta` Delta Lake: Append, upsert, update or delete by key in a Delta Lake table, local or on OneLake, ADLS, S3 or GCS, creating it from the input columns on first use. Columns are matched by name and a mismatch is refused, never dropped or filled with NULL
 - `snk.dhis2` DHIS2: Import rows into DHIS2. Set url to https://<host>/api/dataValueSets (importType aggregate) or https://<host>/api/tracker (importType tracker + trackerResource trackedEntities/events/enrollments/relationships). Rows are chunked (chunkSize, default 1000) and wrapped in the collection key DHIS2 expects. importStrategy defaults to CREATE_AND_UPDATE, which IS the DHIS2 upsert; dryRun validates without committing. The import summary is parsed, not discarded: conflicts, error reports and a non-zero ignored count fail the run by default (failOnConflict), because DHIS2 answers HTTP 200 even when it rejects every record. Sent synchronously (async=false) so the outcome is known per chunk rather than left in a job queue
+- `snk.druid` Apache Druid: Ingest rows into a Druid datasource with a native batch (index_parallel) task that carries them inline, then follow the task until it succeeds or fails. Dimensions are typed from the input columns; append adds rows, replace overwrites the time chunks they cover
 - `snk.duckdb` DuckDB: Write a table into a DuckDB file
 - `snk.ducklake` DuckLake: Write a table into a DuckLake catalog
 - `snk.elastic` Elasticsearch: Bulk-index docs via the _bulk NDJSON API (configurable host, index, ApiKey auth)

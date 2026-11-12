@@ -364,6 +364,11 @@ COMPONENTS = {
         'summary': 'Import rows into DHIS2. Set url to https://<host>/api/dataValueSets (importType aggregate) or https://<host>/api/tracker (importType tracker + trackerResource trackedEntities/events/enrollments/relationships). Rows are chunked (chunkSize, default 1000) and wrapped in the collection key DHIS2 expe...',
         'params': ['url', 'importType', 'trackerResource', 'importStrategy', 'chunkSize', 'dryRun', 'atomicMode', 'failOnConflict', 'authType', 'authHeader', 'authToken'],
     },
+    'snk.druid': {
+        'kind': 'sink',
+        'summary': 'Ingest rows into a Druid datasource with a native batch (index_parallel) task that carries them inline, then follow the task until it succeeds or fails. Dimensions are typed from the input columns; append adds rows, replace overwrites the time chunks they cover.',
+        'params': ['endpoint', 'username', 'password', 'dataSource', 'timestampColumn', 'writeMode', 'segmentGranularity', 'rowsPerTask'],
+    },
     'snk.duckdb': {
         'kind': 'sink',
         'summary': 'Write a table into a DuckDB file',
@@ -669,6 +674,11 @@ COMPONENTS = {
         'summary': 'Connect to a ws:// or wss:// URL and send each upstream row as a text frame - the whole row as JSON, or one column when messageColumn is set - then close. For pushing processed results to real-time dashboards or WebSocket APIs.',
         'params': ['url', 'messageColumn', 'headers'],
     },
+    'snk.wsserver': {
+        'kind': 'sink',
+        'summary': 'Hold a WebSocket port open and broadcast each upstream row, as one JSON message, to every consumer attached: browsers or services connect to ws://host:port/path. Runs under `duckle-runner follow`, which keeps the port and its consumers from one pass to the next; a single run refuses it. A consume...',
+        'params': ['host', 'port', 'path', 'queueSize'],
+    },
     'snk.xml': {
         'kind': 'sink',
         'summary': 'Write rows as XML via `quick-xml`. Default shape: `<root><row><col>val</col>...</row>...</root>`. rootElement / rowElement override the wrapper names. Complex (object/array) cell values are JSON-encoded inside CDATA so the file round-trips back through src.xml losslessly.',
@@ -794,6 +804,11 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'Discord REST. Bot token in Authorization header (prefix `Bot `). No native pagination on most endpoints; use `?limit=N&before=ID` patterns. responsePath empty (responses are top-level arrays). Base URL https://discord.com/api/v10.',
         'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responseFormat', 'responsePath', 'jsonPath', 'paginationType', 'nextUrlPath', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'incrementalField', 'incrementalInitial', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
+    },
+    'src.druid': {
+        'kind': 'source',
+        'summary': 'Run Druid SQL against a Router or Broker (POST /druid/v2/sql). Columns are typed from the SQL types Druid reports, an empty result included, and a result cut off mid-stream fails the run instead of loading part of it.',
+        'params': ['endpoint', 'username', 'password', 'query', 'context'],
     },
     'src.duckdb': {
         'kind': 'source',

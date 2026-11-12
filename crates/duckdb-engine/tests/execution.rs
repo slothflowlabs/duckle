@@ -27024,6 +27024,543 @@ fn snk_manticore_splits_rows_into_batches() {
 }
 
 // ---------------------------------------------------------------------------
+// src.druid / snk.druid (#23): Apache Druid. The source runs Druid SQL and
+// reads the arrayLines result, whose header rows carry each column's SQL type
+// and whose blank trailer line is how a cut-off result is told from a whole
+// one. The sink submits a native batch (index_parallel) task with the rows
+// inline, then follows the task's status until it succeeds or fails.
+// ---------------------------------------------------------------------------
+
+/// Serve `responses` (status, body) in order on 127.0.0.1, one connection
+/// each. Each request is read whole (head, then Content-Length bytes) and
+/// forwarded down the channel as text. Returns (port, receiver).
+fn druid_stub(responses: Vec<(u16, String)>) -> (u16, std::sync::mpsc::Receiver<String>) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind druid stub");
+    let port = listener.local_addr().unwrap().port();
+    let count = responses.len();
+    std::thread::spawn(move || {
+        for (i, stream) in incoming_bounded(&listener, count).enumerate() {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 8192];
+            let head_end = loop {
+                if let Some(p) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break Some(p + 4);
+                }
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break None,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            };
+            if let Some(head_end) = head_end {
+                let head = String::from_utf8_lossy(&buf[..head_end]).to_lowercase();
+                let len = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while buf.len() < head_end + len {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                }
+            }
+            let _ = tx.send(String::from_utf8_lossy(&buf).to_string());
+            let (status, body) = &responses[i];
+            let resp = format!(
+                "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status,
+                if *status == 200 { "OK" } else { "Error" },
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+    (port, rx)
+}
+
+/// The JSON body of a raw HTTP request.
+fn druid_request_json(req: &str) -> Value {
+    serde_json::from_str(req.split("\r\n\r\n").nth(1).unwrap_or("")).unwrap_or(Value::Null)
+}
+
+/// (name, type) of every column in a Parquet file, in order.
+fn parquet_columns(path: &str) -> Vec<(String, String)> {
+    duckdb_json(&format!("DESCRIBE SELECT * FROM read_parquet('{}')", path))
+        .iter()
+        .map(|d| {
+            (
+                d["column_name"].as_str().unwrap_or_default().to_string(),
+                d["column_type"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// An arrayLines answer: the three header rows (names, Druid types, SQL
+/// types), the rows, then the blank trailer line Druid ends a whole result
+/// with.
+fn druid_array_lines(header: [&str; 3], rows: &[&str]) -> String {
+    let mut lines: Vec<&str> = header.to_vec();
+    lines.extend_from_slice(rows);
+    format!("{}\n\n", lines.join("\n"))
+}
+
+const WIKI_HEADER: [&str; 3] = [
+    r#"["__time","channel","added","ratio","is_robot"]"#,
+    r#"["LONG","STRING","LONG","DOUBLE","LONG"]"#,
+    r#"["TIMESTAMP","VARCHAR","BIGINT","DOUBLE","BOOLEAN"]"#,
+];
+
+/// Run src.druid against `body` into a Parquet file; returns the result, the
+/// file and the request Druid was sent.
+fn run_druid_source(
+    engine: &DuckdbEngine,
+    status: u16,
+    body: String,
+    extra: Value,
+) -> (duckle_duckdb_engine::RunResult, String, tempfile::TempDir, Option<String>) {
+    let (port, rx) = druid_stub(vec![(status, body)]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.parquet");
+    let mut props = json!({
+        "endpoint": format!("http://127.0.0.1:{}", port),
+        "query": "SELECT __time, channel, added, ratio, is_robot FROM wikipedia",
+    });
+    for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+        props[k] = v;
+    }
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("d", "src.druid", props),
+            node("k", "snk.parquet", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "d", "k")]),
+    ));
+    let req = rx.recv_timeout(std::time::Duration::from_secs(5)).ok();
+    (r, out, tmp, req)
+}
+
+#[test]
+fn src_druid_types_columns_from_the_sql_header_in_query_order() {
+    let engine = engine_or_skip!();
+    let body = druid_array_lines(
+        WIKI_HEADER,
+        &[
+            r##"["2016-06-27T00:00:11.080Z","#sv.wikipedia",31,0.5,true]"##,
+            r##"["2016-06-27T00:00:17.457Z","#ja.wikipedia",125,1.25,false]"##,
+        ],
+    );
+    let (r, out, _tmp, req) = run_druid_source(
+        &engine,
+        200,
+        body,
+        json!({ "username": "reader", "password": "s3cret", "context": "{\"sqlTimeZone\": \"UTC\"}" }),
+    );
+    assert_eq!(r.status, "ok", "druid source failed: {:?}", r.error);
+
+    let req = req.expect("the SQL request");
+    assert!(req.starts_with("POST /druid/v2/sql "), "expected POST /druid/v2/sql: {}", req);
+    // base64("reader:s3cret")
+    assert!(
+        req.contains("Authorization: Basic cmVhZGVyOnMzY3JldA=="),
+        "expected HTTP Basic credentials: {}",
+        req
+    );
+    let sent = druid_request_json(&req);
+    assert_eq!(sent["query"], "SELECT __time, channel, added, ratio, is_robot FROM wikipedia");
+    assert_eq!(sent["resultFormat"], "arrayLines");
+    assert_eq!(sent["header"], true);
+    assert_eq!(sent["typesHeader"], true);
+    assert_eq!(sent["sqlTypesHeader"], true);
+    assert_eq!(sent["context"], json!({ "sqlTimeZone": "UTC" }), "the query context goes as an object");
+
+    assert_eq!(
+        parquet_columns(&out),
+        vec![
+            ("__time".to_string(), "TIMESTAMP".to_string()),
+            ("channel".to_string(), "VARCHAR".to_string()),
+            ("added".to_string(), "BIGINT".to_string()),
+            ("ratio".to_string(), "DOUBLE".to_string()),
+            ("is_robot".to_string(), "BOOLEAN".to_string()),
+        ],
+        "SQL types from the header, in the query's own column order"
+    );
+    let rows = duckdb_json(&format!(
+        "SELECT CAST(__time AS VARCHAR) AS t, channel, added, ratio, is_robot FROM read_parquet('{}') ORDER BY added",
+        out
+    ));
+    assert_eq!(rows[0]["t"], "2016-06-27 00:00:11.08");
+    assert_eq!(rows[0]["channel"], "#sv.wikipedia");
+    assert_eq!(rows[1]["added"], 125);
+    assert_eq!(rows[1]["ratio"], 1.25);
+    assert_eq!(rows[1]["is_robot"], false);
+}
+
+#[test]
+fn src_druid_types_an_empty_result_from_its_header() {
+    // No rows, but Druid still sent the header: the table is typed from it
+    // rather than refused for having nothing to infer types from.
+    let engine = engine_or_skip!();
+    let (r, out, _tmp, _req) =
+        run_druid_source(&engine, 200, druid_array_lines(WIKI_HEADER, &[]), json!({}));
+    assert_eq!(r.status, "ok", "an empty Druid result should load: {:?}", r.error);
+    assert_eq!(count(&format!("read_parquet('{}')", out)), 0);
+    assert_eq!(parquet_columns(&out).len(), 5);
+    assert_eq!(parquet_columns(&out)[0], ("__time".to_string(), "TIMESTAMP".to_string()));
+}
+
+#[test]
+fn src_druid_reports_the_error_druid_gives() {
+    let engine = engine_or_skip!();
+    let body = r#"{"error":"druidException","errorCode":"invalidInput","persona":"USER","category":"INVALID_INPUT","errorMessage":"Object 'nope' not found within 'druid'","context":{}}"#;
+    let (r, _out, _tmp, _req) = run_druid_source(&engine, 400, body.to_string(), json!({}));
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(
+        err.contains("Object 'nope' not found within 'druid'"),
+        "the run should say what Druid said: {}",
+        err
+    );
+}
+
+#[test]
+fn src_druid_fails_a_result_cut_off_before_its_trailer() {
+    // arrayLines ends a whole result with a blank line. A stream that stops
+    // without it was cut off (Druid cannot change the status once rows have
+    // gone out), so the rows that did arrive must not load as if complete.
+    let engine = engine_or_skip!();
+    let mut body = WIKI_HEADER.join("\n");
+    body.push('\n');
+    body.push_str(r##"["2016-06-27T00:00:11.080Z","#sv.wikipedia",31,0.5,true]"##);
+    body.push('\n');
+    let (r, _out, _tmp, _req) = run_druid_source(&engine, 200, body, json!({}));
+    assert_eq!(r.status, "error", "a cut-off result must fail the run");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("cut off"), "the error should say the result was cut off: {}", err);
+}
+
+#[test]
+fn src_druid_reads_dates_and_arrays_as_their_own_types() {
+    // Druid sends a DATE as a full ISO timestamp, and an array column as a
+    // JSON array.
+    let engine = engine_or_skip!();
+    let body = druid_array_lines(
+        [r#"["day","tags"]"#, r#"["LONG","ARRAY<STRING>"]"#, r#"["DATE","VARCHAR ARRAY"]"#],
+        &[r#"["2016-06-27T00:00:00.000Z",["a","b"]]"#],
+    );
+    let (r, out, _tmp, _req) = run_druid_source(&engine, 200, body, json!({}));
+    assert_eq!(r.status, "ok", "druid source failed: {:?}", r.error);
+    assert_eq!(
+        parquet_columns(&out),
+        vec![
+            ("day".to_string(), "DATE".to_string()),
+            ("tags".to_string(), "VARCHAR[]".to_string()),
+        ]
+    );
+    let rows = duckdb_json(&format!(
+        "SELECT CAST(day AS VARCHAR) AS day, tags FROM read_parquet('{}')",
+        out
+    ));
+    assert_eq!(rows[0]["day"], "2016-06-27");
+    assert_eq!(rows[0]["tags"], json!(["a", "b"]));
+}
+
+#[test]
+fn src_druid_refuses_a_context_that_is_not_a_json_object() {
+    // Checked when the pipeline is planned, so `validate` catches it too.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.parquet");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("d", "src.druid", json!({
+                "endpoint": "http://127.0.0.1:9",
+                "query": "SELECT 1",
+                "context": "[\"sqlTimeZone\"]",
+            })),
+            node("k", "snk.parquet", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "d", "k")]),
+    ));
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("context must be a JSON object"), "{}", err);
+}
+
+const DRUID_CSV: &str = "ts,name,n,x,flag\n2024-01-02 03:04:05,alpha,42,1.5,true\n2024-01-03 04:05:06,beta,7,2.25,false\n";
+
+fn druid_task(id: &str) -> String {
+    format!(r#"{{"task":"{}"}}"#, id)
+}
+
+fn druid_status(id: &str, status: &str, error: Option<&str>) -> String {
+    let error = error.map(|e| format!(r#""{}""#, e)).unwrap_or_else(|| "null".into());
+    format!(
+        r#"{{"task":"{id}","status":{{"id":"{id}","status":"{status}","statusCode":"{status}","errorMsg":{error}}}}}"#
+    )
+}
+
+/// Run the CSV above into snk.druid with `props` against `responses`;
+/// returns the result and every request the stub saw, in order.
+fn run_druid_sink(
+    engine: &DuckdbEngine,
+    responses: Vec<(u16, String)>,
+    props: Value,
+) -> (duckle_duckdb_engine::RunResult, Vec<String>) {
+    let expected = responses.len();
+    let (port, rx) = druid_stub(responses);
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "events.csv", DRUID_CSV);
+    let mut sink = json!({ "endpoint": format!("http://127.0.0.1:{}", port), "dataSource": "events" });
+    for (k, v) in props.as_object().cloned().unwrap_or_default() {
+        sink[k] = v;
+    }
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("d", "snk.druid", sink),
+        ]),
+        json!([main_edge("e1", "s", "d")]),
+    ));
+    let mut seen = Vec::new();
+    for _ in 0..expected {
+        match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+            Ok(req) => seen.push(req),
+            Err(_) => break,
+        }
+    }
+    (r, seen)
+}
+
+/// The rows a task carried inline, one JSON object per line.
+fn druid_inline_rows(task: &Value) -> Vec<Value> {
+    task["spec"]["ioConfig"]["inputSource"]["data"]
+        .as_str()
+        .unwrap_or_default()
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("an inline row is JSON"))
+        .collect()
+}
+
+#[test]
+fn snk_druid_submits_a_typed_inline_task_and_waits_for_it() {
+    let engine = engine_or_skip!();
+    let id = "index_parallel_events_x1";
+    let (r, reqs) = run_druid_sink(
+        &engine,
+        vec![
+            (200, druid_task(id)),
+            (200, druid_status(id, "RUNNING", None)),
+            (200, druid_status(id, "SUCCESS", None)),
+        ],
+        json!({ "timestampColumn": "ts" }),
+    );
+    assert_eq!(r.status, "ok", "druid sink failed: {:?}", r.error);
+    assert_eq!(reqs.len(), 3, "submit, then poll until SUCCESS: {:?}", reqs);
+    assert!(reqs[0].starts_with("POST /druid/indexer/v1/task "), "{}", reqs[0]);
+    assert!(
+        reqs[1].starts_with(&format!("GET /druid/indexer/v1/task/{}/status ", id)),
+        "{}",
+        reqs[1]
+    );
+    assert!(reqs[2].starts_with("GET "), "still polling after RUNNING: {}", reqs[2]);
+
+    let task = druid_request_json(&reqs[0]);
+    assert_eq!(task["type"], "index_parallel");
+    let schema = &task["spec"]["dataSchema"];
+    assert_eq!(schema["dataSource"], "events");
+    assert_eq!(
+        schema["timestampSpec"],
+        json!({ "column": "ts", "format": "millis" }),
+        "a TIMESTAMP time column goes as epoch milliseconds"
+    );
+    assert_eq!(
+        schema["dimensionsSpec"]["dimensions"],
+        json!([
+            { "type": "string", "name": "name" },
+            { "type": "long", "name": "n" },
+            { "type": "double", "name": "x" },
+            { "type": "long", "name": "flag" },
+        ]),
+        "every other column is a dimension typed from its DuckDB type"
+    );
+    assert_eq!(schema["granularitySpec"]["segmentGranularity"], "day");
+    assert_eq!(schema["granularitySpec"]["rollup"], false);
+    let io = &task["spec"]["ioConfig"];
+    assert_eq!(io["appendToExisting"], true);
+    assert_eq!(io["inputSource"]["type"], "inline");
+    assert_eq!(io["inputFormat"]["type"], "json");
+    let rows = druid_inline_rows(&task);
+    assert_eq!(rows.len(), 2);
+    // 2024-01-02T03:04:05Z
+    assert_eq!(rows[0]["ts"], 1_704_164_645_000_i64);
+    assert_eq!(rows[0]["name"], "alpha");
+    assert_eq!(rows[0]["flag"], 1, "a boolean goes as a long");
+    assert_eq!(rows[1]["flag"], 0);
+}
+
+#[test]
+fn snk_druid_fails_the_run_with_the_reason_druid_gives() {
+    let engine = engine_or_skip!();
+    let id = "index_parallel_events_x2";
+    let (r, _reqs) = run_druid_sink(
+        &engine,
+        vec![
+            (200, druid_task(id)),
+            (200, druid_status(id, "FAILED", Some("Cannot parse timestamp [banana]"))),
+        ],
+        json!({ "timestampColumn": "ts" }),
+    );
+    assert_eq!(r.status, "error", "a failed task must fail the run");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("Cannot parse timestamp [banana]"), "Druid's reason: {}", err);
+    assert!(err.contains(id), "the task id, to find its log: {}", err);
+}
+
+#[test]
+fn snk_druid_splits_append_rows_across_tasks() {
+    let engine = engine_or_skip!();
+    let (r, reqs) = run_druid_sink(
+        &engine,
+        vec![
+            (200, druid_task("t1")),
+            (200, druid_status("t1", "SUCCESS", None)),
+            (200, druid_task("t2")),
+            (200, druid_status("t2", "SUCCESS", None)),
+        ],
+        json!({ "timestampColumn": "ts", "rowsPerTask": 1, "segmentGranularity": "hour" }),
+    );
+    assert_eq!(r.status, "ok", "druid sink failed: {:?}", r.error);
+    assert_eq!(reqs.len(), 4, "two tasks, each followed to SUCCESS: {:?}", reqs);
+    let first = druid_inline_rows(&druid_request_json(&reqs[0]));
+    let second = druid_inline_rows(&druid_request_json(&reqs[2]));
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0]["name"], "alpha");
+    assert_eq!(
+        druid_request_json(&reqs[0])["spec"]["dataSchema"]["granularitySpec"]["segmentGranularity"],
+        "hour"
+    );
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0]["name"], "beta");
+    assert!(reqs[1].contains("/task/t1/status"), "{}", reqs[1]);
+    assert!(reqs[3].contains("/task/t2/status"), "{}", reqs[3]);
+}
+
+#[test]
+fn snk_druid_replace_sends_every_row_in_one_overwriting_task() {
+    // Replace overwrites the time chunks a task's rows cover, so a second
+    // task would overwrite what the first one wrote: one task carries all.
+    let engine = engine_or_skip!();
+    let (r, reqs) = run_druid_sink(
+        &engine,
+        vec![
+            (200, druid_task("r1")),
+            (200, druid_status("r1", "SUCCESS", None)),
+            (200, druid_task("r2")),
+        ],
+        json!({ "timestampColumn": "ts", "writeMode": "replace", "rowsPerTask": 1 }),
+    );
+    assert_eq!(r.status, "ok", "druid sink failed: {:?}", r.error);
+    assert_eq!(reqs.len(), 2, "one task, followed to SUCCESS, and no second: {:?}", reqs);
+    let task = druid_request_json(&reqs[0]);
+    assert_eq!(task["spec"]["ioConfig"]["appendToExisting"], false);
+    assert_eq!(druid_inline_rows(&task).len(), 2);
+}
+
+#[test]
+fn snk_druid_without_a_time_column_stamps_every_row_with_the_epoch() {
+    let engine = engine_or_skip!();
+    let (r, reqs) = run_druid_sink(
+        &engine,
+        vec![(200, druid_task("e1")), (200, druid_status("e1", "SUCCESS", None))],
+        json!({}),
+    );
+    assert_eq!(r.status, "ok", "druid sink failed: {:?}", r.error);
+    let task = druid_request_json(&reqs[0]);
+    let schema = &task["spec"]["dataSchema"];
+    assert_eq!(
+        schema["timestampSpec"],
+        json!({ "column": "!!!_no_such_column_!!!", "format": "auto", "missingValue": "1970-01-01T00:00:00Z" })
+    );
+    assert_eq!(
+        schema["dimensionsSpec"]["dimensions"][0],
+        json!({ "type": "string", "name": "ts" }),
+        "with no time column, a timestamp is an ordinary dimension"
+    );
+    assert_eq!(druid_inline_rows(&task)[0]["ts"], "2024-01-02 03:04:05");
+}
+
+#[test]
+fn snk_druid_refuses_a_time_column_the_input_does_not_have() {
+    let engine = engine_or_skip!();
+    let (r, reqs) = run_druid_sink(&engine, vec![], json!({ "timestampColumn": "when" }));
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("`when`"), "name the missing column: {}", err);
+    assert!(reqs.is_empty(), "nothing is sent to Druid: {:?}", reqs);
+}
+
+#[test]
+fn snk_druid_points_at_the_overlord_when_the_endpoint_has_no_task_api() {
+    // A Router without its management proxy answers the task API with 404.
+    let engine = engine_or_skip!();
+    let (r, _reqs) = run_druid_sink(&engine, vec![(404, String::new())], json!({ "timestampColumn": "ts" }));
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("Overlord"), "say where the task API lives: {}", err);
+}
+
+#[test]
+fn snk_druid_sends_zoned_wide_and_nested_values_without_bending_them() {
+    // A zoned time goes as UTC wall-clock text, whatever zone this host is
+    // in; a list as a json dimension; a DECIMAL as a double; and an integer
+    // wider than Druid's long as text rather than narrowed into one.
+    let engine = engine_or_skip!();
+    let (port, rx) = druid_stub(vec![(200, druid_task("w1")), (200, druid_status("w1", "SUCCESS", None))]);
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "kick.csv", "k\n1\n");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("q", "code.sql", json!({ "sql": concat!(
+                "SELECT TIMESTAMPTZ '2024-01-02 03:04:05+02' AS zoned, [1, 2] AS tags, ",
+                "CAST(12.50 AS DECIMAL(5,2)) AS amount, ",
+                "CAST('170141183460469231731687303715884105727' AS HUGEINT) AS big FROM input"
+            ) })),
+            node("d", "snk.druid", json!({ "endpoint": format!("http://127.0.0.1:{}", port), "dataSource": "wide" })),
+        ]),
+        json!([main_edge("e1", "s", "q"), main_edge("e2", "q", "d")]),
+    ));
+    assert_eq!(r.status, "ok", "druid sink failed: {:?}", r.error);
+    let task = druid_request_json(&rx.recv_timeout(std::time::Duration::from_secs(5)).expect("the task"));
+    assert_eq!(
+        task["spec"]["dataSchema"]["dimensionsSpec"]["dimensions"],
+        json!([
+            { "type": "string", "name": "zoned" },
+            { "type": "json", "name": "tags" },
+            { "type": "double", "name": "amount" },
+            { "type": "string", "name": "big" },
+        ])
+    );
+    let row = &druid_inline_rows(&task)[0];
+    assert_eq!(row["zoned"], "2024-01-02 01:04:05", "03:04:05+02 is 01:04:05 UTC");
+    assert_eq!(row["tags"], json!([1, 2]));
+    assert_eq!(row["amount"], 12.5);
+    assert_eq!(row["big"], "170141183460469231731687303715884105727");
+}
+
+// ---------------------------------------------------------------------------
 // src.generate: believable fake rows, compiled to SQL.
 // ---------------------------------------------------------------------------
 

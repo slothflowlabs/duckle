@@ -16112,6 +16112,326 @@ impl DuckdbEngine {
         ))
     }
 
+    /// Apache Druid SQL source (#23): POST /druid/v2/sql and read the answer
+    /// as arrayLines - one JSON array per line - so a result of any size
+    /// streams to disk rather than into memory.
+    ///
+    /// The three header rows (column names, Druid types, SQL types) type every
+    /// column, an empty result included, in the query's own column order. A
+    /// whole result ends with a blank line. Druid cannot change the status once
+    /// rows have gone out, so a stream that stops without that line was cut
+    /// off, and fails the run rather than loading part of the answer.
+    pub(crate) fn run_druid_source(
+        &self,
+        db: &Path,
+        spec: &DruidSourceSpec,
+    ) -> Result<String, EngineError> {
+        use std::io::BufRead;
+
+        let url = format!("{}/druid/v2/sql", spec.endpoint.trim_end_matches('/'));
+        let mut body = serde_json::json!({
+            "query": spec.query,
+            "resultFormat": "arrayLines",
+            "header": true,
+            "typesHeader": true,
+            "sqlTypesHeader": true,
+        });
+        if let Some(context) = &spec.context {
+            body["context"] = context.clone();
+        }
+        self.check_cancelled()?;
+        let response =
+            match druid_request("POST", &url, spec.username.as_deref(), spec.password.as_deref())
+                .set("Content-Type", "application/json")
+                .send_string(&body.to_string())
+            {
+                Ok(r) => r,
+                Err(ureq::Error::Status(code, r)) => return Err(druid_status_error(code, &url, r)),
+                Err(e) => {
+                    return Err(EngineError::Query(format!(
+                        "Druid HTTP transport to {}: {}",
+                        url, e
+                    )))
+                }
+            };
+        let mut lines = std::io::BufReader::new(response.into_reader()).lines();
+        let mut header = |what: &str| -> Result<Vec<String>, EngineError> {
+            let line = lines
+                .next()
+                .transpose()
+                .map_err(|e| EngineError::Query(format!("druid: reading the result: {}", e)))?;
+            line.as_deref()
+                .and_then(|l| serde_json::from_str::<Vec<String>>(l).ok())
+                .ok_or_else(|| {
+                    EngineError::Query(format!(
+                        "druid: the answer from {} has no {} header row - is the endpoint a \
+                         Druid Router or Broker?",
+                        url, what
+                    ))
+                })
+        };
+        let names = header("column-name")?;
+        let _druid_types = header("Druid-type")?;
+        let sql_types = header("SQL-type")?;
+        if sql_types.len() != names.len() {
+            return Err(EngineError::Query(format!(
+                "druid: the header names {} column(s) but types {}",
+                names.len(),
+                sql_types.len()
+            )));
+        }
+        let mut writer = JsonLinesWriter::open(&spec.node_id)?;
+        let mut rows = 0_usize;
+        let mut whole = false;
+        for line in lines {
+            let line =
+                line.map_err(|e| EngineError::Query(format!("druid: reading the result: {}", e)))?;
+            if line.trim().is_empty() {
+                whole = true;
+                break;
+            }
+            if rows % 10_000 == 0 {
+                self.check_cancelled()?;
+            }
+            let cells: Vec<JsonValue> = serde_json::from_str(&line).map_err(|e| {
+                EngineError::Query(format!(
+                    "druid: result row {} is not a JSON array: {}",
+                    rows + 1,
+                    e
+                ))
+            })?;
+            let mut row = serde_json::Map::with_capacity(cells.len());
+            for (i, cell) in cells.into_iter().enumerate() {
+                row.insert(format!("c{}", i), cell);
+            }
+            writer.write_row(&JsonValue::Object(row))?;
+            rows += 1;
+        }
+        if !whole {
+            return Err(EngineError::Query(format!(
+                "druid: the result was cut off after {} row(s): it ended without the blank line \
+                 Druid closes a whole result with, so the query most likely failed partway. \
+                 Nothing was loaded.",
+                rows
+            )));
+        }
+        let (columns_spec, select_list) = druid_columns(&names, &sql_types);
+        writer.finalize_typed(&self.bin, db, &spec.node_id, &columns_spec, &select_list)?;
+        Ok(format!(
+            "druid: materialized {} rows ({} columns) into {}",
+            rows,
+            names.len(),
+            spec.node_id
+        ))
+    }
+
+    /// Apache Druid ingestion sink (#23): submit a native batch
+    /// (`index_parallel`) task carrying the rows inline, then follow its status
+    /// until it succeeds or fails - a submitted task is only a promise.
+    ///
+    /// Every column but the time column becomes a dimension typed from its
+    /// DuckDB type, so Druid stores what was sent rather than guessing from
+    /// JSON. Append sends `rows_per_task` rows per task, one task at a time.
+    /// Replace sends every row in one task: it overwrites the time chunks a
+    /// task's rows cover, so a second task would overwrite the first.
+    pub(crate) fn run_druid_sink(
+        &self,
+        db: &Path,
+        secret_prefix: &str,
+        spec: &DruidSinkSpec,
+    ) -> Result<String, EngineError> {
+        let columns = describe_columns(self, db, &spec.from_view);
+        let time = spec.timestamp_column.as_deref();
+        if let Some(t) = time {
+            if !columns.iter().any(|(n, _)| n == t) {
+                return Err(EngineError::Config(format!(
+                    "snk.druid: the time column `{}` is not in the input (it has: {})",
+                    t,
+                    columns
+                        .iter()
+                        .map(|(n, _)| n.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+        }
+        let mut select = Vec::with_capacity(columns.len());
+        let mut dimensions = Vec::with_capacity(columns.len());
+        let mut time_format = "auto";
+        for (name, ty) in &columns {
+            let q = plan::quote_ident(name);
+            let ty = ty.to_uppercase();
+            if Some(name.as_str()) == time {
+                match druid_epoch_millis(&q, &ty) {
+                    Some(expr) => {
+                        select.push(format!("{} AS {}", expr, q));
+                        time_format = "millis";
+                    }
+                    None => select.push(q),
+                }
+                continue;
+            }
+            let (kind, expr) = druid_dimension(&q, &ty);
+            select.push(format!("{} AS {}", expr, q));
+            dimensions.push(serde_json::json!({ "type": kind, "name": name }));
+        }
+        let timestamp_spec = match time {
+            Some(t) => serde_json::json!({ "column": t, "format": time_format }),
+            // Druid's own idiom for data with no time: a column that cannot
+            // exist, and the value every row gets in its place.
+            None => serde_json::json!({
+                "column": "!!!_no_such_column_!!!",
+                "format": "auto",
+                "missingValue": "1970-01-01T00:00:00Z",
+            }),
+        };
+        let rows = self.run_rows(
+            Some(db),
+            &format!(
+                "{}SELECT {} FROM {}",
+                secret_prefix,
+                select.join(", "),
+                plan::quote_ident(&spec.from_view)
+            ),
+        )?;
+        if rows.is_empty() {
+            return Ok(format!(
+                "druid: no rows for {}; no task submitted",
+                spec.data_source
+            ));
+        }
+        let replace = spec.mode == "replace";
+        let per_task = if replace {
+            rows.len()
+        } else {
+            spec.rows_per_task.max(1)
+        };
+        let base = spec.endpoint.trim_end_matches('/');
+        let (user, password) = (spec.username.as_deref(), spec.password.as_deref());
+        let mut done: Vec<String> = Vec::new();
+        for chunk in rows.chunks(per_task) {
+            self.check_cancelled()?;
+            let data = chunk
+                .iter()
+                .map(|r| r.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let task = serde_json::json!({
+                "type": "index_parallel",
+                "spec": {
+                    "dataSchema": {
+                        "dataSource": spec.data_source,
+                        "timestampSpec": timestamp_spec,
+                        "dimensionsSpec": { "dimensions": dimensions },
+                        "granularitySpec": {
+                            "type": "uniform",
+                            "segmentGranularity": spec.segment_granularity,
+                            "queryGranularity": "none",
+                            "rollup": false,
+                        },
+                    },
+                    "ioConfig": {
+                        "type": "index_parallel",
+                        "inputSource": { "type": "inline", "data": data },
+                        "inputFormat": { "type": "json" },
+                        "appendToExisting": !replace,
+                    },
+                    "tuningConfig": {
+                        "type": "index_parallel",
+                        "partitionsSpec": { "type": "dynamic" },
+                    },
+                },
+            });
+            let id = druid_submit_task(base, user, password, &task)?;
+            if let Some(reason) = self.wait_for_druid_task(base, user, password, &id)? {
+                let earlier = if done.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "; the {} task(s) before it had already ingested {} row(s), which stay in {}",
+                        done.len(),
+                        done.len() * per_task,
+                        spec.data_source
+                    )
+                };
+                return Err(EngineError::Query(format!(
+                    "druid: ingestion task {} failed: {}{}",
+                    id, reason, earlier
+                )));
+            }
+            done.push(id);
+        }
+        Ok(if replace {
+            format!(
+                "druid: replaced the time chunks of {} that {} row(s) cover (task {})",
+                spec.data_source,
+                rows.len(),
+                done.join(", ")
+            )
+        } else {
+            format!(
+                "druid: appended {} row(s) to {} in {} task(s)",
+                rows.len(),
+                spec.data_source,
+                done.len()
+            )
+        })
+    }
+
+    /// Follow a Druid task's status until it ends: Ok(None) on SUCCESS,
+    /// Ok(Some(reason)) on FAILED. A cancelled run asks Druid to shut the
+    /// task down rather than leave it running with nobody waiting on it.
+    fn wait_for_druid_task(
+        &self,
+        base: &str,
+        user: Option<&str>,
+        password: Option<&str>,
+        id: &str,
+    ) -> Result<Option<String>, EngineError> {
+        let task = percent_encode_path(id);
+        let url = format!("{}/druid/indexer/v1/task/{}/status", base, task);
+        let mut waits = [200_u64, 500, 1000].into_iter().chain(std::iter::repeat(2000));
+        loop {
+            if let Err(e) = self.ai_sleep_cancellable(waits.next().unwrap_or(2000)) {
+                let shutdown = format!("{}/druid/indexer/v1/task/{}/shutdown", base, task);
+                let _ = druid_request("POST", &shutdown, user, password).call();
+                return Err(e);
+            }
+            let answer: JsonValue = match druid_request("GET", &url, user, password).call() {
+                Ok(r) => r.into_json().map_err(|e| {
+                    EngineError::Query(format!("druid: task status from {} is not JSON: {}", url, e))
+                })?,
+                Err(ureq::Error::Status(code, r)) => return Err(druid_status_error(code, &url, r)),
+                Err(e) => {
+                    return Err(EngineError::Query(format!(
+                        "Druid HTTP transport to {}: {}",
+                        url, e
+                    )))
+                }
+            };
+            let state = answer
+                .pointer("/status/statusCode")
+                .or_else(|| answer.pointer("/status/status"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match state {
+                "SUCCESS" => return Ok(None),
+                "FAILED" => {
+                    return Ok(Some(
+                        answer
+                            .pointer("/status/errorMsg")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("Druid gave no reason; the task's log in the Druid console has it")
+                            .to_string(),
+                    ))
+                }
+                // WAITING, PENDING, RUNNING
+                _ => {}
+            }
+        }
+    }
+
     /// Generic HTTP REST source. Fetches the URL (optionally with a
     /// JSON body for POST APIs), parses the response, walks the
     /// configured JSON pointer to find the row array, and follows
@@ -19685,6 +20005,181 @@ fn imap_starttls(tcp: &mut std::net::TcpStream) -> std::io::Result<()> {
 /// only thing standing between a label like `` a`b `` and a broken query.
 fn cypher_ident(s: &str) -> String {
     format!("`{}`", s.replace('`', "``"))
+}
+
+/// A Druid HTTP request with optional Basic credentials (druid-basic-security).
+fn druid_request(method: &str, url: &str, user: Option<&str>, password: Option<&str>) -> ureq::Request {
+    let mut req = crate::tls::http_agent()
+        .request(method, url)
+        .set("Accept", "application/json");
+    if let Some(u) = user {
+        use base64::engine::general_purpose::STANDARD as B64;
+        use base64::Engine as _;
+        let creds = B64.encode(format!("{}:{}", u, password.unwrap_or("")));
+        req = req.set("Authorization", &format!("Basic {}", creds));
+    }
+    req
+}
+
+/// The run error for a Druid error answer, carrying Druid's own reason:
+/// `errorMessage` in both the current (druidException) and the older error
+/// shape, else `error`, else the start of the body.
+fn druid_status_error(code: u16, url: &str, response: ureq::Response) -> EngineError {
+    let body = response.into_string().unwrap_or_default();
+    let reason = serde_json::from_str::<JsonValue>(&body)
+        .ok()
+        .and_then(|v| {
+            ["errorMessage", "error"].iter().find_map(|k| {
+                v.get(*k)
+                    .and_then(|e| e.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            })
+        })
+        .unwrap_or_else(|| body.chars().take(300).collect());
+    EngineError::Query(format!("Druid HTTP {} from {}: {}", code, url, reason))
+}
+
+/// Submit an ingestion task; returns the id Druid gave it.
+fn druid_submit_task(
+    base: &str,
+    user: Option<&str>,
+    password: Option<&str>,
+    task: &JsonValue,
+) -> Result<String, EngineError> {
+    let url = format!("{}/druid/indexer/v1/task", base);
+    let answer: JsonValue = match druid_request("POST", &url, user, password)
+        .set("Content-Type", "application/json")
+        .send_string(&task.to_string())
+    {
+        Ok(r) => r.into_json().map_err(|e| {
+            EngineError::Query(format!(
+                "druid: the task API at {} answered with something other than JSON: {}",
+                url, e
+            ))
+        })?,
+        // A Router whose management proxy is off has no task API.
+        Err(ureq::Error::Status(code @ (404 | 405), _)) => {
+            return Err(EngineError::Query(format!(
+                "druid: {} has no task API (HTTP {}). Ingestion goes to the Overlord: point the \
+                 endpoint at it (port 8081 in the quickstart, 8090 on its own), or at a Router \
+                 started with druid.router.managementProxy.enabled=true.",
+                url, code
+            )))
+        }
+        Err(ureq::Error::Status(code, r)) => return Err(druid_status_error(code, &url, r)),
+        Err(e) => {
+            return Err(EngineError::Query(format!(
+                "Druid HTTP transport to {}: {}",
+                url, e
+            )))
+        }
+    };
+    answer
+        .get("task")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            EngineError::Query(format!(
+                "druid: the task API at {} took the task but gave no task id: {}",
+                url, answer
+            ))
+        })
+}
+
+/// read_json's `columns` map and the projection for a Druid arrayLines
+/// result. Cells are keyed by position (c0, c1, ...), so the query's own
+/// column names - any characters, in the query's order - appear only in the
+/// projection.
+fn druid_columns(names: &[String], sql_types: &[String]) -> (String, String) {
+    let mut columns = Vec::with_capacity(names.len());
+    let mut select = Vec::with_capacity(names.len());
+    for (i, (name, sql_type)) in names.iter().zip(sql_types).enumerate() {
+        let key = format!("c{}", i);
+        let (read_as, cast_to) = druid_duckdb_type(sql_type);
+        columns.push(format!("'{}': '{}'", key, read_as));
+        let cell = plan::quote_ident(&key);
+        let expr = match cast_to {
+            Some(t) => format!("CAST({} AS {})", cell, t),
+            None => cell,
+        };
+        select.push(format!("{} AS {}", expr, plan::quote_ident(name)));
+    }
+    (columns.join(", "), select.join(", "))
+}
+
+/// The DuckDB type a Druid SQL type is read as, and a cast after it where
+/// read_json cannot produce the type directly (Druid sends a DATE as a full
+/// ISO timestamp).
+fn druid_duckdb_type(sql_type: &str) -> (String, Option<&'static str>) {
+    let t = sql_type.trim().to_uppercase();
+    if let Some(inner) = t.strip_suffix(" ARRAY") {
+        return (format!("{}[]", druid_duckdb_type(inner).0), None);
+    }
+    let read_as = match t.as_str() {
+        "TIMESTAMP" => "TIMESTAMP",
+        "DATE" => return ("TIMESTAMP".to_string(), Some("DATE")),
+        "BIGINT" | "INTEGER" | "SMALLINT" | "TINYINT" => "BIGINT",
+        "BOOLEAN" => "BOOLEAN",
+        "VARCHAR" | "CHAR" => "VARCHAR",
+        _ if ["DOUBLE", "FLOAT", "REAL", "DECIMAL"].iter().any(|p| t.starts_with(p)) => "DOUBLE",
+        _ if t.starts_with("COMPLEX<JSON>") => "JSON",
+        // OTHER (sketches and the like) and anything newer: kept as text.
+        _ => "VARCHAR",
+    };
+    (read_as.to_string(), None)
+}
+
+/// The time column as epoch milliseconds, for a temporal DuckDB type: a
+/// number Druid reads the same way whatever time zone this host is in. None
+/// for any other type, which goes as it is (ISO text, or a number).
+fn druid_epoch_millis(column: &str, ty: &str) -> Option<String> {
+    if ty == "DATE" {
+        Some(format!("epoch_ms(CAST({} AS TIMESTAMP))", column))
+    } else if ty.starts_with("TIMESTAMP") {
+        Some(format!("epoch_ms({})", column))
+    } else {
+        None
+    }
+}
+
+/// The Druid dimension type for a DuckDB column, and the expression that
+/// sends it in a form Druid reads as that type.
+fn druid_dimension(column: &str, ty: &str) -> (&'static str, String) {
+    let same = column.to_string();
+    match ty {
+        "TINYINT" | "SMALLINT" | "INTEGER" | "BIGINT" | "UTINYINT" | "USMALLINT" | "UINTEGER" => {
+            ("long", same)
+        }
+        // Not CAST(.. AS INTEGER): DuckDB 2.0 pushes that cast into a CSV scan
+        // when another column of the same SELECT is cast to VARCHAR, and then
+        // parses the text "true" as an integer and fails the run.
+        "BOOLEAN" => (
+            "long",
+            format!("CASE WHEN {0} THEN 1 WHEN NOT {0} THEN 0 END", column),
+        ),
+        "FLOAT" | "REAL" | "DOUBLE" => ("double", same),
+        _ if ty.starts_with("DECIMAL") => ("double", format!("CAST({} AS DOUBLE)", column)),
+        "VARCHAR" => ("string", same),
+        // UTC wall-clock text, so the value does not depend on this host's zone.
+        "TIMESTAMP WITH TIME ZONE" => (
+            "string",
+            format!("CAST(timezone('UTC', {}) AS VARCHAR)", column),
+        ),
+        _ if ty.ends_with(']')
+            || ty.starts_with("STRUCT")
+            || ty.starts_with("MAP")
+            || ty.starts_with("UNION")
+            || ty == "JSON" =>
+        {
+            ("json", same)
+        }
+        // Everything else as text: dates and times, UUIDs, enums, and the
+        // integers wider than Druid's long (HUGEINT, UBIGINT), which a long
+        // would silently narrow.
+        _ => ("string", format!("CAST({} AS VARCHAR)", column)),
+    }
 }
 
 /// A Manticore HTTP JSON request with optional Basic credentials. Manticore

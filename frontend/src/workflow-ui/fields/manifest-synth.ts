@@ -2969,6 +2969,108 @@ function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
             },
         ], 'upstream');
     }
+    // Apache Druid (#23). Routed by id so the databases group's generic
+    // synth cannot claim it: Druid is reached over HTTP - SQL to read, the
+    // task API to ingest - not with a connection string.
+    if (comp.id === 'src.druid' || comp.id === 'snk.druid') {
+        const isSource = comp.id === 'src.druid';
+        const connection: FormSection = {
+            label: 'Druid',
+            fields: [
+                {
+                    key: 'endpoint',
+                    label: 'Endpoint',
+                    kind: 'text',
+                    required: true,
+                    placeholder: 'http://localhost:8888',
+                    description: isSource
+                        ? 'A Router (port 8888) or a Broker (8082).'
+                        : 'The Overlord (8081 in the quickstart, 8090 on its own), or a Router (8888) with its management proxy on, as the quickstart has it.',
+                },
+                {
+                    key: 'username',
+                    label: 'Username',
+                    kind: 'text',
+                    description: 'Only for a cluster with basic security (druid-basic-security). Leave blank otherwise.',
+                },
+                { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
+            ],
+        };
+        if (isSource) {
+            return base(comp, [
+                connection,
+                {
+                    label: 'Query',
+                    fields: [
+                        {
+                            key: 'query',
+                            label: 'Druid SQL',
+                            kind: 'textarea',
+                            rows: 6,
+                            required: true,
+                            placeholder: 'SELECT __time, channel, SUM(added) AS added\nFROM wikipedia\nGROUP BY 1, 2',
+                            description: 'Each column is typed from the SQL type Druid reports for it, so an empty result still has its columns.',
+                        },
+                        {
+                            key: 'context',
+                            label: 'Query context (JSON)',
+                            kind: 'textarea',
+                            rows: 3,
+                            placeholder: '{"sqlTimeZone": "UTC"}',
+                            description: 'Optional. A JSON object of Druid query context parameters, such as sqlTimeZone or timeout.',
+                        },
+                    ],
+                },
+            ]);
+        }
+        return base(comp, [
+            connection,
+            {
+                label: 'Write',
+                fields: [
+                    { key: 'dataSource', label: 'Datasource', kind: 'text', required: true, placeholder: 'events' },
+                    {
+                        key: 'timestampColumn',
+                        label: 'Time column',
+                        kind: 'column',
+                        description: 'Druid partitions every row by a primary timestamp. A TIMESTAMP or DATE column is sent as epoch milliseconds; a text column must hold ISO 8601. Leave blank for data with no time: every row gets 1970-01-01T00:00:00Z, so Replace refreshes the whole datasource.',
+                    },
+                    {
+                        key: 'writeMode',
+                        label: 'Write mode',
+                        kind: 'select',
+                        defaultValue: 'append',
+                        options: [
+                            { label: 'Append', value: 'append' },
+                            { label: 'Replace the time chunks the rows cover', value: 'replace' },
+                        ],
+                        description: 'Replace sends every row in one task and overwrites each time chunk it touches; chunks it does not touch keep their data.',
+                    },
+                    {
+                        key: 'segmentGranularity',
+                        label: 'Segment granularity',
+                        kind: 'select',
+                        defaultValue: 'day',
+                        options: [
+                            { label: 'Hour', value: 'hour' },
+                            { label: 'Day', value: 'day' },
+                            { label: 'Week', value: 'week' },
+                            { label: 'Month', value: 'month' },
+                            { label: 'Year', value: 'year' },
+                            { label: 'All (one time chunk)', value: 'all' },
+                        ],
+                    },
+                    {
+                        key: 'rowsPerTask',
+                        label: 'Rows per task',
+                        kind: 'integer',
+                        defaultValue: 50000,
+                        description: 'Append only. Each task carries its rows inline in its spec, which Druid keeps in its metadata store, and starts its own worker: fewer, larger tasks load faster, within what the metadata store accepts.',
+                    },
+                ],
+            },
+        ], 'upstream');
+    }
     if (comp.id === 'xf.tumble') {
         return base(comp, [
             {

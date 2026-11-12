@@ -1851,6 +1851,42 @@ pub struct ManticoreSinkSpec {
     pub password: Option<String>,
 }
 
+/// Apache Druid SQL source (#23): `POST /druid/v2/sql`, read as arrayLines.
+#[derive(Debug, Clone)]
+pub struct DruidSourceSpec {
+    pub node_id: String,
+    /// Router or Broker, e.g. "http://localhost:8888".
+    pub endpoint: String,
+    /// Druid SQL.
+    pub query: String,
+    /// Optional query context object (sqlTimeZone, timeout, ...).
+    pub context: Option<serde_json::Value>,
+    /// Optional HTTP Basic credentials (druid-basic-security).
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+/// Apache Druid ingestion sink (#23): a native batch (`index_parallel`) task
+/// carrying the rows inline, followed until it succeeds or fails.
+#[derive(Debug, Clone)]
+pub struct DruidSinkSpec {
+    pub from_view: String,
+    /// Overlord, or a Router with its management proxy on.
+    pub endpoint: String,
+    pub data_source: String,
+    /// The column every row's primary timestamp comes from. None = no time
+    /// in the data: every row is stamped 1970-01-01T00:00:00Z.
+    pub timestamp_column: Option<String>,
+    /// "append" adds the rows; "replace" overwrites the time chunks they cover.
+    pub mode: String,
+    /// Druid segmentGranularity ("day" unless set).
+    pub segment_granularity: String,
+    /// Rows per task when appending. Replace sends every row in one task.
+    pub rows_per_task: usize,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
 /// Pagination style for src.rest.
 #[derive(Debug, Clone)]
 pub enum RestPagination {

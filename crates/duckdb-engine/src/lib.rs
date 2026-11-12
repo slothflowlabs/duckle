@@ -116,7 +116,7 @@ use plan::{
     AvroSinkSpec, AvroSourceSpec, CassandraSinkSpec, CassandraSourceSpec, ClickHouseSinkSpec,
     ClickHouseSourceSpec, ClipboardSourceSpec, DatabricksSinkSpec, DatabricksSourceSpec,
     DbtSpec, DynamoDbSourceSpec, ElasticSourceSpec, EmailSinkSpec, EmailSourceSpec,
-    ManticoreSinkSpec, ManticoreSourceSpec,
+    ManticoreSinkSpec, ManticoreSourceSpec, DruidSinkSpec, DruidSourceSpec,
     FormatFileSinkSpec,
     FormatFileSourceSpec, FormatKind, FtpSinkSpec, FtpSourceSpec, GitSourceSpec,
     GizmoSqlSinkSpec, GizmoSqlSourceSpec, HtmlSourceSpec, ModelCardSpec, PdfSourceSpec, HuggingFaceSinkSpec,
@@ -2720,6 +2720,10 @@ impl DuckdbEngine {
                     }
                     Some(RuntimeSpec::ManticoreSource(spec)) => {
                         self.run_manticore_source(&db_path, spec)
+                    }
+                    Some(RuntimeSpec::DruidSource(spec)) => self.run_druid_source(&db_path, spec),
+                    Some(RuntimeSpec::DruidSink(spec)) => {
+                        self.run_druid_sink(&db_path, &secret_prefix, spec)
                     }
                     Some(RuntimeSpec::ManticoreSink(spec)) => {
                         self.run_manticore_sink(&db_path, &secret_prefix, spec)

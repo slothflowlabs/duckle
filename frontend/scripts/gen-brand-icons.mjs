@@ -95,6 +95,7 @@ const SI = {
     gsheets: 'googlesheets',
     databricks: 'databricks',
     clickhouse: 'clickhouse',
+    druid: 'apachedruid',
     cockroach: 'cockroachlabs',
     pulsar: 'apachepulsar',
     duckdb: 'duckdb',

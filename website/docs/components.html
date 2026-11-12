@@ -17,16 +17,16 @@
 <meta property="og:site_name" content="Duckle" />
 <meta property="og:url" content="https://duckle.org/docs/components.html" />
 <meta property="og:title" content="Component reference - Duckle" />
-<meta property="og:description" content="The Duckle component reference: 421 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta property="og:description" content="The Duckle component reference: 423 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta property="og:image" content="https://duckle.org/assets/img/og-card.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:url" content="https://duckle.org/docs/components.html" />
 <meta name="twitter:title" content="Component reference - Duckle" />
-<meta name="twitter:description" content="The Duckle component reference: 421 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta name="twitter:description" content="The Duckle component reference: 423 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta name="twitter:image" content="https://duckle.org/assets/img/og-card.png" />
-<meta name="description" content="The Duckle component reference: 421 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta name="description" content="The Duckle component reference: 423 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta name="keywords" content="visual ETL tool, DuckDB ETL, open source ETL, ELT tool, code-first ETL, Python ETL, ETL for AI agents, MCP ETL, data pipeline builder, dbt GUI, dbt on DuckDB, DuckLake, Quack DuckDB, no-code data pipeline, Fivetran alternative, Airbyte alternative, Talend alternative, dlt alternative, self-hosted ETL, local-first ETL" />
 <meta name="theme-color" content="#07090f" />
 <link rel="apple-touch-icon" href="../assets/img/duckle-mark.v4.svg" />
@@ -61,8 +61,8 @@
 {
   "@context": "https://schema.org",
   "@type": "TechArticle",
-  "headline": "Duckle components reference: 421 sources, transforms, sinks and data-quality nodes",
-  "description": "The Duckle component reference: 421 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB.",
+  "headline": "Duckle components reference: 423 sources, transforms, sinks and data-quality nodes",
+  "description": "The Duckle component reference: 423 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB.",
   "author": {
     "@type": "Organization",
     "name": "SlothFlow Labs"
@@ -133,12 +133,12 @@
 <span class="eyebrow">Reference</span>
 <h1>Component reference</h1>
 <!-- BEGIN GENERATED summary (website/scripts/build-llms.mjs writes this from the component catalog; edit it there) -->
-<p class="lead">Duckle ships 421 components across six kinds - 134 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 82 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 22 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 404 are available today; the 3 in preview and the 14 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
+<p class="lead">Duckle ships 423 components across six kinds - 135 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 83 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 22 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 406 are available today; the 3 in preview and the 14 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
 
 <div class="grid cols-3">
-  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span><h3>134 sources</h3><p>Files, lakehouse, databases, warehouses, object storage, streaming, SaaS APIs, NoSQL, vector DBs and more, all under <code>src.*</code>.</p></div>
+  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span><h3>135 sources</h3><p>Files, lakehouse, databases, warehouses, object storage, streaming, SaaS APIs, NoSQL, vector DBs and more, all under <code>src.*</code>.</p></div>
   <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg></span><h3>145 transforms</h3><p>Fields, rows, aggregates, joins, windows, strings, dates, JSON, arrays, CDC/SCD, AI and search, all under <code>xf.*</code>.</p></div>
-  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg></span><h3>82 sinks</h3><p>Files, databases, warehouses, object storage, vector DBs, messaging and comms, all under <code>snk.*</code> with universal write modes.</p></div>
+  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg></span><h3>83 sinks</h3><p>Files, databases, warehouses, object storage, vector DBs, messaging and comms, all under <code>snk.*</code> with universal write modes.</p></div>
 </div>
 <!-- END GENERATED summary -->
 
@@ -195,7 +195,7 @@
 </table>
 </div>
 
-<h3 id="sources-databases">Databases (16)</h3>
+<h3 id="sources-databases">Databases (17)</h3>
 <div style="overflow-x:auto">
 <table>
   <thead><tr><th>Component</th><th>What it does</th></tr></thead>
@@ -212,6 +212,7 @@
     <tr><td>Turso / libSQL<br><code>src.turso</code></td><td>Read a Turso (libSQL) database over the HTTP pipeline API - no driver install. Paste the libsql:// URL the dashboard gives you (it is normalized to https) plus a database auth token. Whole-table read or custom SQL</td></tr>
     <tr><td>DuckDB<br><code>src.duckdb</code></td><td>Read a table from a DuckDB file</td></tr>
     <tr><td>ClickHouse<br><code>src.clickhouse</code></td><td>Read ClickHouse via the HTTP interface (POST SELECT ... FORMAT JSON). User/password auth via X-ClickHouse-User / X-ClickHouse-Key headers</td></tr>
+    <tr><td>Apache Druid<br><code>src.druid</code></td><td>Run Druid SQL against a Router or Broker (POST /druid/v2/sql). Columns are typed from the SQL types Druid reports, an empty result included, and a result cut off mid-stream fails the run instead of loading part of it</td></tr>
     <tr><td>CockroachDB<br><code>src.cockroach</code></td><td>Read from CockroachDB via the DuckDB postgres extension</td></tr>
     <tr><td>ADBC (Arrow)<br><code>src.adbc</code></td><td>Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options</td></tr>
     <tr><td>Teradata<br><code>src.teradata</code></td><td>Read from Teradata through its free ODBC driver (no DuckDB Teradata extension exists). Install the Teradata ODBC driver, then connect with friendly host / user / password / database fields, a DSN, or a full ODBC connection string. Whole-table read or custom SQL; types preserved</td></tr>
@@ -780,7 +781,7 @@
 </table>
 </div>
 
-<h3 id="sinks-databases">Databases (15)</h3>
+<h3 id="sinks-databases">Databases (16)</h3>
 <div style="overflow-x:auto">
 <table>
   <thead><tr><th>Component</th><th>What it does</th></tr></thead>
@@ -798,6 +799,7 @@
     <tr><td>Turso / libSQL<br><code>snk.turso</code></td><td>INSERT rows into a Turso (libSQL) database over the HTTP pipeline API. Creates the table if missing from the upstream column types; Append adds rows, Overwrite clears it first. Values go up as bound parameters, batched (default 500)</td></tr>
     <tr><td>DuckDB<br><code>snk.duckdb</code></td><td>Write a table into a DuckDB file</td></tr>
     <tr><td>ClickHouse<br><code>snk.clickhouse</code></td><td>INSERT to ClickHouse via the HTTP interface (FORMAT JSONEachRow). Batched at 10k rows by default</td></tr>
+    <tr><td>Apache Druid<br><code>snk.druid</code></td><td>Ingest rows into a Druid datasource with a native batch (index_parallel) task that carries them inline, then follow the task until it succeeds or fails. Dimensions are typed from the input columns; append adds rows, replace overwrites the time chunks they cover</td></tr>
     <tr><td>Execute in Source<br><code>snk.execsource</code></td><td>In-database processing: run a CREATE TABLE AS query on the source server itself (Postgres / MySQL) via postgres_execute / mysql_execute. The transform executes in the database and the result lands there, with no round-trip through DuckDB. Self-contained: no input needed</td></tr>
     <tr><td>Generic JDBC <span class="chip">Planned</span><br><code>snk.jdbc</code></td><td>Writes data to Generic JDBC</td></tr>
   </tbody>

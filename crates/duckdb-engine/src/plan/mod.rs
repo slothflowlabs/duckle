@@ -429,6 +429,8 @@ pub enum RuntimeSpec {
     ElasticSource(ElasticSourceSpec),
     ManticoreSource(ManticoreSourceSpec),
     ManticoreSink(ManticoreSinkSpec),
+    DruidSource(DruidSourceSpec),
+    DruidSink(DruidSinkSpec),
     MongoSink(MongoSinkSpec),
     HuggingFaceSink(HuggingFaceSinkSpec),
     MongoSource(MongoSourceSpec),
@@ -1996,6 +1998,8 @@ fn build_stage(
     let mut elastic_source: Option<ElasticSourceSpec> = None;
     let mut manticore_source: Option<ManticoreSourceSpec> = None;
     let mut manticore_sink: Option<ManticoreSinkSpec> = None;
+    let mut druid_source: Option<DruidSourceSpec> = None;
+    let mut druid_sink: Option<DruidSinkSpec> = None;
     let mut mongo_sink: Option<MongoSinkSpec> = None;
     let mut huggingface_sink: Option<HuggingFaceSinkSpec> = None;
     let mut mongo_source: Option<MongoSourceSpec> = None;
@@ -3209,6 +3213,39 @@ fn build_stage(
                 .and_then(|v| v.as_u64())
                 .filter(|n| *n > 0)
                 .unwrap_or(1000) as usize,
+            username: string_prop(&props, "username").filter(|s| !s.is_empty()),
+            password: string_prop(&props, "password").filter(|s| !s.is_empty()),
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.druid" {
+        // Apache Druid (#23): a native batch task with the rows inline, then
+        // its status until it ends. MUST come before the starts_with("snk.")
+        // catch-all below.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let endpoint = string_prop(&props, "endpoint")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: endpoint required", component_id)))?;
+        let data_source = string_prop(&props, "dataSource")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: dataSource required", component_id)))?;
+        let mode = match string_prop(&props, "writeMode").as_deref() {
+            Some("replace") => "replace",
+            _ => "append",
+        };
+        druid_sink = Some(DruidSinkSpec {
+            from_view: from_view.to_string(),
+            endpoint,
+            data_source,
+            timestamp_column: string_prop(&props, "timestampColumn").filter(|s| !s.is_empty()),
+            mode: mode.to_string(),
+            segment_granularity: string_prop(&props, "segmentGranularity")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "day".to_string()),
+            rows_per_task: props
+                .get("rowsPerTask")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(50_000) as usize,
             username: string_prop(&props, "username").filter(|s| !s.is_empty()),
             password: string_prop(&props, "password").filter(|s| !s.is_empty()),
         });
@@ -4483,6 +4520,36 @@ fn build_stage(
                 .and_then(|v| v.as_u64())
                 .filter(|n| *n > 0)
                 .unwrap_or(100),
+            username: string_prop(&props, "username").filter(|s| !s.is_empty()),
+            password: string_prop(&props, "password").filter(|s| !s.is_empty()),
+        });
+        (String::new(), StageKind::View, None)
+    } else if component_id == "src.druid" {
+        // Apache Druid SQL (#23). Form: endpoint, query, context, username,
+        // password. The context is checked here so `validate` catches it.
+        let endpoint = string_prop(&props, "endpoint")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: endpoint required", component_id)))?;
+        let query = string_prop(&props, "query")
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: query required", component_id)))?;
+        let context = match string_prop(&props, "context").filter(|s| !s.trim().is_empty()) {
+            None => None,
+            Some(text) => match serde_json::from_str::<JsonValue>(&text) {
+                Ok(v) if v.is_object() => Some(v),
+                _ => {
+                    return Err(EngineError::Config(format!(
+                        "{}: context must be a JSON object, such as {{\"sqlTimeZone\": \"UTC\"}}",
+                        component_id
+                    )))
+                }
+            },
+        };
+        druid_source = Some(DruidSourceSpec {
+            node_id: node.id.clone(),
+            endpoint,
+            query,
+            context,
             username: string_prop(&props, "username").filter(|s| !s.is_empty()),
             password: string_prop(&props, "password").filter(|s| !s.is_empty()),
         });
@@ -7395,6 +7462,8 @@ fn build_stage(
         .or_else(|| elastic_source.map(RuntimeSpec::ElasticSource))
         .or_else(|| manticore_source.map(RuntimeSpec::ManticoreSource))
         .or_else(|| manticore_sink.map(RuntimeSpec::ManticoreSink))
+        .or_else(|| druid_source.map(RuntimeSpec::DruidSource))
+        .or_else(|| druid_sink.map(RuntimeSpec::DruidSink))
         .or_else(|| mongo_sink.map(RuntimeSpec::MongoSink))
         .or_else(|| huggingface_sink.map(RuntimeSpec::HuggingFaceSink))
         .or_else(|| mongo_source.map(RuntimeSpec::MongoSource))
