@@ -885,6 +885,14 @@ export function portsForComponent(comp: ComponentDef): NodePorts {
 function portsForComponentRaw(comp: ComponentDef): NodePorts {
     const id = comp.id;
 
+    // Sub-flow boundaries. A Sub-flow node's own ports come from the pipeline
+    // it runs (DuckleNode reads them through SubflowPortsContext).
+    if (id === 'ctl.subflow.in') return { inputs: [], outputs: [MAIN_OUT] };
+    if (id === 'ctl.subflow.out') return { inputs: [MAIN_IN], outputs: [] };
+    // Before its pipeline is picked: a sub-flow may read its own rows and take
+    // none in, and the engine names an input left unwired, so none is required.
+    if (id === 'ctl.subflow') return { inputs: [{ ...MAIN_IN, optional: true }], outputs: [MAIN_OUT] };
+
     // Mapper - 1 main input, up to 3 lookup inputs, main + reject outputs
     if (id === 'xf.map') {
         return {
@@ -3070,6 +3078,49 @@ function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
                 ],
             },
         ], 'upstream');
+    }
+    // Sub-flows (a Talend joblet, a Hop mapping). Routed by id: the control
+    // group's generic form knows nothing of a called pipeline or a port name.
+    if (comp.id === 'ctl.subflow') {
+        return base(comp, [
+            {
+                label: 'Sub-flow',
+                fields: [
+                    {
+                        key: 'subflowRef',
+                        label: 'Sub-flow',
+                        kind: 'pipeline-ref',
+                        required: true,
+                        description:
+                            'The pipeline this node runs in place, its rows passing through it. Its Sub-flow input and output nodes become this node\'s ports, by name.',
+                    },
+                ],
+            },
+        ]);
+    }
+    if (comp.id === 'ctl.subflow.in' || comp.id === 'ctl.subflow.out') {
+        const isIn = comp.id === 'ctl.subflow.in';
+        const fields: FormSection['fields'] = [
+            {
+                key: 'port',
+                label: 'Port name',
+                kind: 'text',
+                defaultValue: 'main',
+                description: isIn
+                    ? 'The port a calling pipeline wires its rows to.'
+                    : 'The port a calling pipeline takes these rows from.',
+            },
+        ];
+        if (isIn) {
+            fields.push({
+                key: 'samplePath',
+                label: 'Sample file (running on its own)',
+                kind: 'file-path',
+                description:
+                    'Rows to use when this sub-flow runs by itself, to preview and test it: a CSV, Parquet or JSON file. A calling pipeline never reads it.',
+            });
+        }
+        return base(comp, [{ label: isIn ? 'Sub-flow input' : 'Sub-flow output', fields }]);
     }
     if (comp.id === 'xf.tumble') {
         return base(comp, [

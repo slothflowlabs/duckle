@@ -654,7 +654,7 @@ mod plan_arms {
 /// available.
 #[test]
 fn every_available_component_is_one_the_engine_dispatches() {
-    const ENGINE_SOURCES: [&str; 10] = [
+    const ENGINE_SOURCES: [&str; 11] = [
         "crates/duckdb-engine/src/plan/builders.rs",
         "crates/duckdb-engine/src/plan/mod.rs",
         "crates/duckdb-engine/src/plan/graph.rs",
@@ -665,6 +665,7 @@ fn every_available_component_is_one_the_engine_dispatches() {
         "crates/duckdb-engine/src/capabilities.rs",
         "crates/duckdb-engine/src/format.rs",
         "crates/duckdb-engine/src/props.rs",
+        "crates/duckdb-engine/src/subflow.rs",
     ];
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
     let id_lit = regex::Regex::new(r#""((?:src|snk|xf|ctl|code|qa)\.[a-z0-9_.]+)""#).unwrap();

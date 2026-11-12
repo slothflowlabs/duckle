@@ -49,6 +49,7 @@ import {
     Palette,
     UnfoldVertical,
     Ungroup,
+    PackagePlus,
 } from 'lucide-react';
 import DuckleNode from './nodes/DuckleNode';
 import NoteNode from './nodes/NoteNode';
@@ -158,6 +159,8 @@ type Props = {
     onSelectionChange: (params: OnSelectionChangeParams) => void;
     onDropComponent: (component: ComponentDef, position: DropPosition) => void;
     onSetActiveContext?: (id: string) => void;
+    /** Move these steps into a new pipeline, run here by one Sub-flow node. */
+    onSaveAsSubflow?: (nodeIds: string[]) => void;
     onNodeAction: (action: NodeAction, nodeId: string) => void;
     onPaneAction: (action: PaneAction) => void;
     onEdgeChangeType: (edgeId: string, newType: ConnectionType) => void;
@@ -183,6 +186,7 @@ function CanvasInner({
     onSelectionChange,
     onDropComponent,
     onSetActiveContext,
+    onSaveAsSubflow,
     onNodeAction,
     onPaneAction,
     onEdgeChangeType,
@@ -383,6 +387,15 @@ function CanvasInner({
                     },
                 },
             ];
+            if (onSaveAsSubflow) {
+                items.push({
+                    kind: 'item',
+                    key: 'save-subflow',
+                    label: ids.length > 1 ? `Save ${ids.length} steps as a sub-flow` : 'Save as a sub-flow',
+                    icon: <PackagePlus size={ICON_SIZE} />,
+                    onClick: () => onSaveAsSubflow(ids),
+                });
+            }
             if (holder) {
                 items.push({
                     kind: 'item',
@@ -394,7 +407,7 @@ function CanvasInner({
             }
             return items;
         },
-        [nodes, groups, onGroupsChange],
+        [nodes, groups, onGroupsChange, onSaveAsSubflow],
     );
     const [editingNote, setEditingNote] = useState<string | null>(null);
     const noteActions = useMemo(

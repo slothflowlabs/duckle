@@ -23,6 +23,7 @@ const PIPELINE_REF_KEYS = [
     'iteratePipelineRef',
     'foreachPipelineRef',
     'fallbackPipelineRef',
+    'subflowRef',
 ];
 
 function joinPath(dir: string, ...parts: string[]): string {

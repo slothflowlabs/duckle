@@ -52,6 +52,7 @@ pub mod pools;
 pub mod release;
 pub mod follow_session;
 pub mod broadcast;
+pub mod subflow;
 pub mod sqlcomplete;
 pub mod sqldiag;
 pub mod openlineage;
@@ -1717,6 +1718,15 @@ impl DuckdbEngine {
         if let Err(e) = crate::format::refuse_if_too_new(doc.format_version) {
             return RunResult::failed(total_start, e.to_string());
         }
+        // Sub-flows run as their own nodes inside this pipeline. Expanded before
+        // anything reads the graph, so the plan, masking (tags by node id),
+        // previews and lineage all see the same nodes.
+        let subs = self.inherited_subs.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let expanded = match crate::subflow::expand(doc, &subs) {
+            Ok(expanded) => expanded,
+            Err(e) => return RunResult::failed(total_start, e.to_string()),
+        };
+        let doc = expanded.as_ref().unwrap_or(doc);
 
         if !cli_present(&self.bin) {
             return RunResult::failed(total_start, duckdb_missing_message(&self.bin));

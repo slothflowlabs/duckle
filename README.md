@@ -136,7 +136,7 @@ In short: a free, open-source, single-engine alternative to hosted, per-row-pric
 Three things set it apart:
 
 1. **An AI assistant that ships in the box.** Describe the pipeline you want in English; Duckie writes the JSON and drops it onto the canvas. The model runs wherever Duckle does - no API key, no telemetry, no vendor round-trip. Point it at your own OpenAI-compatible endpoint instead if you would rather it did not run in-process.
-2. **406 components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
+2. **409 components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
 3. **A self-contained binary you can audit.** 73 to 110 MB depending on your platform. Engines install on first launch. Workspaces are plain files in a folder you choose. Diff them, branch them, ship them.
 
 <div align="center">
@@ -154,7 +154,7 @@ Three things set it apart:
 | **Single-file binary, no bundled DB** | 73 to 110 MB depending on platform (it embeds the headless runner + MCP server). DuckDB downloads on first launch with a guided step. AI engine is opt-in. |
 | **Native speed** | Execution runs through DuckDB: vectorized, columnar, local. A clean-and-export job that crawls in a spreadsheet finishes in milliseconds. |
 | **Git-friendly by design** | Pipelines, connections, contexts, and routines persist as plain files in a folder you pick. Diff them, branch them, review them. |
-| **406 components ready today** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
+| **409 components ready today** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
 | **Honest about scope** | Single-machine and embedded by design. Built to make local and small-team data work fast, not to replace a distributed warehouse. |
 | **60 UI languages** | Topbar, palette, chat assistant, properties panel, and common dialogs ship localized. English, Spanish, Chinese (Simplified + Traditional), Hindi, Arabic, Portuguese (Brazil), Bengali, Russian, Japanese, Punjabi, German, Korean, French, Vietnamese, Telugu, Marathi, Turkish, Tamil, Urdu, Persian, Polish, Italian, Ukrainian, Indonesian, Thai, Dutch, Hebrew, Swedish, Greek, Czech, Hungarian, Romanian, Filipino, Malay, Norwegian, Danish, Finnish, Catalan, Bulgarian, Slovak, Croatian, Serbian, Slovenian, Lithuanian, Latvian, Estonian, Khmer, Burmese, Sinhala, Nepali, Swahili, Afrikaans, Welsh, Irish, Icelandic, Albanian, Azerbaijani, Mongolian, Kazakh. RTL (Arabic, Hebrew, Persian, Urdu) supported. Switch languages from the topbar globe. |
 | **Open source** | Dual-licensed MIT OR Apache-2.0. Yours to use, fork, and extend. |
@@ -1906,7 +1906,7 @@ than on every evaluation after the recovery.
 ### The connector matrix, generated (`capabilities`)
 
 A hand-maintained feature table drifts from the code the week after it is
-written, and a prose list of 423 components cannot answer "which sources do
+written, and a prose list of 426 components cannot answer "which sources do
 incremental?". So it is derived from the same manifests the editor renders forms
 from:
 
@@ -3594,9 +3594,9 @@ Duckle is in **public beta**. The visual designer, the DuckDB execution engine, 
 
 **Scope, stated plainly:** Duckle runs as a service on hardware you provision, and uses all of it. What it does not do is split one query across a cluster, so when a job outgrows the largest instance you want to pay for, push the work down into the source system or point the output at a warehouse, object store or lakehouse. It will not pretend to be a cluster.
 
-The component palette ships **423 components** so the roadmap is visible in the product itself:
+The component palette ships **426 components** so the roadmap is visible in the product itself:
 
-- **406 available** runs on the DuckDB engine today
+- **409 available** runs on the DuckDB engine today
 - **3 preview** is configurable in the designer (drag, wire, set properties); execution is being wired engine-by-engine
 - **14 planned** is reserved in the palette but not yet executable - see [`docs/roadmap.md`](docs/roadmap.md)
 
@@ -3759,7 +3759,7 @@ Database sinks support an optional **dead-letter (validate-before-insert)** step
 
 ### Control flow
 
-**21 control-flow components available today.**
+**24 control-flow components available today.**
 
 | Component | What it does |
 |---|---|
@@ -3775,6 +3775,9 @@ Database sinks support an optional **dead-letter (validate-before-insert)** step
 | **Run Pipeline** | Inline-execute another pipeline file (`ctl.runpipeline`) |
 | **Trigger Pipeline** | The same as Run Pipeline, under the name other ETL tools give it (`ctl.trigger`) |
 | **Run Job** | Call a child pipeline (picked from the workspace) passing parent context variables; chain several to build a Master Job (`ctl.runjob`). The child runs in its own temporary database. It can take the caller's input rows (**Pass this node's input rows**, read in the child as `${DUCKLE_INPUT}`, for example by a Parquet source) and hand rows back (**Take the rows the child returns**, written by the child to `${DUCKLE_RETURN}`). With both on, a child is a reusable block that several pipelines call |
+| **Sub-flow** | Run another pipeline as one step of this one, its rows passing through it: a reusable piece several pipelines share, like a Talend joblet. Its ways in and out are the sub-flow's **Sub-flow input** and **Sub-flow output** nodes, which become this node's ports by name. Before the run is planned, the sub-flow's steps take the node's place, so the plan, previews and masking see every step, and a sub-flow can call another (`ctl.subflow`) |
+| **Sub-flow input** | A sub-flow's way in: the rows a calling pipeline wires to its port. Run on its own, the sub-flow reads the sample file set here instead, so it can be previewed and tested by itself (`ctl.subflow.in`) |
+| **Sub-flow output** | A sub-flow's way out: the rows a calling pipeline takes from its port (`ctl.subflow.out`) |
 | **Parallelize** | Run the downstream branches wired to its outputs concurrently; branches are unlimited (`ctl.parallelize`) |
 | **Sequence Anchor** | Does no work itself: ordering links attach to it, to say what runs after it or what must finish first. It never joins the data flow (`ctl.anchor`) |
 | **Iterate** | Run a sub-pipeline N times with `${ITER_INDEX}` substitution |
@@ -3800,6 +3803,21 @@ levels down. A value named on the call itself still wins, since naming one there
 a parent says which value to run the child with. A name whose value came out NULL is
 not passed: it has no value, and an unset `${...}` is left as it is rather than arriving
 as the word NULL.
+
+A **sub-flow** is a pipeline made to be one step of others. Inside it, a **Sub-flow
+input** node stands for the rows a caller wires in and a **Sub-flow output** node for
+the rows it hands back, each named by its port (`main` unless set). In the caller, a
+**Sub-flow** node picks the pipeline and shows one port per input and output, by those
+names. Before the run is planned, the sub-flow's steps take the node's place, so they
+run as steps of the caller, named `<node>__<step>` in its previews and run log, and the
+plan, its SQL and masking see every one. A sub-flow can call another; one that calls
+itself, directly or through others, is refused. Its file is read the way a Run Job's
+child is, so the workspace's context variables, `${workspace}` and whatever the caller
+was handed (a For Each item's variables, say) all reach its steps. To make one from
+steps you already have, select them, right-click and choose **Save as a sub-flow**:
+they move into a new pipeline beside this one, wired through inputs and outputs, and a
+Sub-flow node takes their place. Give a Sub-flow input a sample file to preview and test
+the sub-flow on its own.
 
 A sub-pipeline runs under its own name, so its run log lands in
 `logs/<child>/` and an `xf.incremental` watermark inside it is saved to

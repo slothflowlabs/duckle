@@ -53,6 +53,8 @@ import {
 } from '../src/geo/map-view';
 import { getManifest } from '../src/workflow-ui/fields/component-manifests';
 import { batchesOf, describeBatch, restoredRepo, trashEntry, trashFileName } from '../src/recycle-bin';
+import { subflowPorts } from '../src/canvas/subflow-ports';
+import { extractSubflow } from '../src/canvas/subflow-extract';
 import { caseProblem, cleaned, dummyInput, guessGenerator, listOf, newCase, newSuite } from '../src/test-cases';
 import {
     buildBundle,
@@ -2151,6 +2153,77 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         JSON.stringify(restoredRepo([project], [orphan])),
     );
     check('bin: restoring what is already there adds nothing', restoredRepo(back, [a, b]).length === back.length, JSON.stringify(restoredRepo(back, [a, b])));
+}
+
+// ---------------------------------------------------------------------------
+// A Sub-flow node's ports are the ports its pipeline declares, by name.
+// ---------------------------------------------------------------------------
+{
+    const sub = {
+        nodes: [
+            { data: { componentId: 'ctl.subflow.in', properties: { port: 'orders' } } },
+            { data: { componentId: 'ctl.subflow.in', properties: {} } },
+            { data: { componentId: 'xf.filter', properties: { predicate: 'x > 1' } } },
+            { data: { componentId: 'ctl.subflow.out', properties: { port: ' big ' } } },
+        ],
+    };
+    const ports = subflowPorts(sub);
+    check(
+        'subflow: an input or output is named by its port, "main" when unset, trimmed',
+        JSON.stringify(ports) === JSON.stringify({ inputs: ['orders', 'main'], outputs: ['big'] }),
+        JSON.stringify(ports),
+    );
+    check('subflow: a pipeline not loaded offers no ports', subflowPorts(undefined) === null, String(subflowPorts(undefined)));
+}
+
+// ---------------------------------------------------------------------------
+// Save as sub-flow: the selection moves out, and one Sub-flow node, wired to
+// named ports, takes its place.
+// ---------------------------------------------------------------------------
+{
+    const n = (id: string, componentId: string, x: number) => ({ id, type: 'transform', position: { x, y: 0 }, data: { label: id, componentId, properties: {} } });
+    const e = (id: string, source: string, target: string, targetHandle = 'main', kind = 'main') => ({
+        id, source, target, sourceHandle: 'main', targetHandle, data: { connectionType: kind },
+    });
+    const pipeline = {
+        nodes: [n('a', 'src.csv', 0), n('x', 'src.csv', 0), n('b', 'xf.join.inner', 300), n('c', 'xf.addcol', 600), n('d', 'snk.csv', 900), n('f', 'snk.csv', 900)],
+        edges: [e('e1', 'a', 'b'), e('e2', 'x', 'b', 'lookup', 'lookup'), e('e3', 'b', 'c'), e('e4', 'c', 'd'), e('e5', 'c', 'f')],
+    };
+    const got = extractSubflow(pipeline, ['b', 'c'], 'p_sub');
+    const sub = got?.subflow;
+    const caller = got?.caller;
+    const ports = (cid: string) => (sub?.nodes ?? []).filter(x => x.data.componentId === cid).map(x => x.data.properties?.port);
+    check('subflow-extract: one input per outside upstream, "main" first', JSON.stringify(ports('ctl.subflow.in')) === '["main","in_2"]', JSON.stringify(ports('ctl.subflow.in')));
+    check('subflow-extract: one output for a step feeding the outside, however many links', JSON.stringify(ports('ctl.subflow.out')) === '["main"]', JSON.stringify(ports('ctl.subflow.out')));
+    const lookupIn = (sub?.edges ?? []).find(x => x.target === 'b' && x.targetHandle === 'lookup');
+    check('subflow-extract: an input keeps the port it fed inside, a lookup stays a lookup', lookupIn?.data?.connectionType === 'lookup', JSON.stringify(lookupIn));
+    check('subflow-extract: the selected steps and their own link move', ['b', 'c'].every(id => sub?.nodes.some(x => x.id === id)) && (sub?.edges ?? []).some(x => x.id === 'e3'), JSON.stringify(sub?.edges));
+    const call = caller?.nodes.find(x => x.data.componentId === 'ctl.subflow');
+    check('subflow-extract: the selection leaves the caller and a Sub-flow node names the new pipeline', !!call && call.data.properties?.subflowRef === 'p_sub' && !caller?.nodes.some(x => x.id === 'b' || x.id === 'c'), JSON.stringify(caller?.nodes.map(x => x.id)));
+    const into = (caller?.edges ?? []).filter(x => x.target === call?.id).map(x => `${x.source}>${x.targetHandle}`).sort();
+    check('subflow-extract: each outside upstream is wired to its port', JSON.stringify(into) === '["a>main","x>in_2"]', JSON.stringify(into));
+    const from = (caller?.edges ?? []).filter(x => x.source === call?.id).map(x => `${x.sourceHandle}>${x.target}`).sort();
+    check('subflow-extract: every outside step the selection fed is fed from the output', JSON.stringify(from) === '["main>d","main>f"]', JSON.stringify(from));
+    check('subflow-extract: nothing selected changes nothing', extractSubflow(pipeline, [], 'p') === null, 'not null');
+}
+
+// ---------------------------------------------------------------------------
+// A run reads a sub-flow from its file, as it reads a Run Job's child: the
+// picker stores a pipeline id, and the engine reads a path.
+// ---------------------------------------------------------------------------
+{
+    const repo = [{ id: 'p_sub', name: 'Clean orders', type: 'pipeline', parentId: 'pipelines' } as RepoItem];
+    const ref = resolveForRun([node('c', 'ctl.subflow', { subflowRef: 'p_sub' })], repo, 'C:/ws')[0].data.properties?.subflowRef;
+    check("subflow: a run turns the sub-flow's id into its file, as for Run Job", ref === 'C:/ws/pipelines/p_sub.json', String(ref));
+}
+
+// ---------------------------------------------------------------------------
+// A sub-flow may read its own rows and take none in, so a Sub-flow node with
+// nothing wired into it is not flagged: the engine says which port is unwired.
+// ---------------------------------------------------------------------------
+{
+    const codes = validatePipeline([node('c', 'ctl.subflow', { subflowRef: 'p_sub' })], []).issues.map(i => i.code);
+    check('subflow: a Sub-flow node with no upstream is not flagged as missing one', !codes.includes('missing-required-input'), codes.join(','));
 }
 
 if (failures.length) {

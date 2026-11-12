@@ -17431,15 +17431,6 @@ impl DuckdbEngine {
         subs: &std::collections::HashMap<String, String>,
         item: Option<&str>,
     ) -> Result<(), EngineError> {
-        let resolved = resolve_subpipeline_ref(path);
-        let mut content = std::fs::read_to_string(&resolved).map_err(|e| {
-            EngineError::Config(format!("sub-pipeline: read '{}': {}", resolved, e))
-        })?;
-        // Resolve the workspace's context variables (e.g. ${MOTHERDUCK_TOKEN})
-        // in the child too. The parent pipeline is resolved by the caller before
-        // it reaches the engine, but a child read raw from disk here is not, so
-        // its context placeholders would otherwise pass through literally. Per-
-        // row ITER substitutions win on any key collision.
         // What this job was handed flows on to whatever it runs, so a value named by a
         // caller still reaches a body lifted out further down. The call's own variables
         // win on a collision, since they are the more specific of the two.
@@ -17449,21 +17440,7 @@ impl DuckdbEngine {
                 subs.iter().map(|(k, v)| (k.clone(), v.clone()))
             ).collect()
         };
-        content = substitute_into_child(&content, &merged);
-        let mut sub_doc: plan::PipelineDoc = serde_json::from_str(strip_bom(&content)).map_err(|e| {
-            EngineError::Config(format!("sub-pipeline: parse '{}': {}", path, e))
-        })?;
-        // A node may hold only `connectionRef`, the saved connection supplying
-        // its auth. Every surface resolves refs on the document it was handed,
-        // and a child is not that document - it is read from disk right here -
-        // so a child using a saved connection failed for a field the connection
-        // provides. Every child path (runjob, iterate, foreach, batch items,
-        // install fallback) comes through this function, so this is the one
-        // place, and an unresolvable ref fails the child as it fails a run.
-        if let Some(ws) = std::env::var("DUCKLE_WORKSPACE").ok().filter(|w| !w.is_empty()) {
-            duckle_secrets::resolve_connection_refs(std::path::Path::new(&ws), &mut sub_doc.nodes)
-                .map_err(|e| EngineError::Config(format!("sub-pipeline '{}': {}", path, e)))?;
-        }
+        let (resolved, sub_doc) = load_child_pipeline(path, &merged)?;
         // Run it under the CHILD's own name. Unnamed, every sub-pipeline shared
         // one run-log folder and - far worse - one `xf.incremental` watermark
         // file per node id, so three different children driven by ctl.foreach
@@ -21113,6 +21090,45 @@ pub(crate) fn substitute_into_child(
         }
     }
     content
+}
+
+/// Read a pipeline that runs inside another, the way every such pipeline is
+/// read: found by path, id or name ([`resolve_subpipeline_ref`]), with the
+/// workspace's context variables and `subs` put in ([`substitute_into_child`]),
+/// and its saved connections applied. Returns where it was read from, and the
+/// document.
+///
+/// A run surface resolves the document it was handed, and a pipeline read from
+/// disk in here is not that document. So Run Job, Iterate, For Each, batch
+/// items, install fallbacks and sub-flows all come through this one function:
+/// a second copy of these steps is how two of them come to disagree.
+pub(crate) fn load_child_pipeline(
+    reference: &str,
+    subs: &std::collections::HashMap<String, String>,
+) -> Result<(String, plan::PipelineDoc), EngineError> {
+    let resolved = resolve_subpipeline_ref(reference);
+    let content = std::fs::read_to_string(&resolved).map_err(|e| {
+        EngineError::Config(format!("sub-pipeline: read '{}': {}", resolved, e))
+    })?;
+    // Resolve the workspace's context variables (e.g. ${MOTHERDUCK_TOKEN})
+    // in the child too. The parent pipeline is resolved by the caller before
+    // it reaches the engine, but a child read raw from disk here is not, so
+    // its context placeholders would otherwise pass through literally. Per-
+    // row ITER substitutions win on any key collision.
+    let content = substitute_into_child(&content, subs);
+    let mut doc: plan::PipelineDoc = serde_json::from_str(strip_bom(&content)).map_err(|e| {
+        EngineError::Config(format!("sub-pipeline: parse '{}': {}", reference, e))
+    })?;
+    // A node may hold only `connectionRef`, the saved connection supplying
+    // its auth. Every surface resolves refs on the document it was handed,
+    // and a child is not that document - it is read from disk right here -
+    // so a child using a saved connection failed for a field the connection
+    // provides. An unresolvable ref fails the child as it fails a run.
+    if let Some(ws) = std::env::var("DUCKLE_WORKSPACE").ok().filter(|w| !w.is_empty()) {
+        duckle_secrets::resolve_connection_refs(std::path::Path::new(&ws), &mut doc.nodes)
+            .map_err(|e| EngineError::Config(format!("sub-pipeline '{}': {}", reference, e)))?;
+    }
+    Ok((resolved, doc))
 }
 
 /// The name a sub-pipeline run goes under: `<child>` or `<child>@<item>`.

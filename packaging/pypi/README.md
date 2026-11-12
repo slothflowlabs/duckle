@@ -74,7 +74,7 @@ See exactly what will run, before it runs:
 p.explain()   # prints the compiled SQL, one block per stage
 ```
 
-## 423 components, not 10 file formats
+## 426 components, not 10 file formats
 
 Component ids map onto attribute paths, so anything in the catalog is reachable:
 

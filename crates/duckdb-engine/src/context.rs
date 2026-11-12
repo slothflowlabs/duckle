@@ -22,11 +22,12 @@ use std::path::{Path, PathBuf};
 /// Property keys that hold a reference to another pipeline the engine reads
 /// from disk. The dropdown stores a portable pipeline id; the engine needs
 /// a file path, so we resolve here at build time.
-const PIPELINE_REF_KEYS: [&str; 4] = [
+const PIPELINE_REF_KEYS: [&str; 5] = [
     "pipelineRef",
     "iteratePipelineRef",
     "foreachPipelineRef",
     "fallbackPipelineRef",
+    "subflowRef",
 ];
 
 /// A repository.json entry. Only id/name/type are needed; parentId and any

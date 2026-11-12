@@ -925,6 +925,11 @@ pub fn compile(pipeline: &PipelineDoc) -> Result<CompiledPipeline, EngineError> 
 /// in the source stage's process, would not exist when the next stage runs in
 /// its own process, giving `Catalog "duckle_src_..." does not exist` (#87).
 fn compile_impl(pipeline: &PipelineDoc, allow_view_upgrade: bool) -> Result<CompiledPipeline, EngineError> {
+    // Sub-flow calls become the sub-flow's own nodes before anything else looks
+    // at the graph, the policy check included: what a sub-flow does is checked
+    // as if it were written here. A run has expanded them already.
+    let expanded = crate::subflow::expand(pipeline, &Default::default())?;
+    let pipeline = expanded.as_ref().unwrap_or(pipeline);
     // #285: the environment's policy, enforced HERE rather than in a validation
     // step. An agent that can write the pipeline can also invoke a path that
     // skips validation, so the check belongs where a pipeline becomes something
@@ -4270,6 +4275,43 @@ fn build_stage(
         let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
         let sql = passthrough_view_sql(&node.id, from_view);
         (sql, StageKind::View, Some(from_view.to_string()))
+    } else if component_id == crate::subflow::INPUT {
+        // A sub-flow's way in. Called from another pipeline it is replaced by
+        // what the caller wires to its port (crate::subflow); run on its own,
+        // it reads its sample file.
+        let sample = string_prop(&props, "samplePath")
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                EngineError::Config(format!(
+                    "{} `{}`: a sub-flow's input has rows only when a pipeline runs the sub-flow \
+                     through a Sub-flow node. To run it on its own, give the input a sample file \
+                     (samplePath).",
+                    component_id, node.id
+                ))
+            })?;
+        (
+            format!(
+                "CREATE OR REPLACE VIEW {} AS SELECT * FROM '{}'",
+                quote_ident(&node.id),
+                sql_escape(&sample)
+            ),
+            StageKind::View,
+            None,
+        )
+    } else if component_id == crate::subflow::OUTPUT || component_id == crate::subflow::STAND_IN {
+        // A sub-flow's way out, or what a call leaves under its own id: a
+        // pass-through, so the rows leaving show here.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        (
+            passthrough_view_sql(&node.id, from_view),
+            StageKind::View,
+            Some(from_view.to_string()),
+        )
+    } else if component_id == crate::subflow::CALL {
+        return Err(EngineError::Config(format!(
+            "{} `{}` reached the planner without being expanded",
+            component_id, node.id
+        )));
     } else if component_id == "ctl.log" || component_id == "ctl.warn" {
         // Emit a log line as a side effect, then pass the upstream through.
         // The executor substitutes {rows} with the upstream count and emits

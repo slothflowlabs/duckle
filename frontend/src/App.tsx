@@ -98,6 +98,8 @@ import ConfirmModal from './workflow-ui/ConfirmModal';
 import EdgeEditorModal from './canvas/EdgeEditorModal';
 import BreakpointModal from './canvas/BreakpointModal';
 import RecycleBinModal from './workflow-ui/RecycleBinModal';
+import { SubflowPortsContext, subflowPorts } from './canvas/subflow-ports';
+import { extractSubflow } from './canvas/subflow-extract';
 import { linkPort, linkRows, withBreakpoint } from './link-rows';
 import VisualMapperModal, {
     type MapperState,
@@ -1084,6 +1086,30 @@ export default function App() {
         activeJobId,
         activePipeline as unknown as CanvasSnapshot,
         applyPipelineSnapshot,
+    );
+
+    // Save as a sub-flow: the steps move into a new pipeline beside this one,
+    // and a Sub-flow node running it takes their place, wired to its ports.
+    const handleSaveAsSubflow = useCallback(
+        (nodeIds: string[]) => {
+            const id = freshId('p');
+            const extracted = extractSubflow(activePipeline as unknown as Parameters<typeof extractSubflow>[0], nodeIds, id);
+            if (!extracted) return;
+            const here = repo.find(i => i.id === activeJobId);
+            const taken = new Set(repo.filter(i => i.type === 'pipeline').map(i => i.name));
+            const base = `${here?.name ?? 'Pipeline'} sub-flow`;
+            let name = base;
+            for (let n = 2; taken.has(name); n++) name = `${base} ${n}`;
+            setRepo(r => [...r, { id, name, type: 'pipeline', parentId: here?.parentId ?? 'pipelines' }]);
+            setPipelineData(d => ({ ...d, [id]: extracted.subflow as unknown as PipelineState }));
+            updateActive(s => {
+                const caller = extracted.caller as unknown as PipelineState;
+                const groups = s.groups ? pruneGroups(s.groups, new Set(caller.nodes.map(n => n.id))) : s.groups;
+                return { ...caller, groups };
+            });
+            markDirty();
+        },
+        [activePipeline, activeJobId, repo, updateActive, markDirty],
     );
 
     const handleNodesChange = useCallback(
@@ -2378,6 +2404,12 @@ export default function App() {
         return `Delete ${item.type} "${item.name}"${nested}?${used}\n\nIt goes to the recycle bin, where you can restore it.`;
     };
 
+    // What a Sub-flow node shows as its ports: the pipeline it runs, looked up by id.
+    const subflowLookup = useCallback(
+        (pipelineId: string) => subflowPorts(pipelineData[pipelineId] as Parameters<typeof subflowPorts>[0]), 
+        [pipelineData],
+    );
+
     const handleCreatePipeline = useCallback(
         (rawName: string, parentId: string, template: PipelineTemplate, built?: PipelineState) => {
             const id = freshId('p');
@@ -2963,6 +2995,7 @@ export default function App() {
                         onImportJob={isInTauri() ? handleImportJob : undefined}
                         onGoHome={() => setShowHome(true)}
                     />
+                    <SubflowPortsContext.Provider value={subflowLookup}>
                     <EditorTabs
                         engine={engine}
                         nodes={nodes}
@@ -2983,6 +3016,7 @@ export default function App() {
                         onSelectionChange={handleSelectionChange}
                         onDropComponent={handleDropComponent}
                         onSetActiveContext={setActiveContextId}
+                        onSaveAsSubflow={handleSaveAsSubflow}
                         onNodeAction={handleNodeAction}
                         onPaneAction={handlePaneAction}
                         onEdgeChangeType={handleEdgeChangeType}
@@ -2992,6 +3026,7 @@ export default function App() {
                         nodeAutodetectAvailable={nodeAutodetectAvailable}
                         onSaveBeforeTests={saveActive}
                     />
+                    </SubflowPortsContext.Provider>
                 </section>
                 <PropertiesPanel
                     selected={selectedNode}

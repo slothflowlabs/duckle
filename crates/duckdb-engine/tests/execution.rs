@@ -27653,6 +27653,399 @@ fn snk_druid_sends_zoned_wide_and_nested_values_without_bending_them() {
 }
 
 // ---------------------------------------------------------------------------
+// ctl.subflow: a pipeline used as one node in another (Talend joblet, Hop
+// mapping). Its rows come in through ctl.subflow.in and leave through
+// ctl.subflow.out; before planning, each call is replaced by the sub-flow's
+// own nodes, so the plan and every run surface see one ordinary graph.
+// ---------------------------------------------------------------------------
+
+/// An edge between named ports; a port called lookup* is a lookup link.
+fn wire(id: &str, source: &str, source_handle: &str, target: &str, target_handle: &str) -> Value {
+    let kind = if target_handle.starts_with("lookup") { "lookup" } else { "main" };
+    json!({
+        "id": id, "source": source, "target": target,
+        "sourceHandle": source_handle, "targetHandle": target_handle,
+        "data": { "connectionType": kind }
+    })
+}
+
+/// Write a pipeline file; returns its path.
+fn pipeline_file(dir: &Path, name: &str, nodes: Value, edges: Value) -> String {
+    write_file(dir, name, &serde_json::to_string(&json!({ "nodes": nodes, "edges": edges })).unwrap())
+}
+
+/// A sub-flow that keeps rows with amount >= 10 and adds `doubled`.
+fn doubling_subflow(dir: &Path, sample: Option<&str>) -> String {
+    let mut input = json!({ "port": "main" });
+    if let Some(s) = sample {
+        input["samplePath"] = json!(s);
+    }
+    pipeline_file(
+        dir,
+        "double.json",
+        json!([
+            node("in", "ctl.subflow.in", input),
+            node("keep", "xf.filter", json!({ "predicate": "amount >= 10" })),
+            node("dbl", "xf.addcol", json!({ "name": "doubled", "type": "int64", "expression": "amount * 2" })),
+            node("out", "ctl.subflow.out", json!({ "port": "main" })),
+        ]),
+        json!([main_edge("a", "in", "keep"), main_edge("b", "keep", "dbl"), main_edge("c", "dbl", "out")]),
+    )
+}
+
+/// src.csv (id, amount: 5, 10, 20) -> `call` (a ctl.subflow of `subflow`) -> snk.csv.
+fn call_subflow(engine: &DuckdbEngine, dir: &Path, subflow: &str) -> (duckle_duckdb_engine::RunResult, String) {
+    let csv = write_file(dir, "in.csv", "id,amount\n1,5\n2,10\n3,20\n");
+    let out = out_path(dir, "out.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("call", "ctl.subflow", json!({ "subflowRef": subflow })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "call"), main_edge("e2", "call", "k")]),
+    ));
+    (r, out)
+}
+
+#[test]
+fn a_subflow_runs_inline_between_the_callers_nodes() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = doubling_subflow(tmp.path(), None);
+    let (r, out) = call_subflow(&engine, tmp.path(), &sub);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let rows = duckdb_json(&format!("SELECT id, doubled FROM read_csv_auto('{}') ORDER BY id", out));
+    assert_eq!(rows, vec![json!({ "id": 2, "doubled": 20 }), json!({ "id": 3, "doubled": 40 })]);
+}
+
+#[test]
+fn a_subflow_routes_each_named_port() {
+    // Two ways in (orders, and regions as a lookup) and two ways out (every
+    // joined row, and only the big ones), each wired by its port's name.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = pipeline_file(
+        tmp.path(),
+        "enrich.json",
+        json!([
+            node("orders", "ctl.subflow.in", json!({ "port": "orders" })),
+            node("regions", "ctl.subflow.in", json!({ "port": "regions" })),
+            node("j", "xf.join.inner", json!({ "leftKey": "region", "rightKey": "region" })),
+            node("big", "xf.filter", json!({ "predicate": "amount >= 100" })),
+            node("all_out", "ctl.subflow.out", json!({ "port": "joined" })),
+            node("big_out", "ctl.subflow.out", json!({ "port": "big" })),
+        ]),
+        json!([
+            main_edge("a", "orders", "j"),
+            lookup_edge("b", "regions", "j"),
+            main_edge("c", "j", "all_out"),
+            main_edge("d", "j", "big"),
+            main_edge("e", "big", "big_out"),
+        ]),
+    );
+    let orders = write_file(tmp.path(), "orders.csv", "id,region,amount\n1,N,50\n2,S,150\n3,N,70\n");
+    let regions = write_file(tmp.path(), "regions.csv", "region,name\nN,North\nS,South\n");
+    let all = out_path(tmp.path(), "all.csv");
+    let big = out_path(tmp.path(), "big.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("so", "src.csv", json!({ "path": orders, "hasHeader": true })),
+            node("sr", "src.csv", json!({ "path": regions, "hasHeader": true })),
+            node("call", "ctl.subflow", json!({ "subflowRef": sub })),
+            node("k_all", "snk.csv", json!({ "path": all, "hasHeader": true })),
+            node("k_big", "snk.csv", json!({ "path": big, "hasHeader": true })),
+        ]),
+        json!([
+            wire("e1", "so", "main", "call", "orders"),
+            wire("e2", "sr", "main", "call", "regions"),
+            wire("e3", "call", "joined", "k_all", "main"),
+            wire("e4", "call", "big", "k_big", "main"),
+        ]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", all)), 3);
+    assert_eq!(
+        scalar_string(&format!("SELECT name FROM read_csv_auto('{}') WHERE id = 2", all)),
+        "South"
+    );
+    assert_eq!(count(&format!("read_csv_auto('{}')", big)), 1);
+}
+
+#[test]
+fn a_subflow_can_call_a_subflow() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let inner = doubling_subflow(tmp.path(), None);
+    let outer = pipeline_file(
+        tmp.path(),
+        "outer.json",
+        json!([
+            node("in", "ctl.subflow.in", json!({})),
+            node("inner", "ctl.subflow", json!({ "subflowRef": inner })),
+            node("out", "ctl.subflow.out", json!({})),
+        ]),
+        json!([main_edge("a", "in", "inner"), main_edge("b", "inner", "out")]),
+    );
+    let (r, out) = call_subflow(&engine, tmp.path(), &outer);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2);
+}
+
+#[test]
+fn a_subflow_that_calls_itself_is_refused() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let path = out_path(tmp.path(), "loop.json");
+    pipeline_file(
+        tmp.path(),
+        "loop.json",
+        json!([
+            node("in", "ctl.subflow.in", json!({})),
+            node("again", "ctl.subflow", json!({ "subflowRef": path })),
+            node("out", "ctl.subflow.out", json!({})),
+        ]),
+        json!([main_edge("a", "in", "again"), main_edge("b", "again", "out")]),
+    );
+    let (r, _) = call_subflow(&engine, tmp.path(), &path);
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("calls itself"), "say it loops: {}", err);
+    assert!(err.contains("loop.json"), "name the sub-flow: {}", err);
+}
+
+#[test]
+fn a_subflow_call_with_no_subflow_is_refused() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let (r, _) = call_subflow(&engine, tmp.path(), "");
+    assert_eq!(r.status, "error");
+    assert!(r.error.unwrap_or_default().contains("pick the sub-flow"));
+    let missing = out_path(tmp.path(), "nowhere.json");
+    let (r, _) = call_subflow(&engine, tmp.path(), &missing);
+    assert_eq!(r.status, "error");
+    assert!(r.error.unwrap_or_default().contains("nowhere.json"));
+}
+
+#[test]
+fn a_subflow_input_with_nothing_wired_into_it_is_refused() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = doubling_subflow(tmp.path(), None);
+    let out = out_path(tmp.path(), "out.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("call", "ctl.subflow", json!({ "subflowRef": sub })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "call", "k")]),
+    ));
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("nothing is wired into its input \"main\""), "{}", err);
+}
+
+#[test]
+fn a_subflow_that_only_passes_rows_through_hands_them_on() {
+    // Its input wired straight to its output: what the caller sends in comes
+    // out unchanged.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = pipeline_file(
+        tmp.path(),
+        "through.json",
+        json!([node("in", "ctl.subflow.in", json!({})), node("out", "ctl.subflow.out", json!({}))]),
+        json!([main_edge("a", "in", "out")]),
+    );
+    let (r, out) = call_subflow(&engine, tmp.path(), &sub);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3);
+}
+
+#[test]
+fn a_subflow_with_two_outputs_of_one_name_is_refused() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = pipeline_file(
+        tmp.path(),
+        "twice.json",
+        json!([
+            node("in", "ctl.subflow.in", json!({})),
+            node("o1", "ctl.subflow.out", json!({ "port": "main" })),
+            node("o2", "ctl.subflow.out", json!({ "port": "main" })),
+        ]),
+        json!([main_edge("a", "in", "o1"), main_edge("b", "in", "o2")]),
+    );
+    let (r, _) = call_subflow(&engine, tmp.path(), &sub);
+    assert_eq!(r.status, "error");
+    assert!(r.error.unwrap_or_default().contains("two outputs called \"main\""));
+}
+
+#[test]
+fn a_tagged_column_inside_a_subflow_is_masked_in_its_preview() {
+    // Masking reads tags by node id, so it has to see the expanded graph: a
+    // secret declared on a step inside the sub-flow stays masked in the call.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let mut keep = node("keep", "xf.filter", json!({ "predicate": "amount >= 10" }));
+    keep["data"]["schema"] = json!([
+        { "name": "id", "type": "int64" },
+        { "name": "amount", "type": "int64" },
+        { "name": "token", "type": "string", "tags": ["secret"] }
+    ]);
+    let sub = pipeline_file(
+        tmp.path(),
+        "secret.json",
+        json!([node("in", "ctl.subflow.in", json!({})), keep, node("out", "ctl.subflow.out", json!({}))]),
+        json!([main_edge("a", "in", "keep"), main_edge("b", "keep", "out")]),
+    );
+    let csv = write_file(tmp.path(), "in.csv", "id,amount,token
+1,5,sk-a
+2,10,sk-b
+");
+    let out = out_path(tmp.path(), "out.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("call", "ctl.subflow", json!({ "subflowRef": sub })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "call"), main_edge("e2", "call", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let p = r.preview.iter().find(|p| p.node_id == "call__keep").expect("a preview for the sub-flow's step");
+    assert_eq!(p.rows[0]["token"], "***", "{:?}", p.rows[0]);
+}
+
+#[test]
+fn a_pipeline_that_calls_a_subflow_compiles_without_running() {
+    // validate compiles without running, so compiling has to expand the call too.
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = doubling_subflow(tmp.path(), None);
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": "in.csv", "hasHeader": true })),
+            node("call", "ctl.subflow", json!({ "subflowRef": sub })),
+            node("k", "snk.csv", json!({ "path": "out.csv", "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "call"), main_edge("e2", "call", "k")]),
+    );
+    let compiled = duckle_duckdb_engine::plan::compile(&d).expect("compiles");
+    let ids: Vec<&str> = compiled.stages.iter().map(|s| s.node_id.as_str()).collect();
+    assert!(ids.contains(&"call__keep") && ids.contains(&"call"), "{:?}", ids);
+}
+
+#[test]
+fn a_subflow_finds_a_subflow_it_calls_by_id_as_a_run_job_does() {
+    // The picker stores a pipeline id. A run rewrites the caller's own ids to
+    // paths, but a sub-flow's file is read inside the engine, so an id in it
+    // has to be found the way a Run Job's child is found.
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let pipelines = ws.join("pipelines");
+    std::fs::create_dir_all(&pipelines).unwrap();
+    doubling_subflow(&pipelines, None); // pipelines/double.json: the id "double"
+    let outer = pipeline_file(
+        &pipelines,
+        "outer.json",
+        json!([
+            node("in", "ctl.subflow.in", json!({})),
+            node("inner", "ctl.subflow", json!({ "subflowRef": "double" })),
+            node("out", "ctl.subflow.out", json!({})),
+        ]),
+        json!([main_edge("a", "in", "inner"), main_edge("b", "inner", "out")]),
+    );
+    std::env::set_var("DUCKLE_WORKSPACE", ws);
+    let (r, out) = call_subflow(&engine, ws, &outer);
+    std::env::remove_var("DUCKLE_WORKSPACE");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2);
+}
+
+#[test]
+fn a_subflow_gets_the_workspace_variables_a_run_job_child_gets() {
+    // A run puts the caller's own ${...} in before the engine sees it. A
+    // sub-flow's file is read inside the engine, so it gets them there, as a
+    // Run Job's child does: the workspace's contexts, and ${workspace}.
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    write_file(ws, "repository.json", r#"[{"id":"ctx","name":"local","type":"context"}]"#);
+    std::fs::create_dir_all(ws.join("contexts")).unwrap();
+    write_file(&ws.join("contexts"), "ctx.json", r#"{"variables":[{"key":"minAmount","value":"10"}]}"#);
+    let sub = pipeline_file(
+        ws,
+        "vars.json",
+        json!([
+            node("in", "ctl.subflow.in", json!({})),
+            node("keep", "xf.filter", json!({ "predicate": "amount >= ${minAmount}" })),
+            node("where", "xf.addcol", json!({ "name": "ws", "type": "string", "expression": "'${workspace}'" })),
+            node("out", "ctl.subflow.out", json!({})),
+        ]),
+        json!([main_edge("a", "in", "keep"), main_edge("b", "keep", "where"), main_edge("c", "where", "out")]),
+    );
+    std::env::set_var("DUCKLE_WORKSPACE", ws);
+    let (r, out) = call_subflow(&engine, ws, &sub);
+    std::env::remove_var("DUCKLE_WORKSPACE");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let rows = duckdb_json(&format!("SELECT id, ws FROM read_csv_auto('{}') ORDER BY id", out));
+    let root = ws.to_string_lossy().replace('\\', "/");
+    assert_eq!(rows, vec![json!({ "id": 2, "ws": root }), json!({ "id": 3, "ws": root })]);
+}
+
+#[test]
+fn a_subflow_in_a_batch_item_gets_the_items_variables() {
+    // What a job is handed flows on to what it runs: a batch item's (or a For
+    // Each child's) variables reach the steps of a sub-flow it calls, as they
+    // reach its own.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = pipeline_file(
+        tmp.path(),
+        "min.json",
+        json!([
+            node("in", "ctl.subflow.in", json!({})),
+            node("keep", "xf.filter", json!({ "predicate": "amount >= ${MIN}" })),
+            node("out", "ctl.subflow.out", json!({})),
+        ]),
+        json!([main_edge("a", "in", "keep"), main_edge("b", "keep", "out")]),
+    );
+    let csv = write_file(tmp.path(), "in.csv", "id,amount\n1,5\n2,10\n3,20\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let child = pipeline_file(
+        tmp.path(),
+        "child.json",
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("call", "ctl.subflow", json!({ "subflowRef": sub })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "call"), main_edge("e2", "call", "k")]),
+    );
+    let vars: std::collections::BTreeMap<String, String> = [("MIN".to_string(), "20".to_string())].into();
+    engine.run_batch_item(&child, &vars, None).expect("the item runs");
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 1);
+}
+
+#[test]
+fn a_subflow_runs_on_its_own_from_its_sample() {
+    // Opened and run by itself, the input reads its sample file; through a
+    // call the sample is never read.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let sample = write_file(tmp.path(), "sample.csv", "id,amount\n1,5\n2,10\n3,20\n");
+    let sub = doubling_subflow(tmp.path(), Some(&sample));
+    let text = std::fs::read_to_string(&sub).unwrap();
+    let alone: duckle_duckdb_engine::PipelineDoc = serde_json::from_str(&text).unwrap();
+    let r = engine.execute_pipeline(&alone);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(preview_rows_of(&r, "out"), Some(2), "the output shows what would leave the sub-flow");
+}
+
+// ---------------------------------------------------------------------------
 // src.generate: believable fake rows, compiled to SQL.
 // ---------------------------------------------------------------------------
 

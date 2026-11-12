@@ -49,6 +49,7 @@ type Props = {
     onSelectionChange: (params: OnSelectionChangeParams) => void;
     onDropComponent: (component: ComponentDef, position: DropPosition) => void;
     onSetActiveContext?: (id: string) => void;
+    onSaveAsSubflow?: (nodeIds: string[]) => void;
     onNodeAction: (action: NodeAction, nodeId: string) => void;
     onPaneAction: (action: PaneAction) => void;
     onEdgeChangeType: (edgeId: string, newType: ConnectionType) => void;
@@ -79,6 +80,7 @@ export default function EditorTabs({
     onSelectionChange,
     onDropComponent,
     onSetActiveContext,
+    onSaveAsSubflow,
     onNodeAction,
     onPaneAction,
     onEdgeChangeType,
@@ -147,6 +149,7 @@ export default function EditorTabs({
                         onSelectionChange={onSelectionChange}
                         onDropComponent={onDropComponent}
                         onSetActiveContext={onSetActiveContext}
+                        onSaveAsSubflow={onSaveAsSubflow}
                         onNodeAction={onNodeAction}
                         onPaneAction={onPaneAction}
                         onEdgeChangeType={onEdgeChangeType}

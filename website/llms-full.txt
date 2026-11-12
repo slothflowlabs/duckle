@@ -13,10 +13,10 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 423 components, 406 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 426 components, 409 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
 - 204 connectors (126 sources / 78 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
-- Data quality: 30 checks, plus 21 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
+- Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
 - dbt: runs dbt on DuckDB with a GUI, using a fast build engine by default and dbt-core as a fallback.
 - AI: an on-device assistant (Qwen via llama.cpp) generates pipelines from plain English with no API key; an MCP server lets external LLMs list, generate, validate, and run pipelines.
@@ -487,7 +487,7 @@ marked [planned] or [preview] are not usable yet.
 - `qa.survivor` Survivorship (Golden Record): Collapse duplicate records sharing a key into one golden record, picking each surviving field by rule: most-frequent value, most-recent / oldest (by a date column), or max / min. Applies to every non-key column at once
 - `qa.unique` Uniqueness Check: Pass first per key; duplicates to reject
 
-### Control flow (22)
+### Control flow (25)
 
 - `ctl.anchor` Sequence Anchor: Does no work itself. It exists so ordering links have something to attach to: wire a trigger out of it to say what runs after, or into it to say what must finish first. Takes no input and produces no rows, so it never joins the data flow
 - `ctl.checkpoint` Checkpoint: Pass rows through and also write a parquet snapshot to a path - the durable artifact a future run can read back via src.parquet
@@ -505,6 +505,9 @@ marked [planned] or [preview] are not usable yet.
 - `ctl.runpipeline` Run Pipeline: Reads + executes another pipeline file inline as a side effect, then passes the upstream view through unchanged. Useful for triggering helper pipelines (refresh dimension tables, kick off cleanup) without composing their output into the parent
 - `ctl.schedule` Schedule [planned]: Controls flow with Schedule
 - `ctl.setvar` Set Run Variable: Work out a value while the run is under way and let later steps in the same pipeline ask for it as ${name}: the date on the batch just read, the id just written. Wired to rows the expression is read against them; wired to nothing it stands on its own. The static context cannot carry these, because nothing knows them until the run has started
+- `ctl.subflow` Sub-flow: Run another pipeline as one node here, its rows passing through it (a Talend joblet, a Hop mapping). Its ports are the sub-flow's Sub-flow input and output nodes, by name; the engine puts the sub-flow's steps in place of this node when it plans the run
+- `ctl.subflow.in` Sub-flow input: A sub-flow's way in: the rows a calling pipeline wires to this port. Run on its own, the sub-flow reads the sample file set here instead
+- `ctl.subflow.out` Sub-flow output: A sub-flow's way out: the rows leaving through this port, to whatever the calling pipeline wires to it
 - `ctl.switch` Switch / Conditional Split: Route rows to case_1..N outputs by condition; first match wins
 - `ctl.throttle` Throttle: Insert an inter-stage delay derived from a rows-per-second target (best-effort for batch pipelines, hook is in place for streaming)
 - `ctl.trigger` Trigger Pipeline: Alias of ctl.runpipeline; same executor branch

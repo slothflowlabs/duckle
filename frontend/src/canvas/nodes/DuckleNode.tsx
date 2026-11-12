@@ -17,6 +17,7 @@ import { PipelineGraphContext } from '../graph-context';
 import { useRunStatus } from '../run-status-context';
 import { deriveNodeSubtitle } from '../../node-subtitle';
 import ComponentIcon from '../../workflow-ui/ComponentIcon';
+import { SubflowPortsContext } from '../subflow-ports';
 import type { NodeKind } from '../../workflow-ui/palette-data';
 
 export type DuckleFlowNode = Node<DuckleNodeData>;
@@ -32,11 +33,32 @@ export default function DuckleNode({ id, data, selected, type }: NodeProps<Duckl
     // The real pipeline, not the drawing: a collapsed group redraws links (graph-context.ts).
     const { nodes: allNodes, edges: allEdges } = useContext(PipelineGraphContext);
 
+    // A Sub-flow node's ports are the ports of the pipeline it runs, by name.
+    const lookupSubflow = useContext(SubflowPortsContext);
+    const subflowRef = data.componentId === 'ctl.subflow' ? data.properties?.subflowRef : undefined;
+    const subflow = typeof subflowRef === 'string' && subflowRef ? lookupSubflow(subflowRef) : null;
+    const subflowKey = subflow ? `${subflow.inputs.join('|')}>${subflow.outputs.join('|')}` : '';
+    const effectiveInputs = useMemo((): PortDef[] => {
+        if (!subflowKey) return inputs;
+        return subflowKey
+            .split('>')[0]
+            .split('|')
+            .filter(Boolean)
+            .map(name => ({ id: name, label: name, type: 'main' }));
+    }, [subflowKey, inputs]);
+
     // Parallelize branches are unlimited: instead of a fixed set of output
     // ports we grow them to one beyond the highest connected branch, so there
     // is always exactly one free branch to wire up next. The engine groups
     // branches dynamically by source handle, so nothing here is capped.
-    const effectiveOutputs = useMemo(() => {
+    const effectiveOutputs = useMemo((): PortDef[] => {
+        if (subflowKey) {
+            return subflowKey
+                .split('>')[1]
+                .split('|')
+                .filter(Boolean)
+                .map(name => ({ id: name, label: name, type: 'main' }));
+        }
         if (data.componentId !== 'ctl.parallelize') return outputs;
         let maxConnected = 0;
         for (const e of allEdges) {
@@ -49,7 +71,7 @@ export default function DuckleNode({ id, data, selected, type }: NodeProps<Duckl
             const n = i + 1;
             return { id: `main_${n}`, label: `branch ${n}`, type: 'main', optional: n > 2 };
         });
-    }, [data.componentId, outputs, allEdges, id]);
+    }, [data.componentId, outputs, allEdges, id, subflowKey]);
 
     // React Flow caches handle positions per node; when the parallelize
     // node grows/shrinks its branch handles dynamically, we must tell React
@@ -57,12 +79,12 @@ export default function DuckleNode({ id, data, selected, type }: NodeProps<Duckl
     // to handle ids that did not exist at the node's first measure).
     const updateNodeInternals = useUpdateNodeInternals();
     useEffect(() => {
-        if (data.componentId === 'ctl.parallelize') {
+        if (data.componentId === 'ctl.parallelize' || data.componentId === 'ctl.subflow') {
             updateNodeInternals(id);
         }
-    }, [effectiveOutputs.length, id, data.componentId, updateNodeInternals]);
+    }, [effectiveOutputs.length, id, data.componentId, updateNodeInternals, subflowKey]);
 
-    const portCount = Math.max(inputs.length, effectiveOutputs.length);
+    const portCount = Math.max(effectiveInputs.length, effectiveOutputs.length);
 
     const effectiveSchema = useMemo(
         () => resolveOutputSchema(id, allNodes, allEdges),
@@ -156,7 +178,7 @@ export default function DuckleNode({ id, data, selected, type }: NodeProps<Duckl
             {portCount > 0 ? (
                 <div className="node-ports">
                     <div className="node-ports-col node-ports-inputs">
-                        {inputs.map(port => (
+                        {effectiveInputs.map(port => (
                             <PortRow key={port.id} port={port} side="input" />
                         ))}
                     </div>

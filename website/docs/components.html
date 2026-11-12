@@ -17,16 +17,16 @@
 <meta property="og:site_name" content="Duckle" />
 <meta property="og:url" content="https://duckle.org/docs/components.html" />
 <meta property="og:title" content="Component reference - Duckle" />
-<meta property="og:description" content="The Duckle component reference: 423 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta property="og:description" content="The Duckle component reference: 426 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta property="og:image" content="https://duckle.org/assets/img/og-card.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:url" content="https://duckle.org/docs/components.html" />
 <meta name="twitter:title" content="Component reference - Duckle" />
-<meta name="twitter:description" content="The Duckle component reference: 423 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta name="twitter:description" content="The Duckle component reference: 426 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta name="twitter:image" content="https://duckle.org/assets/img/og-card.png" />
-<meta name="description" content="The Duckle component reference: 423 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta name="description" content="The Duckle component reference: 426 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta name="keywords" content="visual ETL tool, DuckDB ETL, open source ETL, ELT tool, code-first ETL, Python ETL, ETL for AI agents, MCP ETL, data pipeline builder, dbt GUI, dbt on DuckDB, DuckLake, Quack DuckDB, no-code data pipeline, Fivetran alternative, Airbyte alternative, Talend alternative, dlt alternative, self-hosted ETL, local-first ETL" />
 <meta name="theme-color" content="#07090f" />
 <link rel="apple-touch-icon" href="../assets/img/duckle-mark.v4.svg" />
@@ -61,8 +61,8 @@
 {
   "@context": "https://schema.org",
   "@type": "TechArticle",
-  "headline": "Duckle components reference: 423 sources, transforms, sinks and data-quality nodes",
-  "description": "The Duckle component reference: 423 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB.",
+  "headline": "Duckle components reference: 426 sources, transforms, sinks and data-quality nodes",
+  "description": "The Duckle component reference: 426 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB.",
   "author": {
     "@type": "Organization",
     "name": "SlothFlow Labs"
@@ -133,7 +133,7 @@
 <span class="eyebrow">Reference</span>
 <h1>Component reference</h1>
 <!-- BEGIN GENERATED summary (website/scripts/build-llms.mjs writes this from the component catalog; edit it there) -->
-<p class="lead">Duckle ships 423 components across six kinds - 135 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 83 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 22 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 406 are available today; the 3 in preview and the 14 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
+<p class="lead">Duckle ships 426 components across six kinds - 135 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 83 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 25 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 409 are available today; the 3 in preview and the 14 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
 
 <div class="grid cols-3">
   <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span><h3>135 sources</h3><p>Files, lakehouse, databases, warehouses, object storage, streaming, SaaS APIs, NoSQL, vector DBs and more, all under <code>src.*</code>.</p></div>
@@ -989,7 +989,7 @@
 
 <h2 id="control-flow">Control flow <code>ctl.*</code></h2>
 
-<p>Control-flow nodes orchestrate execution, branching, concurrency and error handling across a pipeline (22 total).</p>
+<p>Control-flow nodes orchestrate execution, branching, concurrency and error handling across a pipeline (25 total).</p>
 
 <h3 id="control-flow-routing">Routing (5)</h3>
 <div style="overflow-x:auto">
@@ -1017,7 +1017,7 @@
 </table>
 </div>
 
-<h3 id="control-flow-pipelines">Pipelines (8)</h3>
+<h3 id="control-flow-pipelines">Pipelines (11)</h3>
 <div style="overflow-x:auto">
 <table>
   <thead><tr><th>Component</th><th>What it does</th></tr></thead>
@@ -1025,6 +1025,9 @@
     <tr><td>Run Pipeline<br><code>ctl.runpipeline</code></td><td>Reads + executes another pipeline file inline as a side effect, then passes the upstream view through unchanged. Useful for triggering helper pipelines (refresh dimension tables, kick off cleanup) without composing their output into the parent</td></tr>
     <tr><td>Trigger Pipeline<br><code>ctl.trigger</code></td><td>Alias of ctl.runpipeline; same executor branch</td></tr>
     <tr><td>Run Job<br><code>ctl.runjob</code></td><td>Calls a child pipeline (job) as a side effect, passing parent context variables that are substituted as ${VAR} into the child before it runs. Chain several Run Job nodes to build a Master Job that orchestrates child jobs in sequence. The child runs in its own temp DB; its output is not composed back into the parent</td></tr>
+    <tr><td>Sub-flow<br><code>ctl.subflow</code></td><td>Run another pipeline as one node here, its rows passing through it (a Talend joblet, a Hop mapping). Its ports are the sub-flow's Sub-flow input and output nodes, by name; the engine puts the sub-flow's steps in place of this node when it plans the run</td></tr>
+    <tr><td>Sub-flow input<br><code>ctl.subflow.in</code></td><td>A sub-flow's way in: the rows a calling pipeline wires to this port. Run on its own, the sub-flow reads the sample file set here instead</td></tr>
+    <tr><td>Sub-flow output<br><code>ctl.subflow.out</code></td><td>A sub-flow's way out: the rows leaving through this port, to whatever the calling pipeline wires to it</td></tr>
     <tr><td>Parallelize<br><code>ctl.parallelize</code></td><td>Runs the independent downstream branches wired to its outputs concurrently. The upstream input is snapshotted once and each branch reads that snapshot in its own isolated execution, joining when all finish (any branch failure fails the node)</td></tr>
     <tr><td>File Operation<br><code>ctl.file</code></td><td>One typed filesystem operation: copy, move or delete a file. Staging a file between a landing area and a working area is ordinary batch work; before this the only filesystem-capable component ran a shell command, which cannot serve both platforms from one authored pipeline</td></tr>
     <tr><td>Sequence Anchor<br><code>ctl.anchor</code></td><td>Does no work itself. It exists so ordering links have something to attach to: wire a trigger out of it to say what runs after, or into it to say what must finish first. Takes no input and produces no rows, so it never joins the data flow</td></tr>

@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 423,
+  "componentCount": 426,
   "components": [
     {
       "id": "src.csv",
@@ -44073,6 +44073,176 @@
               "type": "main"
             }
           ]
+        }
+      }
+    },
+    {
+      "id": "ctl.subflow",
+      "label": "Sub-flow",
+      "kind": "control",
+      "availability": "available",
+      "summary": "Run another pipeline as one node here, its rows passing through it (a Talend joblet, a Hop mapping). Its ports are the sub-flow's Sub-flow input and output nodes, by name; the engine puts the sub-flow's steps in place of this node when it plans the run.",
+      "category": "Control Flow",
+      "group": "Pipelines",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main",
+            "optional": true
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "ctl.subflow",
+        "kind": "transform",
+        "label": "Sub-flow",
+        "description": "Run another pipeline as one node here, its rows passing through it (a Talend joblet, a Hop mapping). Its ports are the sub-flow's Sub-flow input and output nodes, by name; the engine puts the sub-flow's steps in place of this node when it plans the run.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Sub-flow",
+            "fields": [
+              {
+                "key": "subflowRef",
+                "label": "Sub-flow",
+                "kind": "pipeline-ref",
+                "required": true,
+                "description": "The pipeline this node runs in place, its rows passing through it. Its Sub-flow input and output nodes become this node's ports, by name."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main",
+              "optional": true
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ctl.subflow.in",
+      "label": "Sub-flow input",
+      "kind": "control",
+      "availability": "available",
+      "summary": "A sub-flow's way in: the rows a calling pipeline wires to this port. Run on its own, the sub-flow reads the sample file set here instead.",
+      "category": "Control Flow",
+      "group": "Pipelines",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "ctl.subflow.in",
+        "kind": "transform",
+        "label": "Sub-flow input",
+        "description": "A sub-flow's way in: the rows a calling pipeline wires to this port. Run on its own, the sub-flow reads the sample file set here instead.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Sub-flow input",
+            "fields": [
+              {
+                "key": "port",
+                "label": "Port name",
+                "kind": "text",
+                "defaultValue": "main",
+                "description": "The port a calling pipeline wires its rows to."
+              },
+              {
+                "key": "samplePath",
+                "label": "Sample file (running on its own)",
+                "kind": "file-path",
+                "description": "Rows to use when this sub-flow runs by itself, to preview and test it: a CSV, Parquet or JSON file. A calling pipeline never reads it."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ctl.subflow.out",
+      "label": "Sub-flow output",
+      "kind": "control",
+      "availability": "available",
+      "summary": "A sub-flow's way out: the rows leaving through this port, to whatever the calling pipeline wires to it.",
+      "category": "Control Flow",
+      "group": "Pipelines",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "ctl.subflow.out",
+        "kind": "transform",
+        "label": "Sub-flow output",
+        "description": "A sub-flow's way out: the rows leaving through this port, to whatever the calling pipeline wires to it.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Sub-flow output",
+            "fields": [
+              {
+                "key": "port",
+                "label": "Port name",
+                "kind": "text",
+                "defaultValue": "main",
+                "description": "The port a calling pipeline takes these rows from."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
         }
       }
     },

@@ -113,6 +113,21 @@ COMPONENTS = {
         'summary': 'Work out a value while the run is under way and let later steps in the same pipeline ask for it as ${name}: the date on the batch just read, the id just written. Wired to rows the expression is read against them; wired to nothing it stands on its own. The static context cannot carry these, becaus...',
         'params': ['name', 'value'],
     },
+    'ctl.subflow': {
+        'kind': 'control',
+        'summary': "Run another pipeline as one node here, its rows passing through it (a Talend joblet, a Hop mapping). Its ports are the sub-flow's Sub-flow input and output nodes, by name; the engine puts the sub-flow's steps in place of this node when it plans the run.",
+        'params': ['subflowRef'],
+    },
+    'ctl.subflow.in': {
+        'kind': 'control',
+        'summary': "A sub-flow's way in: the rows a calling pipeline wires to this port. Run on its own, the sub-flow reads the sample file set here instead.",
+        'params': ['port', 'samplePath'],
+    },
+    'ctl.subflow.out': {
+        'kind': 'control',
+        'summary': "A sub-flow's way out: the rows leaving through this port, to whatever the calling pipeline wires to it.",
+        'params': ['port'],
+    },
     'ctl.switch': {
         'kind': 'control',
         'summary': 'Route rows to case_1..N outputs by condition; first match wins',
