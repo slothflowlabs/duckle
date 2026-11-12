@@ -4,36 +4,28 @@
 # (engine feature `teradata-static`), so a shipped Linux binary needs no system
 # libodbc.so.2 to launch. odbc-sys's `static` feature uses
 # `#[link(name = "odbc", kind = "static")]`, which makes rustc bundle libodbc.a
-# at compile time - so the static archives must be on rustc's library search
-# path. Add the Debian/Ubuntu multiarch lib dir (where `unixodbc-dev` +
-# `libltdl-dev` install libodbc.a / libodbcinst.a / libltdl.a) for the gnu Linux
-# targets. The musl target is intentionally absent: the musl runner excludes
-# Teradata entirely.
+# (and, with `static_ltdl`, libltdl.a) when odbc-sys itself is compiled - so
+# those archives must be on odbc-sys's search path. odbc-sys's build script takes
+# that path from ODBC_SYS_STATIC_PATH, read when the build script is compiled.
+# The default below is the Debian/Ubuntu x86_64 multiarch dir, where
+# `unixodbc-dev` + `libltdl-dev` install them. A value already in the
+# environment wins: release.yml sets it per arch with `gcc -dumpmachine`, and on
+# another layout (aarch64, Arch, Fedora) set it to the dir holding libodbc.a,
+# such as /usr/lib/aarch64-linux-gnu or /usr/lib64. duckdb-engine's build.rs
+# adds the dirs libodbcinst.a can be in.
 #
-# Distros that do not use multiarch (Arch, Fedora) keep the archives in
-# /usr/lib64 or /usr/local/lib, so those follow as fallbacks. The multiarch dir
-# stays FIRST: these flags apply to every build for the triple, including the
-# release job that produces the published Linux binaries, and that job must keep
-# linking the same archives it links today.
+# This must NOT go back to `-L native=/usr/lib/...` in [target.*] rustflags, as
+# it once was. A rustflag reaches every crate's compile ahead of each build
+# script's own output dir, so libsqlite3-sys bundled the system's libsqlite3.a
+# (from libsqlite3-dev, present on the CI runner and in the Debian build image)
+# in place of the patched SQLite it had just built: Linux builds ran Ubuntu's
+# SQLite 3.45.1 while the lockfile said 3.54.1 (RUSTSEC-2026-0459), and
+# Debian's 3.40.1 broke the Docker link outright. A path from odbc-sys's build
+# script reaches only odbc-sys and the crates that depend on it. duckle-runner's
+# test the_sqlite_this_binary_runs_is_the_patched_bundled_one is the guard.
 #
 # A path under a home directory does NOT belong here - this file is committed and
-# shared, and a home directory is writable by whoever owns it. For a lib dir
-# outside these, set ODBC_SYS_STATIC_PATH; build.rs adds it (and $HOME/.local/lib)
-# to the search path for your build alone, gated on the teradata-static feature.
-# On Windows/macOS this file does nothing.
-[target.x86_64-unknown-linux-gnu]
-rustflags = [
-    "-L", "native=/usr/lib/x86_64-linux-gnu",
-    "-L", "native=/usr/lib64",
-    "-L", "native=/usr/local/lib",
-    "-L", "native=/usr/lib",
-]
-
-[target.aarch64-unknown-linux-gnu]
-rustflags = [
-    "-L", "native=/usr/lib/aarch64-linux-gnu",
-    "-L", "native=/usr/lib64",
-    "-L", "native=/usr/local/lib",
-    "-L", "native=/usr/lib",
-]
-
+# shared, and a home directory is writable by whoever owns it. On Windows/macOS
+# this does nothing: odbc-sys only links statically on Linux.
+[env]
+ODBC_SYS_STATIC_PATH = { value = "/usr/lib/x86_64-linux-gnu", force = false }
