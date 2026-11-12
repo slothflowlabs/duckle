@@ -3711,7 +3711,7 @@ Validators split their input: passing rows continue on the main port, failures r
 
 ### Custom code
 
-**7 ways to drop into code available today.**
+**8 ways to drop into code available today.**
 
 | Capability | What it does |
 |---|---|
@@ -3722,7 +3722,8 @@ Validators split their input: passing rows continue on the main port, failures r
 | **Shell** | Run any shell command; emits `{stdout, stderr, exit_code, duration_ms}`. Platform-aware default shell. Optional `timeoutMs` kills the child. |
 | **WebAssembly UDF** | Per-row WASM transform via pure-Rust `wasmi`. Sandboxed (no fs / net / env). Works with any WASM toolchain (Rust, AssemblyScript, C, TinyGo). |
 | **JavaScript UDF** | Per-row JS transform via pure-Rust `boa` interpreter. Sandboxed. Define a `transform(row)` function. |
-| **Python / Rust UDFs** | Embedded-language stages | Planned |
+| **Python UDF** | A real Python 3 interpreter, packages included (`code.python`). Define `process(row)` to work a row at a time, `transform(table)` to be handed the whole table as a pyarrow Table (polars, pandas, ML), or `transform_batches(batch)` to stream it a RecordBatch at a time when it is larger than memory. Needs Python 3 on PATH or `DUCKLE_PYTHON_BIN` |
+| **Rust UDF** | Planned |
 
 ### Sinks
 
@@ -3757,7 +3758,7 @@ Database sinks support an optional **dead-letter (validate-before-insert)** step
 
 ### Control flow
 
-**18 control-flow components available today.**
+**21 control-flow components available today.**
 
 | Component | What it does |
 |---|---|
@@ -3768,10 +3769,13 @@ Database sinks support an optional **dead-letter (validate-before-insert)** step
 | **Throttle** | Inter-stage delay derived from a rows-per-second target |
 | **Set Run Variable** | Work out a value while the run is under way and let later steps read it as `${name}` (`ctl.setvar`), in this pipeline and in the jobs it goes on to run. Wired to rows the expression is read against them and the first row decides, so use an aggregate to read the whole input; wired to nothing it stands on its own. The value is held in the run's own database, so it survives whichever way the engine executes the stages |
 | **Checkpoint** | Pass rows through and also write a parquet snapshot to a path |
+| **File Operation** | Copy, move or delete one file, such as staging a file between a landing area and a working area, the same way on every platform (`ctl.file`) |
 | **Dead Letter Queue** | Terminal sink for rejected rows (JSON / CSV / Parquet) |
 | **Run Pipeline** | Inline-execute another pipeline file (`ctl.runpipeline`) |
+| **Trigger Pipeline** | The same as Run Pipeline, under the name other ETL tools give it (`ctl.trigger`) |
 | **Run Job** | Call a child pipeline (picked from the workspace) passing parent context variables; chain several to build a Master Job (`ctl.runjob`). The child runs in its own temporary database. It can take the caller's input rows (**Pass this node's input rows**, read in the child as `${DUCKLE_INPUT}`, for example by a Parquet source) and hand rows back (**Take the rows the child returns**, written by the child to `${DUCKLE_RETURN}`). With both on, a child is a reusable block that several pipelines call |
 | **Parallelize** | Run the downstream branches wired to its outputs concurrently; branches are unlimited (`ctl.parallelize`) |
+| **Sequence Anchor** | Does no work itself: ordering links attach to it, to say what runs after it or what must finish first. It never joins the data flow (`ctl.anchor`) |
 | **Iterate** | Run a sub-pipeline N times with `${ITER_INDEX}` substitution |
 | **For Each** | Run a sub-pipeline once per input row with `${ITER_ITEM_<FIELD>}` substitution; an optional item key column names each run so per-row watermarks stay separate |
 
