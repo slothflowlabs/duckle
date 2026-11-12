@@ -27,6 +27,19 @@ import { placeTip } from '../src/tour-place';
 import { pipelinesUsingConnections } from '../src/connection-usage';
 import { arrange } from '../src/canvas/arrange';
 import { pipelineDocument } from '../src/pipeline-doc';
+import { parseWkt } from '../src/geo/wkt';
+import {
+    boundsOf,
+    collectFeatures,
+    crsOfType,
+    fitView,
+    geometryColumns,
+    isGeographic,
+    pathParts,
+    toMap,
+    toScreen,
+    zoomAt,
+} from '../src/geo/map-view';
 import { getManifest } from '../src/workflow-ui/fields/component-manifests';
 import { caseProblem, cleaned, dummyInput, guessGenerator, listOf, newCase, newSuite } from '../src/test-cases';
 import {
@@ -35,6 +48,7 @@ import {
     engineInstall,
     mcpConnectionInfo,
     runPipeline,
+    runPipelinePartial,
     scheduleDelete,
     scheduleList,
     scheduleRunNow,
@@ -1695,6 +1709,235 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     }
     check('doc: a hand-written pipeline still documents', !threw && page.includes('id="step-only"'), threw || page.slice(0, 200));
     check('doc: a step with no label goes by its id', page.includes('1. only') && !/undefined/.test(page), (page.match(/.{40}undefined.{40}/) ?? [''])[0]);
+}
+
+// ---------------------------------------------------------------------------
+// #372: the map reads each shape from a preview row as WKT, the way DuckDB
+// prints a GEOMETRY. Every form below was printed by DuckDB 2.0 itself: Z, M and
+// ZM coordinates, EMPTY, MULTIPOINT without inner parentheses, holes, and
+// collections. A value that is not a shape - a masked one, a typo - is refused
+// so the map can count it instead of drawing something wrong.
+// ---------------------------------------------------------------------------
+{
+    const cases: [string, unknown][] = [
+        ['POINT (1.5 2)', { type: 'Point', coordinates: [1.5, 2] }],
+        ['point(1 2)', { type: 'Point', coordinates: [1, 2] }],
+        ['POINT Z (1 2 3)', { type: 'Point', coordinates: [1, 2] }],
+        ['POINT ZM (1 2 3 4)', { type: 'Point', coordinates: [1, 2] }],
+        ['POINT (1e3 -2.5E-1)', { type: 'Point', coordinates: [1000, -0.25] }],
+        ['POINT (1 2 3)', { type: 'Point', coordinates: [1, 2] }],
+        ['LINESTRING M (0 0 5, 1 1 6)', { type: 'LineString', coordinates: [[0, 0], [1, 1]] }],
+        [
+            'POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0), (2 2, 3 2, 3 3, 2 2))',
+            {
+                type: 'Polygon',
+                coordinates: [
+                    [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]],
+                    [[2, 2], [3, 2], [3, 3], [2, 2]],
+                ],
+            },
+        ],
+        ['MULTIPOINT (1 2, 3 4)', { type: 'MultiPoint', coordinates: [[1, 2], [3, 4]] }],
+        ['MULTIPOINT ((1 2), (3 4))', { type: 'MultiPoint', coordinates: [[1, 2], [3, 4]] }],
+        [
+            'MULTILINESTRING ((0 0, 1 1), (2 2, 3 3))',
+            { type: 'MultiLineString', coordinates: [[[0, 0], [1, 1]], [[2, 2], [3, 3]]] },
+        ],
+        [
+            'MULTIPOLYGON (((0 0, 1 0, 1 1, 0 0)), ((5 5, 6 5, 6 6, 5 5)))',
+            {
+                type: 'MultiPolygon',
+                coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 0]]], [[[5, 5], [6, 5], [6, 6], [5, 5]]]],
+            },
+        ],
+        [
+            'GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (0 0, 1 1))',
+            {
+                type: 'GeometryCollection',
+                geometries: [
+                    { type: 'Point', coordinates: [1, 2] },
+                    { type: 'LineString', coordinates: [[0, 0], [1, 1]] },
+                ],
+            },
+        ],
+        ['POINT EMPTY', { type: 'GeometryCollection', geometries: [] }],
+        ['GEOMETRYCOLLECTION EMPTY', { type: 'GeometryCollection', geometries: [] }],
+        // DuckDB writes an empty member of a multi-shape in place, as EMPTY.
+        ['MULTIPOINT (EMPTY, 1 2)', { type: 'MultiPoint', coordinates: [[1, 2]] }],
+        ['MULTILINESTRING (EMPTY, (0 0, 1 1))', { type: 'MultiLineString', coordinates: [[[0, 0], [1, 1]]] }],
+        [
+            'MULTIPOLYGON (EMPTY, ((0 0, 1 0, 1 1, 0 0)))',
+            { type: 'MultiPolygon', coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 0]]]] },
+        ],
+        [
+            'GEOMETRYCOLLECTION (POINT EMPTY, POINT (1 2))',
+            {
+                type: 'GeometryCollection',
+                geometries: [
+                    { type: 'GeometryCollection', geometries: [] },
+                    { type: 'Point', coordinates: [1, 2] },
+                ],
+            },
+        ],
+    ];
+    for (const [text, want] of cases) {
+        const got = parseWkt(text);
+        check(`wkt: ${text}`, JSON.stringify(got) === JSON.stringify(want), `read as ${JSON.stringify(got)}`);
+    }
+    const notShapes: unknown[] = [
+        '***',
+        '',
+        'POINT (1)',
+        'POINT (1 2',
+        'POINT (a b)',
+        'CIRCLE (1 2)',
+        'POINT (1 2) and more',
+        'POINT (Infinity 2)',
+        'POINT (1e400 2)',
+        42,
+        null,
+        undefined,
+        { x: 1 },
+    ];
+    for (const bad of notShapes) {
+        const got = parseWkt(bad);
+        check(`wkt: ${JSON.stringify(bad) ?? 'undefined'} is not a shape`, got === null, `read as ${JSON.stringify(got)}`);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #372: which columns get a map, the CRS a column's DuckDB type names, and how
+// a preview's rows become features under the feature limit.
+// ---------------------------------------------------------------------------
+{
+    const offered = geometryColumns([
+        { name: 'id', type: 'int64' },
+        { name: 'geom', type: 'geometry' },
+        { name: 'wkt', type: 'string' },
+        { name: 'g2', type: 'GEOMETRY' },
+    ]);
+    check('map: only GEOMETRY columns are offered', JSON.stringify(offered) === '["geom","g2"]', JSON.stringify(offered));
+    const crs: [string | undefined, string | null][] = [
+        ["GEOMETRY('EPSG:4326')", 'EPSG:4326'],
+        ["GEOMETRY('OGC:CRS84')", 'OGC:CRS84'],
+        ['GEOMETRY', null],
+        ['VARCHAR', null],
+        [undefined, null],
+    ];
+    for (const [t, want] of crs) {
+        check(`map: the CRS of ${t}`, crsOfType(t) === want, `read ${JSON.stringify(crsOfType(t))}`);
+    }
+
+    const rows = [
+        { id: 0, g: 'POINT (1 2)' },
+        { id: 1, g: null },
+        { id: 2, g: '***' },
+        { id: 3, g: 'POINT EMPTY' },
+        { id: 4, g: 'LINESTRING (0 0, 4 3)' },
+        { id: 5, g: 'POINT (9 9)' },
+        { id: 6, g: 'POINT (8 8)' },
+    ];
+    const two = collectFeatures(rows, 'g', 2);
+    const rowsOf = (s: { features: { row: number }[] }) => JSON.stringify(s.features.map(f => f.row));
+    check('map: a feature keeps the row it came from', rowsOf(two) === '[0,4]', rowsOf(two));
+    check(
+        'map: a null, a masked value and an empty shape are each counted, not drawn',
+        two.nulls === 1 && two.unreadable === 1 && two.empty === 1,
+        JSON.stringify(two),
+    );
+    check('map: rows past the feature limit are counted as left out', two.capped === 2, JSON.stringify(two));
+    const all = collectFeatures(rows, 'g', 1000);
+    check('map: under the limit nothing is left out', all.features.length === 4 && all.capped === 0, JSON.stringify(all));
+    const box = boundsOf(all.features);
+    check(
+        'map: the extent covers every drawn coordinate',
+        JSON.stringify(box) === JSON.stringify({ minX: 0, minY: 0, maxX: 9, maxY: 9 }),
+        JSON.stringify(box),
+    );
+    check('map: nothing to draw has no extent', boundsOf([]) === null, JSON.stringify(boundsOf([])));
+}
+
+// ---------------------------------------------------------------------------
+// #372: fitting, zooming and reading coordinates back. No basemap is drawn, so
+// the shapes themselves have to come out the right way up, the right shape, and
+// in the right place under the cursor.
+// ---------------------------------------------------------------------------
+{
+    const lonLat = { minX: -10, minY: 35, maxX: 30, maxY: 60 };
+    const metres = { minX: 500000, minY: 4000000, maxX: 600000, maxY: 4100000 };
+    check('map: EPSG:4326 is geographic whatever the numbers', isGeographic('EPSG:4326', metres), 'read as projected');
+    check('map: OGC:CRS84 is geographic', isGeographic('OGC:CRS84', lonLat), 'read as projected');
+    check('map: a projected CRS is not, even over small numbers', !isGeographic('EPSG:3857', { minX: 1, minY: 1, maxX: 2, maxY: 2 }), 'read as geographic');
+    check('map: with no CRS, degree-sized numbers read as longitude/latitude', isGeographic(null, lonLat), 'read as projected');
+    check('map: with no CRS, metre-sized numbers do not', !isGeographic(null, metres), 'read as geographic');
+
+    const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+    const v = fitView({ minX: 0, minY: 0, maxX: 4, maxY: 3 }, 100, 100, 10, false);
+    const corners = ([[0, 0], [4, 0], [4, 3], [0, 3]] as [number, number][]).map(p => toScreen(v, p));
+    const xs = corners.map(c => c[0]);
+    check(
+        'map: fitting keeps every corner inside the padding',
+        corners.every(([x, y]) => x >= 10 - 1e-9 && x <= 90 + 1e-9 && y >= 10 - 1e-9 && y <= 90 + 1e-9),
+        JSON.stringify(corners),
+    );
+    check('map: fitting fills the tighter side', near(Math.max(...xs) - Math.min(...xs), 80), JSON.stringify(corners));
+    check('map: north is up', toScreen(v, [0, 3])[1] < toScreen(v, [0, 0])[1], JSON.stringify(corners));
+    const north = fitView({ minX: 0, minY: 59, maxX: 2, maxY: 61 }, 100, 100, 10, true);
+    check(
+        'map: a degree of longitude is drawn shorter at 60 degrees north',
+        near(north.xStretch, Math.cos(Math.PI / 3)),
+        JSON.stringify(north),
+    );
+    const one = fitView({ minX: 5, minY: 5, maxX: 5, maxY: 5 }, 100, 80, 10, false);
+    const at = toScreen(one, [5, 5]);
+    check(
+        'map: a single point is centred, not divided by zero',
+        Number.isFinite(one.scale) && near(at[0], 50) && near(at[1], 40),
+        JSON.stringify({ one, at }),
+    );
+    const zoomed = zoomAt(v, 2, 30, 40);
+    const before = toMap(v, [30, 40]);
+    const after = toMap(zoomed, [30, 40]);
+    check('map: zooming keeps the point under the cursor', near(before[0], after[0]) && near(before[1], after[1]), JSON.stringify({ before, after }));
+    check('map: zooming in doubles the scale', near(zoomed.scale, v.scale * 2), JSON.stringify(zoomed));
+    const back = toMap(v, toScreen(v, [1.25, 2.5]));
+    check('map: screen and map coordinates convert back exactly', near(back[0], 1.25) && near(back[1], 2.5), JSON.stringify(back));
+
+    const mixed = parseWkt(
+        'GEOMETRYCOLLECTION (POINT (11 12), LINESTRING (10 10, 13 14), POLYGON ((10 10, 14 10, 14 13, 10 10), (11 11, 12 11, 12 12, 11 11)))',
+    );
+    const parts = mixed ? pathParts(mixed, 10, 10) : { points: '', lines: '', polygons: '' };
+    check(
+        'map: each member of a collection is drawn in the layer for its kind',
+        parts.points !== '' && parts.lines !== '' && parts.polygons !== '',
+        JSON.stringify(parts),
+    );
+    check('map: shapes are drawn relative to the origin given', parts.points.startsWith('M1 2'), parts.points);
+    check('map: each ring of a polygon is closed', (parts.polygons.match(/Z/g) ?? []).length === 2, parts.polygons);
+}
+
+// ---------------------------------------------------------------------------
+// #372: the map's Load asks run-to-here to keep more rows for the node it maps.
+// The web editor sends the number with the run; the server half is tested in
+// serve.rs and the desktop command mirrors it.
+// ---------------------------------------------------------------------------
+{
+    const g = globalThis as unknown as { fetch: typeof fetch };
+    const realFetch = g.fetch;
+    const seen: { body?: Record<string, unknown> } = {};
+    g.fetch = (async (url: string, init?: { body?: string }) => {
+        if (String(url) === '/api/run_stream') seen.body = JSON.parse(init?.body ?? '{}') as Record<string, unknown>;
+        const done = { status: 'ok', duration_ms: 1, nodes: {}, preview: [] };
+        return new Response(`event: result\ndata: ${JSON.stringify(done)}\n\n`, { status: 200 });
+    }) as unknown as typeof fetch;
+    const result = await runPipelinePartial([], [], 'f', undefined, 'p1', '/ws', 'P', { previewRows: 250 });
+    g.fetch = realFetch;
+    check(
+        'map: run-to-here sends the rows the map asked for',
+        seen.body?.previewRows === 250 && seen.body?.targetNodeId === 'f',
+        JSON.stringify(seen.body),
+    );
+    check('map: and still reads the run back', result?.status === 'ok', JSON.stringify(result));
 }
 
 if (failures.length) {

@@ -11,6 +11,8 @@ import type { Dive, DiveParam } from './dive-types';
 export interface DiveResult {
     columns: Column[];
     rows: Record<string, unknown>[];
+    /** Each column's DuckDB type, aligned with `columns`; a geometry's CRS is written there (#372). */
+    sqlTypes?: string[];
 }
 
 /** A param value coerced to a SAFE typed SQL literal. Strings/dates are
@@ -77,5 +79,5 @@ export async function runDive(
     const preview =
         result.preview.find((p) => p.node_id === 'dive_sql') ??
         result.preview[result.preview.length - 1];
-    return { columns: preview?.columns ?? [], rows: preview?.rows ?? [] };
+    return { columns: preview?.columns ?? [], rows: preview?.rows ?? [], sqlTypes: preview?.sql_types };
 }

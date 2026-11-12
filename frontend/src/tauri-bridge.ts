@@ -13,7 +13,13 @@ import type { CaseResult, TestSuite } from './test-cases';
  * #317: what a run carries besides its graph - the pipeline's own top-level
  * fields, and the declared parameters' values for the engine to check and apply.
  */
-export type RunInput = { fields?: PipelineRunFields; params?: Record<string, string> };
+export type RunInput = {
+    fields?: PipelineRunFields;
+    params?: Record<string, string>;
+    /** #372: rows a run-to-here keeps for its target, so the map can draw more
+     *  than the 100 every step keeps. Ignored by a full run. */
+    previewRows?: number;
+};
 
 type AutodetectPayload = {
     columns: Column[];
@@ -120,6 +126,9 @@ export type NodePreview = {
     node_id: string;
     columns: Column[];
     rows: Record<string, unknown>[];
+    /** Each column's DuckDB type as DESCRIBE printed it, aligned with `columns`;
+     *  a geometry's CRS is written there, as GEOMETRY('EPSG:4326'). */
+    sql_types?: string[];
 };
 
 export type RunLogLine = {
@@ -173,6 +182,7 @@ async function runViaSse(
     workspacePath?: string | null,
     targetNodeId?: string,
     params?: Record<string, string>,
+    previewRows?: number,
 ): Promise<RunResult | null> {
     const fail = (error: string): RunResult => ({
         status: 'error',
@@ -193,6 +203,7 @@ async function runViaSse(
                 // Present for run-to-here (partial); omitted/null = full run.
                 targetNodeId: targetNodeId ?? null,
                 params: params ?? null,
+                previewRows: previewRows ?? null,
             }),
         });
         if (!res.ok) {
@@ -299,13 +310,23 @@ export async function runPipelinePartial(
     // Web edition: run-to-here streams over SSE like a full run, passing the
     // target node so the server runs only the subgraph up to it.
     if (isWebBackend()) {
-        return runViaSse(pipeline, onEvent, pipelineId, pipelineName, workspacePath, targetNodeId, input?.params);
+        return runViaSse(
+            pipeline,
+            onEvent,
+            pipelineId,
+            pipelineName,
+            workspacePath,
+            targetNodeId,
+            input?.params,
+            input?.previewRows,
+        );
     }
     const channel = new Channel<PipelineEvent>();
     if (onEvent) channel.onmessage = onEvent;
     try {
         return await invoke<RunResult>('run_pipeline_partial', {
             params: input?.params ?? null,
+            previewRows: input?.previewRows ?? null,
             pipeline,
             targetNodeId,
             onEvent: channel,

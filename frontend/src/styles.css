@@ -3711,6 +3711,264 @@ html[dir='rtl'] .topbar-lang {
     background: var(--bg-3);
 }
 
+/* #372: the map of a preview's GEOMETRY column, and the row it shares with the table. */
+.preview-table tr.is-selected td,
+.bottom-preview-table tr.is-selected td,
+.dive-table tr.is-selected td {
+    background: var(--accent-soft);
+    color: var(--text-1);
+}
+
+.preview-map-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 8px;
+    padding: 1px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: var(--bg-3);
+    color: var(--text-2);
+    font: inherit;
+    font-size: 0.7692rem;
+    text-transform: none;
+    letter-spacing: normal;
+    cursor: pointer;
+}
+
+.preview-map-toggle:hover,
+.preview-map-toggle.is-on {
+    border-color: var(--accent);
+    color: var(--text-1);
+}
+
+.geo-map {
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-2);
+    overflow: hidden;
+}
+
+.geo-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-1);
+    font-size: 0.8462rem;
+    color: var(--text-2);
+}
+
+.geo-col {
+    font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    font-weight: 600;
+    color: var(--text-1);
+}
+
+.geo-col-select,
+.geo-limit input {
+    background: var(--bg-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-1);
+    font: inherit;
+    padding: 1px 4px;
+}
+
+.geo-limit input {
+    width: 70px;
+}
+
+.geo-crs {
+    color: var(--text-3);
+}
+
+.geo-spacer {
+    flex: 1;
+}
+
+.geo-limit {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-3);
+}
+
+.geo-load.btn {
+    padding: 2px 8px;
+    font-size: 0.8462rem;
+}
+
+.geo-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-3);
+    color: var(--text-2);
+    cursor: pointer;
+}
+
+.geo-icon-btn:hover {
+    border-color: var(--border-bright);
+    color: var(--text-1);
+}
+
+.geo-canvas {
+    position: relative;
+    background: var(--bg-0);
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+}
+
+.geo-canvas.is-dragging {
+    cursor: grabbing;
+}
+
+.geo-canvas svg {
+    display: block;
+}
+
+/* Strokes stay the same width at every zoom; a point is a round-capped
+   zero-length stroke, so it stays a dot of the same size too. */
+.geo-canvas path {
+    vector-effect: non-scaling-stroke;
+}
+
+.geo-shape {
+    cursor: pointer;
+}
+
+.geo-area {
+    fill: var(--accent-soft);
+    fill-rule: evenodd;
+    stroke: var(--accent);
+    stroke-width: 1.2;
+}
+
+.geo-line {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* A wider, invisible copy of each line, so a thin line can be clicked. */
+.geo-hit {
+    fill: none;
+    stroke: transparent;
+    stroke-width: 10;
+    pointer-events: stroke;
+}
+
+.geo-point {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 8;
+    stroke-linecap: round;
+}
+
+.geo-shape.is-selected .geo-area {
+    fill: rgba(46, 175, 255, 0.28);
+    stroke: var(--kind-source);
+    stroke-width: 2;
+}
+
+.geo-shape.is-selected .geo-line {
+    stroke: var(--kind-source);
+    stroke-width: 3;
+}
+
+.geo-shape.is-selected .geo-point {
+    stroke: var(--kind-source);
+    stroke-width: 11;
+}
+
+.geo-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-3);
+    font-size: 0.8462rem;
+}
+
+.geo-cursor {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--bg-1);
+    color: var(--text-3);
+    font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    font-size: 0.7692rem;
+    pointer-events: none;
+}
+
+.geo-card {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    max-width: 60%;
+    max-height: calc(100% - 12px);
+    overflow: auto;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-2);
+    font-size: 0.8462rem;
+}
+
+.geo-card-head {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-1);
+    font-weight: 600;
+}
+
+.geo-card dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2px 10px;
+    margin: 0;
+    padding: 6px 8px;
+}
+
+.geo-card dt {
+    color: var(--text-3);
+}
+
+.geo-card dd {
+    margin: 0;
+    color: var(--text-1);
+    font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    word-break: break-all;
+}
+
+.geo-status {
+    padding: 4px 8px;
+    border-top: 1px solid var(--border);
+    color: var(--text-3);
+    font-size: 0.7692rem;
+}
+
+.bottom-preview-more {
+    padding: 6px 12px;
+    color: var(--text-3);
+    font-size: 0.7692rem;
+}
+
 /* Modal --------------------------------------------------------------------- */
 .modal-backdrop {
     position: fixed;

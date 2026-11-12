@@ -1552,6 +1552,13 @@ fn run_stream(
     stream.flush().map_err(|e| e.to_string())?;
 
     let engine = DuckdbEngine::new(state.duckdb.clone());
+    // #372: a run-to-here that is mapping its target may ask to keep more of its
+    // rows than the 100 every step keeps. Only the target grows; a full run has
+    // none, so the engine ignores it there.
+    let engine = match args.get("previewRows").and_then(|v| v.as_u64()) {
+        Some(rows) => engine.with_target_preview_rows(rows as usize),
+        None => engine,
+    };
     // Registered before the queue, so a Stop pressed while it waits lands.
     let _running = state.editor_runs.start(&who.label, &engine);
     let (_guard, pool, queued_ms) = state.run_lock.acquire(&doc.resource_pool);
@@ -8030,6 +8037,77 @@ mod tests {
         escaping["pipelineId"] = "../outside".into();
         cmd("run_pipeline", escaping);
         assert!(!ws.join("outside.json").exists(), "an id that is not a file name named a history file");
+    }
+
+    /// #372: the web editor's run-to-here asks for more preview rows for the node
+    /// it is mapping, as the desktop's does, and gets them; the step above keeps 100.
+    #[test]
+    fn a_web_run_to_here_keeps_the_preview_rows_it_asked_for() {
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN").ok().filter(|b| std::path::Path::new(b).exists())
+        else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = super::plain_workspace(tmp.path());
+        let mut csv_body = String::from("id\n");
+        for i in 0..400 {
+            csv_body.push_str(&format!("{i}\n"));
+        }
+        std::fs::write(ws.join("in.csv"), csv_body).unwrap();
+        let state = WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from(bin),
+            dist: ws.clone(),
+            host: "127.0.0.1".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "127.0.0.1", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
+        };
+        let csv = ws.join("in.csv").to_string_lossy().replace('\\', "/");
+        let run = serde_json::json!({
+            "pipeline": {
+                "nodes": [
+                    { "id": "s", "position": { "x": 0, "y": 0 },
+                      "data": { "label": "s", "componentId": "src.csv", "properties": { "path": csv, "hasHeader": true } } },
+                    { "id": "f", "position": { "x": 0, "y": 0 },
+                      "data": { "label": "f", "componentId": "xf.filter", "properties": { "predicate": "id >= 0" } } }
+                ],
+                "edges": [{ "id": "e", "source": "s", "target": "f" }]
+            },
+            "targetNodeId": "f",
+            "previewRows": 250,
+        });
+        let owner = state.console.identify(Some("Bearer s3cret"), None).expect("the owner signs in");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = serde_json::to_vec(&run).unwrap();
+        let text = std::thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let (mut stream, _) = listener.accept().unwrap();
+                super::run_stream(&mut stream, &state, &owner, &body)
+            });
+            let mut conn = std::net::TcpStream::connect(addr).unwrap();
+            let mut text = String::new();
+            let _ = std::io::Read::read_to_string(&mut conn, &mut text);
+            server.join().unwrap().expect("the stream completes");
+            text
+        });
+        let result: serde_json::Value = text
+            .split("event: result\ndata: ")
+            .nth(1)
+            .and_then(|rest| serde_json::from_str(rest.lines().next().unwrap_or("")).ok())
+            .unwrap_or_else(|| panic!("no result in the stream: {text}"));
+        let rows = |id: &str| {
+            result["preview"]
+                .as_array()
+                .and_then(|ps| ps.iter().find(|p| p["node_id"] == id))
+                .and_then(|p| p["rows"].as_array())
+                .map(Vec::len)
+        };
+        assert_eq!(result["status"], "ok", "{result}");
+        assert_eq!(rows("f"), Some(250), "the mapped node keeps the rows asked for");
+        assert_eq!(rows("s"), Some(100), "the step above it keeps the usual 100");
     }
 
     /// An editor run, and so its saved state, was named after the pipeline's

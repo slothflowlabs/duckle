@@ -858,6 +858,8 @@ export default function App() {
         // value a context already gives one of them.
         declared: Record<string, ParamSpec>;
         prefill: Record<string, string>;
+        // #372: preview rows the map asked the target to keep, held across the prompt.
+        previewRows?: number;
     } | null>(null);
 
     const [buildModalPipelineId, setBuildModalPipelineId] = useState<string | null>(null);
@@ -1490,6 +1492,8 @@ export default function App() {
             target: string | null,
             runtimeParams?: Record<string, string>,
             declaredValues?: Record<string, string>,
+            // #372: preview rows to keep for the target of a run-to-here (the map's Load).
+            previewRows?: number,
         ) => {
             // Don't launch a run that's guaranteed to fail (e.g. a sink with no
             // output path) - that only yields a cryptic engine error. Surface
@@ -1522,7 +1526,7 @@ export default function App() {
                     for (const name of declaredNames) {
                         if (Object.prototype.hasOwnProperty.call(known, name)) prefill[name] = known[name];
                     }
-                    setRunParamPrompt({ names: unbound, target, declared, prefill });
+                    setRunParamPrompt({ names: unbound, target, declared, prefill, previewRows });
                     return;
                 }
             }
@@ -1535,7 +1539,7 @@ export default function App() {
                 // supplied run params) before running; the canvas keeps the
                 // editable, un-substituted values.
                 const runNodes = resolveForRun(nodes, repo, workspacePathState, extra, runtimeParams, declaredNames);
-                const input = { fields: runFields, params: declaredValues ?? {} };
+                const input = { fields: runFields, params: declaredValues ?? {}, previewRows };
                 const result = target
                     ? await runPipelinePartial(
                           runNodes,
@@ -1571,6 +1575,14 @@ export default function App() {
     const handleRunFromHere = useCallback(
         (nodeId: string) => {
             void launchRun(nodeId);
+        },
+        [launchRun],
+    );
+
+    // #372: the map's Load - run to the node again, keeping more of its rows.
+    const handleLoadPreviewRows = useCallback(
+        (nodeId: string, rows: number) => {
+            void launchRun(nodeId, undefined, undefined, rows);
         },
         [launchRun],
     );
@@ -2925,6 +2937,13 @@ export default function App() {
                     onOpenMapper={handleOpenMapper}
                     focusNameRequest={renameRequest}
                     openRequest={openPropertiesRequest}
+                    runPreview={
+                        selectedNode
+                            ? shownRunResult?.preview.find(p => p.node_id === selectedNode.id)
+                            : undefined
+                    }
+                    onLoadPreviewRows={handleLoadPreviewRows}
+                    isRunning={isRunning}
                 />
             </main>
 
@@ -3066,9 +3085,9 @@ export default function App() {
                     pipelineName={repo.find(r => r.id === activeJobId)?.name ?? activeJobId}
                     onCancel={() => setRunParamPrompt(null)}
                     onSubmit={({ undeclared, declared }) => {
-                        const target = runParamPrompt.target;
+                        const { target, previewRows } = runParamPrompt;
                         setRunParamPrompt(null);
-                        void launchRun(target, undeclared, declared);
+                        void launchRun(target, undeclared, declared, previewRows);
                     }}
                 />
             ) : null}

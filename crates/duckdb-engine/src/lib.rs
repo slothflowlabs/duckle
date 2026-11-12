@@ -166,6 +166,10 @@ impl From<EngineError> for InspectError {
 const PREVIEW_LIMIT: usize = 8;
 /// Rows captured per stage during a run (shown in the node Preview tab).
 const PREVIEW_ROW_LIMIT: usize = 100;
+/// Most preview rows a run-to-here may keep for its target node (#372): enough
+/// for a map to draw more than a sample, not so many that one request pulls a
+/// whole table across the wire.
+const TARGET_PREVIEW_MAX_ROWS: usize = 10_000;
 
 /// Upper bound on input rows for xf.ai.dedupe. The stage compares every row
 /// against all previously-kept rows (O(N^2) cosine), so an unbounded input can
@@ -181,6 +185,9 @@ pub struct DuckdbEngine {
     cancel: Arc<AtomicBool>,
     /// Whether per-node preview rows are wanted. See [`DuckdbEngine::without_previews`].
     previews: bool,
+    /// #372: preview rows kept for the target of a partial run when more than
+    /// [`PREVIEW_ROW_LIMIT`] were asked for. See [`DuckdbEngine::with_target_preview_rows`].
+    target_preview_rows: Option<usize>,
     /// Substitutions a job passes to everything it runs, however deep.
     ///
     /// A job's return file is named by whoever called it, but the rows may be written from
@@ -423,6 +430,7 @@ impl DuckdbEngine {
     pub fn new(bin: PathBuf) -> Self {
         Self {
             previews: true,
+            target_preview_rows: None,
             bin,
             inherited_subs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             cancel: Arc::new(AtomicBool::new(false)),
@@ -527,6 +535,24 @@ impl DuckdbEngine {
         self
     }
 
+    /// #372: keep up to `rows` preview rows for the target of a partial run, so a
+    /// map of that node's geometry can draw more than the 100 every step keeps.
+    /// Every other step keeps [`PREVIEW_ROW_LIMIT`], and a full run has no target,
+    /// so this changes nothing there. Held between 100 and [`TARGET_PREVIEW_MAX_ROWS`].
+    pub fn with_target_preview_rows(mut self, rows: usize) -> Self {
+        self.target_preview_rows = Some(rows.clamp(PREVIEW_ROW_LIMIT, TARGET_PREVIEW_MAX_ROWS));
+        self
+    }
+
+    /// Preview rows to keep for one step: the usual [`PREVIEW_ROW_LIMIT`], or what
+    /// a run-to-here asked for when this step is its target (#372).
+    fn preview_limit(&self, node_id: &str, target: Option<&str>) -> usize {
+        match self.target_preview_rows {
+            Some(rows) if target == Some(node_id) => rows,
+            _ => PREVIEW_ROW_LIMIT,
+        }
+    }
+
     /// A clone of this engine carrying a FRESH, independent cancel flag, for a
     /// new top-level run. Each run owns its own cancellation scope: cancelling
     /// (or a stale cancel from) one run must not stop another concurrent run,
@@ -538,6 +564,8 @@ impl DuckdbEngine {
             bin: self.bin.clone(),
             cancel: Arc::new(AtomicBool::new(false)),
             previews: self.previews,
+            // Asked for by one run-to-here, for one node: never carried into the next run.
+            target_preview_rows: None,
             // A new run is a new identity; carrying the previous one forward
             // would file this run's log lines under that run.
             run_id: None,
@@ -565,6 +593,7 @@ impl DuckdbEngine {
             bin: self.bin.clone(),
             cancel: Arc::clone(&self.cancel),
             previews: false,
+            target_preview_rows: None,
             run_id: None,
             artifacts: Arc::new(std::sync::Mutex::new(Vec::new())),
             outputs: Arc::new(std::sync::Mutex::new(Default::default())),
@@ -3098,6 +3127,7 @@ impl DuckdbEngine {
                             &stage.node_id,
                             !counted_by_sink.contains(stage.node_id.as_str()),
                             counts_need_every_column,
+                            self.preview_limit(&stage.node_id, target),
                         ),
                     };
                     nodes.insert(
@@ -4147,6 +4177,7 @@ fn count_projection(every_column: bool) -> &'static str {
         name: &str,
         want_count: bool,
         every_column: bool,
+        preview_rows: usize,
     ) -> (Option<u64>, Option<NodePreview>) {
         if !want_count && !self.previews {
             return (None, None);
@@ -4166,7 +4197,7 @@ fn count_projection(every_column: bool) -> &'static str {
             sql.push_str(&format!(
                 " SELECT * FROM (DESCRIBE {q}); SELECT * FROM {q} LIMIT {lim};",
                 q = q,
-                lim = PREVIEW_ROW_LIMIT
+                lim = preview_rows
             ));
         }
         // -bail makes a missing relation fail the whole invocation; treat

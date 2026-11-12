@@ -5,13 +5,16 @@ import {
     CheckCircle2,
     ChevronDown,
     ChevronUp,
+    Map as MapIcon,
     PlayCircle,
     Terminal,
     X,
 } from 'lucide-react';
-import type { RunResult } from '../tauri-bridge';
+import type { NodePreview, RunResult } from '../tauri-bridge';
 import type { ValidationResult } from '../validation';
 import { friendlyError } from '../errors';
+import { GeoMap } from '../geo/GeoMap';
+import { geometryColumns } from '../geo/map-view';
 
 type TabId = 'problems' | 'output' | 'console';
 
@@ -364,19 +367,50 @@ function OutputTab({
     );
 }
 
-function PreviewTable({
-    preview,
-    label,
-}: {
-    preview: { node_id: string; columns: { name: string; type: string }[]; rows: Record<string, unknown>[] };
-    label?: string;
-}) {
+/** Rows a preview table draws; a run-to-here for the map can return many more. */
+const PREVIEW_TABLE_ROWS = 500;
+
+function PreviewTable({ preview, label }: { preview: NodePreview; label?: string }) {
     const { t } = useTranslation();
+    const [showMap, setShowMap] = useState(false);
+    const [selectedRow, setSelectedRow] = useState<number | null>(null);
+    const tbodyRef = useRef<HTMLTableSectionElement>(null);
+    useEffect(() => setSelectedRow(null), [preview]);
+    useEffect(() => {
+        if (selectedRow !== null) tbodyRef.current?.children[selectedRow]?.scrollIntoView({ block: 'nearest' });
+    }, [selectedRow]);
+    const mappable = geometryColumns(preview.columns).length > 0;
+    const sqlTypeOf = (column: string) => {
+        const at = preview.columns.findIndex(c => c.name === column);
+        return at >= 0 ? preview.sql_types?.[at] : undefined;
+    };
+    const shownRows =
+        preview.rows.length > PREVIEW_TABLE_ROWS ? preview.rows.slice(0, PREVIEW_TABLE_ROWS) : preview.rows;
     return (
         <div className="bottom-preview">
             <div className="bottom-preview-head">
                 {t('bottom.preview')} · <b>{label ?? preview.node_id}</b> · {preview.rows.length} rows
+                {mappable ? (
+                    <button
+                        type="button"
+                        className={'preview-map-toggle' + (showMap ? ' is-on' : '')}
+                        onClick={() => setShowMap(on => !on)}
+                        title="Draw this preview's geometry on a map"
+                    >
+                        <MapIcon size={11} /> {showMap ? 'Hide map' : 'View on map'}
+                    </button>
+                ) : null}
             </div>
+            {mappable && showMap ? (
+                <GeoMap
+                    columns={preview.columns}
+                    rows={preview.rows}
+                    sqlTypeOf={sqlTypeOf}
+                    selectedRow={selectedRow}
+                    onSelectRow={setSelectedRow}
+                    height={220}
+                />
+            ) : null}
             <div className="bottom-preview-scroll">
                 <table className="bottom-preview-table">
                     <thead>
@@ -389,9 +423,13 @@ function PreviewTable({
                             ))}
                         </tr>
                     </thead>
-                    <tbody>
-                        {preview.rows.map((r, i) => (
-                            <tr key={i}>
+                    <tbody ref={tbodyRef}>
+                        {shownRows.map((r, i) => (
+                            <tr
+                                key={i}
+                                className={i === selectedRow ? 'is-selected' : undefined}
+                                onClick={showMap ? () => setSelectedRow(i) : undefined}
+                            >
                                 {preview.columns.map(c => (
                                     <td key={c.name} title={formatCell(r[c.name])}>
                                         {formatCell(r[c.name])}
@@ -401,6 +439,12 @@ function PreviewTable({
                         ))}
                     </tbody>
                 </table>
+                {shownRows.length < preview.rows.length ? (
+                    <div className="bottom-preview-more">
+                        The table shows the first {shownRows.length.toLocaleString()} of{' '}
+                        {preview.rows.length.toLocaleString()} rows.
+                    </div>
+                ) : null}
             </div>
         </div>
     );

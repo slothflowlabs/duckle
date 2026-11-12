@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Edge, Node } from '@xyflow/react';
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, MousePointer2, Workflow } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Map as MapIcon, MousePointer2, Workflow } from 'lucide-react';
 import { resolveUpstreamSchema, resolveUpstreamSampleRows, resolveOutputSchema, deriveSchemaFromEngine, diagnosticsFor } from '../schema-resolve';
-import { analyzeNodeSql } from '../tauri-bridge';
+import { analyzeNodeSql, type NodePreview } from '../tauri-bridge';
+import { useRunStatus } from '../canvas/run-status-context';
+import { GeoMap } from '../geo/GeoMap';
+import { geometryColumns } from '../geo/map-view';
 import { setSqlContext } from './fields/sql-context';
 import { buildContextVars, builtinVars, substituteDeep } from '../run-resolve';
 import type { Column, DuckleNodeData } from '../pipeline-types';
@@ -139,6 +142,11 @@ type Props = {
     focusNameRequest?: number;
     /** Bumped by a double-click on a node: show its properties, collapsed or not. */
     openRequest?: number;
+    /** #372: the last run's preview of the selected node; its DuckDB types carry a geometry's CRS. */
+    runPreview?: NodePreview;
+    /** #372: run to a node again, keeping `rows` of its preview rows for the map. */
+    onLoadPreviewRows?: (nodeId: string, rows: number) => void;
+    isRunning?: boolean;
 };
 
 export default function PropertiesPanel({
@@ -152,8 +160,12 @@ export default function PropertiesPanel({
     onOpenMapper,
     focusNameRequest,
     openRequest,
+    runPreview,
+    onLoadPreviewRows,
+    isRunning,
 }: Props) {
     const { t } = useTranslation();
+    const runStatus = useRunStatus(selected?.id ?? '');
     const [tab, setTab] = useState<TabId>('basic');
     // Keyed by the node they are for. As panel-wide flags, selecting another
     // node while a detect ran - or after one failed - showed "Detecting..." or
@@ -811,6 +823,13 @@ export default function PropertiesPanel({
                                       : declaredSchema.length > 0
                                         ? declaredSchema
                                         : upstreamSchema;
+                              // #372: the run reported each column's DuckDB type,
+                              // which is where a geometry's CRS is written.
+                              const sqlTypeOf = (column: string) => {
+                                  const at = runPreview?.columns.findIndex(c => c.name === column) ?? -1;
+                                  return at >= 0 ? runPreview?.sql_types?.[at] : undefined;
+                              };
+                              const nodeId = selected?.id;
                               return (
                                   <div className="properties-section">
                                       <PreviewTab
@@ -823,6 +842,16 @@ export default function PropertiesPanel({
                                           inheritedRows={
                                               !hasOwnRows && upstreamSampleRows.length > 0
                                           }
+                                          sqlTypeOf={sqlTypeOf}
+                                          // Loading more is about THIS step's rows,
+                                          // so it is offered only once it has some.
+                                          totalRows={hasOwnRows ? runStatus?.rows : undefined}
+                                          onLoadRows={
+                                              hasOwnRows && nodeId && onLoadPreviewRows
+                                                  ? rows => onLoadPreviewRows(nodeId, rows)
+                                                  : undefined
+                                          }
+                                          loading={isRunning}
                                       />
                                   </div>
                               );
@@ -879,10 +908,25 @@ type PreviewProps = {
     schema: Column[];
     rows: Record<string, unknown>[];
     inheritedRows?: boolean;
+    sqlTypeOf?: (column: string) => string | undefined;
+    totalRows?: number;
+    onLoadRows?: (rows: number) => void;
+    loading?: boolean;
 };
 
-function PreviewTab({ schema, rows, inheritedRows }: PreviewProps) {
+/** Rows the preview table draws; a map can be loaded with far more, and drawing
+ *  every one of them as a table row would make the panel crawl. */
+const PREVIEW_TABLE_ROWS = 500;
+
+function PreviewTab({ schema, rows, inheritedRows, sqlTypeOf, totalRows, onLoadRows, loading }: PreviewProps) {
     const { t } = useTranslation();
+    const [showMap, setShowMap] = useState(false);
+    const [selectedRow, setSelectedRow] = useState<number | null>(null);
+    const tbodyRef = useRef<HTMLTableSectionElement>(null);
+    useEffect(() => setSelectedRow(null), [rows]);
+    useEffect(() => {
+        if (selectedRow !== null) tbodyRef.current?.children[selectedRow]?.scrollIntoView({ block: 'nearest' });
+    }, [selectedRow]);
     // When no formal schema resolved (e.g. a DB sink whose upstream schema
     // is empty until the source is read), derive columns from the sample
     // rows so the preview still renders from whatever data is available -
@@ -925,6 +969,8 @@ function PreviewTab({ schema, rows, inheritedRows }: PreviewProps) {
     }
 
     const cols = effectiveSchema.map(c => c.name);
+    const mappable = geometryColumns(effectiveSchema).length > 0;
+    const shownRows = rows.length > PREVIEW_TABLE_ROWS ? rows.slice(0, PREVIEW_TABLE_ROWS) : rows;
     return (
         <div className="preview-wrap">
             <div className="preview-meta">
@@ -933,7 +979,29 @@ function PreviewTab({ schema, rows, inheritedRows }: PreviewProps) {
                 {inheritedRows ? (
                     <span className="preview-meta-tag"> · upstream sample</span>
                 ) : null}
+                {mappable ? (
+                    <button
+                        type="button"
+                        className={'preview-map-toggle' + (showMap ? ' is-on' : '')}
+                        onClick={() => setShowMap(on => !on)}
+                        title="Draw this preview's geometry on a map"
+                    >
+                        <MapIcon size={11} /> {showMap ? 'Hide map' : 'View on map'}
+                    </button>
+                ) : null}
             </div>
+            {mappable && showMap ? (
+                <GeoMap
+                    columns={effectiveSchema}
+                    rows={rows}
+                    sqlTypeOf={sqlTypeOf}
+                    selectedRow={selectedRow}
+                    onSelectRow={setSelectedRow}
+                    totalRows={totalRows}
+                    onLoadRows={onLoadRows}
+                    loading={loading}
+                />
+            ) : null}
             <div className="preview-tablewrap">
                 <table className="preview-table">
                     <thead>
@@ -946,9 +1014,13 @@ function PreviewTab({ schema, rows, inheritedRows }: PreviewProps) {
                             ))}
                         </tr>
                     </thead>
-                    <tbody>
-                        {rows.map((r, i) => (
-                            <tr key={i}>
+                    <tbody ref={tbodyRef}>
+                        {shownRows.map((r, i) => (
+                            <tr
+                                key={i}
+                                className={i === selectedRow ? 'is-selected' : undefined}
+                                onClick={showMap ? () => setSelectedRow(i) : undefined}
+                            >
                                 {cols.map(name => (
                                     <td key={name}>{formatCell(r[name])}</td>
                                 ))}
@@ -957,6 +1029,11 @@ function PreviewTab({ schema, rows, inheritedRows }: PreviewProps) {
                     </tbody>
                 </table>
             </div>
+            {shownRows.length < rows.length ? (
+                <div className="preview-meta">
+                    The table shows the first {shownRows.length.toLocaleString()} of {rows.length.toLocaleString()} rows.
+                </div>
+            ) : null}
         </div>
     );
 }

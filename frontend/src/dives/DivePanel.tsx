@@ -3,11 +3,14 @@
 // did not return, fall back to the table only rather than rendering a broken
 // chart. See docs/design/dives.md.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Map as MapIcon } from 'lucide-react';
 import type { Dive } from './dive-types';
 import { runDive, type DiveResult } from './dive-run';
 import { VegaChart } from './VegaChart';
 import { suggestChart } from './suggest-chart';
+import { GeoMap } from '../geo/GeoMap';
+import { geometryColumns } from '../geo/map-view';
 
 interface DivePanelProps {
     dive: Dive;
@@ -30,6 +33,9 @@ export function DivePanel({ dive, workspacePath, theme = 'dark' }: DivePanelProp
     const [result, setResult] = useState<DiveResult | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
+    // #372: a dive whose query returns GEOMETRY can be drawn on a map.
+    const [showMap, setShowMap] = useState(false);
+    const [selectedRow, setSelectedRow] = useState<number | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -39,6 +45,7 @@ export function DivePanel({ dive, workspacePath, theme = 'dark' }: DivePanelProp
             .then((r) => {
                 if (!cancelled) {
                     setResult(r);
+                    setSelectedRow(null);
                     setLoading(false);
                 }
             })
@@ -64,14 +71,45 @@ export function DivePanel({ dive, workspacePath, theme = 'dark' }: DivePanelProp
     // auto-pick one from the result shape; null means nothing sensible to chart.
     const spec = declaredOk ? dive.chart : suggestChart(result.columns);
     const chartRenderable = spec !== null && encodingFields(spec).every((f) => cols.includes(f));
+    const mappable = geometryColumns(result.columns).length > 0;
+    const sqlTypeOf = (column: string) => {
+        const at = result.columns.findIndex((c) => c.name === column);
+        return at >= 0 ? result.sqlTypes?.[at] : undefined;
+    };
 
     return (
         <div className="dive-panel">
-            <div className="dive-panel-head">{dive.title}</div>
+            <div className="dive-panel-head">
+                {dive.title}
+                {mappable ? (
+                    <button
+                        type="button"
+                        className={'preview-map-toggle' + (showMap ? ' is-on' : '')}
+                        onClick={() => setShowMap((on) => !on)}
+                        title="Draw this dive's geometry on a map"
+                    >
+                        <MapIcon size={11} /> {showMap ? 'Hide map' : 'View on map'}
+                    </button>
+                ) : null}
+            </div>
             {chartRenderable && spec ? (
                 <VegaChart spec={spec} rows={result.rows} theme={theme} />
             ) : null}
-            <DiveTable columns={cols} rows={result.rows} />
+            {mappable && showMap ? (
+                <GeoMap
+                    columns={result.columns}
+                    rows={result.rows}
+                    sqlTypeOf={sqlTypeOf}
+                    selectedRow={selectedRow}
+                    onSelectRow={setSelectedRow}
+                />
+            ) : null}
+            <DiveTable
+                columns={cols}
+                rows={result.rows}
+                selectedRow={showMap ? selectedRow : null}
+                onSelectRow={showMap ? setSelectedRow : undefined}
+            />
         </div>
     );
 }
@@ -82,8 +120,24 @@ function fmt(v: unknown): string {
     return String(v);
 }
 
-function DiveTable({ columns, rows }: { columns: string[]; rows: Record<string, unknown>[] }) {
+function DiveTable({
+    columns,
+    rows,
+    selectedRow,
+    onSelectRow,
+}: {
+    columns: string[];
+    rows: Record<string, unknown>[];
+    selectedRow?: number | null;
+    onSelectRow?: (row: number) => void;
+}) {
     const shown = rows.slice(0, 100);
+    const tbodyRef = useRef<HTMLTableSectionElement>(null);
+    useEffect(() => {
+        if (selectedRow !== null && selectedRow !== undefined) {
+            tbodyRef.current?.children[selectedRow]?.scrollIntoView({ block: 'nearest' });
+        }
+    }, [selectedRow]);
     return (
         <div className="dive-table-wrap">
             <table className="dive-table">
@@ -94,9 +148,13 @@ function DiveTable({ columns, rows }: { columns: string[]; rows: Record<string, 
                         ))}
                     </tr>
                 </thead>
-                <tbody>
+                <tbody ref={tbodyRef}>
                     {shown.map((row, i) => (
-                        <tr key={i}>
+                        <tr
+                            key={i}
+                            className={i === selectedRow ? 'is-selected' : undefined}
+                            onClick={onSelectRow ? () => onSelectRow(i) : undefined}
+                        >
                             {columns.map((c) => (
                                 <td key={c}>{fmt(row[c])}</td>
                             ))}

@@ -1458,6 +1458,27 @@ One field rather than a checkbox and a column, because a checkbox ticked with no
 column chosen is a state the engine would have to guess at, and guessing which
 column holds the geometry is how the wrong one gets sorted on.
 
+### A map of a GEOMETRY column
+
+A preview with a `GEOMETRY` column offers **View on map**: in a node's
+**Preview** tab, in the run **Output** panel and in a dive. Points, lines and
+polygons are drawn and fitted to their extent; the wheel zooms and a drag pans.
+Clicking a shape selects its row in the table and shows that row's values, and
+clicking a row selects its shape. The CRS comes from the column's type
+(`GEOMETRY('EPSG:4326')`) and is shown when there is one.
+
+There is no basemap. Tiles come from a third-party server, and opening a
+preview should not reach the network, so the shapes are drawn on a plain
+background, with longitude narrowed by the cosine of the latitude so they keep
+their shape.
+
+A run keeps 100 rows of each step, which is a sample rather than a map.
+**Feature limit** caps how many shapes are drawn (1,000 by default, up to
+10,000), and **Load N rows** runs to the step again keeping that many of its
+rows. Only that step grows: the steps above it still keep 100, so a bigger map
+does not make every preview bigger. A value that is not WKT, such as a masked
+one, is counted under the map rather than drawn.
+
 ### A watcher is not a run
 
 `follow` polls continuously, and most polls find nothing. A source checked every

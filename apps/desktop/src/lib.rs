@@ -637,8 +637,15 @@ async fn run_pipeline_partial(
     pipeline_name: Option<String>,
     workspace_path: Option<String>,
     params: Option<std::collections::HashMap<String, String>>,
+    preview_rows: Option<usize>,
 ) -> Result<RunResult, String> {
     let engine = engine()?.for_new_run();
+    // #372: a run-to-here that is mapping its target may keep more of its rows
+    // than the 100 every step keeps. Only the target grows.
+    let engine = match preview_rows {
+        Some(rows) => engine.with_target_preview_rows(rows),
+        None => engine,
+    };
     *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = Some(engine.clone());
     // Resolve ${ENV:NAME} from the OS environment before running (issue #137);
     // saved Salesforce connections resolve first (#166 stage 2).

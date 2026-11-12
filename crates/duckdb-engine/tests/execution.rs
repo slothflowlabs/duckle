@@ -16334,6 +16334,95 @@ fn partial_run_returns_preview_rows_for_the_target_node() {
     );
 }
 
+/// How many preview rows a run returned for one node, if it returned a preview.
+fn preview_rows_of(r: &duckle_duckdb_engine::RunResult, id: &str) -> Option<usize> {
+    r.preview.iter().find(|p| p.node_id == id).map(|p| p.rows.len())
+}
+
+#[test]
+fn a_partial_run_keeps_the_rows_asked_for_its_target_and_the_usual_100_elsewhere() {
+    // #372: a map of a node's geometry draws the rows its preview holds. Every
+    // step keeps 100, which is a sample, not a map. Run-to-here may ask for more
+    // for the ONE node being mapped; the steps above it must not grow with it,
+    // or every upstream preview would cross the wire at the larger size too.
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let mut body = String::from("id\n");
+    for i in 0..400 {
+        body.push_str(&format!("{i}\n"));
+    }
+    let csv = write_file(ws, "in.csv", &body);
+    let pipeline = json!([
+        node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+        node("f", "xf.filter", json!({ "predicate": "id >= 0" })),
+    ]);
+    let edges = json!([main_edge("e1", "s", "f")]);
+
+    let asked = engine.clone().with_target_preview_rows(250).execute_pipeline_with_events(
+        &doc(pipeline.clone(), edges.clone()),
+        Some("f"),
+        Some("MapRows"),
+        |_| {},
+    );
+    assert_eq!(asked.status, "ok", "partial run failed: {:?}", asked.error);
+    assert_eq!(preview_rows_of(&asked, "f"), Some(250), "the target keeps the rows asked for");
+    assert_eq!(preview_rows_of(&asked, "s"), Some(100), "the step above it keeps the usual 100");
+
+    let plain = engine.execute_pipeline_with_events(&doc(pipeline, edges), Some("f"), Some("MapRows"), |_| {});
+    assert_eq!(plain.status, "ok", "partial run failed: {:?}", plain.error);
+    assert_eq!(preview_rows_of(&plain, "f"), Some(100), "unasked, the target keeps 100 like every step");
+}
+
+#[test]
+fn a_geometry_previews_as_wkt_with_its_crs_on_both_execution_paths() {
+    // #372: the map reads each shape from the preview row as WKT and the CRS from
+    // the column's DuckDB type. A run-to-here takes the per-stage path and a full
+    // run of two batchable steps the batched one, and the two write previews with
+    // different serialisers (-json output versus COPY ... FORMAT json), so both
+    // are held to the same contract.
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let csv = write_file(
+        ws,
+        "shapes.csv",
+        "id|wkt\n1|POINT (1.5 2)\n2|POLYGON ((0 0, 4 0, 4 3, 0 0))\n",
+    );
+    let pipeline = json!([
+        node("s", "src.csv", json!({ "path": csv, "hasHeader": true, "delimiter": "|" })),
+        node(
+            "g",
+            "xf.geo.create",
+            json!({ "source": "wkt", "wktColumn": "wkt", "crs": "EPSG:4326", "outputColumn": "geom" }),
+        ),
+    ]);
+    let edges = json!([main_edge("e1", "s", "g")]);
+    for target in [Some("g"), None] {
+        let r = engine.execute_pipeline_with_events(&doc(pipeline.clone(), edges.clone()), target, Some("Geo"), |_| {});
+        assert_eq!(r.status, "ok", "run (target {target:?}) failed: {:?}", r.error);
+        let p = r
+            .preview
+            .iter()
+            .find(|p| p.node_id == "g")
+            .unwrap_or_else(|| panic!("no preview for the geometry step (target {target:?})"));
+        let at = p.columns.iter().position(|c| c.name == "geom").expect("a geom column");
+        assert_eq!(
+            p.sql_types.get(at).map(String::as_str),
+            Some("GEOMETRY('EPSG:4326')"),
+            "the CRS travels in the column type (target {target:?})"
+        );
+        let shapes: Vec<&str> = p.rows.iter().filter_map(|r| r.get("geom").and_then(Value::as_str)).collect();
+        assert_eq!(
+            shapes,
+            vec!["POINT (1.5 2)", "POLYGON ((0 0, 4 0, 4 3, 0 0))"],
+            "each shape arrives as WKT (target {target:?})"
+        );
+    }
+}
+
 #[test]
 fn batched_view_row_error_is_attributed_to_the_view_not_the_sink() {
     // audit pass-3: in the batched executor a view whose body errors on
