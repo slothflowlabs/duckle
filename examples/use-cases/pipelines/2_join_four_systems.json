@@ -1,0 +1,307 @@
+{
+  "formatVersion": 1,
+  "name": "2. Join four systems in one pass",
+  "nodes": [
+    {
+      "id": "orders",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "label": "Orders (Parquet)",
+        "componentId": "src.parquet",
+        "properties": {
+          "path": "${workspace}/data/orders.parquet"
+        }
+      }
+    },
+    {
+      "id": "products",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 180
+      },
+      "data": {
+        "label": "Products (DuckDB)",
+        "componentId": "src.duckdb",
+        "properties": {
+          "database": "${workspace}/data/catalog.duckdb",
+          "tableName": "products"
+        }
+      }
+    },
+    {
+      "id": "customers",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 360
+      },
+      "data": {
+        "label": "Customers (CSV)",
+        "componentId": "src.csv",
+        "properties": {
+          "path": "${workspace}/data/customers.csv",
+          "hasHeader": true
+        }
+      }
+    },
+    {
+      "id": "regions",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 540
+      },
+      "data": {
+        "label": "Regions (SQLite)",
+        "componentId": "src.sqlite",
+        "properties": {
+          "database": "${workspace}/data/regions.sqlite",
+          "mode": "table",
+          "tableName": "regions"
+        }
+      }
+    },
+    {
+      "id": "map",
+      "type": "transform",
+      "position": {
+        "x": 360,
+        "y": 270
+      },
+      "data": {
+        "label": "Map: join and derive",
+        "componentId": "xf.map",
+        "properties": {
+          "mode": "visual",
+          "lookups": [
+            {
+              "port": "lookup_1",
+              "leftKey": "product_id",
+              "rightKey": "product_id",
+              "joinType": "inner"
+            },
+            {
+              "port": "lookup_2",
+              "leftKey": "customer_id",
+              "rightKey": "customer_id",
+              "joinType": "left"
+            },
+            {
+              "port": "lookup_3",
+              "leftKey": "region_code",
+              "rightKey": "region_code",
+              "joinType": "inner"
+            }
+          ],
+          "mapper": {
+            "outputs": [
+              {
+                "id": "m_order",
+                "name": "order_id",
+                "type": "int64",
+                "expression": "main.order_id"
+              },
+              {
+                "id": "m_day",
+                "name": "ordered_on",
+                "type": "date",
+                "expression": "CAST(main.ordered_at AS DATE)"
+              },
+              {
+                "id": "m_customer",
+                "name": "customer",
+                "type": "string",
+                "expression": "COALESCE(lookup_2.name, 'unknown customer')"
+              },
+              {
+                "id": "m_segment",
+                "name": "segment",
+                "type": "string",
+                "expression": "COALESCE(lookup_2.segment, 'unknown')"
+              },
+              {
+                "id": "m_region",
+                "name": "region",
+                "type": "string",
+                "expression": "lookup_3.region_name"
+              },
+              {
+                "id": "m_category",
+                "name": "category",
+                "type": "string",
+                "expression": "lookup_1.category"
+              },
+              {
+                "id": "m_amount",
+                "name": "amount",
+                "type": "float64",
+                "expression": "ROUND(main.quantity * lookup_1.unit_price, 2)"
+              },
+              {
+                "id": "m_margin",
+                "name": "margin",
+                "type": "float64",
+                "expression": "ROUND(main.quantity * (lookup_1.unit_price - lookup_1.unit_cost), 2)"
+              },
+              {
+                "id": "m_tier",
+                "name": "tier",
+                "type": "string",
+                "expression": "CASE WHEN main.quantity * lookup_1.unit_price >= 200 THEN 'large' WHEN main.quantity * lookup_1.unit_price >= 75 THEN 'medium' ELSE 'small' END"
+              }
+            ],
+            "filter": "main.status = 'ACTIVE'"
+          }
+        }
+      }
+    },
+    {
+      "id": "by_region",
+      "type": "transform",
+      "position": {
+        "x": 720,
+        "y": 270
+      },
+      "data": {
+        "label": "Revenue by region and category",
+        "componentId": "xf.groupby",
+        "properties": {
+          "groupKeys": [
+            "region",
+            "category"
+          ],
+          "aggregations": [
+            {
+              "column": "amount",
+              "function": "sum",
+              "alias": "revenue"
+            },
+            {
+              "column": "margin",
+              "function": "sum",
+              "alias": "margin"
+            },
+            {
+              "column": "order_id",
+              "function": "count",
+              "alias": "orders"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "to_parquet",
+      "type": "sink",
+      "position": {
+        "x": 1080,
+        "y": 180
+      },
+      "data": {
+        "label": "revenue_by_region.parquet",
+        "componentId": "snk.parquet",
+        "properties": {
+          "path": "${workspace}/output/revenue_by_region.parquet"
+        }
+      }
+    },
+    {
+      "id": "to_duckdb",
+      "type": "sink",
+      "position": {
+        "x": 1080,
+        "y": 360
+      },
+      "data": {
+        "label": "warehouse.duckdb (upsert)",
+        "componentId": "snk.duckdb",
+        "properties": {
+          "database": "${workspace}/output/warehouse.duckdb",
+          "tableName": "revenue_by_region",
+          "mode": "upsert",
+          "conflictColumns": [
+            "region",
+            "category"
+          ]
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "orders",
+      "target": "map",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e2",
+      "source": "products",
+      "target": "map",
+      "sourceHandle": "main",
+      "targetHandle": "lookup_1",
+      "data": {
+        "connectionType": "lookup"
+      }
+    },
+    {
+      "id": "e3",
+      "source": "customers",
+      "target": "map",
+      "sourceHandle": "main",
+      "targetHandle": "lookup_2",
+      "data": {
+        "connectionType": "lookup"
+      }
+    },
+    {
+      "id": "e4",
+      "source": "regions",
+      "target": "map",
+      "sourceHandle": "main",
+      "targetHandle": "lookup_3",
+      "data": {
+        "connectionType": "lookup"
+      }
+    },
+    {
+      "id": "e5",
+      "source": "map",
+      "target": "by_region",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e6",
+      "source": "by_region",
+      "target": "to_parquet",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e7",
+      "source": "by_region",
+      "target": "to_duckdb",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    }
+  ]
+}

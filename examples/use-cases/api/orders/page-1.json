@@ -1,0 +1,26 @@
+{
+  "orders": [
+    {
+      "order_id": 9001,
+      "sku": "P-100",
+      "quantity": 4,
+      "unit_price": 12.5,
+      "placed_at": "2026-11-01T09:12:00Z"
+    },
+    {
+      "order_id": 9002,
+      "sku": "P-300",
+      "quantity": 1,
+      "unit_price": 64.0,
+      "placed_at": "2026-11-01T10:40:00Z"
+    },
+    {
+      "order_id": 9003,
+      "sku": "P-200",
+      "quantity": 2,
+      "unit_price": 48.0,
+      "placed_at": "2026-11-01T11:05:00Z"
+    }
+  ],
+  "next": "http://127.0.0.1:8765/orders/page-2.json"
+}

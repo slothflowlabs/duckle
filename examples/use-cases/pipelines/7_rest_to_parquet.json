@@ -1,0 +1,81 @@
+{
+  "formatVersion": 1,
+  "name": "7. REST API to Parquet",
+  "nodes": [
+    {
+      "id": "api",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "label": "Orders API (2 pages)",
+        "componentId": "src.rest",
+        "properties": {
+          "url": "${apiBase}/orders/page-1.json",
+          "method": "GET",
+          "authType": "bearer",
+          "authToken": "${ENV:SHOP_API_TOKEN}",
+          "responsePath": "/orders",
+          "paginationType": "nextUrl",
+          "nextUrlPath": "/next"
+        }
+      }
+    },
+    {
+      "id": "gross",
+      "type": "transform",
+      "position": {
+        "x": 360,
+        "y": 0
+      },
+      "data": {
+        "label": "Gross per order",
+        "componentId": "xf.addcol",
+        "properties": {
+          "name": "gross",
+          "type": "float64",
+          "expression": "quantity * unit_price"
+        }
+      }
+    },
+    {
+      "id": "out",
+      "type": "sink",
+      "position": {
+        "x": 720,
+        "y": 0
+      },
+      "data": {
+        "label": "api_orders.parquet",
+        "componentId": "snk.parquet",
+        "properties": {
+          "path": "${workspace}/output/api_orders.parquet"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "api",
+      "target": "gross",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e2",
+      "source": "gross",
+      "target": "out",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    }
+  ]
+}

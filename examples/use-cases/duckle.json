@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "engine": "duckdb",
+  "jobs": [
+    {
+      "id": "2_join_four_systems",
+      "name": "2. Join four systems in one pass",
+      "dirty": false
+    }
+  ],
+  "activeJobId": "2_join_four_systems"
+}

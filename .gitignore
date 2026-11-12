@@ -99,3 +99,7 @@ examples/*/runs/
 examples/*/state/
 examples/*/.duckle/
 examples/starter-workspace/data/
+# use-cases commits its CSVs; its first pipeline writes these from them.
+examples/use-cases/data/*.parquet
+examples/use-cases/data/*.duckdb
+examples/use-cases/data/*.sqlite

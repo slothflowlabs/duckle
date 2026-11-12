@@ -1,0 +1,51 @@
+{
+  "formatVersion": 1,
+  "name": "3. Mirror: load Monday's customers",
+  "nodes": [
+    {
+      "id": "monday",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "label": "Monday's extract",
+        "componentId": "src.csv",
+        "properties": {
+          "path": "${workspace}/data/crm_monday.csv",
+          "hasHeader": true
+        }
+      }
+    },
+    {
+      "id": "mirror",
+      "type": "sink",
+      "position": {
+        "x": 360,
+        "y": 0
+      },
+      "data": {
+        "label": "crm_mirror.duckdb",
+        "componentId": "snk.duckdb",
+        "properties": {
+          "database": "${workspace}/output/crm_mirror.duckdb",
+          "tableName": "customers",
+          "mode": "overwrite"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "monday",
+      "target": "mirror",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    }
+  ]
+}

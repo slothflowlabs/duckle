@@ -1,0 +1,191 @@
+{
+  "formatVersion": 1,
+  "name": "1. Make the inputs (Parquet, DuckDB, SQLite)",
+  "nodes": [
+    {
+      "id": "gen_orders",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "label": "Orders (generated)",
+        "componentId": "src.generate",
+        "properties": {
+          "rowCount": 500,
+          "seed": "use-cases",
+          "columns": [
+            {
+              "name": "order_id",
+              "generator": "sequence",
+              "start": 1001
+            },
+            {
+              "name": "customer_id",
+              "generator": "integer",
+              "min": 1,
+              "max": 9
+            },
+            {
+              "name": "product_id",
+              "generator": "pick",
+              "values": [
+                "P-100",
+                "P-200",
+                "P-300",
+                "P-400",
+                "P-500"
+              ]
+            },
+            {
+              "name": "region_code",
+              "generator": "pick",
+              "values": [
+                "EU-N",
+                "EU-S",
+                "NA-E",
+                "NA-W"
+              ]
+            },
+            {
+              "name": "quantity",
+              "generator": "integer",
+              "min": 1,
+              "max": 6
+            },
+            {
+              "name": "status",
+              "generator": "pick",
+              "values": [
+                "ACTIVE",
+                "ACTIVE",
+                "ACTIVE",
+                "CANCELLED"
+              ]
+            },
+            {
+              "name": "ordered_at",
+              "generator": "timestamp",
+              "min": "2026-10-01 00:00:00",
+              "max": "2026-10-31 23:59:59"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "orders_parquet",
+      "type": "sink",
+      "position": {
+        "x": 360,
+        "y": 0
+      },
+      "data": {
+        "label": "orders.parquet",
+        "componentId": "snk.parquet",
+        "properties": {
+          "path": "${workspace}/data/orders.parquet"
+        }
+      }
+    },
+    {
+      "id": "products_csv",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 180
+      },
+      "data": {
+        "label": "Products (CSV)",
+        "componentId": "src.csv",
+        "properties": {
+          "path": "${workspace}/data/products.csv",
+          "hasHeader": true
+        }
+      }
+    },
+    {
+      "id": "catalog_duckdb",
+      "type": "sink",
+      "position": {
+        "x": 360,
+        "y": 180
+      },
+      "data": {
+        "label": "catalog.duckdb",
+        "componentId": "snk.duckdb",
+        "properties": {
+          "database": "${workspace}/data/catalog.duckdb",
+          "tableName": "products",
+          "mode": "overwrite"
+        }
+      }
+    },
+    {
+      "id": "regions_csv",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 360
+      },
+      "data": {
+        "label": "Regions (CSV)",
+        "componentId": "src.csv",
+        "properties": {
+          "path": "${workspace}/data/regions.csv",
+          "hasHeader": true
+        }
+      }
+    },
+    {
+      "id": "regions_sqlite",
+      "type": "sink",
+      "position": {
+        "x": 360,
+        "y": 360
+      },
+      "data": {
+        "label": "regions.sqlite",
+        "componentId": "snk.sqlite",
+        "properties": {
+          "database": "${workspace}/data/regions.sqlite",
+          "tableName": "regions",
+          "mode": "overwrite"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "gen_orders",
+      "target": "orders_parquet",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e2",
+      "source": "products_csv",
+      "target": "catalog_duckdb",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e3",
+      "source": "regions_csv",
+      "target": "regions_sqlite",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    }
+  ]
+}

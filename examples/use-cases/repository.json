@@ -1,0 +1,13 @@
+[
+  {"id": "root", "name": "Use Case Samples", "type": "project"},
+  {"id": "samples", "name": "Use cases from duckle.org", "type": "folder", "parentId": "root"},
+  {"id": "1_make_inputs", "name": "1. Make the inputs (Parquet, DuckDB, SQLite)", "type": "pipeline", "parentId": "samples"},
+  {"id": "2_join_four_systems", "name": "2. Join four systems in one pass", "type": "pipeline", "parentId": "samples"},
+  {"id": "3_mirror_initial_load", "name": "3. Mirror: load Monday's customers", "type": "pipeline", "parentId": "samples"},
+  {"id": "4_mirror_apply_changes", "name": "4. Mirror: apply Tuesday's changes", "type": "pipeline", "parentId": "samples"},
+  {"id": "5_mirror_check", "name": "5. Mirror: check it matches Tuesday", "type": "pipeline", "parentId": "samples"},
+  {"id": "6_rollup_locally", "name": "6. Crunch a million rows, keep only the rollup", "type": "pipeline", "parentId": "samples"},
+  {"id": "7_rest_to_parquet", "name": "7. REST API to Parquet", "type": "pipeline", "parentId": "samples"},
+  {"id": "contexts", "name": "Contexts", "type": "folder", "parentId": "root"},
+  {"id": "local", "name": "Local", "type": "context", "parentId": "contexts"}
+]

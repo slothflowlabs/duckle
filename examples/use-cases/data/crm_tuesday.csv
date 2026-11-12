@@ -1,0 +1,6 @@
+customer_id,name,email,plan
+101,Ada Lovelace,ada@example.com,pro
+102,Grace Hopper,grace.hopper@example.com,team
+104,Hedy Lamarr,hedy@example.com,pro
+105,Katherine Johnson,katherine@example.com,pro
+106,Edsger Dijkstra,edsger@example.com,team

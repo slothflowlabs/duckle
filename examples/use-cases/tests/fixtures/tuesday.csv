@@ -1,0 +1,4 @@
+customer_id,name,email,plan
+1,Ada,ada@example.com,pro
+2,Grace,grace.hopper@example.com,team
+4,Edsger,edsger@example.com,team

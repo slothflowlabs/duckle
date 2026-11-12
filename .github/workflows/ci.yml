@@ -184,14 +184,22 @@ jobs:
           [ "$RUNNER_OS" = "Windows" ] && runner=target/debug/duckle-runner.exe
           for ws in examples/*/; do
             [ -d "$ws/pipelines" ] || continue
-            "$runner" validate "$ws"pipelines/*.pipeline.json
+            "$runner" validate "$ws"pipelines/*.json
           done
 
       - name: Run the example workspaces
         if: runner.os == 'Linux'
         shell: bash
+        env:
+          # use-cases' REST sample sends this as its bearer token. The demo API
+          # does not check it; the run proves the ${ENV:...} reference resolves.
+          SHOP_API_TOKEN: ci-demo-token
         run: |
           set -e
+          # use-cases' REST sample reads a demo API served from its api/ folder.
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory examples/use-cases/api > /dev/null 2>&1 &
+          api=$!
+          trap 'kill $api' EXIT
           for ws in examples/*/; do
             # starter-workspace's inputs are generated, not committed.
             if [ -f "$ws/gen_samples.sql" ]; then
@@ -199,15 +207,23 @@ jobs:
               sed "s|\${workspace}|$PWD/${ws%/}|g" "$ws/gen_samples.sql" | "$DUCKLE_DUCKDB_BIN" :memory:
             fi
             [ -d "$ws/pipelines" ] || continue
-            for p in "$ws"pipelines/*.pipeline.json; do
+            for p in "$ws"pipelines/*.json; do
               case "$(basename "$p")" in _*) continue ;; esac
               echo "== $p"
               target/debug/duckle-runner --pipeline "$p" --workspace "${ws%/}" --log-dir "$RUNNER_TEMP/duckle-logs"
             done
+            # A workspace's tests/ run through `duckle test`, so a sample that
+            # still runs but computes the wrong thing fails here too.
+            if [ -d "$ws/tests" ]; then
+              target/debug/duckle-runner test "$ws"tests/*.test.json --workspace "${ws%/}"
+            fi
           done
           # A sink that reports rows but writes nowhere would pass the loop
           # above - check a known output actually landed on disk.
           test -s examples/flow-control/output/by_region/North.csv
+          test -s examples/use-cases/output/revenue_by_region.parquet
+          test -s examples/use-cases/output/daily_revenue.parquet
+          test -s examples/use-cases/output/api_orders.parquet
 
       - name: Build the Delta Lake sidecar for snk.delta's tests (Linux)
         # duckle-delta is its own workspace, so `cargo test --workspace` neither

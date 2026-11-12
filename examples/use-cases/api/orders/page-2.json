@@ -1,0 +1,19 @@
+{
+  "orders": [
+    {
+      "order_id": 9004,
+      "sku": "P-500",
+      "quantity": 3,
+      "unit_price": 36.0,
+      "placed_at": "2026-11-02T08:30:00Z"
+    },
+    {
+      "order_id": 9005,
+      "sku": "P-400",
+      "quantity": 1,
+      "unit_price": 89.0,
+      "placed_at": "2026-11-02T14:55:00Z"
+    }
+  ],
+  "next": null
+}

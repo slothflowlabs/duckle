@@ -1,0 +1,134 @@
+{
+  "formatVersion": 1,
+  "name": "5. Mirror: check it matches Tuesday",
+  "nodes": [
+    {
+      "id": "tuesday",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "label": "Tuesday's extract",
+        "componentId": "src.csv",
+        "properties": {
+          "path": "${workspace}/data/crm_tuesday.csv",
+          "hasHeader": true
+        }
+      }
+    },
+    {
+      "id": "mirror",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 180
+      },
+      "data": {
+        "label": "The mirror",
+        "componentId": "src.duckdb",
+        "properties": {
+          "database": "${workspace}/output/crm_mirror.duckdb",
+          "tableName": "customers"
+        }
+      }
+    },
+    {
+      "id": "compare",
+      "type": "transform",
+      "position": {
+        "x": 360,
+        "y": 90
+      },
+      "data": {
+        "label": "Any difference",
+        "componentId": "xf.cdc.diff",
+        "properties": {
+          "naturalKey": [
+            "customer_id"
+          ],
+          "compareColumns": [
+            "name",
+            "email",
+            "plan"
+          ]
+        }
+      }
+    },
+    {
+      "id": "gate",
+      "type": "transform",
+      "position": {
+        "x": 720,
+        "y": 90
+      },
+      "data": {
+        "label": "Quality gate",
+        "componentId": "qa.assert",
+        "properties": {
+          "description": "The mirror holds exactly Tuesday's customers",
+          "expression": "change_type = 'unchanged'",
+          "onFail": "fail"
+        }
+      }
+    },
+    {
+      "id": "done",
+      "type": "transform",
+      "position": {
+        "x": 1080,
+        "y": 90
+      },
+      "data": {
+        "label": "Log",
+        "componentId": "ctl.log",
+        "properties": {
+          "message": "The mirror matches Tuesday's extract"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "tuesday",
+      "target": "compare",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e2",
+      "source": "mirror",
+      "target": "compare",
+      "sourceHandle": "main",
+      "targetHandle": "lookup",
+      "data": {
+        "connectionType": "lookup"
+      }
+    },
+    {
+      "id": "e3",
+      "source": "compare",
+      "target": "gate",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e4",
+      "source": "gate",
+      "target": "done",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    }
+  ]
+}

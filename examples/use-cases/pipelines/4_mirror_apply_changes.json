@@ -1,0 +1,113 @@
+{
+  "formatVersion": 1,
+  "name": "4. Mirror: apply Tuesday's changes",
+  "nodes": [
+    {
+      "id": "tuesday",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "label": "Tuesday's extract (new)",
+        "componentId": "src.csv",
+        "properties": {
+          "path": "${workspace}/data/crm_tuesday.csv",
+          "hasHeader": true
+        }
+      }
+    },
+    {
+      "id": "monday",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 180
+      },
+      "data": {
+        "label": "Monday's extract (previous)",
+        "componentId": "src.csv",
+        "properties": {
+          "path": "${workspace}/data/crm_monday.csv",
+          "hasHeader": true
+        }
+      }
+    },
+    {
+      "id": "diff",
+      "type": "transform",
+      "position": {
+        "x": 360,
+        "y": 90
+      },
+      "data": {
+        "label": "What changed",
+        "componentId": "xf.cdc.diff",
+        "properties": {
+          "naturalKey": [
+            "customer_id"
+          ],
+          "compareColumns": [
+            "name",
+            "email",
+            "plan"
+          ]
+        }
+      }
+    },
+    {
+      "id": "mirror",
+      "type": "sink",
+      "position": {
+        "x": 720,
+        "y": 90
+      },
+      "data": {
+        "label": "crm_mirror.duckdb (upsert)",
+        "componentId": "snk.duckdb",
+        "properties": {
+          "database": "${workspace}/output/crm_mirror.duckdb",
+          "tableName": "customers",
+          "mode": "upsert",
+          "conflictColumns": [
+            "customer_id"
+          ],
+          "deleteColumn": "change_type"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "tuesday",
+      "target": "diff",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e2",
+      "source": "monday",
+      "target": "diff",
+      "sourceHandle": "main",
+      "targetHandle": "lookup",
+      "data": {
+        "connectionType": "lookup"
+      }
+    },
+    {
+      "id": "e3",
+      "source": "diff",
+      "target": "mirror",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+customer_id,name,email,country,segment
+1,Ada Lovelace,ada@example.com,GB,enterprise
+2,Grace Hopper,grace@example.com,US,enterprise
+3,Alan Turing,alan@example.com,GB,smb
+4,Hedy Lamarr,hedy@example.com,AT,smb
+5,Katherine Johnson,katherine@example.com,US,consumer
+6,Edsger Dijkstra,edsger@example.com,NL,consumer
+7,Barbara Liskov,barbara@example.com,US,enterprise
+8,Tim Berners-Lee,tim@example.com,GB,smb

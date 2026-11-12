@@ -1,0 +1,117 @@
+{
+  "formatVersion": 1,
+  "name": "6. Crunch a million rows, keep only the rollup",
+  "nodes": [
+    {
+      "id": "orders",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "label": "Orders (generated)",
+        "componentId": "src.generate",
+        "properties": {
+          "rowCount": 1000000,
+          "seed": "rollup",
+          "columns": [
+            {
+              "name": "order_id",
+              "generator": "sequence"
+            },
+            {
+              "name": "ordered_on",
+              "generator": "date",
+              "min": "2026-10-01",
+              "max": "2026-10-31"
+            },
+            {
+              "name": "region",
+              "generator": "pick",
+              "values": [
+                "EU-N",
+                "EU-S",
+                "NA-E",
+                "NA-W"
+              ]
+            },
+            {
+              "name": "amount",
+              "generator": "decimal",
+              "min": 5,
+              "max": 500
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "daily",
+      "type": "transform",
+      "position": {
+        "x": 360,
+        "y": 0
+      },
+      "data": {
+        "label": "Daily revenue by region",
+        "componentId": "xf.groupby",
+        "properties": {
+          "groupKeys": [
+            "ordered_on",
+            "region"
+          ],
+          "aggregations": [
+            {
+              "column": "amount",
+              "function": "sum",
+              "alias": "revenue"
+            },
+            {
+              "column": "order_id",
+              "function": "count",
+              "alias": "orders"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "out",
+      "type": "sink",
+      "position": {
+        "x": 720,
+        "y": 0
+      },
+      "data": {
+        "label": "daily_revenue.parquet",
+        "componentId": "snk.parquet",
+        "properties": {
+          "path": "${workspace}/output/daily_revenue.parquet"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "orders",
+      "target": "daily",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e2",
+      "source": "daily",
+      "target": "out",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    }
+  ]
+}
