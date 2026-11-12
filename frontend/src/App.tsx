@@ -117,6 +117,7 @@ import type {
 } from './repo-types';
 import { getDefaults, getManifest } from './workflow-ui/fields/component-manifests';
 import type { DuckleNodeData, NoteData } from './pipeline-types';
+import { pruneGroups, type PipelineGroup } from './canvas/groups';
 import { pipelinesUsingConnections } from './connection-usage';
 import { pipelineDocument } from './pipeline-doc';
 import type { DropPosition, NodeAction, PaneAction } from './canvas/Canvas';
@@ -138,9 +139,12 @@ type PipelineState = {
     edges: Edge[];
     /** Canvas notes, kept apart from the nodes so a run never sees one. */
     notes?: Node<NoteData>[];
+    /** Canvas groups: named frames around steps, kept apart from the nodes too. */
+    groups?: PipelineGroup[];
 };
 
 const NO_NOTES: Node<NoteData>[] = [];
+const NO_GROUPS: PipelineGroup[] = [];
 
 const SAMPLE_NODES: Node<DuckleNodeData>[] = [
     {
@@ -544,6 +548,7 @@ export default function App() {
     const nodes = activePipeline.nodes;
     const edges = activePipeline.edges;
     const notes = activePipeline.notes ?? NO_NOTES;
+    const groups = activePipeline.groups ?? NO_GROUPS;
 
     // Web edition: no folder picker - the server tells us which workspace it
     // serves, so we adopt and load it.
@@ -1085,8 +1090,16 @@ export default function App() {
     const handleNodesChange = useCallback(
         (changes: NodeChange[]) => {
             setNodes(ns => applyNodeChanges(changes, ns) as Node<DuckleNodeData>[]);
+            // A deleted step leaves its group, and a group left with none goes.
+            if (changes.some(c => c.type === 'remove')) {
+                updateActive(s => {
+                    if (!s.groups) return s;
+                    const kept = pruneGroups(s.groups, new Set(s.nodes.map(n => n.id)));
+                    return kept === s.groups ? s : { ...s, groups: kept };
+                });
+            }
         },
-        [setNodes],
+        [setNodes, updateActive],
     );
 
     const handleEdgesChange = useCallback(
@@ -1100,6 +1113,17 @@ export default function App() {
         (changes: NodeChange[]) => {
             updateActive(s => ({ ...s, notes: applyNodeChanges(changes, s.notes ?? []) as Node<NoteData>[] }));
             if (changes.some(c => c.type === 'add' || c.type === 'replace' || c.type === 'remove')) markDirty();
+        },
+        [updateActive, markDirty],
+    );
+
+    const handleGroupsChange = useCallback(
+        (update: (groups: PipelineGroup[]) => PipelineGroup[]) => {
+            updateActive(s => {
+                const next = update(s.groups ?? NO_GROUPS);
+                return next === s.groups ? s : { ...s, groups: next };
+            });
+            markDirty();
         },
         [updateActive, markDirty],
     );
@@ -1270,7 +1294,7 @@ export default function App() {
     );
 
     const handleSelectionChange = useCallback((params: OnSelectionChangeParams) => {
-        const sel = params.nodes.find(n => n.type !== 'note') ?? null;
+        const sel = params.nodes.find(n => n.type !== 'note' && n.type !== 'frame') ?? null;
         setSelectedId(sel?.id ?? null);
         // Live mode: previewing whatever node you click makes the toggle feel
         // alive (run up to it + animate). Skip sinks (a run to a sink writes and
@@ -1761,6 +1785,7 @@ export default function App() {
             nodes,
             edges,
             ...(notes.length > 0 ? { notes } : {}),
+            ...(groups.length > 0 ? { groups } : {}),
             exportedAt: new Date().toISOString(),
         };
         await saveTextFile(
@@ -1768,7 +1793,7 @@ export default function App() {
             JSON.stringify(payload, null, 2),
             [{ name: 'Duckle pipeline', extensions: ['json'] }],
         );
-    }, [nodes, edges, notes, activeJobName]);
+    }, [nodes, edges, notes, groups, activeJobName]);
 
     // Talend's "Generate Doc as HTML": one page describing a pipeline, saved
     // where the user picks, or downloaded in the web editor.
@@ -1804,7 +1829,7 @@ export default function App() {
 
     const importFromText = useCallback(
         (text: string, suggestedName: string) => {
-            let parsed: { name?: string; nodes?: unknown; edges?: unknown; notes?: unknown };
+            let parsed: { name?: string; nodes?: unknown; edges?: unknown; notes?: unknown; groups?: unknown };
             try {
                 parsed = JSON.parse(text);
             } catch (err) {
@@ -1833,6 +1858,7 @@ export default function App() {
                     nodes: importedNodes as PipelineState['nodes'],
                     edges: importedEdges as PipelineState['edges'],
                     ...(Array.isArray(parsed.notes) ? { notes: parsed.notes as PipelineState['notes'] } : {}),
+                    ...(Array.isArray(parsed.groups) ? { groups: parsed.groups as PipelineState['groups'] } : {}),
                 },
             }));
             setJobs(js =>
@@ -2904,6 +2930,8 @@ export default function App() {
                         nodes={nodes}
                         planNodes={planNodes}
                         notes={notes}
+                        groups={groups}
+                        onGroupsChange={handleGroupsChange}
                         edges={edges}
                         runResult={shownRunResult}
                         isRunning={isRunning}

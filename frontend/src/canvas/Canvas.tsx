@@ -11,6 +11,7 @@ import {
     type EdgeChange,
     type Node,
     type NodeChange,
+    type NodeSelectionChange,
     type OnSelectionChangeParams,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -41,10 +42,29 @@ import {
     Undo2,
     FlaskConical,
     Workflow,
+    FoldVertical,
+    Group,
+    Palette,
+    UnfoldVertical,
+    Ungroup,
 } from 'lucide-react';
 import DuckleNode from './nodes/DuckleNode';
 import NoteNode from './nodes/NoteNode';
 import { NoteContext } from './note-context';
+import GroupFrame, { type FrameData } from './nodes/GroupFrame';
+import { FrameContext } from './frame-context';
+import { PipelineGraphContext } from './graph-context';
+import {
+    GROUP_COLORS,
+    PROXY_EDGE,
+    edgesForDisplay,
+    frameRect,
+    groupNodes,
+    hiddenSteps,
+    memberMoves,
+    ungroupNode,
+    type PipelineGroup,
+} from './groups';
 import { arrange, type ArrangeMode } from './arrange';
 import DuckleEdge from './DuckleEdge';
 import ConnectionTypePicker from './ConnectionTypePicker';
@@ -65,6 +85,7 @@ const nodeTypes = {
     transform: DuckleNode,
     sink: DuckleNode,
     note: NoteNode,
+    frame: GroupFrame,
 };
 
 const edgeTypes = {
@@ -124,6 +145,9 @@ type Props = {
     nodes: Node<DuckleNodeData>[];
     /** Notes on the canvas: drawn with the nodes, never among them. */
     notes: Node<NoteData>[];
+    /** Groups on the canvas: frames drawn around steps, never among the nodes either. */
+    groups: PipelineGroup[];
+    onGroupsChange: (update: (groups: PipelineGroup[]) => PipelineGroup[]) => void;
     edges: Edge[];
     onNodesChange: (changes: NodeChange[]) => void;
     onNotesChange: (changes: NodeChange[]) => void;
@@ -145,6 +169,8 @@ type Props = {
 function CanvasInner({
     nodes,
     notes,
+    groups,
+    onGroupsChange,
     edges,
     onNodesChange,
     onNotesChange,
@@ -228,19 +254,142 @@ function CanvasInner({
         return () => window.removeEventListener('duckle:minimap-visibility', sync);
     }, []);
 
+    // A group's frame is drawn from where its steps are and never stored, and the
+    // steps of a collapsed group are hidden for drawing only.
+    const [selectedFrames, setSelectedFrames] = useState<ReadonlySet<string>>(() => new Set());
+    const frameIds = useMemo(() => new Set(groups.map(g => g.id)), [groups]);
+    const frames = useMemo<Node<FrameData>[]>(
+        () =>
+            groups.flatMap(group => {
+                const box = frameRect(group, nodes);
+                if (!box) return [];
+                const steps = nodes.filter(n => group.members.includes(n.id)).length;
+                return [
+                    {
+                        id: group.id,
+                        type: 'frame',
+                        position: { x: box.x, y: box.y },
+                        width: box.width,
+                        height: box.height,
+                        style: { width: box.width, height: box.height },
+                        data: { group, steps },
+                        // Open, it sits behind its steps and only its header takes
+                        // the pointer; collapsed, the card stands in for them.
+                        zIndex: group.collapsed ? 0 : -1,
+                        className: group.collapsed ? 'frame-closed' : 'frame-open',
+                        dragHandle: group.collapsed ? undefined : '.canvas-frame-head',
+                        connectable: false,
+                        selected: selectedFrames.has(group.id),
+                    },
+                ];
+            }),
+        [groups, nodes, selectedFrames],
+    );
+    const hidden = useMemo(() => hiddenSteps(groups), [groups]);
+    const shownNodes = useMemo(
+        () => (hidden.size === 0 ? nodes : nodes.map(n => (hidden.has(n.id) ? { ...n, hidden: true } : n))),
+        [nodes, hidden],
+    );
+    const flowEdges = useMemo(() => edgesForDisplay(edges, groups), [edges, groups]);
+    const graph = useMemo(() => ({ nodes, edges }), [nodes, edges]);
+
     // Notes are drawn with the nodes but kept apart from them: every change to a
     // note goes back to the notes, so nothing that reads the nodes sees one.
     const noteIds = useMemo(() => new Set(notes.map(n => n.id)), [notes]);
-    const flowNodes = useMemo<Node[]>(() => [...notes, ...nodes], [notes, nodes]);
+    const flowNodes = useMemo<Node[]>(() => [...frames, ...notes, ...shownNodes], [frames, notes, shownNodes]);
     const handleFlowNodesChange = useCallback(
         (changes: NodeChange[]) => {
             const isNote = (c: NodeChange) => c.type !== 'add' && noteIds.has(c.id);
+            const isFrame = (c: NodeChange) => c.type !== 'add' && frameIds.has(c.id);
             const toNotes = changes.filter(isNote);
-            const toNodes = changes.filter(c => !isNote(c));
+            const toFrames = changes.filter(isFrame);
+            const toNodes = changes.filter(c => !isNote(c) && !isFrame(c));
+            if (toFrames.length) {
+                // Dragging a frame moves its steps; a step selected with the frame
+                // is already moving with the same drag.
+                const moving = new Set(toNodes.flatMap(c => (c.type === 'position' ? [c.id] : [])));
+                for (const c of toFrames) {
+                    if (c.type !== 'position' || !c.position) continue;
+                    const group = groups.find(g => g.id === c.id);
+                    if (!group) continue;
+                    for (const m of memberMoves(group, nodes, c.position, moving)) {
+                        toNodes.push({ type: 'position', id: m.id, position: m.position, dragging: c.dragging });
+                    }
+                }
+                const selects = toFrames.filter((c): c is NodeSelectionChange => c.type === 'select');
+                if (selects.length) {
+                    setSelectedFrames(prev => {
+                        const next = new Set(prev);
+                        for (const c of selects) {
+                            if (c.selected) next.add(c.id);
+                            else next.delete(c.id);
+                        }
+                        return next;
+                    });
+                }
+                // Deleting a frame lets go of its steps; it never deletes them.
+                const removed = new Set(toFrames.flatMap(c => (c.type === 'remove' ? [c.id] : [])));
+                if (removed.size) onGroupsChange(gs => gs.filter(g => !removed.has(g.id)));
+            }
             if (toNotes.length) onNotesChange(toNotes);
             if (toNodes.length) onNodesChange(toNodes);
         },
-        [noteIds, onNotesChange, onNodesChange],
+        [noteIds, frameIds, groups, nodes, onNotesChange, onNodesChange, onGroupsChange],
+    );
+    // A link drawn to a collapsed frame is a picture of a real one, so nothing
+    // done to the picture may reach the real link.
+    const handleFlowEdgesChange = useCallback(
+        (changes: EdgeChange[]) => {
+            const real = changes.filter(c => !('id' in c) || !c.id.startsWith(PROXY_EDGE));
+            if (real.length) onEdgesChange(real);
+        },
+        [onEdgesChange],
+    );
+    const [editingFrame, setEditingFrame] = useState<string | null>(null);
+    const frameActions = useMemo(
+        () => ({
+            editing: editingFrame,
+            setEditing: setEditingFrame,
+            rename: (id: string, label: string) =>
+                onGroupsChange(gs => gs.map(g => (g.id === id ? { ...g, label } : g))),
+            toggle: (id: string) =>
+                onGroupsChange(gs => gs.map(g => (g.id === id ? { ...g, collapsed: !g.collapsed } : g))),
+        }),
+        [editingFrame, onGroupsChange],
+    );
+    // Grouping acts on the selection when the step right-clicked is part of one,
+    // else on that step alone.
+    const groupItems = useCallback(
+        (nodeId: string): MenuItem[] => {
+            const chosen = nodes.filter(n => n.selected);
+            const ids = chosen.some(n => n.id === nodeId) ? chosen.map(n => n.id) : [nodeId];
+            const holder = groups.find(g => g.members.includes(nodeId));
+            const items: MenuItem[] = [
+                { kind: 'separator', key: 's-group' },
+                {
+                    kind: 'item',
+                    key: 'group',
+                    label: ids.length > 1 ? `Group ${ids.length} steps` : 'Group this step',
+                    icon: <Group size={ICON_SIZE} />,
+                    onClick: () => {
+                        const id = 'group_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+                        onGroupsChange(gs => groupNodes(gs, ids, `Group ${gs.length + 1}`, id));
+                        setEditingFrame(id);
+                    },
+                },
+            ];
+            if (holder) {
+                items.push({
+                    kind: 'item',
+                    key: 'ungroup-step',
+                    label: `Take out of "${holder.label}"`,
+                    icon: <Ungroup size={ICON_SIZE} />,
+                    onClick: () => onGroupsChange(gs => ungroupNode(gs, nodeId)),
+                });
+            }
+            return items;
+        },
+        [nodes, groups, onGroupsChange],
     );
     const [editingNote, setEditingNote] = useState<string | null>(null);
     const noteActions = useMemo(
@@ -276,7 +425,7 @@ function CanvasInner({
     // part of one; a single node has nothing to line up with.
     const arrangeItems = useCallback(
         (nodeId: string): MenuItem[] => {
-            const chosen = flowNodes.filter(n => n.selected);
+            const chosen = flowNodes.filter(n => n.selected && n.type !== 'frame');
             if (chosen.length < 2 || !chosen.some(n => n.id === nodeId)) return [];
             const item = (mode: ArrangeMode, label: string, icon: ReactNode): MenuItem => ({
                 kind: 'item',
@@ -516,6 +665,46 @@ function CanvasInner({
 
     const handleNodeContextMenu = useCallback(
         (e: React.MouseEvent, flowNode: Node) => {
+            const frame = groups.find(g => g.id === flowNode.id);
+            if (frame) {
+                const nextColor = GROUP_COLORS[(GROUP_COLORS.indexOf(frame.color ?? 'orange') + 1) % GROUP_COLORS.length];
+                menu.open(e, [
+                    { kind: 'header', key: 'header', label: 'Group · ' + frame.label },
+                    {
+                        kind: 'item',
+                        key: 'rename',
+                        label: 'Rename',
+                        icon: <Pencil size={ICON_SIZE} />,
+                        shortcut: 'Dbl-click',
+                        onClick: () => setEditingFrame(frame.id),
+                    },
+                    {
+                        kind: 'item',
+                        key: 'toggle',
+                        label: frame.collapsed ? 'Expand' : 'Collapse',
+                        icon: frame.collapsed ? <UnfoldVertical size={ICON_SIZE} /> : <FoldVertical size={ICON_SIZE} />,
+                        onClick: () => frameActions.toggle(frame.id),
+                    },
+                    {
+                        kind: 'item',
+                        key: 'colour',
+                        label: `Change colour (to ${nextColor})`,
+                        icon: <Palette size={ICON_SIZE} />,
+                        onClick: () =>
+                            onGroupsChange(gs => gs.map(g => (g.id === frame.id ? { ...g, color: nextColor } : g))),
+                    },
+                    { kind: 'separator', key: 's1' },
+                    {
+                        kind: 'item',
+                        key: 'ungroup',
+                        label: 'Ungroup (keeps the steps)',
+                        icon: <Ungroup size={ICON_SIZE} />,
+                        shortcut: 'Del',
+                        onClick: () => onGroupsChange(gs => gs.filter(g => g.id !== frame.id)),
+                    },
+                ]);
+                return;
+            }
             if (noteIds.has(flowNode.id)) {
                 menu.open(e, [
                     { kind: 'header', key: 'header', label: 'Note' },
@@ -597,6 +786,7 @@ function CanvasInner({
                     onClick: () => onNodeAction('toggle-disable', node.id),
                 },
                 ...arrangeItems(node.id),
+                ...groupItems(node.id),
                 { kind: 'separator', key: 's1' },
                 {
                     kind: 'item',
@@ -641,11 +831,13 @@ function CanvasInner({
             ];
             menu.open(e, items);
         },
-        [menu, onNodeAction, nodeAutodetectAvailable, noteIds, onNotesChange, arrangeItems],
+        [menu, onNodeAction, nodeAutodetectAvailable, noteIds, onNotesChange, arrangeItems, groups, frameActions, onGroupsChange, groupItems],
     );
 
     const handleEdgeContextMenu = useCallback(
         (e: React.MouseEvent, edge: Edge) => {
+            // A link drawn to a collapsed group has no menu: it is not the link.
+            if (edge.id.startsWith(PROXY_EDGE)) return;
             const currentType = (edge.data as { connectionType?: ConnectionType } | undefined)
                 ?.connectionType ?? 'main';
             const items: MenuItem[] = [
@@ -778,21 +970,26 @@ function CanvasInner({
             onMouseMove={onMouseMove}
         >
             <NoteContext.Provider value={noteActions}>
+              <FrameContext.Provider value={frameActions}>
+              <PipelineGraphContext.Provider value={graph}>
                 <ReactFlow
                     nodes={flowNodes}
-                    edges={edges}
+                    edges={flowEdges}
                     onNodesChange={handleFlowNodesChange}
-                    onEdgesChange={onEdgesChange}
+                    onEdgesChange={handleFlowEdgesChange}
                     onConnect={handleConnect}
                     onConnectStart={handleConnectStart}
                     onSelectionChange={onSelectionChange}
                     onNodeContextMenu={handleNodeContextMenu}
                     onEdgeContextMenu={handleEdgeContextMenu}
                     onNodeDoubleClick={(_, node) => {
-                        // A note opens itself for writing; see NoteNode.
-                        if (!noteIds.has(node.id)) onNodeAction('open', node.id);
+                        // A note opens itself for writing (see NoteNode), and a
+                        // group renames from its label (see GroupFrame).
+                        if (!noteIds.has(node.id) && !frameIds.has(node.id)) onNodeAction('open', node.id);
                     }}
-                    onEdgeDoubleClick={(_, edge) => onEdgeEdit(edge.id)}
+                    onEdgeDoubleClick={(_, edge) => {
+                        if (!edge.id.startsWith(PROXY_EDGE)) onEdgeEdit(edge.id);
+                    }}
                     onPaneContextMenu={handlePaneContextMenu}
                     nodeTypes={nodeTypes}
                     edgeTypes={edgeTypes}
@@ -808,6 +1005,8 @@ function CanvasInner({
                     {showMinimap ? <MiniMap pannable zoomable /> : null}
                     <Controls />
                 </ReactFlow>
+              </PipelineGraphContext.Provider>
+              </FrameContext.Provider>
             </NoteContext.Provider>
             {menu.element}
             {pickerPos ? (

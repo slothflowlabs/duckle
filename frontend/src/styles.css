@@ -6273,6 +6273,144 @@ select.modal-select:focus {
     color: var(--text-2);
 }
 
+/* Canvas groups: a frame around steps, never part of a run. Open, only the
+   header takes the pointer, so the steps inside stay clickable and a box
+   selection can start inside the frame. */
+.react-flow__node.frame-open {
+    pointer-events: none !important;
+}
+
+.canvas-frame {
+    --frame: var(--accent);
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border: 1.5px dashed var(--frame);
+    border-radius: 12px;
+}
+
+.canvas-frame::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: var(--frame);
+    opacity: 0.06;
+    pointer-events: none;
+}
+
+.canvas-frame[data-color='blue'] {
+    --frame: var(--kind-source);
+}
+
+.canvas-frame[data-color='slate'] {
+    --frame: var(--kind-transform);
+}
+
+.canvas-frame[data-color='purple'] {
+    --frame: #a78bfa;
+}
+
+.canvas-frame[data-color='yellow'] {
+    --frame: var(--kind-quality);
+}
+
+.canvas-frame[data-color='red'] {
+    --frame: var(--danger);
+}
+
+.canvas-frame.is-selected {
+    border-style: solid;
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.canvas-frame.is-collapsed {
+    border-style: solid;
+    background: var(--bg-2);
+    box-shadow: var(--shadow-2);
+}
+
+.canvas-frame.is-collapsed::before {
+    opacity: 0.12;
+}
+
+.canvas-frame-head {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 36px;
+    padding: 0 10px 0 6px;
+    pointer-events: all;
+    cursor: grab;
+    color: var(--text-1);
+    font-size: 0.9231rem;
+    font-weight: 650;
+}
+
+.canvas-frame.is-collapsed .canvas-frame-head {
+    height: 100%;
+}
+
+.canvas-frame-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--frame);
+    cursor: pointer;
+}
+
+.canvas-frame-toggle:hover {
+    background: var(--bg-3);
+}
+
+.canvas-frame-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.canvas-frame-input {
+    min-width: 0;
+    flex: 1;
+    padding: 2px 6px;
+    border: 1px solid var(--frame);
+    border-radius: 4px;
+    background: var(--bg-1);
+    color: var(--text-1);
+    font: inherit;
+}
+
+.canvas-frame-count {
+    color: var(--text-3);
+    font-size: 0.7692rem;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.canvas-frame-status {
+    width: 8px;
+    height: 8px;
+    flex: none;
+    border-radius: 50%;
+}
+
+.canvas-frame-status.is-ok {
+    background: var(--success);
+}
+
+.canvas-frame-status.is-error {
+    background: var(--danger);
+}
+
+.canvas-frame-status.is-running {
+    background: var(--warn);
+}
+
 /* Canvas notes: text on the canvas, never part of a run. */
 .canvas-note {
     width: 220px;

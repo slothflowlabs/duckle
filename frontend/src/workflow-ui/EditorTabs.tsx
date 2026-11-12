@@ -15,6 +15,7 @@ import RunHistoryView from './RunHistoryView';
 import TestsView from './TestsView';
 import type { EngineId } from './EngineSelector';
 import type { DuckleNodeData, NoteData } from '../pipeline-types';
+import type { PipelineGroup } from '../canvas/groups';
 import type { ComponentDef } from './palette-data';
 import type { ConnectionType } from '../canvas/connection-types';
 import type { RunResult } from '../tauri-bridge';
@@ -33,6 +34,7 @@ type Props = {
     /** Nodes with ${...} placeholders resolved, for the Plan preview (#105). */
     planNodes: Node<DuckleNodeData>[];
     notes: Node<NoteData>[];
+    groups: PipelineGroup[];
     edges: Edge[];
     runResult: RunResult | null;
     isRunning: boolean;
@@ -41,6 +43,7 @@ type Props = {
     pipelineId: string | null;
     onNodesChange: (changes: NodeChange[]) => void;
     onNotesChange: (changes: NodeChange[]) => void;
+    onGroupsChange: (update: (groups: PipelineGroup[]) => PipelineGroup[]) => void;
     onEdgesChange: (changes: EdgeChange[]) => void;
     onConnectWithType: (connection: Connection, type: ConnectionType) => void;
     onSelectionChange: (params: OnSelectionChangeParams) => void;
@@ -63,11 +66,13 @@ export default function EditorTabs({
     isRunning,
     planNodes,
     notes,
+    groups,
     nodeLabels,
     workspacePath,
     pipelineId,
     onNodesChange,
     onNotesChange,
+    onGroupsChange,
     onEdgesChange,
     onConnectWithType,
     onSelectionChange,
@@ -129,6 +134,8 @@ export default function EditorTabs({
                     <Canvas
                         nodes={nodes}
                         notes={notes}
+                        groups={groups}
+                        onGroupsChange={onGroupsChange}
                         edges={edges}
                         pipelineId={pipelineId}
                         onNodesChange={onNodesChange}

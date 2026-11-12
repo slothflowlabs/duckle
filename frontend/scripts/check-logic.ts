@@ -29,6 +29,16 @@ import { arrange } from '../src/canvas/arrange';
 import { pipelineDocument } from '../src/pipeline-doc';
 import { parseWkt } from '../src/geo/wkt';
 import {
+    edgesForDisplay,
+    frameRect,
+    groupNodes,
+    hiddenSteps,
+    memberMoves,
+    pruneGroups,
+    ungroupNode,
+    type PipelineGroup,
+} from '../src/canvas/groups';
+import {
     boundsOf,
     collectFeatures,
     crsOfType,
@@ -1938,6 +1948,125 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         JSON.stringify(seen.body),
     );
     check('map: and still reads the run back', result?.status === 'ok', JSON.stringify(result));
+}
+
+// ---------------------------------------------------------------------------
+// Canvas groups, as Talend, Hop and NiFi have them: a named frame around steps
+// that moves and collapses with them. The frame is never stored, only drawn
+// around wherever the steps are, so it cannot drift from them.
+// ---------------------------------------------------------------------------
+{
+    const at = (id: string, x: number, y: number, size?: { width: number; height: number }) =>
+        ({ id, position: { x, y }, data: {}, ...(size ? { measured: size } : {}) }) as unknown as Node;
+    // A is measured; B has not been yet and is taken as 300 x 160.
+    const nodes = [at('a', 100, 100, { width: 200, height: 100 }), at('b', 400, 250), at('c', 900, 0)];
+    const g: PipelineGroup = { id: 'g', label: 'Extract', members: ['a', 'b'] };
+    check(
+        'groups: a frame holds its steps with room for its header',
+        JSON.stringify(frameRect(g, nodes)) === JSON.stringify({ x: 76, y: 40, width: 648, height: 394 }),
+        JSON.stringify(frameRect(g, nodes)),
+    );
+    check(
+        'groups: a collapsed frame keeps its corner and shrinks to a card',
+        JSON.stringify(frameRect({ ...g, collapsed: true }, nodes)) === JSON.stringify({ x: 76, y: 40, width: 240, height: 64 }),
+        JSON.stringify(frameRect({ ...g, collapsed: true }, nodes)),
+    );
+    check('groups: a group none of whose steps are on the canvas has no frame', frameRect({ ...g, members: ['gone'] }, nodes) === null, 'drew a frame');
+    check(
+        'groups: a frame fits a step at the size the canvas measured it',
+        JSON.stringify(frameRect({ ...g, members: ['a'] }, nodes)) === JSON.stringify({ x: 76, y: 40, width: 248, height: 184 }),
+        JSON.stringify(frameRect({ ...g, members: ['a'] }, nodes)),
+    );
+
+    const moved = memberMoves(g, nodes, { x: 176, y: 90 }, new Set());
+    check(
+        'groups: dragging a frame moves every step in it by the same amount',
+        JSON.stringify(moved) === JSON.stringify([{ id: 'a', position: { x: 200, y: 150 } }, { id: 'b', position: { x: 500, y: 300 } }]),
+        JSON.stringify(moved),
+    );
+    const once = memberMoves(g, nodes, { x: 176, y: 90 }, new Set(['a']));
+    check(
+        'groups: a step already being dragged with the frame is not moved twice',
+        JSON.stringify(once.map(m => m.id)) === '["b"]',
+        JSON.stringify(once),
+    );
+
+    const two: PipelineGroup[] = [g, { id: 'h', label: 'Load', color: 'blue', members: ['c'] }];
+    const regrouped = groupNodes(two, ['b', 'c'], 'Clean', 'k');
+    check(
+        'groups: grouping takes the steps out of the groups they were in',
+        JSON.stringify(regrouped.map(x => [x.id, x.members])) === JSON.stringify([['g', ['a']], ['k', ['b', 'c']]]),
+        JSON.stringify(regrouped),
+    );
+    check(
+        'groups: a new group takes a colour no other group has',
+        groupNodes([{ ...g, color: 'orange' }], ['c'], 'New', 'n').find(x => x.id === 'n')?.color === 'blue',
+        JSON.stringify(groupNodes([{ ...g, color: 'orange' }], ['c'], 'New', 'n')),
+    );
+    check('groups: grouping nothing changes nothing', groupNodes(two, [], 'x', 'y') === two, 'made a group of nothing');
+    const out = ungroupNode(two, 'c');
+    check('groups: taking out a group\'s last step drops the group', JSON.stringify(out.map(x => x.id)) === '["g"]', JSON.stringify(out));
+
+    const kept = new Set(['a', 'b', 'c']);
+    check('groups: pruning with every step there returns the same groups', pruneGroups(two, kept) === two, 'copied unchanged groups');
+    const pruned = pruneGroups(two, new Set(['a']));
+    check(
+        'groups: a deleted step leaves its group, and an emptied group goes',
+        JSON.stringify(pruned.map(x => [x.id, x.members])) === JSON.stringify([['g', ['a']]]),
+        JSON.stringify(pruned),
+    );
+
+    const folded: PipelineGroup[] = [{ ...g, collapsed: true }];
+    const hidden = hiddenSteps(folded);
+    check('groups: the steps of a collapsed group are hidden, and only those', hidden.get('a') === 'g' && hidden.get('b') === 'g' && !hidden.has('c'), JSON.stringify([...hidden]));
+    const e = (id: string, source: string, target: string) =>
+        ({ id, source, target, sourceHandle: 'main', targetHandle: 'main', data: { connectionType: 'main' } }) as Edge;
+    const shown = edgesForDisplay([e('inside', 'a', 'b'), e('out', 'b', 'c'), e('in', 'c', 'a'), e('free', 'c', 'd')], folded);
+    const byId = new Map(shown.map(x => [x.id, x]));
+    check('groups: a link inside a collapsed group is not drawn', !byId.has('inside') && !byId.has('group-edge:inside'), JSON.stringify(shown.map(x => x.id)));
+    const outward = byId.get('group-edge:out');
+    check(
+        'groups: a link leaving a collapsed group is drawn from its frame',
+        outward?.source === 'g' && outward.sourceHandle === 'group-out' && outward.target === 'c' && outward.targetHandle === 'main',
+        JSON.stringify(outward),
+    );
+    const inward = byId.get('group-edge:in');
+    check(
+        'groups: a link entering a collapsed group is drawn to its frame',
+        inward?.target === 'g' && inward.targetHandle === 'group-in' && inward.source === 'c',
+        JSON.stringify(inward),
+    );
+    check('groups: a link drawn to a frame cannot be selected or deleted as if it were the real one', outward?.selectable === false && outward?.deletable === false, JSON.stringify(outward));
+    check('groups: links outside any collapsed group are untouched', byId.get('free') !== undefined, JSON.stringify(shown.map(x => x.id)));
+    const open = [e('inside', 'a', 'b')];
+    check('groups: an expanded group changes no link', edgesForDisplay(open, [g]) === open, 'rewrote links of an open group');
+
+    // A group is a step of the undo history of its own.
+    const timers = new Map<number, () => void>();
+    let next = 0;
+    const timer = (fn: () => void) => {
+        const id = next++;
+        timers.set(id, fn);
+        return () => {
+            timers.delete(id);
+        };
+    };
+    const withGroups = (groups: PipelineGroup[]): CanvasSnapshot =>
+        ({ nodes: [], edges: [], groups }) as unknown as CanvasSnapshot;
+    const isStep = (from: CanvasSnapshot, to: CanvasSnapshot) => {
+        timers.clear();
+        const h = new UndoHistory('a', from, timer, () => {});
+        h.observe('a', from);
+        h.observe('a', to);
+        for (const [id, fn] of [...timers]) {
+            timers.delete(id);
+            fn();
+        }
+        return h.undo() === from;
+    };
+    check('groups: making a group is an undo step', isStep(withGroups([]), withGroups([g])), 'undo did not take the group away');
+    check('groups: renaming a group is an undo step', isStep(withGroups([g]), withGroups([{ ...g, label: 'Read' }])), 'undo did not restore the name');
+    check('groups: collapsing a group is an undo step', isStep(withGroups([g]), withGroups([{ ...g, collapsed: true }])), 'undo did not expand it');
 }
 
 if (failures.length) {

@@ -11,8 +11,14 @@
 // Kept free of React so it can be driven directly with a fake clock; the hook in
 // useUndoRedo.ts only feeds it snapshots and applies what it returns.
 import type { Node, Edge } from '@xyflow/react';
+import type { PipelineGroup } from './canvas/groups';
 
-export type CanvasSnapshot = { nodes: Node<Record<string, unknown>>[]; edges: Edge[]; notes?: Node<Record<string, unknown>>[] };
+export type CanvasSnapshot = {
+    nodes: Node<Record<string, unknown>>[];
+    edges: Edge[];
+    notes?: Node<Record<string, unknown>>[];
+    groups?: PipelineGroup[];
+};
 
 /** Run `fn` after `ms`; the returned function cancels it. */
 export type Timer = (fn: () => void, ms: number) => () => void;
@@ -54,7 +60,15 @@ function meaningfulKey(s: CanvasSnapshot): string {
         y: Math.round(n.position?.y ?? 0),
         text: (n.data as { text?: unknown } | undefined)?.text,
     }));
-    return JSON.stringify({ nodes, edges, notes });
+    // Groups too: making, naming, colouring or collapsing one is a step of its own.
+    const groups = (s.groups ?? []).map(g => ({
+        id: g.id,
+        label: g.label,
+        color: g.color,
+        collapsed: !!g.collapsed,
+        members: g.members,
+    }));
+    return JSON.stringify({ nodes, edges, notes, groups });
 }
 
 type Stack = { past: CanvasSnapshot[]; future: CanvasSnapshot[] };

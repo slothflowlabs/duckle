@@ -1,10 +1,8 @@
-import { useEffect, useMemo } from 'react';
+import { useContext, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     Handle,
     Position,
-    useNodes,
-    useEdges,
     useUpdateNodeInternals,
     type Node,
     type NodeProps,
@@ -15,6 +13,7 @@ import { getManifest } from '../../workflow-ui/fields/component-manifests';
 import { metaFor } from '../connection-types';
 import type { PortDef } from '../../workflow-ui/fields/types';
 import { resolveOutputSchema } from '../../schema-resolve';
+import { PipelineGraphContext } from '../graph-context';
 import { useRunStatus } from '../run-status-context';
 import { deriveNodeSubtitle } from '../../node-subtitle';
 import ComponentIcon from '../../workflow-ui/ComponentIcon';
@@ -30,8 +29,8 @@ export default function DuckleNode({ id, data, selected, type }: NodeProps<Duckl
     const inputs = ports?.inputs ?? [];
     const outputs = ports?.outputs ?? [];
 
-    const allNodes = useNodes() as Node<DuckleNodeData>[];
-    const allEdges = useEdges();
+    // The real pipeline, not the drawing: a collapsed group redraws links (graph-context.ts).
+    const { nodes: allNodes, edges: allEdges } = useContext(PipelineGraphContext);
 
     // Parallelize branches are unlimited: instead of a fixed set of output
     // ports we grow them to one beyond the highest connected branch, so there
