@@ -37,6 +37,7 @@ type Props = {
     onNewPipeline: (parentId: string) => void;
     /** Undefined in the web editor, where the engine-side translator is unreachable. */
     onImportJob?: () => void;
+    onOpenRecycleBin?: () => void;
     onNewFolder: (parentId: string) => void;
     onNewConnection: (parentId: string) => void;
     onNewContext: (parentId: string) => void;
@@ -106,6 +107,7 @@ export default function ProjectTree(props: Props) {
         onOpenItem,
         onNewPipeline,
         onImportJob,
+        onOpenRecycleBin,
         onNewFolder,
         onNewConnection,
         onNewContext,
@@ -603,6 +605,16 @@ export default function ProjectTree(props: Props) {
                         title="Import a Talend .item job"
                     >
                         <Upload size={13} /> Talend
+                    </button>
+                ) : null}
+                {onOpenRecycleBin ? (
+                    <button
+                        type="button"
+                        className="repo-action-button"
+                        onClick={onOpenRecycleBin}
+                        title="Recycle bin: what was deleted, to put back"
+                    >
+                        <Trash2 size={13} /> Bin
                     </button>
                 ) : null}
             </div>

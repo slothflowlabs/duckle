@@ -18,6 +18,7 @@ type Props = {
     onNewConnection: (parentId: string) => void;
     /** Undefined in the web editor, where the engine-side translator is unreachable. */
     onImportJob?: () => void;
+    onOpenRecycleBin?: () => void;
     onNewContext: (parentId: string) => void;
     onNewDocument: (parentId: string) => void;
     onNewRoutine: (parentId: string) => void;
@@ -44,6 +45,7 @@ export default function LeftSidebar({
     onNewFolder,
     onNewConnection,
     onImportJob,
+    onOpenRecycleBin,
     onNewContext,
     onNewDocument,
     onNewRoutine,
@@ -100,6 +102,7 @@ export default function LeftSidebar({
                         onNewFolder={onNewFolder}
                         onNewConnection={onNewConnection}
                         onImportJob={onImportJob}
+                        onOpenRecycleBin={onOpenRecycleBin}
                         onNewContext={onNewContext}
                         onNewDocument={onNewDocument}
                         onNewRoutine={onNewRoutine}

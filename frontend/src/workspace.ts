@@ -1,5 +1,6 @@
 import { isTauri } from './tauri-dialog';
 import { isWebBackend, webFs } from './web-fs';
+import { restoredRepo, trashEntry, trashFileName, type TrashEntry, type TrashItem } from './recycle-bin';
 
 // A backend that can read/write the workspace exists in the desktop app (Tauri
 // fs) and in the web edition (HTTP fs via duckle-runner). Browser dev with no
@@ -563,20 +564,6 @@ export async function saveItemPayload(
     }
 }
 
-export async function deletePipelineFile(
-    path: string,
-    pipelineId: string,
-): Promise<void> {
-    if (!hasBackend()) return;
-    try {
-        const { exists, remove } = await fs();
-        const file = joinPath(path, PIPELINES_DIR, `${pipelineId}.json`);
-        if (await exists(file)) await remove(file);
-    } catch (err) {
-        console.warn('deletePipelineFile failed', err);
-    }
-}
-
 export async function deleteItemPayload(
     path: string,
     itemType: string,
@@ -591,6 +578,98 @@ export async function deleteItemPayload(
         if (await exists(file)) await remove(file);
     } catch (err) {
         console.warn('deleteItemPayload failed', err);
+    }
+}
+
+// ---- Recycle bin -------------------------------------------------------
+
+/** Where the recycle bin keeps removed items, inside the workspace. */
+const TRASH_DIR = '.duckle/trash';
+
+/** The file an item keeps its content in, relative to the workspace; null for
+ * one with none (a folder, the project). */
+export function itemFile(type: string, id: string): string | null {
+    const dir = PAYLOAD_DIR_BY_TYPE[type];
+    return dir ? `${dir}/${id}.json` : null;
+}
+
+/**
+ * Move items removed from the project tree into the recycle bin. Each one's
+ * entry is written before its file is removed, so a write that fails leaves
+ * the file where it was instead of losing it.
+ */
+export async function moveToTrash(
+    path: string,
+    removed: TrashItem[],
+    batch: string,
+    deletedAt: string,
+): Promise<void> {
+    if (!hasBackend() || removed.length === 0) return;
+    try {
+        const { exists, mkdir, readTextFile, writeTextFile, remove } = await fs();
+        const dir = joinPath(path, ...TRASH_DIR.split('/'));
+        await mkdir(dir, { recursive: true });
+        for (const item of removed) {
+            const rel = itemFile(item.type, item.id);
+            const file = rel ? joinPath(path, ...rel.split('/')) : null;
+            const content = file && (await exists(file)) ? await readTextFile(file) : null;
+            const entry = trashEntry(item, batch, deletedAt, content === null ? null : rel, content);
+            await writeTextFile(joinPath(dir, trashFileName(batch, item.id)), JSON.stringify(entry, null, 2));
+            if (file && content !== null) await remove(file);
+        }
+    } catch (err) {
+        console.warn('moveToTrash failed', err);
+    }
+}
+
+/** Everything in the recycle bin. A damaged entry is skipped, not fatal. */
+export async function listTrash(path: string): Promise<TrashEntry[]> {
+    if (!hasBackend()) return [];
+    const dir = joinPath(path, ...TRASH_DIR.split('/'));
+    const { readTextFile } = await fs();
+    const entries: TrashEntry[] = [];
+    for (const name of await readDirEntries(dir)) {
+        try {
+            entries.push(JSON.parse(await readTextFile(joinPath(dir, name))) as TrashEntry);
+        } catch (err) {
+            console.warn(`recycle bin: skipped ${name}`, err);
+        }
+    }
+    return entries;
+}
+
+/**
+ * Put `entries` back: their files, then their places in repository.json, then
+ * take them out of the bin. A file already back at its path is left alone.
+ * The caller reloads the workspace from disk afterwards.
+ */
+export async function restoreFromTrash(
+    path: string,
+    entries: TrashEntry[],
+    repo: TrashItem[],
+): Promise<void> {
+    if (!hasBackend()) return;
+    const { exists, mkdir, writeTextFile } = await fs();
+    for (const entry of entries) {
+        if (!entry.file || entry.content === null) continue;
+        const parts = entry.file.split('/');
+        const target = joinPath(path, ...parts);
+        if (await exists(target)) continue;
+        await mkdir(joinPath(path, ...parts.slice(0, -1)), { recursive: true });
+        await writeTextFile(target, entry.content);
+    }
+    await saveRepository(path, restoredRepo(repo, entries) as Array<Record<string, unknown>>);
+    await purgeFromTrash(path, entries);
+}
+
+/** Remove `entries` from the recycle bin for good. */
+export async function purgeFromTrash(path: string, entries: TrashEntry[]): Promise<void> {
+    if (!hasBackend()) return;
+    const { exists, remove } = await fs();
+    const dir = joinPath(path, ...TRASH_DIR.split('/'));
+    for (const entry of entries) {
+        const file = joinPath(dir, trashFileName(entry.batch, entry.item.id));
+        if (await exists(file)) await remove(file);
     }
 }
 

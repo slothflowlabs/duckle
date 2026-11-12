@@ -52,6 +52,7 @@ import {
     zoomAt,
 } from '../src/geo/map-view';
 import { getManifest } from '../src/workflow-ui/fields/component-manifests';
+import { batchesOf, describeBatch, restoredRepo, trashEntry, trashFileName } from '../src/recycle-bin';
 import { caseProblem, cleaned, dummyInput, guessGenerator, listOf, newCase, newSuite } from '../src/test-cases';
 import {
     buildBundle,
@@ -2111,6 +2112,45 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         !('breakpoint' in (cleared[0].data as Record<string, unknown>)) && (cleared[0].data as Record<string, unknown>).label === 'paid',
         JSON.stringify(cleared[0].data),
     );
+}
+
+// ---------------------------------------------------------------------------
+// The recycle bin: a removed item keeps its file and its place in the tree, and
+// what was removed together goes back together.
+// ---------------------------------------------------------------------------
+{
+    const at = (h: number) => `2026-11-12T${String(h).padStart(2, '0')}:00:00.000Z`;
+    const folder = { id: 'f1', name: 'Sales', type: 'folder', parentId: 'root' };
+    const pipe = { id: 'p1', name: 'Orders', type: 'pipeline', parentId: 'f1' };
+    const dive = { id: 'd1', name: 'Look', type: 'dive', parentId: 'root', payload: { big: true } };
+    const a = trashEntry(folder, '100', at(10), null, null);
+    const b = trashEntry(pipe, '100', at(10), 'pipelines/p1.json', '{"nodes":[]}');
+    const c = trashEntry(dive, '200', at(11), 'dives/d1.json', '{}');
+    check('bin: an entry keeps the tree fields, not the in-memory payload', !('payload' in c.item) && c.item.name === 'Look', JSON.stringify(c.item));
+    check('bin: an entry file is named by batch then id', trashFileName('100', 'p1') === '100__p1.json', trashFileName('100', 'p1'));
+    const batches = batchesOf([b, a, c]);
+    check('bin: the newest batch comes first', batches.map(x => x.batch).join() === '200,100', JSON.stringify(batches.map(x => x.batch)));
+    check(
+        'bin: a deleted folder heads its batch and what was in it does not',
+        batches[1]?.heads.map(h => h.id).join() === 'f1' && batches[1]?.entries.length === 2,
+        JSON.stringify(batches[1]),
+    );
+    check('bin: a batch says what it holds', describeBatch(batches[1]) === 'folder "Sales" and 1 nested item', describeBatch(batches[1]));
+    check('bin: a single item is named on its own', describeBatch(batches[0]) === 'dive "Look"', describeBatch(batches[0]));
+    const project = { id: 'root', name: 'Project', type: 'project', parentId: null };
+    const back = restoredRepo([project], [a, b]);
+    check(
+        'bin: a restored folder goes back where it was, with its contents inside it',
+        back.find(i => i.id === 'f1')?.parentId === 'root' && back.find(i => i.id === 'p1')?.parentId === 'f1',
+        JSON.stringify(back),
+    );
+    const orphan = trashEntry({ id: 'p2', name: 'X', type: 'pipeline', parentId: 'gone' }, '300', at(12), 'pipelines/p2.json', '{}');
+    check(
+        'bin: an item whose folder is gone goes back under the project',
+        restoredRepo([project], [orphan]).find(i => i.id === 'p2')?.parentId === 'root',
+        JSON.stringify(restoredRepo([project], [orphan])),
+    );
+    check('bin: restoring what is already there adds nothing', restoredRepo(back, [a, b]).length === back.length, JSON.stringify(restoredRepo(back, [a, b])));
 }
 
 if (failures.length) {

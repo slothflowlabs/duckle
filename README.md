@@ -338,6 +338,7 @@ A worked example using the bundled `samples/orders.csv` data.
 - After a run, click a link to see the rows that went down it in the **Output** panel. A link from a step's main output shows that step's rows; a link from a **reject** or switch-case port shows the rows that port sent, which no step's preview holds.
 - Right-click a link and **Set breakpoint…** to give it a SQL condition, such as `amount < 0`. A run you start in the editor stops after the link's source step when any row going down the link matches, shows the rows that did, and runs nothing past it. Scheduled, headless and deployed runs ignore breakpoints, so a pipeline can be deployed with them still set.
 - Right-click the pipeline in the project tree and choose **Generate documentation…** for one HTML page with every step, setting and column, in the order they run. Credentials are left out, so the page can be shared.
+- Deleting a pipeline, folder, connection or other item from the project tree moves it to the **Bin** at the top of the tree, with its file and its place in the tree. **Restore** puts it back, a folder with what was in it; **Delete forever** removes it for good.
 - Cancel mid-run with the **Stop** button - the DuckDB process is killed cleanly.
 - Save your work: **Cmd/Ctrl-S** writes a JSON pipeline file to your workspace folder.
 

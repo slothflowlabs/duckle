@@ -73,8 +73,7 @@ import {
     newAccountId,
 } from './accounts';
 import {
-    deleteItemPayload,
-    deletePipelineFile,
+    moveToTrash,
     getWorkspacePath,
     hasBackend,
     isInTauri,
@@ -98,6 +97,7 @@ import NewPipelineModal, { type PipelineTemplate } from './workflow-ui/NewPipeli
 import ConfirmModal from './workflow-ui/ConfirmModal';
 import EdgeEditorModal from './canvas/EdgeEditorModal';
 import BreakpointModal from './canvas/BreakpointModal';
+import RecycleBinModal from './workflow-ui/RecycleBinModal';
 import { linkPort, linkRows, withBreakpoint } from './link-rows';
 import VisualMapperModal, {
     type MapperState,
@@ -440,6 +440,7 @@ export default function App() {
     const [workspaceLoadError, setWorkspaceLoadError] = useState<string | null>(null);
     // Bumped by "Reload from disk" to re-trigger the load effect for the same path (#92).
     const [reloadNonce, setReloadNonce] = useState(0);
+    const [binOpen, setBinOpen] = useState(false);
     // Bumped once a load's files are on screen; undo starts over from them.
     const [loadedNonce, setLoadedNonce] = useState(0);
     // True while a brand-new workspace is being seeded with sample pipelines +
@@ -717,17 +718,13 @@ export default function App() {
                         }
                     }
                 }
-                // Delete payloads for items that were removed.
-                for (const before of prev) {
-                    if (currById.has(before.id)) continue;
-                    if (before.type === 'pipeline') {
-                        await deletePipelineFile(ws, before.id);
-                    } else if (
-                        before.type !== 'folder' &&
-                        before.type !== 'project'
-                    ) {
-                        await deleteItemPayload(ws, before.type, before.id);
-                    }
+                // Items removed since the last save go to the recycle bin with
+                // their files. One save's removals are one batch, so a deleted
+                // folder comes back with what was in it.
+                const removed = prev.filter(before => !currById.has(before.id));
+                if (removed.length > 0) {
+                    const now = new Date();
+                    await moveToTrash(ws, removed, String(now.getTime()), now.toISOString());
                 }
                 // Only advance the baseline if every payload persisted; a
                 // failed item stays "changed" so the next debounce retries it.
@@ -2378,7 +2375,7 @@ export default function App() {
                 : users.length === 1
                   ? `\n\nUsed by 1 pipeline: ${shown}. It will fail until it points at another connection.`
                   : `\n\nUsed by ${users.length} pipelines: ${shown}. They will fail until they point at another connection.`;
-        return `Delete ${item.type} "${item.name}"${nested}?${used}\n\nThis cannot be undone.`;
+        return `Delete ${item.type} "${item.name}"${nested}?${used}\n\nIt goes to the recycle bin, where you can restore it.`;
     };
 
     const handleCreatePipeline = useCallback(
@@ -2924,6 +2921,7 @@ export default function App() {
                     onNewFolder={handleNewFolderInRepo}
                     onNewConnection={handleNewConnection}
                     onImportJob={isInTauri() ? handleImportJob : undefined}
+                    onOpenRecycleBin={workspacePathState ? () => setBinOpen(true) : undefined}
                     onNewContext={handleNewContext}
                     onNewDocument={handleNewDocument}
                     onNewRoutine={handleNewRoutine}
@@ -3111,6 +3109,18 @@ export default function App() {
                             /* a browser with storage turned off still gets past the wizard */
                         }
                         setSetupChoice(choice);
+                    }}
+                />
+            ) : null}
+
+            {binOpen && workspacePathState ? (
+                <RecycleBinModal
+                    workspace={workspacePathState}
+                    repo={repo}
+                    onClose={() => setBinOpen(false)}
+                    onRestored={() => {
+                        setBinOpen(false);
+                        setReloadNonce(n => n + 1);
                     }}
                 />
             ) : null}

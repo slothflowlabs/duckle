@@ -10300,3 +10300,46 @@ select.modal-select:focus {
 .run-param-name { font-weight: 600; }
 .run-param-required { color: var(--danger); }
 .run-param-hint { font-size: 12px; opacity: 0.7; }
+
+/* Recycle bin: one row per deleted batch, with its two actions beside it. */
+.modal.recycle-bin {
+    width: min(640px, 92vw);
+}
+
+.recycle-bin-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 50vh;
+    overflow-y: auto;
+}
+
+.recycle-bin-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.recycle-bin-what {
+    flex: 1;
+    min-width: 0;
+}
+
+.recycle-bin-name {
+    color: var(--text-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.recycle-bin-when {
+    font-size: 0.8462rem;
+    color: var(--text-3);
+}
+
+.recycle-bin-error {
+    color: var(--danger);
+    margin-bottom: 8px;
+}
