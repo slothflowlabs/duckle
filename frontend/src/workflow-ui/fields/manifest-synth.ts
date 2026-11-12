@@ -4976,6 +4976,54 @@ function synthStreamingSink(comp: ComponentDef): ComponentManifest {
             'upstream',
         );
     }
+    // snk.wsserver is a WebSocket SERVER (#292): consumers connect to it, and the
+    // follow loop keeps it listening between passes. Keys mirror the engine's
+    // WsServerSinkSpec parse in plan/mod.rs.
+    if (comp.id === 'snk.wsserver') {
+        return base(
+            comp,
+            [
+                {
+                    label: 'Listener',
+                    fields: [
+                        {
+                            key: 'host',
+                            label: 'Host',
+                            kind: 'text',
+                            defaultValue: '127.0.0.1',
+                            placeholder: '127.0.0.1',
+                            description: 'Address to listen on. 0.0.0.0 accepts consumers from other machines.',
+                        },
+                        {
+                            key: 'port',
+                            label: 'Port',
+                            kind: 'number',
+                            required: true,
+                            placeholder: '8765',
+                            description: 'Consumers connect to ws://host:port/path.',
+                        },
+                        {
+                            key: 'path',
+                            label: 'Path',
+                            kind: 'text',
+                            defaultValue: '/',
+                            placeholder: '/rows',
+                            description: 'The one path consumers connect on; any other is turned away.',
+                        },
+                        {
+                            key: 'queueSize',
+                            label: 'Queue per consumer',
+                            kind: 'number',
+                            defaultValue: 1000,
+                            description:
+                                'The most rows held for one consumer. One that cannot keep up loses its oldest rows, counted in the pass report, instead of holding up the pipeline.',
+                        },
+                    ],
+                },
+            ],
+            'upstream',
+        );
+    }
     return base(
         comp,
         [

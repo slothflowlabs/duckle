@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 420,
+  "componentCount": 421,
   "components": [
     {
       "id": "src.csv",
@@ -39850,6 +39850,78 @@
                 "key": "headers",
                 "label": "Headers",
                 "kind": "key-value"
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
+      "id": "snk.wsserver",
+      "label": "WebSocket server",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "Hold a WebSocket port open and broadcast each upstream row, as one JSON message, to every consumer attached: browsers or services connect to ws://host:port/path. Runs under `duckle-runner follow`, which keeps the port and its consumers from one pass to the next; a single run refuses it. A consumer that cannot keep up loses its oldest queued rows, counted in the pass report, and there is no replay: a broadcast is not a delivery.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.wsserver",
+        "kind": "sink",
+        "label": "WebSocket server",
+        "description": "Hold a WebSocket port open and broadcast each upstream row, as one JSON message, to every consumer attached: browsers or services connect to ws://host:port/path. Runs under `duckle-runner follow`, which keeps the port and its consumers from one pass to the next; a single run refuses it. A consumer that cannot keep up loses its oldest queued rows, counted in the pass report, and there is no replay: a broadcast is not a delivery.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Listener",
+            "fields": [
+              {
+                "key": "host",
+                "label": "Host",
+                "kind": "text",
+                "defaultValue": "127.0.0.1",
+                "placeholder": "127.0.0.1",
+                "description": "Address to listen on. 0.0.0.0 accepts consumers from other machines."
+              },
+              {
+                "key": "port",
+                "label": "Port",
+                "kind": "number",
+                "required": true,
+                "placeholder": "8765",
+                "description": "Consumers connect to ws://host:port/path."
+              },
+              {
+                "key": "path",
+                "label": "Path",
+                "kind": "text",
+                "defaultValue": "/",
+                "placeholder": "/rows",
+                "description": "The one path consumers connect on; any other is turned away."
+              },
+              {
+                "key": "queueSize",
+                "label": "Queue per consumer",
+                "kind": "number",
+                "defaultValue": 1000,
+                "description": "The most rows held for one consumer. One that cannot keep up loses its oldest rows, counted in the pass report, instead of holding up the pipeline."
               }
             ]
           }

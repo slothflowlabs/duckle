@@ -207,7 +207,12 @@ pub fn run(opts: FollowOptions) -> Result<u64, String> {
     std::env::set_var("DUCKLE_LOG_DIR", &log_dir);
 
     let duckdb = crate::resolve_duckdb(opts.duckdb.clone())?;
-    let engine = DuckdbEngine::new(duckdb).without_previews();
+    // #292: the loop owns the broadcast listeners, so snk.wsserver keeps its port
+    // open and its consumers attached from one pass to the next. They close when
+    // the loop ends.
+    let engine = DuckdbEngine::new(duckdb)
+        .without_previews()
+        .with_broadcast_hub(duckle_duckdb_engine::broadcast::Hub::new());
 
     // Ctrl-C is checked between passes, never during one. Stopping mid-batch
     // is what would leave a sink half-written with the position already moved.
@@ -311,6 +316,17 @@ pub fn run(opts: FollowOptions) -> Result<u64, String> {
             failures += 1;
         }
         report(passes, &outcome);
+        // #292: what each broadcast step sent and to how many consumers, with any
+        // rows a slow consumer lost. Quiet passes stay quiet, as above.
+        if outcome.rows > 0 {
+            for status in result.nodes.values() {
+                if status.component.as_deref() == Some("snk.wsserver") {
+                    if let Some(note) = &status.note {
+                        println!("batch {:<6} {}", passes, note);
+                    }
+                }
+            }
+        }
 
         let (keep_going, wait) = next_step(&outcome, &opts, passes);
         if !keep_going {
@@ -499,6 +515,42 @@ mod tests {
     ///
     /// Refused BEFORE the document is read, so the message is about the clash
     /// rather than about whatever else might be wrong with the file.
+    /// #292: the loop owns the broadcast listener, so a pipeline that broadcasts
+    /// runs under it, where a single run refuses the step.
+    #[test]
+    fn a_follower_runs_a_pipeline_that_broadcasts() {
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN").ok().filter(|b| std::path::Path::new(b).exists())
+        else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let ws = tempfile::tempdir().unwrap();
+        let csv = ws.path().join("in.csv");
+        std::fs::write(&csv, "id\n1\n2\n").unwrap();
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let pipeline = ws.path().join("ticks.json");
+        let doc = serde_json::json!({
+            "nodes": [
+                { "id": "s", "position": { "x": 0, "y": 0 }, "data": { "label": "s", "componentId": "src.csv",
+                  "properties": { "path": csv.to_string_lossy().replace('\\', "/"), "hasHeader": true } } },
+                { "id": "b", "position": { "x": 0, "y": 0 }, "data": { "label": "b", "componentId": "snk.wsserver",
+                  "properties": { "port": port, "path": "/rows" } } }
+            ],
+            "edges": [{ "id": "e", "source": "s", "target": "b", "data": { "connectionType": "main" } }]
+        });
+        std::fs::write(&pipeline, doc.to_string()).unwrap();
+        let passes = run(FollowOptions {
+            pipeline,
+            workspace: Some(ws.path().to_path_buf()),
+            duckdb: Some(bin.into()),
+            max_batches: Some(2),
+            idle_ms: 10,
+            ..Default::default()
+        })
+        .expect("a pipeline that broadcasts runs under the follow loop");
+        assert_eq!(passes, 2);
+    }
+
     #[test]
     fn a_follower_will_not_start_beside_a_run_of_the_same_pipeline() {
         let ws = tempfile::tempdir().unwrap();

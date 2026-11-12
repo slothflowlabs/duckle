@@ -611,6 +611,7 @@ export const PALETTE: Category[] = [
                     snk('pubsub', 'GCP Pub/Sub', 'available', 'Publish messages via the Pub/Sub REST API (POST /v1/projects/{p}/topics/{t}:publish). Each upstream row -> one base64-encoded message. Auth via OAuth2 Bearer access token. Batched at 100 messages per request (Pub/Sub max).'),
                     snk('kinesis', 'AWS Kinesis', 'planned'),
                     snk('websocket', 'WebSocket', 'available', 'Connect to a ws:// or wss:// URL and send each upstream row as a text frame - the whole row as JSON, or one column when messageColumn is set - then close. For pushing processed results to real-time dashboards or WebSocket APIs.'),
+                    snk('wsserver', 'WebSocket server', 'available', 'Hold a WebSocket port open and broadcast each upstream row, as one JSON message, to every consumer attached: browsers or services connect to ws://host:port/path. Runs under `duckle-runner follow`, which keeps the port and its consumers from one pass to the next; a single run refuses it. A consumer that cannot keep up loses its oldest queued rows, counted in the pass report, and there is no replay: a broadcast is not a delivery.'),
                 ],
             },
             {

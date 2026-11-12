@@ -12401,6 +12401,47 @@ impl DuckdbEngine {
         Ok(format!("websocket: sent {} message(s) to {}", sent, spec.url))
     }
 
+    /// snk.wsserver (#292): broadcast the upstream rows, one JSON object per
+    /// message, to every consumer attached to the follow loop's listener. What a
+    /// broadcast promises (no replay, drop-oldest for a slow consumer, zero
+    /// consumers is fine) is set out in `broadcast.rs`.
+    pub(crate) fn run_wsserver_sink(&self, db: &Path, spec: &WsServerSinkSpec) -> Result<String, EngineError> {
+        self.check_cancelled()?;
+        let hub = self.broadcast.as_ref().ok_or_else(|| {
+            EngineError::Config(
+                "snk.wsserver broadcasts while `duckle-runner follow` runs this pipeline: the \
+                 loop keeps the port open and its consumers attached between passes. A single \
+                 run would open the port and close it again with nobody there, so it is refused."
+                    .into(),
+            )
+        })?;
+        let rows = self.run_rows(
+            Some(db),
+            &format!("SELECT * FROM {}", plan::quote_ident(&spec.from_view)),
+        )?;
+        let messages: Vec<String> = rows
+            .iter()
+            .map(|row| serde_json::to_string(row).unwrap_or_default())
+            .collect();
+        let addr = format!("{}:{}", spec.host, spec.port);
+        let sent = hub
+            .publish(&addr, &spec.path, spec.queue, &messages)
+            .map_err(EngineError::Query)?;
+        let dropped = if sent.dropped > 0 {
+            format!("; {} row(s) dropped for consumers that could not keep up", sent.dropped)
+        } else {
+            String::new()
+        };
+        Ok(format!(
+            "broadcast {} row(s) to {} consumer(s) on ws://{}{}{}",
+            messages.len(),
+            sent.consumers,
+            addr,
+            spec.path,
+            dropped
+        ))
+    }
+
     /// src.email: connect to an IMAP server via rustls, select a
     /// mailbox, fetch up to max_messages most recent messages by
     /// reverse-UID order, parse with mail-parser, emit one row per

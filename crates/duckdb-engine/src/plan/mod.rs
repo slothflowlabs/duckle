@@ -519,6 +519,9 @@ pub enum RuntimeSpec {
     /// src.websocket / snk.websocket (issue #192): WebSocket client connectors.
     WebSocketSource(WebSocketSourceSpec),
     WebSocketSink(WebSocketSinkSpec),
+    /// snk.wsserver (#292): WebSocket server sink, broadcast through the follow
+    /// loop's listener.
+    WsServerSink(WsServerSinkSpec),
     DynamodbSource(DynamoDbSourceSpec),
     KinesisSource(KinesisSourceSpec),
     AiEmbed(AiEmbedSpec),
@@ -2069,6 +2072,7 @@ fn build_stage(
     let mut clipboard_source: Option<ClipboardSourceSpec> = None;
     let mut websocket_source: Option<WebSocketSourceSpec> = None;
     let mut websocket_sink: Option<WebSocketSinkSpec> = None;
+    let mut wsserver_sink: Option<WsServerSinkSpec> = None;
     let mut email_source: Option<EmailSourceSpec> = None;
     let mut email_sink: Option<EmailSinkSpec> = None;
     let mut webhook_source: Option<WebhookSourceSpec> = None;
@@ -2177,6 +2181,33 @@ fn build_stage(
             url,
             message_column: string_prop(&props, "messageColumn").filter(|s| !s.is_empty()),
             headers: headers_from_props(&props),
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.wsserver" {
+        // WebSocket server sink (#292): broadcast each upstream row to whoever is
+        // attached to a listener the follow loop owns.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let number = |key: &str| {
+            props
+                .get(key)
+                .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+        };
+        let port = number("port")
+            .filter(|p| (1..=65535).contains(p))
+            .ok_or_else(|| EngineError::Config(format!("{}: port required (1-65535)", component_id)))?;
+        let path = string_prop(&props, "path")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "/".into());
+        wsserver_sink = Some(WsServerSinkSpec {
+            from_view: from_view.to_string(),
+            host: string_prop(&props, "host")
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "127.0.0.1".into()),
+            port: port as u16,
+            path: if path.starts_with('/') { path } else { format!("/{path}") },
+            queue: number("queueSize").filter(|n| *n > 0).unwrap_or(1000) as usize,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.dhis2" {
@@ -7413,6 +7444,7 @@ fn build_stage(
         .or_else(|| format_sink.map(RuntimeSpec::FormatSink))
         .or_else(|| websocket_source.map(RuntimeSpec::WebSocketSource))
         .or_else(|| websocket_sink.map(RuntimeSpec::WebSocketSink))
+        .or_else(|| wsserver_sink.map(RuntimeSpec::WsServerSink))
         .or_else(|| kafka_sink.map(RuntimeSpec::KafkaSink))
         .or_else(|| kafka_source.map(RuntimeSpec::KafkaSource))
         .or_else(|| avro_source.map(RuntimeSpec::AvroSource))

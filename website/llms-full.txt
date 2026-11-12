@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 420 components, 403 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 201 connectors (125 sources / 76 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 421 components, 404 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 202 connectors (125 sources / 77 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 21 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -218,7 +218,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.yaml` YAML: Read a YAML file as a table. Top-level YAML arrays become one row per element; non-array docs become a single row. Suits config-data ETL (Helm values, GitHub Actions matrices) not bulk logs
 - `src.zendesk` Zendesk: Zendesk Support REST. Basic auth (email/token + API token). Cursor pagination via `meta.after_cursor` + `page[after]` param. responsePath /tickets (or whatever resource)
 
-### Destinations (write) (81)
+### Destinations (write) (82)
 
 - `snk.access` Microsoft Access: Write a table into an Access database (.accdb / .mdb), creating the file and the table when missing. Append or overwrite in one transaction; an empty upstream leaves the table alone. Windows only, through the Microsoft Access ODBC driver
 - `snk.avro` Avro: Write rows as an Apache Avro container file via the pure-Rust `apache-avro` crate. Schema is inferred from the first row's column types (long / double / string / boolean) - or supply a JSON Avro schema via the schemaJson field to override. recordName names the inferred record (default `Row`)
@@ -299,6 +299,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.weaviate` Weaviate: Batch upsert objects to a Weaviate cluster via /v1/batch/objects with Bearer auth
 - `snk.webhook` Webhook: HTTP POST one request per row, body = row JSON (configurable method + headers)
 - `snk.websocket` WebSocket: Connect to a ws:// or wss:// URL and send each upstream row as a text frame - the whole row as JSON, or one column when messageColumn is set - then close. For pushing processed results to real-time dashboards or WebSocket APIs
+- `snk.wsserver` WebSocket server: Hold a WebSocket port open and broadcast each upstream row, as one JSON message, to every consumer attached: browsers or services connect to ws://host:port/path. Runs under `duckle-runner follow`, which keeps the port and its consumers from one pass to the next; a single run refuses it. A consumer that cannot keep up loses its oldest queued rows, counted in the pass report, and there is no replay: a broadcast is not a delivery
 - `snk.xml` XML: Write rows as XML via `quick-xml`. Default shape: `<root><row><col>val</col>...</row>...</root>`. rootElement / rowElement override the wrapper names. Complex (object/array) cell values are JSON-encoded inside CDATA so the file round-trips back through src.xml losslessly
 - `snk.yaml` YAML: Write the upstream rows as a top-level YAML array (`- key: value` per row)
 

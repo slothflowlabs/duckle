@@ -1176,6 +1176,20 @@ pub struct WebSocketSinkSpec {
     pub headers: Vec<(String, String)>,
 }
 
+/// snk.wsserver (#292): broadcast each upstream row, as one JSON message, to every
+/// WebSocket consumer attached to the listener at `host:port` on `path`. The
+/// listener belongs to the follow loop (`broadcast::Hub`), so it outlives a pass;
+/// a run outside `duckle-runner follow` has none and refuses the step.
+#[derive(Debug, Clone)]
+pub struct WsServerSinkSpec {
+    pub from_view: String,
+    pub host: String,
+    pub port: u16,
+    pub path: String,
+    /// The most rows queued for one consumer before its oldest are dropped.
+    pub queue: usize,
+}
+
 /// xf.ai.embed: per-row embedding transform. Reads `input_column`
 /// from each upstream row, batches up to `batch_size`, POSTs to
 /// `{base_url}/v1/embeddings` with Bearer `api_key`, adds the

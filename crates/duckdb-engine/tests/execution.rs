@@ -16603,6 +16603,67 @@ fn the_rows_a_breakpoint_stopped_on_are_masked() {
     assert_eq!(rows[0]["token"], "***", "a secret must never reach the rows a breakpoint shows: {}", rows[0]);
 }
 
+/// #292: s -> snk.wsserver on 127.0.0.1:`port`/rows.
+fn broadcast_pipeline(ws: &Path, port: u16) -> PipelineDoc {
+    let csv = write_file(ws, "ticks.csv", "id,price\n1,10.5\n2,11\n");
+    doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("b", "snk.wsserver", json!({ "host": "127.0.0.1", "port": port, "path": "/rows" })),
+        ]),
+        json!([main_edge("e1", "s", "b")]),
+    )
+}
+
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}
+
+#[test]
+fn a_follow_loop_broadcasts_each_pass_to_the_consumers_attached() {
+    // The loop owns the listener (a broadcast hub), so a consumer that attaches
+    // between passes stays attached and is sent each later pass's rows, one JSON
+    // object per message. The first pass opens the port with nobody there,
+    // which is still a successful pass.
+    use tokio_tungstenite::tungstenite::{self, Message};
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let port = free_port();
+    let pipeline = broadcast_pipeline(tmp.path(), port);
+    let looped = engine.with_broadcast_hub(duckle_duckdb_engine::broadcast::Hub::new());
+
+    let first = looped.execute_pipeline(&pipeline);
+    assert_eq!(first.status, "ok", "{:?}", first.error);
+    let (mut consumer, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}/rows")).expect("a consumer attaches");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let second = looped.execute_pipeline(&pipeline);
+    assert_eq!(second.status, "ok", "{:?}", second.error);
+    let note = second.nodes.get("b").and_then(|s| s.note.clone()).unwrap_or_default();
+    assert!(note.contains("2 row(s)") && note.contains("1 consumer(s)"), "the pass reports what it broadcast: {note}");
+    let rows: Vec<Value> = (0..2)
+        .map(|_| match consumer.read().expect("a message") {
+            Message::Text(t) => serde_json::from_str(&t).expect("each message is a JSON row"),
+            other => panic!("expected text, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(rows[0]["id"], 1);
+    assert_eq!(rows[1]["price"], 11.0);
+}
+
+#[test]
+fn a_run_outside_a_follow_loop_refuses_the_server_sink() {
+    // A single run would open the port and close it again with nobody attached,
+    // which looks like a broadcast and is not one.
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let r = engine.execute_pipeline(&broadcast_pipeline(tmp.path(), free_port()));
+    assert_eq!(r.status, "error");
+    let error = r.error.unwrap_or_default();
+    assert!(error.contains("duckle-runner follow"), "{error}");
+}
+
 #[test]
 fn a_run_that_did_not_ask_for_breakpoints_runs_straight_through_them() {
     // The same file, scheduled or run headless, must not stop: a breakpoint is

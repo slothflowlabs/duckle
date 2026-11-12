@@ -51,6 +51,7 @@ pub mod plugin;
 pub mod pools;
 pub mod release;
 pub mod follow_session;
+pub mod broadcast;
 pub mod sqlcomplete;
 pub mod sqldiag;
 pub mod openlineage;
@@ -134,7 +135,7 @@ use plan::{
     SnowflakeSinkSpec,
     SnowflakeSourceSpec,
     SqlServerSinkSpec,
-    SqlServerSourceSpec, WasmSpec, WeaviateSourceSpec, WebSocketSinkSpec, WebSocketSourceSpec,
+    SqlServerSourceSpec, WasmSpec, WeaviateSourceSpec, WebSocketSinkSpec, WebSocketSourceSpec, WsServerSinkSpec,
     WebhookSourceSpec, WebhookSpec, XmlSinkSpec, XmlSourceSpec,
 };
 
@@ -190,6 +191,9 @@ pub struct DuckdbEngine {
     target_preview_rows: Option<usize>,
     /// Whether this run stops at breakpoints on links. See [`DuckdbEngine::with_breakpoints`].
     breakpoints: bool,
+    /// #292: the listeners snk.wsserver broadcasts through. Only the follow loop
+    /// has them; see [`DuckdbEngine::with_broadcast_hub`].
+    pub(crate) broadcast: Option<Arc<broadcast::Hub>>,
     /// Substitutions a job passes to everything it runs, however deep.
     ///
     /// A job's return file is named by whoever called it, but the rows may be written from
@@ -434,6 +438,7 @@ impl DuckdbEngine {
             previews: true,
             target_preview_rows: None,
             breakpoints: false,
+            broadcast: None,
             bin,
             inherited_subs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             cancel: Arc::new(AtomicBool::new(false)),
@@ -555,6 +560,14 @@ impl DuckdbEngine {
         self
     }
 
+    /// #292: broadcast through `hub`'s listeners. The follow loop passes the hub
+    /// it owns, so a listener stays open across passes and a consumer stays
+    /// attached between them. Any other run has none and refuses snk.wsserver.
+    pub fn with_broadcast_hub(mut self, hub: Arc<broadcast::Hub>) -> Self {
+        self.broadcast = Some(hub);
+        self
+    }
+
     /// Preview rows to keep for one step: the usual [`PREVIEW_ROW_LIMIT`], or what
     /// a run-to-here asked for when this step is its target (#372).
     fn preview_limit(&self, node_id: &str, target: Option<&str>) -> usize {
@@ -579,6 +592,8 @@ impl DuckdbEngine {
             target_preview_rows: None,
             // An editor asks for breakpoints run by run; a new run starts without.
             breakpoints: false,
+            // A broadcast listener belongs to a follow loop, never to a fresh run.
+            broadcast: None,
             // A new run is a new identity; carrying the previous one forward
             // would file this run's log lines under that run.
             run_id: None,
@@ -608,6 +623,7 @@ impl DuckdbEngine {
             previews: false,
             target_preview_rows: None,
             breakpoints: false,
+            broadcast: None,
             run_id: None,
             artifacts: Arc::new(std::sync::Mutex::new(Vec::new())),
             outputs: Arc::new(std::sync::Mutex::new(Default::default())),
@@ -2944,6 +2960,7 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::WebSocketSink(spec)) => {
                         self.run_websocket_sink(&db_path, spec)
                     }
+                    Some(RuntimeSpec::WsServerSink(spec)) => self.run_wsserver_sink(&db_path, spec),
                     Some(RuntimeSpec::EmailSink(spec)) => self.run_email_sink(&db_path, spec),
                     Some(RuntimeSpec::DynamodbSource(spec)) => {
                         self.run_dynamodb_source(&db_path, spec)

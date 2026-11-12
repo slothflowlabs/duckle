@@ -524,6 +524,26 @@ That ordering is the difference between a correct micro-batch loop and a lossy
 one, so it is covered by a regression test that fails if the position ever
 advances past a batch that did not land.
 
+#### Broadcasting rows to WebSocket consumers
+
+The **WebSocket server** sink (`snk.wsserver`) holds a port open and sends each
+row a pass produces, as one JSON message, to every consumer connected to
+`ws://host:port/path`: a browser dashboard, another service. The follow loop owns
+the listener, so the port stays open and consumers stay connected from one pass
+to the next; a single run has nobody to send to and refuses the step.
+
+What it promises is stated rather than left to be discovered:
+
+- **A broadcast is not a delivery.** A consumer that connects late, or is
+  dropped, misses those rows, and there is no replay. For rows that must arrive,
+  publish them somewhere durable.
+- **A slow consumer cannot stall the pipeline.** Each consumer has a bounded
+  queue (**Queue per consumer**, 1,000 by default), and one that cannot keep up
+  loses its oldest queued rows. The pass report says how many. Waiting instead
+  would hold the pass, and with it the follower's position, so one slow browser
+  could stop ingestion.
+- **Nobody connected is a successful pass.** The position moves on either way.
+
 ### Masking what you look at, not what you write
 
 A pipeline's sinks can be perfectly governed and its data still be read off a
@@ -3706,7 +3726,7 @@ Validators split their input: passing rows continue on the main port, failures r
 
 ### Sinks
 
-**76 sinks available today.**
+**77 sinks available today.**
 
 | Group | Connectors | Status |
 |---|---|---|
@@ -3728,7 +3748,7 @@ Validators split their input: passing rows continue on the main port, failures r
 | **Email (SMTP)** | Per-row SMTP send via pure-Rust `lettre` + rustls. Plain text v1; HTML + attachments follow. | Available |
 | **NoSQL** | **Neo4j** (rows as nodes over the HTTP Query API; one `UNWIND $rows` round trip per batch, `mergeKeys` switches CREATE to MERGE so re-runs update rather than duplicate), MongoDB (insert_many batched; **upsert** via replace_one on a key, plus delete propagation via delete_one), Cassandra / ScyllaDB (CQL), Elasticsearch / OpenSearch (`_bulk` NDJSON), **Manticore Search** (HTTP JSON `/bulk`; the doc rides inside the action line, insert or replace, and a batch the server rejects at HTTP 200 fails the run), Redis (pipelined SET) | Available |
 | **NoSQL** | DynamoDB | Planned |
-| **Streaming** | Kafka / Redpanda (`rskafka`), NATS JetStream, GCP Pub/Sub (REST + OAuth2), RabbitMQ (`lapin`), WebSocket (`ws://` / `wss://`) | Available |
+| **Streaming** | Kafka / Redpanda (`rskafka`), NATS JetStream, GCP Pub/Sub (REST + OAuth2), RabbitMQ (`lapin`), WebSocket (`ws://` / `wss://`), WebSocket server (broadcast under `duckle-runner follow`) | Available |
 | **Streaming** | Pulsar, Kinesis | Planned |
 | **Vector / AI databases** | pgvector, Pinecone (`/vectors/upsert`), Qdrant (`/points` PUT), Weaviate (`/v1/batch/objects`), Milvus (`/v1/vector/insert`) | Available |
 | **Vector / AI databases** | Chroma, LanceDB | Preview (need vendor SDK) |
