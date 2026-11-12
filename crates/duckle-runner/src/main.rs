@@ -1712,6 +1712,10 @@ Refusing rather than reporting a clean run.",
                     path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."))
                 };
                 let _ = duckle_secrets::resolve_connection_refs(&ws, &mut doc.nodes);
+                // A Sub-flow node is expanded as the pipeline compiles, and the
+                // editor names its sub-flow by pipeline id: found in this
+                // workspace, as a run sets it (run_with).
+                std::env::set_var("DUCKLE_WORKSPACE", &ws);
                 // #298: a dead property is not a compile error - the pipeline
                 // compiles perfectly and does the wrong thing. Checked here so
                 // the one surface whose whole job is to say "this is fine"
