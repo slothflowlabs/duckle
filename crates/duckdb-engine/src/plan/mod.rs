@@ -1720,12 +1720,45 @@ fn delete_column_from(props: &JsonValue) -> Option<String> {
     }
 }
 
-/// The value in `deleteColumn` that marks a row for deletion (default
-/// "delete", matching xf.cdc.diff's change_type tag).
+/// The value in `deleteColumn` that marks a row for deletion: the node's own,
+/// or "delete", DuckLake CDC's change_type tag. `delete_flag_values` says what
+/// else that default matches.
 fn delete_value_from(props: &JsonValue) -> String {
     string_prop(props, "deleteValue")
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "delete".into())
+}
+
+/// The values in a sink's delete column that delete a row. "delete" (the
+/// default, DuckLake CDC's tag) also matches "deleted", the tag xf.cdc.diff
+/// gives a removed row, so a sink fed by either change feed deletes the row
+/// instead of upserting it as a row of NULLs. Any other value matches itself.
+pub(crate) fn delete_flag_values(value: &str) -> Vec<String> {
+    let mut values = vec![value.to_string()];
+    if value == "delete" {
+        values.push("deleted".to_string());
+    }
+    values
+}
+
+/// SQL tests for a delete-flag `column`: (deletes, stays). `deletes` is true
+/// when the column holds a value that deletes; `stays` is true otherwise, NULL
+/// included. Plain IN / NOT IN, which every dialect a sink speaks accepts.
+/// `quote` escapes a value for a single-quoted literal.
+pub(crate) fn delete_flag_sql(
+    column: &str,
+    value: &str,
+    quote: impl Fn(&str) -> String,
+) -> (String, String) {
+    let list = delete_flag_values(value)
+        .iter()
+        .map(|v| format!("'{}'", quote(v)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    (
+        format!("{column} IN ({list})"),
+        format!("({column} IS NULL OR {column} NOT IN ({list}))"),
+    )
 }
 
 /// Parse ADBC database options from a node's `options` array (key/value pairs)

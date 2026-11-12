@@ -186,6 +186,23 @@ async fn the_delete_value_can_be_named() {
 }
 
 #[tokio::test]
+async fn the_default_delete_value_also_takes_the_tag_cdc_diff_gives() {
+    // The default, "delete", is DuckLake CDC's tag; xf.cdc.diff tags a removed
+    // row "deleted". On the default both delete.
+    let dir = tempfile::tempdir().unwrap();
+    let table = table_with(dir.path(), &[1, 2, 3]).await;
+    let src = parquet(
+        dir.path(),
+        "s.parquet",
+        vec![("id", ints(&[1, 2])), ("name", strs(&[Some("a"), Some("b")])), ("op", strs(&[Some("deleted"), Some("delete")]))],
+    );
+    run(Request { delete_column: Some("op".into()), ..keyed(&table, &src, Mode::Upsert, "id") })
+        .await
+        .unwrap();
+    assert_eq!(rows(&table, "id").await, ["3|c"]);
+}
+
+#[tokio::test]
 async fn an_upsert_creates_a_missing_table_without_its_flagged_rows() {
     let dir = tempfile::tempdir().unwrap();
     let table = dir.path().join("t").to_string_lossy().into_owned();

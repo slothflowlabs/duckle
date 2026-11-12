@@ -297,7 +297,7 @@ const upsertModeFields = (supportsMerge = false): Field[] => [
         label: 'Delete flag value',
         kind: 'text',
         defaultValue: 'delete',
-        description: 'The value in the delete flag column that marks a row for deletion (default "delete").',
+        description: 'The value in the delete flag column that marks a row for deletion. The default, "delete", also takes "deleted", so a change feed from DuckLake CDC or from xf.cdc.diff deletes as it is; a value set here matches only itself.',
     },
 ];
 
@@ -787,7 +787,7 @@ const dbWriteFields = (): Field[] => [
         label: 'Delete flag value',
         kind: 'text',
         defaultValue: 'delete',
-        description: 'The value in the delete flag column that marks a row for deletion (default "delete").',
+        description: 'The value in the delete flag column that marks a row for deletion. The default, "delete", also takes "deleted", so a change feed from DuckLake CDC or from xf.cdc.diff deletes as it is; a value set here matches only itself.',
     },
     ...deadLetterFields(),
 ];
@@ -2480,7 +2480,7 @@ function synthLakehouseSink(comp: ComponentDef): ComponentManifest {
                     },
                     { key: 'conflictColumns', label: 'Key columns', kind: 'columns', visibleWhen: { key: 'mode', equals: ['upsert', 'update', 'delete'] }, description: 'The columns that identify a row. Required for upsert, update and delete.' },
                     { key: 'deleteColumn', label: 'Delete flag column (optional)', kind: 'text', placeholder: '_change_type', visibleWhen: { key: 'mode', equals: 'upsert' }, description: 'A row whose value here equals the delete value deletes its match instead of upserting it, so a change feed can be applied as it comes. The column itself is never written.' },
-                    { key: 'deleteValue', label: 'Delete value', kind: 'text', placeholder: 'delete', visibleWhen: { key: 'mode', equals: 'upsert' }, description: 'Compared as text. Empty means "delete".' },
+                    { key: 'deleteValue', label: 'Delete value', kind: 'text', placeholder: 'delete', visibleWhen: { key: 'mode', equals: 'upsert' }, description: 'Compared as text. Empty means "delete", which also takes "deleted", the tag xf.cdc.diff gives a removed row.' },
                 ],
             },
             {
@@ -6055,7 +6055,7 @@ function synthNoSqlSink(comp: ComponentDef): ComponentManifest {
                         label: 'Delete flag value',
                         kind: 'text',
                         defaultValue: 'delete',
-                        description: 'The value that marks a document for deletion (default "delete").',
+                        description: 'The value that marks a document for deletion. The default, "delete", also takes "deleted", the tag xf.cdc.diff gives a removed row; a value set here matches only itself.',
                     },
                     {
                         key: 'batchSize',

@@ -1209,6 +1209,48 @@
     }
 
     #[test]
+    fn a_delete_flag_also_matches_the_tag_cdc_diff_gives() {
+        // xf.cdc.diff tags a removed row "deleted"; a sink's default delete value,
+        // "delete", is DuckLake CDC's tag. On the default both delete, in every
+        // write path that honours a delete column, so a diff into a sink removes
+        // the row instead of upserting it as a row of NULLs. A value the node sets
+        // matches only itself.
+        assert_eq!(delete_flag_values("delete"), ["delete", "deleted"]);
+        assert_eq!(delete_flag_values("D"), ["D"]);
+        let (deletes, stays) = delete_flag_sql("s.\"op\"", "delete", |v| v.replace('\'', "''"));
+        assert_eq!(deletes, "s.\"op\" IN ('delete', 'deleted')");
+        assert_eq!(stays, "(s.\"op\" IS NULL OR s.\"op\" NOT IN ('delete', 'deleted'))");
+
+        // Every SQL write path that honours a delete column: build_db_sink's upsert
+        // (DuckDB / SQLite), build_relational_sink's upsert, and the MERGE that merge
+        // mode compiles to (DuckDB-native targets only). Merge needs the input's
+        // columns, so the source declares them. Postgres, Cockroach and MySQL upserts
+        // run on the staged driver instead, which takes the same delete_flag_sql.
+        let db = r#""database":"/tmp/t.duckdb","tableName":"t""#;
+        let md = r#""database":"my_db","token":"T","tableName":"t""#;
+        for (component, target, mode) in [
+            ("snk.duckdb", db, "upsert"),
+            ("snk.duckdb", db, "merge"),
+            ("snk.motherduck", md, "upsert"),
+            ("snk.motherduck", md, "merge"),
+        ] {
+            let d = pipeline_from_json(&format!(
+                r#"{{"nodes":[
+                    {{"id":"s","position":{{"x":0,"y":0}},"data":{{"label":"S","componentId":"src.csv","properties":{{"path":"/tmp/in.csv"}},"schema":[{{"name":"id","type":"int64"}},{{"name":"name","type":"string"}},{{"name":"op","type":"string"}}]}}}},
+                    {{"id":"k","position":{{"x":0,"y":0}},"data":{{"label":"K","componentId":"{component}","properties":{{{target},"mode":"{mode}","conflictColumns":["id"],"deleteColumn":"op"}}}}}}
+                  ],"edges":[{{"id":"e1","source":"s","target":"k","data":{{"connectionType":"main"}}}}]}}"#
+            ));
+            let c = compile(&d).unwrap();
+            let sql = c.stages.iter().find(|s| s.node_id == "k").unwrap().sql.clone();
+            assert!(!sql.is_empty(), "{component} {mode} compiles to SQL, so the check below can see it");
+            assert!(
+                sql.contains("IN ('delete', 'deleted')"),
+                "{component} {mode} must take 'deleted' as a delete on the default value: {sql}"
+            );
+        }
+    }
+
+    #[test]
     fn sqlserver_bulk_carries_the_encrypt_toggle() {
         // #357: "Encrypt connection" was read only on the tiberius driver path,
         // and `bulk` defaults to true, so on the sink's default path the control
@@ -1381,17 +1423,18 @@
 
     #[test]
     fn diffsummary_reduces_change_feed() {
-        // xf.diffsummary: counts insert/delete/update_postimage from a change
-        // feed into one summary row (added/removed/updated/total + text).
+        // xf.diffsummary: counts a change feed into one summary row
+        // (added/removed/updated/total + text), in both vocabularies: DuckLake's
+        // insert/delete/update_postimage and xf.cdc.diff's inserted/deleted/updated.
         let mut ni = NodeInputs::default();
         ni.ports.insert("main".into(), vec!["up".into()]);
         let sql = build_diffsummary(&ni, &serde_json::json!({})).unwrap();
-        assert!(sql.contains("FILTER (WHERE \"change_type\" = 'insert') AS added"), "got: {}", sql);
+        assert!(sql.contains("FILTER (WHERE \"change_type\" IN ('insert', 'inserted')) AS added"), "got: {}", sql);
         assert!(sql.contains("(added + removed + updated) AS total_changes"), "got: {}", sql);
         assert!(sql.contains("FROM \"up\""), "got: {}", sql);
         // configurable change column
         let custom = build_diffsummary(&ni, &serde_json::json!({"changeColumn": "op"})).unwrap();
-        assert!(custom.contains("FILTER (WHERE \"op\" = 'delete') AS removed"), "got: {}", custom);
+        assert!(custom.contains("FILTER (WHERE \"op\" IN ('delete', 'deleted')) AS removed"), "got: {}", custom);
     }
 
     #[test]

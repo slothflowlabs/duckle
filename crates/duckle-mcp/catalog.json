@@ -34017,7 +34017,7 @@
                   "key": "mode",
                   "equals": "upsert"
                 },
-                "description": "Compared as text. Empty means \"delete\"."
+                "description": "Compared as text. Empty means \"delete\", which also takes \"deleted\", the tag xf.cdc.diff gives a removed row."
               }
             ]
           },
@@ -34256,7 +34256,7 @@
                 "label": "Delete flag value",
                 "kind": "text",
                 "defaultValue": "delete",
-                "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+                "description": "The value in the delete flag column that marks a row for deletion. The default, \"delete\", also takes \"deleted\", so a change feed from DuckLake CDC or from xf.cdc.diff deletes as it is; a value set here matches only itself."
               },
               {
                 "key": "validateBeforeInsert",
@@ -34518,7 +34518,7 @@
                 "label": "Delete flag value",
                 "kind": "text",
                 "defaultValue": "delete",
-                "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+                "description": "The value in the delete flag column that marks a row for deletion. The default, \"delete\", also takes \"deleted\", so a change feed from DuckLake CDC or from xf.cdc.diff deletes as it is; a value set here matches only itself."
               },
               {
                 "key": "validateBeforeInsert",
@@ -34698,7 +34698,7 @@
                 "label": "Delete flag value",
                 "kind": "text",
                 "defaultValue": "delete",
-                "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+                "description": "The value in the delete flag column that marks a row for deletion. The default, \"delete\", also takes \"deleted\", so a change feed from DuckLake CDC or from xf.cdc.diff deletes as it is; a value set here matches only itself."
               },
               {
                 "key": "validateBeforeInsert",
@@ -34885,7 +34885,7 @@
                 "label": "Delete flag value",
                 "kind": "text",
                 "defaultValue": "delete",
-                "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+                "description": "The value in the delete flag column that marks a row for deletion. The default, \"delete\", also takes \"deleted\", so a change feed from DuckLake CDC or from xf.cdc.diff deletes as it is; a value set here matches only itself."
               },
               {
                 "key": "validateBeforeInsert",
@@ -35099,7 +35099,7 @@
                 "label": "Delete flag value",
                 "kind": "text",
                 "defaultValue": "delete",
-                "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+                "description": "The value in the delete flag column that marks a row for deletion. The default, \"delete\", also takes \"deleted\", so a change feed from DuckLake CDC or from xf.cdc.diff deletes as it is; a value set here matches only itself."
               }
             ]
           },
@@ -35268,7 +35268,7 @@
                 "label": "Delete flag value",
                 "kind": "text",
                 "defaultValue": "delete",
-                "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+                "description": "The value in the delete flag column that marks a row for deletion. The default, \"delete\", also takes \"deleted\", so a change feed from DuckLake CDC or from xf.cdc.diff deletes as it is; a value set here matches only itself."
               }
             ]
           },
@@ -36542,7 +36542,7 @@
                 "label": "Delete flag value",
                 "kind": "text",
                 "defaultValue": "delete",
-                "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+                "description": "The value in the delete flag column that marks a row for deletion. The default, \"delete\", also takes \"deleted\", so a change feed from DuckLake CDC or from xf.cdc.diff deletes as it is; a value set here matches only itself."
               },
               {
                 "key": "validateBeforeInsert",
@@ -37149,7 +37149,7 @@
                 "label": "Delete flag value",
                 "kind": "text",
                 "defaultValue": "delete",
-                "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+                "description": "The value in the delete flag column that marks a row for deletion. The default, \"delete\", also takes \"deleted\", so a change feed from DuckLake CDC or from xf.cdc.diff deletes as it is; a value set here matches only itself."
               }
             ]
           }
@@ -37699,7 +37699,7 @@
                 "label": "Delete flag value",
                 "kind": "text",
                 "defaultValue": "delete",
-                "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+                "description": "The value in the delete flag column that marks a row for deletion. The default, \"delete\", also takes \"deleted\", so a change feed from DuckLake CDC or from xf.cdc.diff deletes as it is; a value set here matches only itself."
               }
             ]
           }
@@ -37872,7 +37872,7 @@
                 "label": "Delete flag value",
                 "kind": "text",
                 "defaultValue": "delete",
-                "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+                "description": "The value in the delete flag column that marks a row for deletion. The default, \"delete\", also takes \"deleted\", so a change feed from DuckLake CDC or from xf.cdc.diff deletes as it is; a value set here matches only itself."
               }
             ]
           },
@@ -41694,7 +41694,7 @@
                 "label": "Delete flag value",
                 "kind": "text",
                 "defaultValue": "delete",
-                "description": "The value that marks a document for deletion (default \"delete\")."
+                "description": "The value that marks a document for deletion. The default, \"delete\", also takes \"deleted\", the tag xf.cdc.diff gives a removed row; a value set here matches only itself."
               },
               {
                 "key": "batchSize",

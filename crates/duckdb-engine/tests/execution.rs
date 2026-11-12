@@ -4374,6 +4374,98 @@ fn duckdb_upsert_with_delete_propagation() {
     assert_delete_propagation_result(&out);
 }
 
+/// Seed `sink` with ids 1..3, then send it xf.cdc.diff's changes on the sink's
+/// DEFAULT delete value: 2 renamed, 3 removed (which the diff tags "deleted"),
+/// 4 added. Returns the target read back as CSV.
+fn cdc_diff_into(engine: &DuckdbEngine, dir: &Path, sink: &str, reader: &str, mode: &str) -> String {
+    let previous = write_file(dir, "previous.csv", "id,name\n1,alice\n2,bob\n3,carol\n");
+    let current = write_file(dir, "current.csv", "id,name\n1,alice\n2,BOB\n4,dave\n");
+    let tag = format!("{}-{}", sink.replace('.', "_"), mode);
+    let db = out_path(dir, &format!("target-{tag}.db"));
+    let out = out_path(dir, &format!("after-{tag}.csv"));
+    let seed = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": previous, "hasHeader": true })),
+            node("w", sink, json!({ "database": db, "tableName": "people", "mode": "overwrite" })),
+        ]),
+        json!([main_edge("e", "s", "w")]),
+    ));
+    assert_eq!(seed.status, "ok", "seed {tag}: {:?}", seed.error);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("cur", "src.csv", json!({ "path": current, "hasHeader": true })),
+            node("prev", "src.csv", json!({ "path": previous, "hasHeader": true })),
+            node("diff", "xf.cdc.diff", json!({ "naturalKey": ["id"], "compareColumns": ["name"] })),
+            node("w", sink, json!({
+                "database": db, "tableName": "people", "mode": mode,
+                "conflictColumns": ["id"], "deleteColumn": "change_type"
+            })),
+        ]),
+        json!([main_edge("e1", "cur", "diff"), lookup_edge("e2", "prev", "diff"), main_edge("e3", "diff", "w")]),
+    ));
+    assert_eq!(r.status, "ok", "{tag} from xf.cdc.diff: {:?}", r.error);
+    let read = engine.execute_pipeline(&doc(
+        json!([
+            node("r", reader, json!({ "database": db, "tableName": "people" })),
+            node("k", "snk.csv", json!({ "path": &out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "r", "k")]),
+    ));
+    assert_eq!(read.status, "ok", "read back {tag}: {:?}", read.error);
+    out
+}
+
+#[test]
+fn a_cdc_diff_feed_deletes_through_a_local_sink_on_the_default_value() {
+    // xf.cdc.diff tags a removed row "deleted"; the sinks' default delete value
+    // was only "delete" (DuckLake CDC's tag), so the removed row was upserted as
+    // a row of NULLs instead of deleted.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    // Upsert only: merge needs the input's columns at plan time, and the diff's
+    // output declares none (the planner says so). Merge's MERGE statement takes
+    // the same flag test, which a_delete_flag_also_matches_the_tag_cdc_diff_gives
+    // checks in the compiled SQL.
+    for (sink, reader, mode) in [("snk.duckdb", "src.duckdb", "upsert"), ("snk.sqlite", "src.sqlite", "upsert")] {
+        let out = cdc_diff_into(&engine, tmp.path(), sink, reader, mode);
+        assert_delete_propagation_result(&out);
+    }
+}
+
+#[test]
+fn diff_summary_counts_what_cdc_diff_tags() {
+    // Diff Summary counted only DuckLake's tags (insert / delete /
+    // update_postimage), so a summary of xf.cdc.diff's changes said 0.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let previous = write_file(tmp.path(), "previous.csv", "id,name\n1,alice\n2,bob\n3,carol\n");
+    let current = write_file(tmp.path(), "current.csv", "id,name\n1,alice\n2,BOB\n4,dave\n");
+    let out = out_path(tmp.path(), "summary.jsonl");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("cur", "src.csv", json!({ "path": current, "hasHeader": true })),
+            node("prev", "src.csv", json!({ "path": previous, "hasHeader": true })),
+            node("diff", "xf.cdc.diff", json!({ "naturalKey": ["id"], "compareColumns": ["name"] })),
+            node("sum", "xf.diffsummary", json!({})),
+            node("k", "snk.jsonl", json!({ "path": &out })),
+        ]),
+        json!([
+            main_edge("e1", "cur", "diff"),
+            lookup_edge("e2", "prev", "diff"),
+            main_edge("e3", "diff", "sum"),
+            main_edge("e4", "sum", "k"),
+        ]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let text = std::fs::read_to_string(&out).unwrap();
+    let row: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    assert_eq!(
+        (row["added"].clone(), row["removed"].clone(), row["updated"].clone()),
+        (json!(1), json!(1), json!(1)),
+        "{row}"
+    );
+}
+
 #[test]
 fn duckdb_upsert_without_conflict_columns_errors() {
     // GitHub #19: selecting Upsert on a DuckDB/SQLite sink WITHOUT conflict

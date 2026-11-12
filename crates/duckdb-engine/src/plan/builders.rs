@@ -633,13 +633,15 @@ pub(crate) fn build_diffsummary(inputs: &NodeInputs, props: &JsonValue) -> Resul
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "change_type".into());
     let c = quote_ident(&col);
+    // Both change-feed vocabularies: DuckLake's (insert / delete /
+    // update_postimage) and xf.cdc.diff's (inserted / deleted / updated).
     Ok(format!(
         "SELECT added, removed, updated, (added + removed + updated) AS total_changes, \
          added::VARCHAR || ' added, ' || removed::VARCHAR || ' removed, ' || updated::VARCHAR || ' updated' AS summary \
          FROM (SELECT \
-         COUNT(*) FILTER (WHERE {c} = 'insert') AS added, \
-         COUNT(*) FILTER (WHERE {c} = 'delete') AS removed, \
-         COUNT(*) FILTER (WHERE {c} = 'update_postimage') AS updated \
+         COUNT(*) FILTER (WHERE {c} IN ('insert', 'inserted')) AS added, \
+         COUNT(*) FILTER (WHERE {c} IN ('delete', 'deleted')) AS removed, \
+         COUNT(*) FILTER (WHERE {c} IN ('update_postimage', 'updated')) AS updated \
          FROM {tbl})",
         c = c,
         tbl = quote_ident(upstream)
@@ -6600,18 +6602,11 @@ fn build_merge_stmt(
     // Optional CDC delete propagation, mirroring the upsert mode: a matched row
     // flagged for deletion is removed; a flagged unmatched row is not inserted.
     let (delete_clause, not_matched_filter) = match &del_col {
-        Some(c) => (
-            format!(
-                "WHEN MATCHED AND src.{c} IS NOT DISTINCT FROM '{v}' THEN DELETE ",
-                c = quote_ident(c),
-                v = sql_escape(&del_val)
-            ),
-            format!(
-                " AND src.{c} IS DISTINCT FROM '{v}'",
-                c = quote_ident(c),
-                v = sql_escape(&del_val)
-            ),
-        ),
+        Some(c) => {
+            let (deletes, stays) =
+                super::delete_flag_sql(&format!("src.{}", quote_ident(c)), &del_val, sql_escape);
+            (format!("WHEN MATCHED AND {deletes} THEN DELETE "), format!(" AND {stays}"))
+        }
         None => (String::new(), String::new()),
     };
     // Omit the UPDATE clause when the source has only key columns (nothing to set).
@@ -6721,9 +6716,8 @@ pub(crate) fn build_relational_sink(
                 .join(", ");
             let insert_filter = match &del_col {
                 Some(c) => format!(
-                    " WHERE {} IS DISTINCT FROM '{}'",
-                    quote_ident(c),
-                    sql_escape(&del_val)
+                    " WHERE {}",
+                    super::delete_flag_sql(&quote_ident(c), &del_val, sql_escape).1
                 ),
                 None => String::new(),
             };
@@ -7217,9 +7211,8 @@ pub(crate) fn build_db_sink(
             .join(", ");
         let insert_filter = match &del_col {
             Some(c) => format!(
-                " WHERE {} IS DISTINCT FROM '{}'",
-                quote_ident(c),
-                sql_escape(&del_val)
+                " WHERE {}",
+                super::delete_flag_sql(&quote_ident(c), &del_val, sql_escape).1
             ),
             None => String::new(),
         };

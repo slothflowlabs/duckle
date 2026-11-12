@@ -7602,7 +7602,8 @@ fn build_native_upsert_sql(
                 // skips flagged rows; a prior DELETE removes flagged keys.
                 Some(dc) => {
                     let flag = format!("\"{}\"", dc.replace('"', "\"\""));
-                    let v = spec.delete_value.replace('\'', "''");
+                    let (deletes, stays) =
+                        plan::delete_flag_sql(&flag, &spec.delete_value, |v| v.replace('\'', "''"));
                     let col_list = data_cols
                         .iter()
                         .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
@@ -7610,19 +7611,17 @@ fn build_native_upsert_sql(
                         .join(", ");
                     vec![
                         format!(
-                            "DELETE FROM {target} WHERE ({keys}) IN (SELECT {keys} FROM {staging} WHERE {flag} = '{v}')",
+                            "DELETE FROM {target} WHERE ({keys}) IN (SELECT {keys} FROM {staging} WHERE {deletes})",
                             target = target_native,
                             staging = staging_native,
                             keys = key_list,
-                            flag = flag,
-                            v = v,
+                            deletes = deletes,
                         ),
                         format!(
-                            "INSERT INTO {target} ({cols}) SELECT {cols} FROM {staging} WHERE ({flag} IS NULL OR {flag} <> '{v}') {conflict}",
+                            "INSERT INTO {target} ({cols}) SELECT {cols} FROM {staging} WHERE {stays} {conflict}",
                             target = target_native,
                             staging = staging_native,
-                            flag = flag,
-                            v = v,
+                            stays = stays,
                             cols = col_list,
                             conflict = conflict
                         ),
@@ -7684,7 +7683,8 @@ fn build_native_upsert_sql(
                 }
                 Some(dc) => {
                     let flag = format!("`{}`", dc.replace('`', "``"));
-                    let v = spec.delete_value.replace('\'', "''");
+                    let (deletes, stays) =
+                        plan::delete_flag_sql(&flag, &spec.delete_value, |v| v.replace('\'', "''"));
                     let key_list = spec
                         .conflict_cols
                         .iter()
@@ -7706,18 +7706,16 @@ fn build_native_upsert_sql(
                     };
                     vec![
                         format!(
-                            "DELETE FROM {target} WHERE ({keys}) IN (SELECT {keys} FROM {staging} WHERE {flag} = '{v}')",
+                            "DELETE FROM {target} WHERE ({keys}) IN (SELECT {keys} FROM {staging} WHERE {deletes})",
                             target = target_native,
                             staging = staging_native,
                             keys = key_list,
-                            flag = flag,
-                            v = v
+                            deletes = deletes
                         ),
                         format!(
-                            "{head} ({cols}) SELECT {cols} FROM {staging} WHERE ({flag} IS NULL OR {flag} <> '{v}'){tail}",
+                            "{head} ({cols}) SELECT {cols} FROM {staging} WHERE {stays}{tail}",
                             staging = staging_native,
-                            flag = flag,
-                            v = v,
+                            stays = stays,
                             cols = col_list,
                             head = insert_head,
                             tail = on_dup_tail

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use deltalake::arrow::datatypes::DataType;
 use deltalake::datafusion::common::Column;
-use deltalake::datafusion::logical_expr::{binary_expr, cast, lit, Expr, Operator};
+use deltalake::datafusion::logical_expr::{cast, lit, Expr};
 use deltalake::datafusion::prelude::{ParquetReadOptions, SessionContext};
 use deltalake::protocol::SaveMode;
 use deltalake::DeltaTable;
@@ -86,12 +86,24 @@ fn column(relation: Option<&str>, name: &str) -> Expr {
 
 /// True where the flag column holds the delete value. A NULL flag is not a delete.
 fn flagged(relation: Option<&str>, flag: &str, value: &str) -> Expr {
-    cast(column(relation, flag), DataType::Utf8).eq(lit(value.to_string()))
+    cast(column(relation, flag), DataType::Utf8).in_list(flag_values(value), false)
 }
 
 /// The complement of `flagged`, NULL counting as "not a delete".
 fn not_flagged(relation: Option<&str>, flag: &str, value: &str) -> Expr {
-    binary_expr(cast(column(relation, flag), DataType::Utf8), Operator::IsDistinctFrom, lit(value.to_string()))
+    let flag = cast(column(relation, flag), DataType::Utf8);
+    flag.clone().is_null().or(flag.in_list(flag_values(value), true))
+}
+
+/// The values that delete. "delete" (the default, DuckLake CDC's tag) also takes
+/// "deleted", the tag xf.cdc.diff gives a removed row; any other value matches
+/// only itself. The engine's `plan::delete_flag_values` says the same.
+fn flag_values(value: &str) -> Vec<Expr> {
+    let mut values = vec![lit(value.to_string())];
+    if value == "delete" {
+        values.push(lit("deleted".to_string()));
+    }
+    values
 }
 
 fn mode_name(mode: Mode) -> &'static str {

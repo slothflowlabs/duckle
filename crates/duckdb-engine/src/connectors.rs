@@ -1840,11 +1840,9 @@ impl DuckdbEngine {
         let (delete_clause, not_matched_guard) = match delete_col {
             Some(dc) => {
                 let q = sf_quote_ident(dc);
-                let v = jsonnative_quote_inner(&spec.delete_value);
-                (
-                    format!(" WHEN MATCHED AND s.{q} = '{v}' THEN DELETE", q = q, v = v),
-                    format!(" AND (s.{q} IS NULL OR s.{q} <> '{v}')", q = q, v = v),
-                )
+                let (deletes, stays) =
+                    plan::delete_flag_sql(&format!("s.{q}"), &spec.delete_value, jsonnative_quote_inner);
+                (format!(" WHEN MATCHED AND {deletes} THEN DELETE"), format!(" AND {stays}"))
             }
             None => (String::new(), String::new()),
         };
@@ -2225,16 +2223,14 @@ impl DuckdbEngine {
             let (delete_part, insert_where) = match delete_col {
                 Some(dc) => {
                     let q = oq(dc);
-                    let v = spec.delete_value.replace('\'', "''");
+                    let (deletes, stays) =
+                        plan::delete_flag_sql(&format!("s.{q}"), &spec.delete_value, |v| v.replace('\'', "''"));
                     let dp = if update_set.is_empty() {
                         String::new()
                     } else {
-                        format!(" DELETE WHERE (s.{q} = '{v}')", q = q, v = v)
+                        format!(" DELETE WHERE ({deletes})")
                     };
-                    (
-                        dp,
-                        format!(" WHERE (s.{q} IS NULL OR s.{q} <> '{v}')", q = q, v = v),
-                    )
+                    (dp, format!(" WHERE {stays}"))
                 }
                 None => (String::new(), String::new()),
             };
@@ -14922,11 +14918,9 @@ impl DuckdbEngine {
         let (delete_clause, not_matched_guard) = match delete_col {
             Some(dc) => {
                 let q = ss_quote_ident(dc);
-                let v = spec.delete_value.replace('\'', "''");
-                (
-                    format!(" WHEN MATCHED AND s.{q} = '{v}' THEN DELETE", q = q, v = v),
-                    format!(" AND (s.{q} IS NULL OR s.{q} <> '{v}')", q = q, v = v),
-                )
+                let (deletes, stays) =
+                    plan::delete_flag_sql(&format!("s.{q}"), &spec.delete_value, |v| v.replace('\'', "''"));
+                (format!(" WHEN MATCHED AND {deletes} THEN DELETE"), format!(" AND {stays}"))
             }
             None => (String::new(), String::new()),
         };
@@ -15574,7 +15568,11 @@ impl DuckdbEngine {
                         let is_delete = spec
                             .delete_column
                             .as_deref()
-                            .map(|dc| bson_flag_matches(doc.get(dc), &spec.delete_value))
+                            .map(|dc| {
+                                plan::delete_flag_values(&spec.delete_value)
+                                    .iter()
+                                    .any(|v| bson_flag_matches(doc.get(dc), v))
+                            })
                             .unwrap_or(false);
                         if let Some(dc) = &spec.delete_column {
                             doc.remove(dc);
@@ -18641,11 +18639,9 @@ impl DuckdbEngine {
         let (delete_clause, not_matched_guard) = match delete_col {
             Some(dc) => {
                 let q = db_quote_ident(dc);
-                let v = jsonnative_quote_inner(&spec.delete_value);
-                (
-                    format!(" WHEN MATCHED AND s.{q} = '{v}' THEN DELETE", q = q, v = v),
-                    format!(" AND (s.{q} IS NULL OR s.{q} <> '{v}')", q = q, v = v),
-                )
+                let (deletes, stays) =
+                    plan::delete_flag_sql(&format!("s.{q}"), &spec.delete_value, jsonnative_quote_inner);
+                (format!(" WHEN MATCHED AND {deletes} THEN DELETE"), format!(" AND {stays}"))
             }
             None => (String::new(), String::new()),
         };
