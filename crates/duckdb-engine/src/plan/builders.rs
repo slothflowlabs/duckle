@@ -10769,6 +10769,21 @@ pub(crate) fn http_transport_from_props(props: &JsonValue) -> Option<crate::tls:
     }
 }
 
+/// #256: how an HTTP-backed node paces its requests, and whether it keeps the
+/// cookies its server sets. Either may arrive as text, from a `${var}`.
+pub(crate) fn http_pacing_from_props(props: &JsonValue) -> crate::tls::HttpPacing {
+    let rps = props
+        .get("httpRequestsPerSecond")
+        .and_then(|v| v.as_f64().or_else(|| v.as_str()?.trim().parse().ok()));
+    let keep = props
+        .get("httpKeepCookies")
+        .and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s.trim().eq_ignore_ascii_case("true"))));
+    crate::tls::HttpPacing {
+        requests_per_second: rps.filter(|r| r.is_finite() && *r > 0.0),
+        keep_cookies: keep.unwrap_or(false),
+    }
+}
+
 pub(crate) fn push_rest_auth(headers: &mut Vec<(String, String)>, props: &JsonValue) {
     let auth_type = string_prop(props, "authType").unwrap_or_else(|| "none".into());
     let token = string_prop(props, "authToken").unwrap_or_default();

@@ -691,6 +691,8 @@ pub struct HtmlSourceSpec {
     /// #256: per-node transport (proxy, timeouts, User-Agent), usually filled
     /// from a saved `http` connection. None uses the shared default agent.
     pub transport: Option<crate::tls::HttpTransport>,
+    /// #256: requests per second, and whether to keep the server's cookies.
+    pub pacing: crate::tls::HttpPacing,
     pub node_id: String,
     /// A local filesystem path, or an `http(s)://` URL fetched through the
     /// shared proxy- and CA-aware agent.
@@ -1943,6 +1945,8 @@ pub struct RestSourceSpec {
     /// #256: per-node transport (proxy, timeouts, User-Agent), usually filled
     /// from a saved `http` connection. None uses the shared default agent.
     pub transport: Option<crate::tls::HttpTransport>,
+    /// #256: requests per second, and whether to keep the server's cookies.
+    pub pacing: crate::tls::HttpPacing,
     pub node_id: String,
     /// #257: the upstream relation whose rows each drive one request. None is
     /// exactly one endpoint, which is every pipeline that existed before.

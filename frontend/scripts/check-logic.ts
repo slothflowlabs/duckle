@@ -2249,6 +2249,24 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     );
 }
 
+// ---------------------------------------------------------------------------
+// #256: a saved HTTP transport can be made in the editor, with every field the
+// engine flattens onto a node from it. Nodes offered a picker for one and the
+// engine merged it, but no connection type created one.
+// ---------------------------------------------------------------------------
+{
+    const secrets = readFileSync(resolve(__FRONTEND_DIR__, '../crates/duckle-secrets/src/lib.rs'), 'utf8');
+    const merge = secrets.slice(secrets.indexOf('fn resolve_transport_ref'), secrets.indexOf('fn merge_rest_connection'));
+    const read = [...merge.matchAll(/\("([A-Za-z]+)", "http[A-Za-z]+"\)/g)].map(m => m[1]).sort();
+    const offered = [...((CONNECTION_TYPES.find(t => t.kind === 'http')?.fields ?? []) as string[])].sort();
+    check('http transport: the engine merge was found', read.includes('proxy'), `read ${JSON.stringify(read)}`);
+    check(
+        'http transport: the editor makes one, offering exactly what the engine reads',
+        JSON.stringify(offered) === JSON.stringify(read),
+        `offered ${JSON.stringify(offered)}, read ${JSON.stringify(read)}`,
+    );
+}
+
 if (failures.length) {
     console.error(`\ncheck-logic: ${failures.length} check(s) failed:\n`);
     for (const f of failures) console.error(`  - ${f}`);

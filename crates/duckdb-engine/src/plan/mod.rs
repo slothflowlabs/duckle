@@ -5361,6 +5361,7 @@ fn build_stage(
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| "fail".to_string()),
             transport: http_transport_from_props(&props),
+            pacing: http_pacing_from_props(&props),
             node_id: node.id.clone(),
             path: path.unwrap_or_default(),
             row_selector,
@@ -6338,6 +6339,7 @@ fn build_stage(
             concurrency: 1,
             on_parent_error: "fail".to_string(),
             transport: http_transport_from_props(&props),
+            pacing: http_pacing_from_props(&props),
             node_id: node.id.clone(),
             raw_response_destination: string_prop(&props, "rawResponseDestination")
                 .map(|v| v.trim().to_string())
@@ -6570,6 +6572,7 @@ fn build_stage(
                 .map(|v| v.trim().to_string())
                 .unwrap_or_default(),
             transport: http_transport_from_props(&props),
+            pacing: http_pacing_from_props(&props),
             node_id: node.id.clone(),
             response_metadata: props
                 .get("responseMetadata")

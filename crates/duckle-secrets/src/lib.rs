@@ -552,6 +552,8 @@ fn resolve_transport_ref(workspace: &Path, props: &mut JsonValue) -> Result<(), 
         ("readTimeoutSecs", "httpReadTimeoutSecs"),
         ("connectTimeoutSecs", "httpConnectTimeoutSecs"),
         ("userAgent", "httpUserAgent"),
+        ("requestsPerSecond", "httpRequestsPerSecond"),
+        ("keepCookies", "httpKeepCookies"),
     ] {
         let filled = |v: Option<&JsonValue>| -> bool {
             !matches!(v, None | Some(JsonValue::Null)) && v.and_then(|x| x.as_str()) != Some("")
@@ -1232,6 +1234,31 @@ mod tests {
     /// you update in one place". That only works if the connection supplies the
     /// headers WITHOUT taking over the request, so the rules are the opposite of
     /// the generic merge: headers merge per key, and the node's own url survives.
+    #[test]
+    fn an_http_transport_carries_the_pace_and_the_cookies_too() {
+        // #256: a rate limit belongs to the API, so the transport every node
+        // calling it shares is where it is set. What a node sets still wins.
+        let ws = temp_ws("transport");
+        write_connection(
+            &ws,
+            "vendor_http",
+            r#"{"kind":"http","proxy":"http://proxy.corp:8080","requestsPerSecond":2.5,"keepCookies":true}"#,
+        );
+        let mut shared = sf_node("src.rest", serde_json::json!({ "transportRef": "vendor_http", "url": "https://v.example.com" }));
+        resolve_connection_refs(&ws, std::slice::from_mut(&mut shared)).unwrap();
+        let p = shared.data.properties.unwrap();
+        assert_eq!(p["httpProxy"], "http://proxy.corp:8080");
+        assert_eq!(p["httpRequestsPerSecond"], 2.5);
+        assert_eq!(p["httpKeepCookies"], true);
+
+        let mut own = sf_node(
+            "src.rest",
+            serde_json::json!({ "transportRef": "vendor_http", "url": "https://v.example.com", "httpRequestsPerSecond": 1 }),
+        );
+        resolve_connection_refs(&ws, std::slice::from_mut(&mut own)).unwrap();
+        assert_eq!(own.data.properties.unwrap()["httpRequestsPerSecond"], 1, "the node's own pace wins");
+    }
+
     #[test]
     fn a_rest_connection_supplies_auth_without_taking_over_the_request() {
         let ws = temp_ws("rest");

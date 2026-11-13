@@ -420,7 +420,7 @@ const transportRefField = (): Field => ({
     label: 'HTTP transport',
     kind: 'connection-ref',
     accepts: ['http'],
-    description: 'Pick a saved HTTP transport to apply a proxy, timeouts and a User-Agent without setting them on every node. Anything you set here on the node wins over the connection.',
+    description: 'Pick a saved HTTP transport to apply a proxy, timeouts, a User-Agent, a request pace and cookie keeping without setting them on every node. Anything you set here on the node wins over the connection.',
 });
 
 const credentialFields = (acceptKind?: string): Field[] => [
@@ -674,6 +674,21 @@ const httpTransportFields = (): Field[] => [
         placeholder: '300',
         description:
             'How long a single read may stall before the request fails. A per-read deadline, not a deadline on the whole transfer, so a large download is unaffected while bytes keep arriving.',
+    },
+    {
+        key: 'httpRequestsPerSecond',
+        label: 'Max requests per second',
+        kind: 'number',
+        placeholder: '5',
+        description:
+            "Spaces this node's requests, across pages and parallel requests, to at most this many a second. Blank sends as fast as answers come. Either way, a 429 or 503 is waited out as the server asks and the request sent again, up to five times.",
+    },
+    {
+        key: 'httpKeepCookies',
+        label: 'Keep cookies between requests',
+        kind: 'bool',
+        description:
+            "Sends back the cookies the server sets, such as a session the next page needs. Only on this node's requests in this run, never shared with another node or run.",
     },
 ];
 

@@ -134,6 +134,18 @@ pub struct HttpTransport {
     pub user_agent: Option<String>,
 }
 
+/// #256: how one node spaces its requests, and whether it keeps the cookies
+/// its server sets, for one run. Not part of [`HttpTransport`]: that is the key
+/// agents are cached and shared by, and a pace or a cookie jar must never be
+/// shared between nodes or runs.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct HttpPacing {
+    /// At most this many requests a second. None: as fast as answers come.
+    pub requests_per_second: Option<f64>,
+    /// Send back the cookies the server sets, on this node's requests only.
+    pub keep_cookies: bool,
+}
+
 /// A read that has delivered nothing for this long is stalled, not slow. Set
 /// generously: the point is that a dead socket cannot park a stage forever, not
 /// to police how long a server may take. Override with DUCKLE_HTTP_READ_TIMEOUT.

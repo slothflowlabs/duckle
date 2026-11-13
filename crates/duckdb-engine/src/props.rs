@@ -492,7 +492,9 @@ mod tests {
                 "httpProxy": "http://proxy.corp:8080",
                 "httpUserAgent": "duckle/1.0",
                 "httpConnectTimeoutSecs": 10,
-                "httpReadTimeoutSecs": 60
+                "httpReadTimeoutSecs": 60,
+                "httpRequestsPerSecond": 2,
+                "httpKeepCookies": true
             }),
         ));
         assert!(f.is_empty(), "a real engine setting reported as dead: {f:?}");
@@ -502,8 +504,14 @@ mod tests {
     fn every_http_backed_source_offers_the_whole_transport() {
         // Declaring three of the four is worse than declaring none: the form
         // looks complete and the missing one still fails validation.
-        const TRANSPORT: [&str; 4] =
-            ["httpProxy", "httpUserAgent", "httpConnectTimeoutSecs", "httpReadTimeoutSecs"];
+        const TRANSPORT: [&str; 6] = [
+            "httpProxy",
+            "httpUserAgent",
+            "httpConnectTimeoutSecs",
+            "httpReadTimeoutSecs",
+            "httpRequestsPerSecond",
+            "httpKeepCookies",
+        ];
         let offering: Vec<&String> = declared()
             .iter()
             .filter(|(_, keys)| TRANSPORT.iter().any(|k| keys.contains(*k)))

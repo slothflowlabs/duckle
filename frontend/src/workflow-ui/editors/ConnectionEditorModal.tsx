@@ -138,6 +138,14 @@ export const CONNECTION_TYPES: ConnectionType[] = [
         label: 'Salesforce',
         fields: ['authMode', 'loginUrl', 'instanceUrl', 'clientId', 'clientSecret', 'accessToken'],
     },
+    {
+        // #256: the transport HTTP-backed sources share, picked on a node as its
+        // "HTTP transport". The field names are what the engine flattens onto
+        // the node (duckle-secrets resolve_transport_ref).
+        kind: 'http',
+        label: 'HTTP transport',
+        fields: ['proxy', 'userAgent', 'connectTimeoutSecs', 'readTimeoutSecs', 'requestsPerSecond', 'keepCookies'],
+    },
 ];
 
 const FIELD_LABELS: Partial<Record<keyof ConnectionPayload, string>> = {
@@ -175,6 +183,12 @@ const FIELD_LABELS: Partial<Record<keyof ConnectionPayload, string>> = {
     authHeader: 'Auth header name (default Authorization)',
     encrypt: 'Encrypt connection',
     trustCert: 'Trust server certificate',
+    proxy: 'Proxy URL',
+    userAgent: 'User-Agent',
+    connectTimeoutSecs: 'Connect timeout (s)',
+    readTimeoutSecs: 'Read timeout (s)',
+    requestsPerSecond: 'Max requests per second',
+    keepCookies: 'Keep cookies between requests',
 };
 
 // The kinds the engine can test (connection_test.rs `probe`): the ones nodes
@@ -182,7 +196,15 @@ const FIELD_LABELS: Partial<Record<keyof ConnectionPayload, string>> = {
 const TESTABLE_KINDS = new Set<ConnectionKind>(['postgres', 'redshift', 'mysql', 'mariadb', 'sqlserver', 's3', 'rest']);
 
 // Yes / No / the node's default, for a boolean the engine reads with as_bool.
-const BOOLEAN_FIELDS = new Set<keyof ConnectionPayload>(['encrypt', 'trustCert']);
+const BOOLEAN_FIELDS = new Set<keyof ConnectionPayload>(['encrypt', 'trustCert', 'keepCookies']);
+
+const NUMBER_FIELDS = new Set<keyof ConnectionPayload>([
+    'port',
+    'connectTimeout',
+    'connectTimeoutSecs',
+    'readTimeoutSecs',
+    'requestsPerSecond',
+]);
 
 const SECRET_FIELDS = new Set<keyof ConnectionPayload>([
     'password',
@@ -314,7 +336,7 @@ export default function ConnectionEditorModal({ item, onSave, onCancel }: Props)
                     <div className="connection-field-grid">
                         {meta?.fields.map(field => {
                             const isSecret = SECRET_FIELDS.has(field);
-                            const isNumber = field === 'port' || field === 'connectTimeout';
+                            const isNumber = NUMBER_FIELDS.has(field);
                             if (field === 'sslmode') {
                                 // Values MUST match libpq sslmode names so the
                                 // engine forwards them verbatim into the DSN (#161).

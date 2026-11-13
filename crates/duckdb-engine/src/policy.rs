@@ -760,7 +760,7 @@ pub fn outbound_host_allowed(netloc: &str) -> Result<(), String> {
 /// "allowed".
 ///
 /// IPv6 literals are unbracketed rather than cut at their first colon.
-fn netloc_host(netloc: &str) -> String {
+pub(crate) fn netloc_host(netloc: &str) -> String {
     let s = match netloc.split_once("://") {
         Some((_, rest)) => rest,
         None => netloc,

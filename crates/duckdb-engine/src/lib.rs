@@ -91,6 +91,7 @@ pub mod launch_env;
 pub mod ndjson;
 pub mod recovery;
 pub mod tls;
+mod http_walk;
 pub mod watermark;
 pub mod xsd;
 pub mod xsd_contract;

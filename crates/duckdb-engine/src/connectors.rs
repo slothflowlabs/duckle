@@ -8857,6 +8857,7 @@ impl DuckdbEngine {
         spec: &HtmlSourceSpec,
         uri: &str,
         from_upstream: bool,
+        session: &std::sync::Mutex<crate::http_walk::HttpWalk>,
     ) -> Result<String, EngineError> {
         if from_upstream {
             let mut reader = self.open_artifact(&spec.input.auth, uri)?;
@@ -8871,11 +8872,14 @@ impl DuckdbEngine {
                 Some(t) => crate::tls::http_agent_with(t),
                 None => crate::tls::http_agent(),
             };
-            let mut req = agent.get(uri);
-            for (k, v) in &spec.headers {
-                req = req.set(k, v);
-            }
-            match req.call() {
+            let make = || {
+                let mut req = agent.get(uri);
+                for (k, v) in &spec.headers {
+                    req = req.set(k, v);
+                }
+                req
+            };
+            match self.http_send(session, uri, &make, None)? {
                 Ok(r) => r
                     .into_string()
                     .map_err(|e| EngineError::Query(format!("html: read {}: {}", uri, e)))?,
@@ -9004,12 +9008,14 @@ impl DuckdbEngine {
         // #255: the returned value is the NEXT page's URL, when this page named
         // one. Reported from here rather than found by the caller, because only
         // this scope has the parsed document.
+        // #256: one session for the stage's documents, so the pace spans them.
+        let session = std::sync::Mutex::new(crate::http_walk::HttpWalk::new(&spec.pacing));
         let mut handle = |uri: &str,
                           source_sha: &Option<String>,
                           upstream_row: &JsonValue|
          -> Result<Option<String>, EngineError> {
             self.check_cancelled()?;
-            let html = match self.html_text(spec, uri, from_upstream) {
+            let html = match self.html_text(spec, uri, from_upstream, &session) {
                 Ok(h) => h,
                 Err(e) if spec.on_error == "skip" => {
                     eprintln!("duckle: html: skipping {uri}: {e}");
@@ -11392,6 +11398,59 @@ impl DuckdbEngine {
             self.check_cancelled()?;
         }
         Ok(())
+    }
+
+    /// #256: send one request of an HTTP source, the way they all send.
+    ///
+    /// Held to the node's requests-per-second, retries included. A 429 or a
+    /// 503 means "not now": the server did not act on the request, so it is
+    /// sent again after the wait the server asks for (the rule AI requests
+    /// follow), up to five more times. Every other answer, and every transport
+    /// error, comes back at once as before: a 500 may have been acted on, and
+    /// sending it again could do twice what was meant once. Cookies a response
+    /// sets are kept when the node keeps cookies.
+    ///
+    /// `make` builds the request afresh for each attempt, because ureq consumes
+    /// a request when it is sent. The outer Err is a cancelled run.
+    pub(crate) fn http_send(
+        &self,
+        session: &std::sync::Mutex<crate::http_walk::HttpWalk>,
+        url: &str,
+        make: &dyn Fn() -> ureq::Request,
+        body: Option<&str>,
+    ) -> Result<Result<ureq::Response, ureq::Error>, EngineError> {
+        const NOT_NOW_RETRIES: u32 = 5;
+        let lock = || session.lock().unwrap_or_else(|e| e.into_inner());
+        let mut attempt = 0;
+        loop {
+            self.check_cancelled()?;
+            // Reserved under the lock, waited out without it, so requests on
+            // several threads keep to one pace together.
+            let wait = lock().reserve(std::time::Instant::now());
+            self.ai_sleep_cancellable(wait.as_millis() as u64)?;
+            let mut req = make();
+            if let Some(kept) = lock().cookie_header(url) {
+                let cookie = match req.header("Cookie") {
+                    Some(own) => format!("{own}; {kept}"),
+                    None => kept,
+                };
+                req = req.set("Cookie", &cookie);
+            }
+            let result = match body {
+                Some(b) => req.send_string(b),
+                None => req.call(),
+            };
+            if let Ok(r) | Err(ureq::Error::Status(_, r)) = &result {
+                lock().keep(r.get_url(), &r.all("set-cookie"));
+            }
+            match result {
+                Err(ureq::Error::Status(code, r)) if (code == 429 || code == 503) && attempt < NOT_NOW_RETRIES => {
+                    self.ai_sleep_cancellable(Self::ai_retry_wait_ms(r.header("Retry-After"), attempt))?;
+                    attempt += 1;
+                }
+                other => return Ok(other),
+            }
+        }
     }
 
     /// #258: send one AI request, retrying on HTTP 429 and 5xx.
@@ -16601,6 +16660,9 @@ impl DuckdbEngine {
         // returns that parent's rows and the pages it walked; it accumulates
         // nothing across parents, which is what lets the caller write results
         // out as they finish instead of holding the whole child dataset.
+        // #256: one session for the node, shared by every parent's walk and every
+        // worker, so the pace and the cookies are the node's, not one thread's.
+        let session = std::sync::Mutex::new(crate::http_walk::HttpWalk::new(&spec.pacing));
         let fetch_parent = |parent: &JsonValue| -> Result<(Vec<JsonValue>, u64), EngineError> {
             let mut out: Vec<JsonValue> = Vec::new();
             self.check_cancelled()?;
@@ -16628,20 +16690,20 @@ impl DuckdbEngine {
             loop {
                 self.check_cancelled()?;
                 // Build request
-                let mut req = agent.request(&spec.method, &url);
                 let has_ct = eff_headers
                     .iter()
                     .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
-                for (k, v) in &eff_headers {
-                    req = req.set(k, v);
-                }
-                if spec.body.is_some() && !has_ct {
-                    req = req.set("content-type", "application/json");
-                }
-                let resp_result = match &spec.body {
-                    Some(b) => req.send_string(b),
-                    None => req.call(),
+                let make = || {
+                    let mut req = agent.request(&spec.method, &url);
+                    for (k, v) in &eff_headers {
+                        req = req.set(k, v);
+                    }
+                    if spec.body.is_some() && !has_ct {
+                        req = req.set("content-type", "application/json");
+                    }
+                    req
                 };
+                let resp_result = self.http_send(&session, &url, &make, spec.body.as_deref())?;
                 let response_raw = match resp_result {
                     Ok(r) => r,
                     Err(ureq::Error::Status(code, r)) => {

@@ -28546,3 +28546,206 @@ fn run_events_catch_assertions_the_run_carried_on_past() {
     assert_eq!(row("bad")["kind"], "assert");
     assert!(row("bad")["message"].as_str().unwrap().contains("small amounts"));
 }
+
+// ---------------------------------------------------------------------------
+// #256: how the HTTP sources space their requests, wait out a rate limit and
+// keep a session's cookies.
+// ---------------------------------------------------------------------------
+
+/// One scripted HTTP response: status, extra headers, body. `{port}` in a
+/// header value or the body becomes the script's own port, so a page can link
+/// to the next one.
+type Scripted = (u16, Vec<(&'static str, String)>, String);
+
+/// Serve `responses` in order on 127.0.0.1, one connection each. Each request
+/// is read whole and sent down the channel with the moment it arrived.
+fn http_script(responses: Vec<Scripted>) -> (u16, std::sync::mpsc::Receiver<(std::time::Instant, String)>) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind http script");
+    let port = listener.local_addr().unwrap().port();
+    let count = responses.len();
+    std::thread::spawn(move || {
+        let fill = |t: &str| t.replace("{port}", &port.to_string());
+        for (i, stream) in incoming_bounded(&listener, count).enumerate() {
+            let Ok(mut stream) = stream else { break };
+            let arrived = std::time::Instant::now();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 8192];
+            let head_end = loop {
+                if let Some(p) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break Some(p + 4);
+                }
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break None,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            };
+            if let Some(head_end) = head_end {
+                let head = String::from_utf8_lossy(&buf[..head_end]).to_lowercase();
+                let len = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while buf.len() < head_end + len {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                }
+            }
+            let _ = tx.send((arrived, String::from_utf8_lossy(&buf).to_string()));
+            let (status, headers, body) = &responses[i];
+            let body = fill(body);
+            let mut resp = format!("HTTP/1.1 {} Scripted\r\nContent-Type: application/json\r\n", status);
+            for (k, v) in headers {
+                resp.push_str(&format!("{}: {}\r\n", k, fill(v)));
+            }
+            resp.push_str(&format!("Content-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body));
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (port, rx)
+}
+
+/// src.rest -> snk.csv against `port`; returns the run and the CSV path.
+fn rest_run(engine: &DuckdbEngine, port: u16, extra: Value) -> (duckle_duckdb_engine::RunResult, String, tempfile::TempDir) {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let mut props = json!({ "url": format!("http://127.0.0.1:{}/p1", port), "responsePath": "/items" });
+    for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+        props[k] = v;
+    }
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.rest", props),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    (r, out, tmp)
+}
+
+/// A page of rows with these ids, linking to `next` (with `{port}` filled in).
+fn items(ids: &[u32], next: Option<&str>) -> String {
+    let rows: Vec<Value> = ids.iter().map(|i| json!({ "id": i })).collect();
+    json!({ "items": rows, "next": next }).to_string()
+}
+
+#[test]
+fn src_rest_waits_out_a_rate_limit_as_the_server_asks() {
+    // A 429 is the server saying "not now": the request was not acted on, so it
+    // is sent again after the wait the server names, rather than failing a run
+    // that has already paid for every page before it.
+    let engine = engine_or_skip!();
+    let (port, rx) = http_script(vec![
+        (429, vec![("Retry-After", "1".into())], "slow down".into()),
+        (200, vec![], items(&[1, 2], None)),
+    ]);
+    let (r, out, _tmp) = rest_run(&engine, port, json!({}));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2);
+    let seen: Vec<_> = rx.try_iter().collect();
+    assert_eq!(seen.len(), 2, "the request is sent once more");
+    let waited = seen[1].0.duration_since(seen[0].0);
+    assert!(waited >= std::time::Duration::from_millis(950), "waited only {waited:?} of the 1 s asked");
+}
+
+#[test]
+fn src_rest_gives_up_when_a_rate_limit_does_not_lift() {
+    let engine = engine_or_skip!();
+    let refusals = (0..6).map(|_| (429, vec![("Retry-After", "0".into())], "slow down".into())).collect();
+    let (port, rx) = http_script(refusals);
+    let (r, _out, _tmp) = rest_run(&engine, port, json!({}));
+    assert_eq!(r.status, "error");
+    assert!(r.error.unwrap_or_default().contains("429"), "say what the server answered");
+    assert_eq!(rx.try_iter().count(), 6, "the first try and five more");
+}
+
+#[test]
+fn src_rest_does_not_send_a_request_again_after_a_server_error() {
+    // A 500 may have been acted on, so sending it again could do twice what
+    // was meant once. Only "not now" answers are retried.
+    let engine = engine_or_skip!();
+    let (port, rx) = http_script(vec![(500, vec![], "boom".into()), (200, vec![], items(&[1], None))]);
+    let (r, _out, _tmp) = rest_run(&engine, port, json!({}));
+    assert_eq!(r.status, "error", "a 500 fails the run");
+    assert!(r.error.unwrap_or_default().contains("500"));
+    assert_eq!(rx.try_iter().count(), 1);
+}
+
+#[test]
+fn src_rest_keeps_to_its_requests_per_second() {
+    let engine = engine_or_skip!();
+    let (port, rx) = http_script(vec![
+        (200, vec![], items(&[1], Some("http://127.0.0.1:{port}/p2"))),
+        (200, vec![], items(&[2], Some("http://127.0.0.1:{port}/p3"))),
+        (200, vec![], items(&[3], None)),
+    ]);
+    let (r, out, _tmp) = rest_run(
+        &engine,
+        port,
+        json!({ "paginationType": "nextUrl", "nextUrlPath": "/next", "httpRequestsPerSecond": 4 }),
+    );
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3);
+    let seen: Vec<_> = rx.try_iter().collect();
+    assert_eq!(seen.len(), 3);
+    for pair in seen.windows(2) {
+        let gap = pair[1].0.duration_since(pair[0].0);
+        assert!(gap >= std::time::Duration::from_millis(230), "4 a second is 250 ms apart, got {gap:?}");
+    }
+}
+
+#[test]
+fn src_rest_keeps_the_cookies_a_server_sets_only_when_asked() {
+    // A session cookie set on the first page is what the next page needs.
+    // Kept only when the node asks, and only for that node's run.
+    let engine = engine_or_skip!();
+    for keep in [true, false] {
+        let (port, rx) = http_script(vec![
+            (
+                200,
+                vec![("Set-Cookie", "sid=abc; Path=/; HttpOnly".into())],
+                items(&[1], Some("http://127.0.0.1:{port}/p2")),
+            ),
+            (200, vec![], items(&[2], None)),
+        ]);
+        let (r, _out, _tmp) = rest_run(
+            &engine,
+            port,
+            json!({ "paginationType": "nextUrl", "nextUrlPath": "/next", "httpKeepCookies": keep }),
+        );
+        assert_eq!(r.status, "ok", "{:?}", r.error);
+        let seen: Vec<String> = rx.try_iter().map(|(_, req)| req.to_lowercase()).collect();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[1].contains("cookie: sid=abc"), keep, "keep={keep}, the second request:\n{}", seen[1]);
+    }
+}
+
+#[test]
+fn src_html_waits_out_a_rate_limit_too() {
+    let engine = engine_or_skip!();
+    let page = "<table id=\"t\"><tr><td>a</td></tr><tr><td>b</td></tr></table>";
+    let (port, rx) = http_script(vec![
+        (429, vec![("Retry-After", "0".into())], "slow down".into()),
+        (200, vec![], page.into()),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.html", json!({ "path": format!("http://127.0.0.1:{}/page", port), "rowSelector": "table#t" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(rx.try_iter().count(), 2);
+}
