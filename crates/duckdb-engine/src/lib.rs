@@ -1819,6 +1819,9 @@ impl DuckdbEngine {
         // about retries.
         plan::apply_output_bindings(&mut compiled.stages, &self.output_bindings);
         plan::drop_stages(&mut compiled.stages, &self.skip_nodes);
+        if let Err(e) = crate::subflow::refuse_unfed_inputs(doc, &compiled.stages) {
+            return RunResult::failed(total_start, e.to_string());
+        }
         let compiled = compiled;
 
         // Component-level run log (Splunk / Dynatrace), gated on

@@ -92,7 +92,8 @@ pub fn list_tools() -> Value {
             "Compile a pipeline to SQL without running it. Returns the per-stage SQL on success, or a structured error.",
             json!({ "type": "object", "properties": {
                 "pipeline": { "type": "object", "description": "Inline pipeline object." },
-                "path": { "type": "string", "description": "Path to a pipeline .json (use instead of 'pipeline')." }
+                "path": { "type": "string", "description": "Path to a pipeline .json (use instead of 'pipeline')." },
+                "workspace": { "type": "string", "description": "Workspace root: a Sub-flow node's sub-flow is found in it by id. Defaults to DUCKLE_WORKSPACE." }
             }})),
         tool("run_pipeline",
             "Run a pipeline headlessly through the DuckDB engine. Returns per-node status, row counts, errors and a small result preview. Set 'target' to run only as far as one node and inspect it without executing the rest of the pipeline or any sink past it. Needs a DuckDB binary.",
@@ -123,7 +124,8 @@ pub fn list_tools() -> Value {
             json!({ "type": "object", "properties": {
                 "pipeline": { "type": "object", "description": "Inline pipeline object." },
                 "path": { "type": "string", "description": "Path to a pipeline .json (use instead of 'pipeline')." },
-                "duckdb": { "type": "string", "description": "DuckDB CLI path for lineage resolution. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb' on PATH." }
+                "duckdb": { "type": "string", "description": "DuckDB CLI path for lineage resolution. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb' on PATH." },
+                "workspace": { "type": "string", "description": "Workspace root: a Sub-flow node's sub-flow is found in it by id. Defaults to DUCKLE_WORKSPACE." }
             }})),
         tool("check_node_sql",
             "Bind a pipeline's SQL against its upstream columns WITHOUT running it, and report what DuckDB said: the message, the position in the node's own SQL, and the column it suggests instead of a typo. Also returns each node's inferred output schema. Scope to one node with 'node'. A source's query is sent to a remote system and is reported as not validated rather than checked against DuckDB. Read-only; runs nothing with effects.",
@@ -187,7 +189,8 @@ pub fn list_tools() -> Value {
                 "before": { "type": "object", "description": "Baseline pipeline object." },
                 "after": { "type": "object", "description": "Changed pipeline object." },
                 "beforePath": { "type": "string", "description": "Path to the baseline pipeline .json (use instead of 'before')." },
-                "afterPath": { "type": "string", "description": "Path to the changed pipeline .json (use instead of 'after')." }
+                "afterPath": { "type": "string", "description": "Path to the changed pipeline .json (use instead of 'after')." },
+                "workspace": { "type": "string", "description": "Workspace root: a Sub-flow node's sub-flow is found in it by id. Defaults to DUCKLE_WORKSPACE." }
             }})),
         tool("trust_report",
             "Score a pipeline's trustworthiness and explain every deduction: compile status, structural risks (joins without keys, orphan nodes, no sink), and columns that look like PII but are neither contract-tagged nor masked. Returns a 0-100 score, a letter grade, and the findings each lost point came from. Static by default (no DuckDB binary needed); pass checkDrift:true to also read each source's live schema and deduct for sources that drifted from their declared schema.",
@@ -195,7 +198,7 @@ pub fn list_tools() -> Value {
                 "pipeline": { "type": "object", "description": "Inline pipeline object." },
                 "path": { "type": "string", "description": "Path to a pipeline .json (use instead of 'pipeline')." },
                 "checkDrift": { "type": "boolean", "description": "Also check live schema drift on the sources (needs a DuckDB binary). Default false keeps the report fully static." },
-                "workspace": { "type": "string", "description": "Workspace root to resolve ${workspace}/${date} in source paths (used with checkDrift)." },
+                "workspace": { "type": "string", "description": "Workspace root: a Sub-flow node's sub-flow is found in it by id, and ${workspace}/${date} in source paths resolve against it (with checkDrift)." },
                 "duckdb": { "type": "string", "description": "DuckDB CLI path for checkDrift. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb' on PATH." }
             }})),
         tool("schema_drift",
@@ -506,6 +509,7 @@ fn t_get_component_schema(args: &Value) -> Result<Value, String> {
 }
 
 fn t_validate_pipeline(args: &Value) -> Result<Value, String> {
+    let _workspace = call_workspace(args);
     let (v, _name) = load_pipeline_value(args)?;
     let doc = to_doc(&v)?;
     match compile_pipeline_sql(&doc) {
@@ -667,6 +671,7 @@ fn load_side(args: &Value, inline: &str, path: &str) -> Result<Value, String> {
 }
 
 fn t_diff_pipelines(args: &Value) -> Result<Value, String> {
+    let _workspace = call_workspace(args);
     let before = load_side(args, "before", "beforePath")?;
     let after = load_side(args, "after", "afterPath")?;
     // Shared with the duckle-runner `review` CLI so both report the same diff.
@@ -683,6 +688,7 @@ fn t_diff_pipelines(args: &Value) -> Result<Value, String> {
 /// The scorecard itself lives in the engine so the CLI and the desktop/web
 /// editor report the same numbers.
 fn t_trust_report(args: &Value) -> Result<Value, String> {
+    let _workspace = call_workspace(args);
     let (v, _name) = load_pipeline_value(args)?;
     // Validate the pipeline up front so a malformed document is an explicit
     // tool error, not a low-scoring report (matches verify_pipeline and the
@@ -854,6 +860,7 @@ fn t_backfill(args: &Value) -> Result<Value, String> {
 }
 
 fn t_verify_pipeline(args: &Value) -> Result<Value, String> {
+    let _workspace = call_workspace(args);
     let (v, _name) = load_pipeline_value(args)?;
     let doc = to_doc(&v)?;
 
@@ -992,6 +999,7 @@ fn t_suggest_contracts(args: &Value) -> Result<Value, String> {
 }
 
 fn t_create_pipeline(args: &Value) -> Result<Value, String> {
+    let _workspace = call_workspace(args);
     let name = arg_str(args, "name").ok_or("missing 'name'")?;
     let workspace = arg_str(args, "workspace");
     let dir = arg_str(args, "directory");
@@ -1170,6 +1178,7 @@ fn deep_merge(base: &mut Value, patch: &Value) {
 }
 
 fn t_update_pipeline(args: &Value) -> Result<Value, String> {
+    let _workspace = call_workspace(args);
     let patch = args
         .get("patch")
         .filter(|v| v.is_object())
@@ -1841,6 +1850,30 @@ fn load_pipeline_value(args: &Value) -> Result<(Value, String), String> {
     } else {
         Err("provide either 'pipeline' (object) or 'path' (string)".to_string())
     }
+}
+
+/// DUCKLE_WORKSPACE as it was before a call set it, put back when dropped.
+struct CallWorkspace(Option<std::ffi::OsString>);
+
+impl Drop for CallWorkspace {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(previous) => std::env::set_var("DUCKLE_WORKSPACE", previous),
+            None => std::env::remove_var("DUCKLE_WORKSPACE"),
+        }
+    }
+}
+
+/// The call's own `workspace` as DUCKLE_WORKSPACE while the guard lives; with
+/// none, the server's stays. Compiling expands a Sub-flow node, and the editor
+/// names its sub-flow by pipeline id, found under DUCKLE_WORKSPACE as a run
+/// finds it (t_run_pipeline). Put back afterwards, so it does not reach the
+/// next call.
+fn call_workspace(args: &Value) -> Option<CallWorkspace> {
+    let ws = arg_str(args, "workspace").filter(|w| !w.is_empty())?;
+    let previous = std::env::var_os("DUCKLE_WORKSPACE");
+    std::env::set_var("DUCKLE_WORKSPACE", ws);
+    Some(CallWorkspace(previous))
 }
 
 fn to_doc(v: &Value) -> Result<PipelineDoc, String> {
@@ -3037,5 +3070,88 @@ mod secret_masking {
             on_disk.contains("Pw-typed-1"),
             "the real password was replaced: {on_disk}"
         );
+    }
+}
+
+#[cfg(test)]
+mod subflow_workspace_tests {
+    use super::*;
+
+    /// A sub-flow keeping rows with amount >= 10.
+    fn subflow() -> Value {
+        json!({
+            "nodes": [
+                { "id": "in", "type": "transform", "position": { "x": 0, "y": 0 },
+                  "data": { "label": "In", "componentId": "ctl.subflow.in", "properties": {} } },
+                { "id": "keep", "type": "transform", "position": { "x": 200, "y": 0 },
+                  "data": { "label": "Keep", "componentId": "xf.filter", "properties": { "predicate": "amount >= 10" } } },
+                { "id": "out", "type": "transform", "position": { "x": 400, "y": 0 },
+                  "data": { "label": "Out", "componentId": "ctl.subflow.out", "properties": {} } }
+            ],
+            "edges": [
+                { "id": "a", "source": "in", "target": "keep" },
+                { "id": "b", "source": "keep", "target": "out" }
+            ]
+        })
+    }
+
+    /// A pipeline calling `p_keep` by its id, as the editor saves it.
+    fn caller(sink: &str) -> Value {
+        json!({
+            "name": "caller",
+            "nodes": [
+                { "id": "s", "type": "source", "position": { "x": 0, "y": 0 },
+                  "data": { "label": "In", "componentId": "src.csv", "properties": { "path": "rows.csv", "hasHeader": true } } },
+                { "id": "call", "type": "transform", "position": { "x": 200, "y": 0 },
+                  "data": { "label": "Sub-flow", "componentId": "ctl.subflow", "properties": { "subflowRef": "p_keep" } } },
+                { "id": "k", "type": "sink", "position": { "x": 400, "y": 0 },
+                  "data": { "label": "Out", "componentId": "snk.csv", "properties": { "path": sink, "hasHeader": true } } }
+            ],
+            "edges": [
+                { "id": "e1", "source": "s", "target": "call" },
+                { "id": "e2", "source": "call", "target": "k" }
+            ]
+        })
+    }
+
+    /// Every tool that compiles without running expands a Sub-flow node, and
+    /// finds a sub-flow named by id in the call's `workspace`, as run_pipeline
+    /// does. The server's own DUCKLE_WORKSPACE is back once each call returns.
+    #[test]
+    fn the_tools_that_compile_find_a_subflow_by_id_in_the_call_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(ws.join("pipelines").join("p_keep.json"), subflow().to_string()).unwrap();
+        std::fs::write(ws.join("pipelines").join("p_caller.json"), caller("out.csv").to_string()).unwrap();
+        let w = ws.to_string_lossy().to_string();
+        let before = std::env::var_os("DUCKLE_WORKSPACE");
+
+        let validate = t_validate_pipeline(&json!({ "pipeline": caller("out.csv"), "workspace": w })).unwrap();
+        assert_eq!(validate["ok"], true, "validate_pipeline: {validate}");
+
+        let verify = t_verify_pipeline(&json!({ "pipeline": caller("out.csv"), "workspace": w })).unwrap();
+        assert_eq!(verify["compile"]["ok"], true, "verify_pipeline: {verify}");
+
+        let diff = t_diff_pipelines(&json!({
+            "before": caller("out.csv"), "after": caller("elsewhere.csv"), "workspace": w
+        }))
+        .unwrap();
+        assert_eq!(diff["summary"]["planChanged"], true, "diff_pipelines: {diff}");
+
+        let trust = t_trust_report(&json!({ "pipeline": caller("out.csv"), "workspace": w })).unwrap();
+        assert!(!trust.to_string().contains("does_not_compile"), "trust_report: {trust}");
+
+        let created = t_create_pipeline(&json!({
+            "name": "second caller", "id": "p_second", "workspace": w, "pipeline": caller("out.csv")
+        }));
+        assert!(created.is_ok(), "create_pipeline: {created:?}");
+
+        let updated = t_update_pipeline(&json!({
+            "workspace": w, "id": "p_caller", "patch": { "name": "renamed caller" }
+        }));
+        assert!(updated.is_ok(), "update_pipeline: {updated:?}");
+
+        assert_eq!(std::env::var_os("DUCKLE_WORKSPACE"), before, "a call's workspace outlived it");
     }
 }

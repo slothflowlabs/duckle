@@ -4278,26 +4278,22 @@ fn build_stage(
     } else if component_id == crate::subflow::INPUT {
         // A sub-flow's way in. Called from another pipeline it is replaced by
         // what the caller wires to its port (crate::subflow); run on its own,
-        // it reads its sample file.
-        let sample = string_prop(&props, "samplePath")
-            .filter(|s| !s.trim().is_empty())
-            .ok_or_else(|| {
-                EngineError::Config(format!(
-                    "{} `{}`: a sub-flow's input has rows only when a pipeline runs the sub-flow \
-                     through a Sub-flow node. To run it on its own, give the input a sample file \
-                     (samplePath).",
-                    component_id, node.id
-                ))
-            })?;
-        (
-            format!(
+        // it reads its sample file. With no sample it still compiles, as an
+        // empty relation, and a run that would read it is refused before
+        // anything executes (subflow::refuse_unfed_inputs), so no run reads it.
+        let sql = match crate::subflow::sample_path(node) {
+            Some(sample) => format!(
                 "CREATE OR REPLACE VIEW {} AS SELECT * FROM '{}'",
                 quote_ident(&node.id),
                 sql_escape(&sample)
             ),
-            StageKind::View,
-            None,
-        )
+            None => format!(
+                "CREATE OR REPLACE VIEW {} AS SELECT NULL AS {} WHERE false",
+                quote_ident(&node.id),
+                quote_ident("no sample file")
+            ),
+        };
+        (sql, StageKind::View, None)
     } else if component_id == crate::subflow::OUTPUT || component_id == crate::subflow::STAND_IN {
         // A sub-flow's way out, or what a call leaves under its own id: a
         // pass-through, so the rows leaving show here.

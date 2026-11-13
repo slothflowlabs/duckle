@@ -56,6 +56,50 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
 /// Reported all at once, and every check runs even after one fails: an operator
 /// fixing a production activation should not discover the second problem after
 /// fixing the first.
+/// A pipeline as `release` stored it, found by the reference a Sub-flow node
+/// holds: a stored path, or an id or name - the file's stem - looked for in
+/// `pipelines/` first and then anywhere, as a run looks in the workspace.
+fn stored_pipeline(
+    workspace: &Path,
+    release: &Release,
+    reference: &str,
+) -> Result<(String, duckle_duckdb_engine::PipelineDoc), duckle_duckdb_engine::EngineError> {
+    use duckle_duckdb_engine::EngineError;
+    let files = &release.body.files;
+    let stem = Path::new(reference)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| reference.to_string());
+    let stem = stem.strip_suffix(".pipeline").unwrap_or(&stem).to_string();
+    let names = [format!("{stem}.json"), format!("{stem}.pipeline.json")];
+    let preferred = [reference.replace('\\', "/"), format!("pipelines/{}", names[0]), format!("pipelines/{}", names[1])];
+    let rel = match preferred.iter().find(|rel| files.contains_key(*rel)) {
+        Some(rel) => rel.clone(),
+        None => {
+            let named: Vec<&String> = files
+                .keys()
+                .filter(|rel| names.iter().any(|n| rel.rsplit('/').next() == Some(n.as_str())))
+                .collect();
+            match named.as_slice() {
+                [one] => (*one).clone(),
+                [] => return Err(EngineError::Config(format!("this release holds no pipeline {reference}"))),
+                many => {
+                    return Err(EngineError::Config(format!(
+                        "this release holds {} pipelines named {reference}",
+                        many.len()
+                    )))
+                }
+            }
+        }
+    };
+    let bytes = release::get_object(workspace, &files[&rel])
+        .map_err(|e| EngineError::Config(format!("{rel}: {e}")))?;
+    let mut doc: duckle_duckdb_engine::PipelineDoc =
+        serde_json::from_slice(&bytes).map_err(|e| EngineError::Config(format!("{rel}: {e}")))?;
+    let _ = duckle_secrets::resolve_connection_refs(workspace, &mut doc.nodes);
+    Ok((rel, doc))
+}
+
 fn dependency_gate(workspace: &Path, release: &Release) -> Vec<String> {
     let mut problems = Vec::new();
 
@@ -95,7 +139,14 @@ fn dependency_gate(workspace: &Path, release: &Release) -> Vec<String> {
                 // reports "does not compile" for a pipeline that runs, and
                 // refuses to cut the release over it.
                 let _ = duckle_secrets::resolve_connection_refs(workspace, &mut d.nodes);
-                duckle_duckdb_engine::compile_pipeline_sql(&d).map_err(|e| e.to_string())
+                // A Sub-flow node's sub-flow comes from this release too, as the
+                // pipeline itself does: activation puts the two on disk together.
+                let expanded = duckle_duckdb_engine::subflow::expand_with(&d, &|reference| {
+                    stored_pipeline(workspace, release, reference)
+                })
+                .map_err(|e| e.to_string())?;
+                duckle_duckdb_engine::compile_pipeline_sql(expanded.as_ref().unwrap_or(&d))
+                    .map_err(|e| e.to_string())
             });
         if let Err(e) = compiled {
             problems.push(format!("{rel} does not compile: {e}"));
@@ -587,5 +638,52 @@ mod tests {
         let problems = dependency_gate(ws, &r);
         assert!(problems.iter().any(|p| p.contains("\"one\"")), "{problems:?}");
         assert!(problems.iter().any(|p| p.contains("\"two\"")), "{problems:?}");
+    }
+
+    /// A pipeline calling a sub-flow verifies against the release's own copy of
+    /// it. The editor names a sub-flow by pipeline id and compiling expands it,
+    /// so this gate reads the sub-flow too - and, as for the pipeline itself,
+    /// from what the release stored rather than from the workspace, or deleting
+    /// the sub-flow today would stop yesterday's release verifying, and with it
+    /// the rollback to it.
+    #[test]
+    fn a_pipeline_calling_a_subflow_verifies_against_the_releases_own_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(
+            ws.join("pipelines/p_keep.json"),
+            r#"{"formatVersion":1,"name":"keep","nodes":[
+                {"id":"in","type":"transform","position":{"x":0,"y":0},
+                 "data":{"label":"In","componentId":"ctl.subflow.in","properties":{}}},
+                {"id":"keep","type":"transform","position":{"x":200,"y":0},
+                 "data":{"label":"Keep","componentId":"xf.filter","properties":{"predicate":"amount >= 10"}}},
+                {"id":"out","type":"transform","position":{"x":400,"y":0},
+                 "data":{"label":"Out","componentId":"ctl.subflow.out","properties":{}}}],
+                "edges":[{"id":"a","source":"in","target":"keep"},{"id":"b","source":"keep","target":"out"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            ws.join("pipelines/p_caller.json"),
+            r#"{"formatVersion":1,"name":"caller","nodes":[
+                {"id":"s","type":"source","position":{"x":0,"y":0},
+                 "data":{"label":"In","componentId":"src.csv","properties":{"path":"a.csv"}}},
+                {"id":"call","type":"transform","position":{"x":200,"y":0},
+                 "data":{"label":"Sub-flow","componentId":"ctl.subflow","properties":{"subflowRef":"p_keep"}}},
+                {"id":"k","type":"sink","position":{"x":400,"y":0},
+                 "data":{"label":"Out","componentId":"snk.csv","properties":{"path":"out.csv"}}}],
+                "edges":[{"id":"e1","source":"s","target":"call"},{"id":"e2","source":"call","target":"k"}]}"#,
+        )
+        .unwrap();
+        let r = release::build(ws).unwrap();
+        release::save(ws, &r).unwrap();
+        assert!(dependency_gate(ws, &r).is_empty(), "{:?}", dependency_gate(ws, &r));
+
+        std::fs::remove_file(ws.join("pipelines/p_keep.json")).unwrap();
+        assert!(
+            dependency_gate(ws, &r).is_empty(),
+            "the release stored its sub-flow, so the workspace losing it must not matter: {:?}",
+            dependency_gate(ws, &r)
+        );
     }
 }

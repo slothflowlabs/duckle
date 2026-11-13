@@ -45,28 +45,63 @@ pub fn port_of(n: &PipelineNode) -> String {
         .to_string()
 }
 
+/// The sample file an input reads when its sub-flow runs on its own.
+pub fn sample_path(n: &PipelineNode) -> Option<String> {
+    prop(n, "samplePath").map(str::trim).filter(|p| !p.is_empty()).map(str::to_string)
+}
+
+/// Refuse a run that would read an input with no sample: a sub-flow run on its
+/// own, with nothing to feed that input. Checked against the stages the run
+/// will execute, so running only a branch the input does not feed is fine.
+/// Not a compile error, because a sub-flow is a whole pipeline that every
+/// check reading pipelines without running them takes like any other.
+pub fn refuse_unfed_inputs(doc: &PipelineDoc, stages: &[crate::plan::Stage]) -> Result<(), EngineError> {
+    for stage in stages.iter().filter(|s| s.component_id == INPUT) {
+        let fed = doc.nodes.iter().any(|n| n.id == stage.node_id && sample_path(n).is_some());
+        if !fed {
+            return Err(EngineError::Config(format!(
+                "{} `{}`: a sub-flow's input has rows only when a pipeline runs the sub-flow \
+                 through a Sub-flow node. To run it on its own, give the input a sample file \
+                 (samplePath).",
+                INPUT, stage.node_id
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn handle(h: &Option<String>) -> &str {
     h.as_deref().filter(|h| !h.is_empty()).unwrap_or("main")
 }
 
+/// Reads a sub-flow from the reference a Sub-flow node holds: where it was read
+/// from, and the document.
+pub type Loader<'a> = dyn Fn(&str) -> Result<(String, PipelineDoc), EngineError> + 'a;
+
 /// `doc` with every sub-flow call expanded; None when it makes none. `subs` are
 /// the variables the run was handed (a For Each child's, a batch item's): they
 /// reach a sub-flow's steps as they reach the run's own.
+///
+/// Each sub-flow is read the way a Run Job's child is: found by path or id, the
+/// workspace's variables and the run's put in, saved connections applied. A run
+/// resolves only the document it was handed, and a sub-flow is not it.
 pub fn expand(doc: &PipelineDoc, subs: &HashMap<String, String>) -> Result<Option<PipelineDoc>, EngineError> {
+    expand_with(doc, &|reference| crate::connectors::load_child_pipeline(reference, subs))
+}
+
+/// [`expand`], reading each sub-flow with `load`: a release's gate reads the
+/// copy the release stored, not the workspace's.
+pub fn expand_with(doc: &PipelineDoc, load: &Loader) -> Result<Option<PipelineDoc>, EngineError> {
     if !doc.nodes.iter().any(|n| component(n) == CALL) {
         return Ok(None);
     }
     let mut out = doc.clone();
-    expand_calls(&mut out, subs, &mut Vec::new())?;
+    expand_calls(&mut out, load, &mut Vec::new())?;
     Ok(Some(out))
 }
 
 /// `stack` holds the path of each sub-flow being expanded.
-fn expand_calls(
-    doc: &mut PipelineDoc,
-    subs: &HashMap<String, String>,
-    stack: &mut Vec<String>,
-) -> Result<(), EngineError> {
+fn expand_calls(doc: &mut PipelineDoc, load: &Loader, stack: &mut Vec<String>) -> Result<(), EngineError> {
     let calls: Vec<PipelineNode> = doc.nodes.iter().filter(|n| component(n) == CALL).cloned().collect();
     for call in calls {
         let reference = prop(&call, "subflowRef")
@@ -79,10 +114,7 @@ fn expand_calls(
                 ))
             })?
             .to_string();
-        // Read the way a Run Job's child is read: found by path or id, the
-        // workspace's variables and the run's put in, saved connections applied.
-        // A run resolves only the document it was handed, and this is not it.
-        let (path, mut child) = crate::connectors::load_child_pipeline(&reference, subs).map_err(|e| {
+        let (path, mut child) = load(&reference).map_err(|e| {
             let why = match e {
                 EngineError::Config(why) => why,
                 other => other.to_string(),
@@ -106,7 +138,7 @@ fn expand_calls(
             )));
         }
         stack.push(path.clone());
-        expand_calls(&mut child, subs, stack)?;
+        expand_calls(&mut child, load, stack)?;
         stack.pop();
         splice(doc, &call, &child, &path)?;
     }

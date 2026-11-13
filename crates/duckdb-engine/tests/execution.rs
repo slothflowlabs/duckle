@@ -28031,6 +28031,43 @@ fn a_subflow_in_a_batch_item_gets_the_items_variables() {
 }
 
 #[test]
+fn a_subflow_with_no_sample_compiles_but_will_not_run_on_its_own() {
+    // A sub-flow is a whole pipeline, and every check that compiles without
+    // running (validate, a release, a trust score) reads it like any other. Run
+    // on its own, an input with no sample has no rows to give, so the run is
+    // refused before anything executes.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = doubling_subflow(tmp.path(), None);
+    let d: duckle_duckdb_engine::PipelineDoc =
+        serde_json::from_str(&std::fs::read_to_string(&sub).unwrap()).unwrap();
+    duckle_duckdb_engine::plan::compile(&d).expect("a sub-flow compiles on its own");
+    let r = engine.execute_pipeline(&d);
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("give the input a sample file"), "say how to run it on its own: {err}");
+}
+
+#[test]
+fn a_subflow_branch_its_input_does_not_feed_runs_without_a_sample() {
+    // Run to here on a branch the input does not feed reads nothing from it.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "side.csv", "id\n1\n2\n");
+    let d = doc(
+        json!([
+            node("in", "ctl.subflow.in", json!({})),
+            node("out", "ctl.subflow.out", json!({})),
+            node("side", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("tidy", "xf.filter", json!({ "predicate": "id > 1" })),
+        ]),
+        json!([main_edge("a", "in", "out"), main_edge("b", "side", "tidy")]),
+    );
+    let r = engine.execute_pipeline_with_events(&d, Some("tidy"), None, |_| {});
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+}
+
+#[test]
 fn a_subflow_runs_on_its_own_from_its_sample() {
     // Opened and run by itself, the input reads its sample file; through a
     // call the sample is never read.

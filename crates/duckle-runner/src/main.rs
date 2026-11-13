@@ -1966,6 +1966,10 @@ fn run_review() -> Result<i32, String> {
     };
     let _ = duckle_secrets::resolve_connection_refs_value(&ws_for(&before), &mut bv);
     let _ = duckle_secrets::resolve_connection_refs_value(&ws_for(&after), &mut av);
+    // A Sub-flow node is expanded as each side compiles, and the editor names
+    // its sub-flow by pipeline id: found in the workspace of the version under
+    // review, as a run of it finds it (run_with). Both sides use that one.
+    std::env::set_var("DUCKLE_WORKSPACE", ws_for(&after));
 
     // Compile status of each side. A change that breaks compilation is the gate.
     let compiles = |v: &serde_json::Value| -> Result<(), String> {
