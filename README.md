@@ -2013,8 +2013,9 @@ whether the deletion runs, so the two cannot disagree about what would go.
 
 ### Reports CI already understands (`--format`)
 
-`validate`, `test` and `review` emit the shapes CI systems and agents actually
-consume, so nothing has to scrape console text:
+`validate`, `test`, `review`, `contracts check` and `policy check` emit the
+shapes CI systems and agents actually consume, so nothing has to scrape console
+text:
 
 ```bash
 duckle-runner validate --format json    # versioned envelope
@@ -2022,6 +2023,7 @@ duckle-runner validate --format junit   # every CI renders this as a test report
 duckle-runner validate --format sarif   # GitHub Code Scanning, and most editors
 duckle-runner test     --format junit   # the same three, from the same module
 duckle-runner review --before old.json --after new.json --format junit
+duckle-runner policy check --format sarif
 ```
 
 For `review` the gate is the after side: a `--before` version that does not
@@ -2979,6 +2981,22 @@ could switch the boundary off from inside the thing being bounded.
 A policy file that is named and cannot be read **refuses the run**. Falling back
 to "no policy" would mean a typo in the environment silently removes the
 boundary. With no policy configured at all, nothing else changes.
+
+**Check it in CI before anything runs** (`policy check`). Every pipeline in the
+workspace, or the ones you name, is checked against the effective policy the way
+a run checks it, with saved connections resolved and sub-flows expanded, and
+every violation is listed rather than the first:
+
+```bash
+duckle-runner policy check                                  # every pipeline in the workspace
+duckle-runner policy check --format sarif pipelines/load.json
+```
+
+It exits 1 on a violation, and 2 when there is no policy to check against: a
+gate with nothing to check would pass everything. It reports violations under
+`mode: report` too, so a policy can be tried in CI before it is enforced. A
+database's `host` counts as a domain, so a sink pointed at a server outside
+`network.allowedDomains` is refused when its pipeline is planned.
 
 ### Catch the run that looks fine and is not (`qa.baseline`)
 

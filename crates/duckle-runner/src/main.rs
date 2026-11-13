@@ -32,6 +32,7 @@ mod runsdiff_cmd;
 mod sql_cmd;
 mod capabilities;
 mod contracts_cmd;
+mod policy_cmd;
 mod report;
 mod retention;
 mod audit;
@@ -2631,6 +2632,10 @@ fn main() -> ExitCode {
     // `contracts` -> will this change break something downstream? (#302)
     if std::env::args().nth(1).as_deref() == Some("contracts") {
         return contracts_cmd::run();
+    }
+    // `policy check` -> every pipeline against the environment's policy (#312).
+    if std::env::args().nth(1).as_deref() == Some("policy") {
+        return policy_cmd::run();
     }
     // `freshness` -> which assets are past the age they declared (#304).
     if std::env::args().nth(1).as_deref() == Some("freshness") {

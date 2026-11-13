@@ -754,9 +754,10 @@ pub fn outbound_host_allowed(netloc: &str) -> Result<(), String> {
 
 /// The host out of a bare host, a `host:port`, or a URL.
 ///
-/// Separate from `host_of` because that one is fed node PROPERTIES, which are
-/// always URLs, and returns None without a scheme. The resolver is handed a
-/// bare `host:port`, and a None there would mean "allowed".
+/// Separate from `host_of` because that one reads a host out of a URL-valued
+/// property and returns None without a scheme. The resolver is handed a bare
+/// `host:port`, as a node's `host` property is, and a None there would mean
+/// "allowed".
 ///
 /// IPv6 literals are unbracketed rather than cut at their first colon.
 fn netloc_host(netloc: &str) -> String {
@@ -863,7 +864,15 @@ pub fn check(policy: &Policy, doc: &PipelineDoc) -> Vec<Violation> {
         if let Some(allowed) = &policy.allowed_domains {
             for key in ["url", "uri", "endpoint", "host", "baseUrl", "webhookUrl", "path"] {
                 let Some(value) = str_prop(key) else { continue };
-                let Some(host) = host_of(&value) else { continue };
+                // A `host` (a database's, say) is a bare host, read the way the
+                // run-time check reads a netloc. Every other key names a host
+                // only inside a URL: a `path` without a scheme is a local file.
+                let host = if key == "host" {
+                    Some(netloc_host(&value)).filter(|h| !h.is_empty())
+                } else {
+                    host_of(&value)
+                };
+                let Some(host) = host else { continue };
                 if !host_allowed(allowed, &host) {
                     out.push(Violation {
                         node: node.id.clone(),
@@ -1553,6 +1562,23 @@ mod tests {
         assert_eq!(check(&p, &d).len(), 2);
         let err = enforce(&p, &d).unwrap_err().to_string();
         assert!(err.contains("code.shell") && err.contains("production"), "{err}");
+    }
+
+    /// A database's `host` is a bare host, never a URL, and the domain rule is
+    /// about every host a pipeline reaches. Read as a URL it yielded nothing, so
+    /// a sink writing to any database host passed the allowlist.
+    #[test]
+    fn a_bare_database_host_is_held_to_the_allowed_domains() {
+        let p = policy_from("network:\n  allowedDomains:\n    - example.com\n");
+        let to = |host: &str| {
+            doc_of(serde_json::json!([node("w", "snk.postgres", serde_json::json!({ "host": host }))]))
+        };
+        assert_eq!(check(&p, &to("db.evil.example.org")).len(), 1, "a host outside the list");
+        assert!(check(&p, &to("db.example.com:5432")).is_empty(), "a port is not part of the host");
+        assert!(check(&p, &to("[::1]:5432")).len() == 1, "an IPv6 literal is a host too");
+        // Only `host` is read bare: a `path` without a scheme is a local file.
+        let file = doc_of(serde_json::json!([node("w", "snk.csv", serde_json::json!({ "path": "out.csv" }))]));
+        assert!(check(&p, &file).is_empty());
     }
 
     /// A string prefix is not a containment test. `/var/lake/development` is
