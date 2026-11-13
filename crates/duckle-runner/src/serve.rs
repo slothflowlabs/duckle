@@ -2960,6 +2960,20 @@ fn dispatch_console(req: &Request, state: &Arc<State>, who: console_auth::Identi
                 None => return respond_err("400 Bad Request", "missing file"),
             };
             let params = parse_run_params(body.get("params"));
+            // The lock the async route and a scheduled run take. c928dd61 gave it to
+            // the async route only, and the console's Run button posts here, so a run
+            // started from the console went ahead beside a scheduled run of the same
+            // pipeline, unseen by any overlap policy. Held until the run returns,
+            // which this request waits for.
+            let pipeline_id = match resolve_in_workspace(&state.workspace, &file) {
+                Ok(p) => p.file_stem().map_or_else(|| "pipeline".into(), |s| s.to_string_lossy().into_owned()),
+                Err(e) => return respond_err("400 Bad Request", &e),
+            };
+            let _run_lock =
+                match duckle_duckdb_engine::runlock::claim_for_run(&state.workspace, &pipeline_id) {
+                    Ok(l) => l,
+                    Err(e) => return respond_err("409 Conflict", &e),
+                };
             match execute_one(state, &file, "manual", &params) {
                 Ok(v) => respond_json(&v),
                 Err(e) => respond_err("400 Bad Request", &e),
@@ -8610,6 +8624,36 @@ mod tests {
         let e = refused(serde_json::json!({ "id": "p", "enabled": true, "intervalSeconds": 60, "misfire": "often" }));
         assert!(e.contains("skip, latest or all"), "{e}");
         assert_eq!(load_schedules(&state).unwrap()["p"]["overlap"], "queue", "a refused save changed it");
+    }
+
+    /// The console's Run takes the lock a scheduled run takes. c928dd61 gave it to
+    /// the async route, but the console's button posts to this one, so a run
+    /// started from the console went ahead beside a scheduled run of the same
+    /// pipeline, and no overlap policy could see it.
+    #[test]
+    fn the_consoles_run_takes_the_lock_a_scheduled_run_takes() {
+        let Ok(duckdb) = std::env::var("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipped: needs DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let (_tmp, ws, _pipes) = overlap_workspace(0);
+        let state = local_state_using(&ws, duckdb.into());
+        let run = || {
+            let mut req = request("POST", "/api/run", None);
+            req.body = serde_json::to_vec(&serde_json::json!({ "file": "pipelines/p.json" })).unwrap();
+            route_console(&req, &state)
+        };
+
+        let scheduled = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+        let refused = run();
+        assert_eq!(refused.code(), 409, "{}", String::from_utf8_lossy(&refused.body));
+        assert!(statuses_of_p(&ws).is_empty(), "it ran beside the scheduled run");
+
+        drop(scheduled);
+        let ran = run();
+        assert_eq!(ran.code(), 200, "{}", String::from_utf8_lossy(&ran.body));
+        assert_eq!(statuses_of_p(&ws), vec!["ok"]);
+        assert!(duckle_duckdb_engine::runlock::try_acquire(&ws, "p").is_some(), "the lock outlived the run");
     }
 
     /// #317: a run the editor starts is held to the pipeline's parameter
