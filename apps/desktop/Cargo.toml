@@ -72,6 +72,14 @@ include_dir = "0.7"
 # staging them to disk on first use. Compressed at build time by build.rs.
 zstd = "0.14"
 
+# The fs-scope test reads capabilities/default.json into Tauri's own scope,
+# which is built from an app: tauri::test::mock_app. macOS and Linux only:
+# there `**` stops at a dot folder, which is what it checks; and on Windows a
+# test binary built with this feature exits STATUS_ENTRYPOINT_NOT_FOUND before
+# any test runs.
+[target.'cfg(unix)'.dev-dependencies]
+tauri = { workspace = true, features = ["test"] }
+
 [features]
 # Required for release builds. Without this feature, tauri-codegen
 # generates an asset resolver that points at devUrl

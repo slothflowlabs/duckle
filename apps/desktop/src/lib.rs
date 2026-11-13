@@ -2883,3 +2883,54 @@ mod tests {
         assert!(plans_list(ws).unwrap().is_empty());
     }
 }
+
+#[cfg(all(test, unix))]
+mod fs_scope_tests {
+    /// The recycle bin is `.duckle/trash` inside the workspace, and the fs
+    /// plugin checks every call against Tauri's scope, whose `**` does not match
+    /// a folder named with a leading dot on macOS and Linux (dotfiles are hidden
+    /// there). This reads the real capability file into Tauri's own scope; CI
+    /// runs it on both.
+    #[test]
+    fn the_capability_scope_reaches_the_recycle_bin() {
+        let caps: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let allow: Vec<std::path::PathBuf> = caps["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["identifier"] == "fs:scope")
+            .expect("an fs:scope entry")["allow"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["path"].as_str().unwrap().into())
+            .collect();
+        let app = tauri::test::mock_app();
+        let scope_of = |allow: Vec<std::path::PathBuf>| {
+            tauri::scope::fs::Scope::new(
+                &app,
+                &tauri::utils::config::FsScope::Scope { allow, deny: vec![], require_literal_leading_dot: None },
+            )
+            .unwrap()
+        };
+        let scope = scope_of(allow);
+
+        let base = std::env::temp_dir().join(format!("duckle-scope-{}", std::process::id()));
+        let ws = base.join("workspace");
+        let trash = ws.join(".duckle").join("trash");
+        let entry = trash.join("1700000000000__p_x.json");
+        let pipeline = ws.join("pipelines").join("p_x.json");
+        std::fs::create_dir_all(&trash).unwrap();
+        std::fs::create_dir_all(pipeline.parent().unwrap()).unwrap();
+        std::fs::write(&entry, "{}").unwrap();
+        std::fs::write(&pipeline, "{}").unwrap();
+
+        let reached = [&pipeline, &trash, &entry].map(|p| scope.is_allowed(p));
+        // Why the two .duckle entries exist: `**` alone stops at the dot.
+        let star_only = scope_of(vec!["**".into()]).is_allowed(&entry);
+        let _ = std::fs::remove_dir_all(&base);
+        assert_eq!(reached, [true, true, true], "a workspace pipeline, the bin, an entry in it");
+        assert!(!star_only, "`**` alone reached .duckle/trash, so the two entries are not needed");
+    }
+}
