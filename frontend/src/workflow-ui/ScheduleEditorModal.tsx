@@ -49,7 +49,16 @@ type Draft = {
     watchRecursive: boolean;
     /** #317: as each parameter's control shows it. */
     params: Record<string, string>;
+    /** #296: what becomes of an occurrence that comes due while the last run is still going. */
+    overlap: NonNullable<Schedule['overlap']>;
 };
+
+const OVERLAP_CHOICES: { value: Draft['overlap']; label: string }[] = [
+    { value: 'skip', label: 'Skip it' },
+    { value: 'queue', label: 'Run it after the current run' },
+    { value: 'replace', label: 'Stop the current run and run it' },
+    { value: 'allow', label: 'Run both at once' },
+];
 
 const CRON_PRESETS: { label: string; expr: string }[] = [
     { label: 'Every minute', expr: '0 * * * * *' },
@@ -116,6 +125,7 @@ export default function ScheduleEditorModal({
             watchPath: '',
             watchRecursive: true,
             params: {},
+            overlap: 'skip',
         });
         setError(null);
     };
@@ -137,6 +147,7 @@ export default function ScheduleEditorModal({
             params: Object.fromEntries(
                 Object.entries(s.params ?? {}).map(([k, v]) => [k, declared[k] ? toParamInput(declared[k], v) : v]),
             ),
+            overlap: s.overlap ?? 'skip',
         });
         setError(null);
     };
@@ -170,7 +181,7 @@ export default function ScheduleEditorModal({
             : undefined;
         const draft = scheduleForSave(
             schedules.find(s => s.id === editing.id),
-            { id: editing.id, pipelineId, name: editing.name, enabled: editing.enabled, kind, params },
+            { id: editing.id, pipelineId, name: editing.name, enabled: editing.enabled, kind, params, overlap: editing.overlap },
         );
         try {
             await scheduleUpsert(draft);
@@ -637,6 +648,24 @@ function ScheduleForm({
                     </span>
                 </div>
             )}
+            <div className="modal-field">
+                <label className="modal-field-label">If the last run is still going</label>
+                <select
+                    className="modal-input modal-select"
+                    value={draft.overlap}
+                    onChange={e => onChange({ ...draft, overlap: e.target.value as Draft['overlap'] })}
+                >
+                    {OVERLAP_CHOICES.map(c => (
+                        <option key={c.value} value={c.value}>
+                            {c.label}
+                        </option>
+                    ))}
+                </select>
+                <p className="modal-field-hint">
+                    Only one run waits at a time. Stopping the current run ends only a run a schedule
+                    started, never one started with Run now.
+                </p>
+            </div>
             <div className="modal-field">
                 <label className="schedule-toggle">
                     <input

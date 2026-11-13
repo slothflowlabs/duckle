@@ -1394,6 +1394,20 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     );
 }
 
+// #296: the Schedules dialog saves its overlap choice, and a save that does not
+// mention one keeps what the schedule has.
+{
+    const loaded = {
+        id: 's1', pipeline_id: 'p', name: 'n', enabled: true,
+        kind: { type: 'interval' as const, seconds: 60 }, overlap: 'queue' as const,
+    };
+    const base = { id: 's1', pipelineId: 'p', name: 'n', enabled: true, kind: loaded.kind };
+    const kept = scheduleForSave(loaded, base);
+    check('#296: a save that does not mention the overlap policy keeps it', kept.overlap === 'queue', JSON.stringify(kept));
+    const chosen = scheduleForSave(loaded, { ...base, overlap: 'replace' });
+    check("#296: the dialog's overlap choice is saved", chosen.overlap === 'replace', JSON.stringify(chosen));
+}
+
 // #384: a tour card is as tall as its text and the font size make it, and on a first run
 // its Next button is the only way forward. A collapsed bottom panel in a 915px window, with
 // a card taller than the old fixed guess, pushed the buttons off the window.

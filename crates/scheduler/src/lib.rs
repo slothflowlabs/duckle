@@ -63,6 +63,37 @@ struct SchedulerInner {
     watchers: HashMap<String, Debouncer<RecommendedWatcher>>,
     /// Receiver for file-watch fires; taken by `spawn_ticker`.
     fire_rx: Option<UnboundedReceiver<String>>,
+    /// #296: the occurrence each schedule has waiting for the run in its way,
+    /// under `overlap: queue` or `replace`. In memory: this scheduler keeps no
+    /// ledger, so a waiting occurrence does not outlive the app.
+    waiting: HashMap<String, duckle_duckdb_engine::occurrences::Occurrence>,
+    /// #296: the cancel handle of each run a schedule started that is still going,
+    /// by schedule id, with its pipeline, for `overlap: replace`.
+    scheduled_runs: HashMap<String, (String, DuckdbEngine)>,
+}
+
+/// Holds a scheduled run's cancel handle in the scheduler while it runs, and
+/// removes it however the run ends.
+struct ScheduledRun {
+    inner: Arc<Mutex<SchedulerInner>>,
+    id: String,
+}
+
+impl ScheduledRun {
+    fn hold(inner: &Arc<Mutex<SchedulerInner>>, id: &str, pipeline_id: &str, engine: &DuckdbEngine) -> Self {
+        if let Ok(mut g) = inner.lock() {
+            g.scheduled_runs.insert(id.to_string(), (pipeline_id.to_string(), engine.clone()));
+        }
+        Self { inner: Arc::clone(inner), id: id.to_string() }
+    }
+}
+
+impl Drop for ScheduledRun {
+    fn drop(&mut self) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.scheduled_runs.remove(&self.id);
+        }
+    }
 }
 
 /// What a schedule locks when it fires, if any one thing.
@@ -283,6 +314,8 @@ impl Scheduler {
                 load_error: None,
                 watchers: HashMap::new(),
                 fire_rx: Some(fire_rx),
+                waiting: HashMap::new(),
+                scheduled_runs: HashMap::new(),
             })),
             engine,
             fire_tx,
@@ -507,12 +540,12 @@ impl Scheduler {
                 }
             },
         };
-        self.run_now_claimed(id).await
+        self.run_now_claimed(id, false).await
     }
 
     /// The body of [`run_now`](Self::run_now), for a caller that already holds
     /// the run lock. Private: see the note there on why the order matters.
-    async fn run_now_claimed(&self, id: &str) -> Result<RunResult, String> {
+    async fn run_now_claimed(&self, id: &str, scheduled: bool) -> Result<RunResult, String> {
         let (workspace, sched) = {
             let g = self.inner.lock().expect("scheduler poisoned");
             let s = g
@@ -574,6 +607,9 @@ impl Scheduler {
         // A fresh per-run cancel scope so concurrent scheduled runs (and the
         // interactive run) don't share or reset each other's cancellation.
         let engine = self.engine.for_new_run();
+        // #296: a scheduled run's cancel handle, for `overlap: replace`. Never a run
+        // a person started from the dialog: a schedule coming due does not end one.
+        let _registered = scheduled.then(|| ScheduledRun::hold(&self.inner, id, &pipeline_id, &engine));
         let started = Utc::now();
         // Log scheduled runs under the pipeline id (the scheduler has no
         // friendly name handy) so they still land in the per-pipeline log.
@@ -764,7 +800,7 @@ impl Scheduler {
         // The caller already holds the run lock for this pipeline and the
         // lock is not reentrant, so this takes the body rather than the public
         // entry point.
-        let Err(e) = self.run_now_claimed(id).await else {
+        let Err(e) = self.run_now_claimed(id, true).await else {
             return;
         };
         warn!("{} run {} failed: {}", why, id, e);
@@ -884,14 +920,9 @@ impl Scheduler {
                             None => None,
                             Some(key) => match claim_run(workspace.as_deref(), key) {
                                 Claim::Ours(lock) => lock,
-                                Claim::Taken => {
-                                    warn!(
-                                        "Pipeline {} is already running in another process; \
-                                         skipping the file-watch fire of {}",
-                                        key, id
-                                    );
-                                    return;
-                                }
+                                // #296: the same overlap policy as a timed fire.
+                                Claim::Taken if me2.overlapped(&id, key, Utc::now()) => None,
+                                Claim::Taken => return,
                                 Claim::Unusable(why) => {
                                     warn!(
                                         "Cannot take a run lock for {} in this workspace, so the \
@@ -910,6 +941,61 @@ impl Scheduler {
         }
     }
 
+    /// #296: an occurrence came due while its pipeline is running. Do what the
+    /// schedule's overlap policy says, decided by the function `duckle serve`
+    /// decides with; true when it should run anyway.
+    fn overlapped(&self, id: &str, pipeline_id: &str, due: DateTime<Utc>) -> bool {
+        use duckle_duckdb_engine::occurrences::{self, Decision, OnOverlap};
+        let mut g = self.inner.lock().expect("scheduler poisoned");
+        let Some(policy) = g.schedules.iter().find(|s| s.id == id).map(|s| s.overlap) else {
+            return false;
+        };
+        let waiting: Vec<occurrences::Occurrence> = g.waiting.get(id).cloned().into_iter().collect();
+        match occurrences::on_overlap(policy, &waiting) {
+            OnOverlap::Run => true,
+            OnOverlap::Skip(reason) => {
+                warn!("Schedule {} ({}): {}", id, pipeline_id, reason);
+                false
+            }
+            OnOverlap::Wait { reason, stop_running, .. } => {
+                warn!("Schedule {} ({}): {}", id, pipeline_id, reason);
+                let at = duckle_duckdb_engine::cronzone::Occurrence {
+                    at: due,
+                    local: String::new(),
+                    offset_seconds: 0,
+                    adjustment: None,
+                };
+                let queued = Decision::Queued { reason };
+                let occ = occurrences::entry(id, &at, None, queued, None, &Utc::now().to_rfc3339());
+                // In place of whatever was waiting: that one is what `supersede` names.
+                g.waiting.insert(id.to_string(), occ);
+                if stop_running {
+                    for (pipeline, run) in g.scheduled_runs.values() {
+                        if pipeline == pipeline_id {
+                            run.request_cancel();
+                        }
+                    }
+                }
+                false
+            }
+        }
+    }
+
+    /// #296: the occurrences waiting for a run that was in their way, handed back
+    /// to be fired again. One whose pipeline is still running comes straight back.
+    fn take_waiting(&self) -> Vec<(String, Option<String>, DateTime<Utc>)> {
+        let mut g = self.inner.lock().expect("scheduler poisoned");
+        let waiting = std::mem::take(&mut g.waiting);
+        waiting
+            .into_iter()
+            .filter_map(|(id, occ)| {
+                let key = g.schedules.iter().find(|s| s.id == id).and_then(lock_key)?.to_string();
+                let at = DateTime::parse_from_rfc3339(&occ.scheduled_for).ok()?.with_timezone(&Utc);
+                Some((id, Some(key), at))
+            })
+            .collect()
+    }
+
     /// Take every schedule that is due, and claim it so nothing else takes it.
     ///
     /// Split out from `fire_due` so a test can drive the claim itself rather
@@ -917,8 +1003,9 @@ impl Scheduler {
     /// that re-implemented the claiming step.
     ///
     /// Returns each due schedule's id alongside its pipeline id, because the
-    /// schedule is what came due but the pipeline is what gets locked.
-    fn claim_due(&self, now: DateTime<Utc>) -> Vec<(String, Option<String>)> {
+    /// schedule is what came due but the pipeline is what gets locked, and the
+    /// instant it came due.
+    fn claim_due(&self, now: DateTime<Utc>) -> Vec<(String, Option<String>, DateTime<Utc>)> {
         let mut g = self.inner.lock().expect("scheduler poisoned");
         let due: Vec<(String, Option<String>, DateTime<Utc>)> = g
             .schedules
@@ -981,7 +1068,7 @@ impl Scheduler {
                     })
                 })
             })
-            .map(|(id, key, _)| (id, key))
+            .map(|(id, key, at)| (id, key, at))
             .collect()
     }
 
@@ -990,8 +1077,11 @@ impl Scheduler {
         // Read the workspace under the same lock as the due list, so the path
         // used for the run lock is the one this tick actually decided against.
         let workspace = { self.inner.lock().expect("scheduler poisoned").workspace_path.clone() };
-        let due = self.claim_due(now);
-        for (id, pipeline_id) in due {
+        // #296: what waited for a run in its way goes first: it is older than
+        // anything due now.
+        let mut due = self.take_waiting();
+        due.extend(self.claim_due(now));
+        for (id, pipeline_id, at) in due {
             let me = self.clone();
             let workspace = workspace.clone();
             // #289: the pool this pipeline asks for, resolved against what the
@@ -1037,14 +1127,9 @@ impl Scheduler {
                     None => None,
                     Some(pipeline_id) => match claim_run(workspace.as_deref(), pipeline_id) {
                         Claim::Ours(lock) => lock,
-                        Claim::Taken => {
-                            warn!(
-                                "Pipeline {} is already running in another process; \
-                                 skipping schedule {} this tick",
-                                pipeline_id, id
-                            );
-                            return;
-                        }
+                        // #296: what the schedule's overlap policy makes of it.
+                        Claim::Taken if me.overlapped(&id, pipeline_id, at) => None,
+                        Claim::Taken => return,
                         Claim::Unusable(why) => {
                             warn!(
                                 "Cannot take a run lock for {} in this workspace, so schedule {} \
@@ -2272,5 +2357,194 @@ mod tests {
         let mut plain = plan_schedule("nightly");
         plain.plan_id = None;
         assert_eq!(lock_key(&plain), Some("not-the-plan"));
+    }
+
+    // ---- #296: overlap, decided as `duckle serve` decides it ---------------------
+
+    /// A scheduler on a workspace whose pipeline `p` takes `wait_ms`, with one
+    /// interval schedule for it under `policy`. None without a DuckDB to run.
+    fn overlapping(policy: &str, wait_ms: u64) -> Option<(tempfile::TempDir, PathBuf, Scheduler, String)> {
+        let bin = std::env::var("DUCKLE_DUCKDB_BIN").ok().filter(|b| Path::new(b).exists())?;
+        let tmp = tempfile::tempdir().unwrap();
+        // Not canonicalized: on Windows that adds a verbatim prefix, which this
+        // scheduler hands to DuckDB as it is.
+        let ws = tmp.path().to_path_buf();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(ws.join("in.csv"), "id\n1\n").unwrap();
+        let path = |p: &Path| p.to_string_lossy().replace('\\', "/");
+        let pipeline = serde_json::json!({
+            "name": "p",
+            "nodes": [
+                { "id": "s", "position": {"x":0,"y":0}, "data": { "label": "in", "componentId": "src.csv",
+                  "properties": { "path": path(&ws.join("in.csv")), "hasHeader": true } } },
+                { "id": "w", "position": {"x":0,"y":0}, "data": { "label": "wait", "componentId": "ctl.wait",
+                  "properties": { "duration": wait_ms, "unit": "ms" } } },
+                { "id": "k", "position": {"x":0,"y":0}, "data": { "label": "out", "componentId": "snk.csv",
+                  "properties": { "path": path(&ws.join("out.csv")), "hasHeader": true } } }
+            ],
+            "edges": [
+                { "id": "e1", "source": "s", "target": "w", "data": { "connectionType": "main" } },
+                { "id": "e2", "source": "w", "target": "k", "data": { "connectionType": "main" } }
+            ]
+        });
+        std::fs::write(ws.join("pipelines").join("p.json"), pipeline.to_string()).unwrap();
+        let sched = Scheduler::new(DuckdbEngine::new(PathBuf::from(bin)));
+        sched.set_workspace(Some(ws.clone()));
+        let id = sched
+            .upsert(Schedule {
+                id: String::new(),
+                pipeline_id: "p".into(),
+                plan_id: None,
+                name: "p".into(),
+                enabled: true,
+                kind: ScheduleKind::Interval { seconds: 3600 },
+                timezone: None,
+                exclude: Default::default(),
+                misfire: Default::default(),
+                catchup: Default::default(),
+                overlap: serde_json::from_value(serde_json::json!(policy)).unwrap(),
+                params: None,
+                last_run_at: None,
+                last_run_status: None,
+                last_run_duration_ms: None,
+                last_run_error: None,
+                next_run_at: None,
+            })
+            .unwrap()
+            .id;
+        Some((tmp, ws, sched, id))
+    }
+
+    /// Make the schedule due `ago` seconds back, the way time passing would.
+    fn due_since(sched: &Scheduler, ago: i64) {
+        let at = Utc::now() - chrono::Duration::seconds(ago);
+        let mut g = sched.inner.lock().unwrap();
+        sched.commit(&mut g, |list| list.iter_mut().for_each(|s| s.next_run_at = Some(at))).unwrap();
+    }
+
+    async fn eventually(what: &str, done: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(90);
+        while !done() {
+            assert!(std::time::Instant::now() < deadline, "{what} never happened");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Each run's status, sorted. A failed run carries its error, so a test that
+    /// expected `ok` says why it was not.
+    fn statuses(ws: &Path) -> Vec<String> {
+        let mut s: Vec<String> = duckle_duckdb_engine::history::load_run_history(ws, "p")
+            .into_iter()
+            .map(|r| match (r.status.as_str(), r.error) {
+                ("error", Some(e)) => format!("error: {e}"),
+                (status, _) => status.to_string(),
+            })
+            .collect();
+        s.sort();
+        s
+    }
+
+    fn waiting(sched: &Scheduler, id: &str) -> bool {
+        sched.inner.lock().unwrap().waiting.contains_key(id)
+    }
+
+    /// `queue`: the occurrence waits while another process runs the pipeline, then
+    /// runs on the first tick after that run has ended.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_queued_occurrence_waits_for_the_run_in_its_way_then_runs() {
+        let Some((_tmp, ws, sched, id)) = overlapping("queue", 0) else { return };
+        let other = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+        due_since(&sched, 2);
+        sched.fire_due().await;
+        eventually("the occurrence waiting", || waiting(&sched, &id)).await;
+        sched.fire_due().await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(statuses(&ws).is_empty(), "it ran beside the run in its way");
+        assert!(waiting(&sched, &id), "a tick while the pipeline was busy dropped it");
+
+        drop(other);
+        sched.fire_due().await;
+        eventually("the run that waited", || statuses(&ws).len() == 1).await;
+        assert_eq!(statuses(&ws), vec!["ok"]);
+        assert!(!waiting(&sched, &id));
+    }
+
+    /// `skip` keeps nothing back: what was turned away stays turned away.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn skip_keeps_nothing_waiting() {
+        let Some((_tmp, ws, sched, id)) = overlapping("skip", 0) else { return };
+        let other = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+        due_since(&sched, 2);
+        sched.fire_due().await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        drop(other);
+        sched.fire_due().await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(!waiting(&sched, &id));
+        assert!(statuses(&ws).is_empty(), "a skipped occurrence ran after all");
+    }
+
+    /// `allow` runs beside the run another process holds the pipeline for.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn allow_runs_beside_the_run_in_its_way() {
+        let Some((_tmp, ws, sched, _id)) = overlapping("allow", 0) else { return };
+        let _other = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+        due_since(&sched, 2);
+        sched.fire_due().await;
+        eventually("the run alongside", || statuses(&ws).len() == 1).await;
+        assert_eq!(statuses(&ws), vec!["ok"]);
+    }
+
+    /// `replace`: this scheduler's run is stopped and the new occurrence runs once
+    /// it has.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn replace_stops_the_scheduled_run_and_runs_the_new_occurrence() {
+        let Some((_tmp, ws, sched, id)) = overlapping("replace", 3_000) else { return };
+        due_since(&sched, 2);
+        sched.fire_due().await;
+        eventually("the first run starting", || sched.inner.lock().unwrap().scheduled_runs.contains_key(&id)).await;
+
+        let asked = std::time::Instant::now();
+        due_since(&sched, 1);
+        sched.fire_due().await;
+        eventually("the first run ending", || statuses(&ws).len() == 1).await;
+        assert!(asked.elapsed() < Duration::from_millis(2_500), "it ran out its wait: not stopped");
+
+        eventually("the pipeline coming free", || !sched.inner.lock().unwrap().scheduled_runs.contains_key(&id)).await;
+        sched.fire_due().await;
+        eventually("the replacing run", || statuses(&ws).len() == 2).await;
+        assert_eq!(statuses(&ws), vec!["cancelled", "ok"]);
+    }
+
+    /// `replace` does not end a run a person started from the dialog: the
+    /// occurrence waits for it instead.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn replace_leaves_a_run_started_from_the_dialog_alone() {
+        let Some((_tmp, ws, sched, id)) = overlapping("replace", 1_500) else { return };
+        let person = {
+            let (sched, id) = (sched.clone(), id.clone());
+            tokio::spawn(async move { sched.run_now(&id).await })
+        };
+        eventually("the person's run holding the pipeline", || {
+            duckle_duckdb_engine::runlock::try_acquire(&ws, "p").is_none()
+        })
+        .await;
+        due_since(&sched, 2);
+        sched.fire_due().await;
+        eventually("the occurrence waiting", || waiting(&sched, &id)).await;
+        let ran = person.await.unwrap().expect("the person's run");
+        assert_eq!(ran.status, "ok", "a schedule stopped a run a person started");
+    }
+
+    /// A file-watch fire is decided by the same policy as a timed one. Sent the
+    /// way a watcher sends it, without waiting on a real file event.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_file_watch_fire_follows_the_overlap_policy_too() {
+        let Some((_tmp, ws, sched, id)) = overlapping("queue", 0) else { return };
+        let _other = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+        sched.spawn_ticker();
+        sched.fire_tx.send(id.clone()).unwrap();
+        eventually("the file-watch fire waiting", || waiting(&sched, &id)).await;
+        assert!(statuses(&ws).is_empty(), "it ran beside the run in its way");
     }
 }

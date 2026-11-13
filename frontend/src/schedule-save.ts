@@ -12,6 +12,8 @@ export type ScheduleEdit = {
      * Left out, the values the schedule already has are kept.
      */
     params?: Record<string, string>;
+    /** #296: what becomes of an occurrence that comes due while the last run is still going. */
+    overlap?: Schedule['overlap'];
 };
 
 /**
@@ -91,5 +93,6 @@ export function scheduleForSave(loaded: Schedule | undefined, edit: ScheduleEdit
         enabled: edit.enabled,
         kind: edit.kind,
         ...(edit.params !== undefined ? { params: edit.params } : {}),
+        ...(edit.overlap !== undefined ? { overlap: edit.overlap } : {}),
     };
 }

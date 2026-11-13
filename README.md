@@ -656,7 +656,7 @@ curl -X POST https://duckle.internal/api/schedules \
   -d '{"id":"orders-load","enabled":true,"cron":"0 3 * * *","overlap":"queue","misfire":"latest"}'
 ```
 
-`duckle-runner serve` honours all of them. The desktop app's own scheduler honours the zone and the exclusion calendar, skips an occurrence that overlaps a run, and runs a missed one once when it next ticks.
+`duckle-runner serve` honours all of them. The desktop app's own scheduler honours the zone, the exclusion calendar and `overlap` too, set in its Schedules dialog; it keeps a waiting occurrence in memory, since it writes no ledger, so one does not outlive the app. A missed occurrence runs once there when it next ticks, whatever `misfire` says.
 
 ### Typed pipeline parameters
 
