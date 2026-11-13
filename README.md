@@ -4022,6 +4022,12 @@ When the installer downloads the DuckDB CLI it also pre-fetches the extensions D
 
 `httpfs` (S3 / GCS / HTTP), `azure` (Azure Blob native), `sqlite`, `postgres`, `mysql`, `excel`, `iceberg`, `delta`, `ducklake`, `vss`, `fts`.
 
+### Pinned downloads, and installing offline
+
+Everything the installer downloads to run is pinned to a SHA-256 by its exact URL: the DuckDB CLI for each platform, SlothDB, llama.cpp, uv, dbt Fusion and every Duckie model. A download that does not match its pin is deleted and refused, and so is one with no pin at all. A test walks every URL each supported platform can request, so a version bump without its checksums fails in CI rather than on your machine. Each URL names a fixed version or revision (uv 0.13.8, dbt Fusion v2.0.11, a Hugging Face commit per model), since a checksum against `latest` would only turn a swapped file into a failed install.
+
+For a machine with no internet, put the files in a folder and point `DUCKLE_ARTIFACT_DIR` at it. Each is found by the name it is published under, checked against the same pin, and nothing is fetched. `DUCKLE_OFFLINE=1` forbids downloads outright, including the extension pre-fetch above: an install that needs a file the folder does not have says which one, and where it is published.
+
 ### Moving to DuckDB 2.0
 
 Duckle pins DuckDB 2.0.0 (LTS). Most of what changes is invisible, but these you may notice, each measured against 1.5.5:

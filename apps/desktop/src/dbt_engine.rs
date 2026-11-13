@@ -16,6 +16,7 @@
 //! for the engine's resolve_dbt_bin(). Everything lives under the app-data dir
 //! (`<app_data>/dbt-fusion/` or `<app_data>/dbt/`), isolated from any system dbt.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Windows: suppress the console window that pops up when this GUI process
@@ -76,8 +77,17 @@ pub fn publish_if_present(app_data: &Path) {
 }
 
 /// uv release asset name for this OS/arch (astral-sh/uv).
+/// The uv release installed when none is on PATH, with a checksum per asset in
+/// engine_manager's PINS. Pinned rather than `latest`, which moves.
+const UV_VERSION: &str = "0.13.8";
+
 fn uv_asset() -> Option<&'static str> {
-    Some(match (std::env::consts::OS, std::env::consts::ARCH) {
+    uv_asset_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// The uv release asset for an OS/arch.
+fn uv_asset_for(os: &str, arch: &str) -> Option<&'static str> {
+    Some(match (os, arch) {
         ("windows", "x86_64") => "uv-x86_64-pc-windows-msvc.zip",
         ("windows", "aarch64") => "uv-aarch64-pc-windows-msvc.zip",
         ("linux", "x86_64") => "uv-x86_64-unknown-linux-gnu.tar.gz",
@@ -88,8 +98,19 @@ fn uv_asset() -> Option<&'static str> {
     })
 }
 
-/// Resolve uv: prefer a system `uv` on PATH; otherwise download a pinned-latest
-/// uv release into `<app_data>/dbt/uv/` and return that path.
+fn uv_url(asset: &str) -> String {
+    format!("https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/{asset}")
+}
+
+/// Where uv for an OS/arch is published, for the pin check's walk over every
+/// platform.
+#[cfg(test)]
+pub(crate) fn uv_url_for(os: &str, arch: &str) -> Option<String> {
+    uv_asset_for(os, arch).map(uv_url)
+}
+
+/// Resolve uv: prefer a system `uv` on PATH; otherwise download uv UV_VERSION
+/// into `<app_data>/dbt/uv/` and return that path.
 pub(crate) fn ensure_uv(app_data: &Path) -> Result<PathBuf, String> {
     // 1. System uv on PATH.
     let on_path = if cfg!(windows) { "uv.exe" } else { "uv" };
@@ -110,8 +131,13 @@ pub(crate) fn ensure_uv(app_data: &Path) -> Result<PathBuf, String> {
     if uv_exe.exists() {
         return Ok(uv_exe);
     }
+    download_uv(&uv_dir, uv_exe)
+}
 
-    // 3. Download a fresh uv from astral-sh/uv (latest).
+/// Step 3 of `ensure_uv`, on its own so a test reaches it on a machine that
+/// already has uv on PATH.
+fn download_uv(uv_dir: &Path, uv_exe: PathBuf) -> Result<PathBuf, String> {
+    // 3. Download uv UV_VERSION from astral-sh/uv.
     let asset = uv_asset().ok_or_else(|| {
         format!(
             "no uv build for this platform ({}/{})",
@@ -119,26 +145,21 @@ pub(crate) fn ensure_uv(app_data: &Path) -> Result<PathBuf, String> {
             std::env::consts::ARCH
         )
     })?;
-    let url = format!(
-        "https://github.com/astral-sh/uv/releases/latest/download/{}",
-        asset
-    );
+    let url = uv_url(asset);
     std::fs::create_dir_all(&uv_dir).map_err(|e| e.to_string())?;
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()
         .map_err(|e| e.to_string())?;
-    let bytes = client
-        .get(&url)
-        .send()
-        .and_then(|r| r.error_for_status())
-        .and_then(|r| r.bytes())
+    let mut bytes = Vec::new();
+    crate::engine_manager::open_artifact(&client, &url)
+        .and_then(|mut a| a.reader.read_to_end(&mut bytes).map(|_| ()).map_err(|e| e.to_string()))
         .map_err(|e| format!("download uv: {e}"))?;
     // Before extraction, because the archive yields an executable.
     crate::engine_manager::verify_download(
         "the uv download",
         &crate::engine_manager::hex_sha256(&bytes),
-        crate::engine_manager::UV_SHA256,
+        crate::engine_manager::pinned_sha256(&url),
     )?;
 
     // uv archives contain the binary under `uv-<target>/uv[.exe]`; extract just it.
@@ -219,11 +240,15 @@ fn ensure_dbt_core(app_data: &Path) -> Result<PathBuf, String> {
 }
 
 /// dbt Fusion release target triple + archive extension for this OS/arch. None
-/// on platforms dbt Labs does not publish a Fusion build for.
+/// on platforms dbt Labs does not publish a Fusion build for: Windows on ARM is
+/// one, its archive missing from every release checked.
 fn fusion_target() -> Option<(&'static str, &'static str)> {
-    Some(match (std::env::consts::OS, std::env::consts::ARCH) {
+    fusion_target_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+fn fusion_target_for(os: &str, arch: &str) -> Option<(&'static str, &'static str)> {
+    Some(match (os, arch) {
         ("windows", "x86_64") => ("x86_64-pc-windows-msvc", "zip"),
-        ("windows", "aarch64") => ("aarch64-pc-windows-msvc", "zip"),
         ("linux", "x86_64") => ("x86_64-unknown-linux-gnu", "tar.gz"),
         ("linux", "aarch64") => ("aarch64-unknown-linux-gnu", "tar.gz"),
         ("macos", "x86_64") => ("x86_64-apple-darwin", "tar.gz"),
@@ -232,25 +257,20 @@ fn fusion_target() -> Option<(&'static str, &'static str)> {
     })
 }
 
-/// Resolve the current Fusion release tag from dbt's public CDN manifest,
-/// falling back to a known-good pin when the manifest is unreachable.
-fn fusion_version(client: &reqwest::blocking::Client) -> String {
-    const PINNED: &str = "v2.0.0-preview.189";
-    client
-        .get("https://public.cdn.getdbt.com/fs/versions.json")
-        .send()
-        .and_then(|r| r.error_for_status())
-        .and_then(|r| r.text())
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|j| {
-            j.get("latest")
-                .and_then(|l| l.get("tag"))
-                .and_then(|t| t.as_str())
-                .map(String::from)
-        })
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| PINNED.to_string())
+/// The dbt Fusion release installed, with a checksum per target in
+/// engine_manager's PINS. Pinned rather than read from dbt's "latest" manifest,
+/// which moves: a newer Fusion is a code change that records its digests.
+const FUSION_VERSION: &str = "v2.0.11";
+
+fn fusion_url(target: &str, ext: &str) -> String {
+    format!("https://public.cdn.getdbt.com/fs/cli/fs-{FUSION_VERSION}-{target}.{ext}")
+}
+
+/// Where the Fusion archive for an OS/arch is published, for the pin check's
+/// walk over every platform.
+#[cfg(test)]
+pub(crate) fn fusion_url_for(os: &str, arch: &str) -> Option<String> {
+    fusion_target_for(os, arch).map(|(target, ext)| fusion_url(target, ext))
 }
 
 /// Fetch the free dbt Fusion CLI (native Rust, no Python) from dbt's official
@@ -274,19 +294,16 @@ fn ensure_fusion(app_data: &Path) -> Result<PathBuf, String> {
         .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|e| e.to_string())?;
-    let version = fusion_version(&client);
-    let url = format!("https://public.cdn.getdbt.com/fs/cli/fs-{version}-{target}.{ext}");
-    let bytes = client
-        .get(&url)
-        .send()
-        .and_then(|r| r.error_for_status())
-        .and_then(|r| r.bytes())
+    let url = fusion_url(target, ext);
+    let mut bytes = Vec::new();
+    crate::engine_manager::open_artifact(&client, &url)
+        .and_then(|mut a| a.reader.read_to_end(&mut bytes).map(|_| ()).map_err(|e| e.to_string()))
         .map_err(|e| format!("download dbt Fusion ({url}): {e}"))?;
     // Before extraction, because the archive yields an executable.
     crate::engine_manager::verify_download(
         "the dbt Fusion download",
         &crate::engine_manager::hex_sha256(&bytes),
-        crate::engine_manager::FUSION_SHA256,
+        crate::engine_manager::pinned_sha256(&url),
     )?;
 
     // The archive carries a single `dbt[.exe]`; extract just it.
@@ -330,6 +347,38 @@ fn ensure_fusion(app_data: &Path) -> Result<PathBuf, String> {
         let _ = std::fs::set_permissions(&dbt, std::fs::Permissions::from_mode(0o755));
     }
     Ok(dbt)
+}
+
+#[cfg(test)]
+mod pinned_download_tests {
+    use super::*;
+    use crate::engine_manager::{clear_artifact_env, plant_wrong_artifact, DOWNLOAD_ENV};
+
+    /// #288: the Fusion archive from the artifact folder is held to its pin.
+    #[test]
+    fn fusion_refuses_a_wrong_archive_from_the_folder() {
+        let Some(url) = fusion_url_for(std::env::consts::OS, std::env::consts::ARCH) else { return };
+        let _env = DOWNLOAD_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let app = tempfile::tempdir().unwrap();
+        let _dir = plant_wrong_artifact(url.rsplit('/').next().unwrap(), 4096);
+        let got = ensure_fusion(app.path());
+        clear_artifact_env();
+        let err = got.expect_err("an archive that does not match its pin is not installed");
+        assert!(err.contains("failed checksum verification"), "{err}");
+    }
+
+    /// #288: the uv archive from the artifact folder is held to its pin.
+    #[test]
+    fn uv_refuses_a_wrong_archive_from_the_folder() {
+        let Some(asset) = uv_asset() else { return };
+        let _env = DOWNLOAD_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let app = tempfile::tempdir().unwrap();
+        let _dir = plant_wrong_artifact(asset, 4096);
+        let got = download_uv(&app.path().join("uv"), app.path().join("uv").join("uv"));
+        clear_artifact_env();
+        let err = got.expect_err("an archive that does not match its pin is not installed");
+        assert!(err.contains("failed checksum verification"), "{err}");
+    }
 }
 
 /// Ensure a dbt engine is provisioned (idempotent) and publish it as

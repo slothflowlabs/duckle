@@ -31,6 +31,9 @@ pub struct LlamaModel {
     pub label: &'static str,
     pub repo: &'static str,
     pub file: &'static str,
+    /// The Hugging Face commit the file is fetched at: a fixed revision rather
+    /// than `main`, which moves, so the bytes behind the URL match its pin.
+    pub revision: &'static str,
     /// Real download size, from the Hugging Face file listing.
     pub size_mb: u32,
     /// What this choice costs and buys, in the user's terms.
@@ -49,6 +52,7 @@ pub const LLAMA_MODELS: &[LlamaModel] = &[
         label: "Qwen2.5 Coder 0.5B",
         repo: "Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF",
         file: "qwen2.5-coder-0.5b-instruct-q4_k_m.gguf",
+        revision: "ebb2015119c907b064c512bf053e945850b5875f",
         size_mb: 469,
         note: "Smallest option. For low-RAM or older machines; expect rough answers.",
     },
@@ -57,6 +61,7 @@ pub const LLAMA_MODELS: &[LlamaModel] = &[
         label: "Llama 3.2 1B Instruct",
         repo: "bartowski/Llama-3.2-1B-Instruct-GGUF",
         file: "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+        revision: "067b946cf014b7c697f3654f621d577a3e3afd1c",
         size_mb: 770,
         note: "Very fast and light. Better at plain English than at pipeline JSON.",
     },
@@ -65,6 +70,7 @@ pub const LLAMA_MODELS: &[LlamaModel] = &[
         label: "Qwen2.5 Coder 1.5B",
         repo: "Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF",
         file: "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
+        revision: "f86cb2c1fa58255f8052cc32aeede1b7482d4361",
         size_mb: 1066,
         note: "Default. Runs on any modern laptop CPU. Best choice if you are unsure.",
     },
@@ -73,6 +79,7 @@ pub const LLAMA_MODELS: &[LlamaModel] = &[
         label: "Llama 3.2 3B Instruct",
         repo: "bartowski/Llama-3.2-3B-Instruct-GGUF",
         file: "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+        revision: "5ab33fa94d1d04e903623ae72c95d1696f09f9e8",
         size_mb: 1926,
         note: "Stronger at plain English, weaker at code than the Qwen models.",
     },
@@ -81,6 +88,7 @@ pub const LLAMA_MODELS: &[LlamaModel] = &[
         label: "Qwen2.5 Coder 3B",
         repo: "Qwen/Qwen2.5-Coder-3B-Instruct-GGUF",
         file: "qwen2.5-coder-3b-instruct-q4_k_m.gguf",
+        revision: "f74adce6aa16316c625447af059dbebe4983757c",
         size_mb: 2007,
         note: "Noticeably better pipeline generation. Comfortable on 16 GB of RAM.",
     },
@@ -89,6 +97,7 @@ pub const LLAMA_MODELS: &[LlamaModel] = &[
         label: "Phi-3.5 Mini",
         repo: "bartowski/Phi-3.5-mini-instruct-GGUF",
         file: "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+        revision: "6d70da17e749a471ccb62ade694486011a75cda3",
         size_mb: 2282,
         note: "Strong reasoning for its size. Good all-rounder on a mid-range laptop.",
     },
@@ -97,6 +106,7 @@ pub const LLAMA_MODELS: &[LlamaModel] = &[
         label: "Qwen3 4B Instruct",
         repo: "unsloth/Qwen3-4B-Instruct-2507-GGUF",
         file: "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+        revision: "a06e946bb6b655725eafa393f4a9745d460374c9",
         size_mb: 2382,
         note: "Newer generation. Best quality per gigabyte in the mid sizes.",
     },
@@ -105,6 +115,7 @@ pub const LLAMA_MODELS: &[LlamaModel] = &[
         label: "Mistral 7B Instruct v0.3",
         repo: "bartowski/Mistral-7B-Instruct-v0.3-GGUF",
         file: "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
+        revision: "61fd4167fff3ab01ee1cfe0da183fa27a944db48",
         size_mb: 4170,
         note: "Well-rounded general model. Wants 16 GB of RAM or GPU offload.",
     },
@@ -113,6 +124,7 @@ pub const LLAMA_MODELS: &[LlamaModel] = &[
         label: "Qwen2.5 Coder 7B",
         repo: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF",
         file: "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+        revision: "13fb94bfda8c8cf22497dc57b78f391a9acb426a",
         size_mb: 4466,
         note: "The best code model here that still fits a 8 GB GPU. Slow on CPU alone.",
     },
@@ -121,6 +133,7 @@ pub const LLAMA_MODELS: &[LlamaModel] = &[
         label: "Qwen2.5 7B Instruct",
         repo: "bartowski/Qwen2.5-7B-Instruct-GGUF",
         file: "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+        revision: "8911e8a47f92bac19d6f5c64a2e2095bd2f7d031",
         size_mb: 4466,
         note: "General-purpose sibling of the 7B coder. Better prose, weaker code.",
     },
@@ -129,6 +142,7 @@ pub const LLAMA_MODELS: &[LlamaModel] = &[
         label: "Qwen3 8B",
         repo: "unsloth/Qwen3-8B-GGUF",
         file: "Qwen3-8B-Q4_K_M.gguf",
+        revision: "a6adef130ffb23ddaf1a62fec9dced968c9bc482",
         size_mb: 4795,
         note: "Newer generation at 8B. Wants a GPU with 8 GB or more.",
     },
@@ -137,6 +151,7 @@ pub const LLAMA_MODELS: &[LlamaModel] = &[
         label: "Gemma 2 9B",
         repo: "bartowski/gemma-2-9b-it-GGUF",
         file: "gemma-2-9b-it-Q4_K_M.gguf",
+        revision: "d731033f3dc4018261fd39896e50984d398b4ac5",
         size_mb: 5494,
         note: "Google's 9B. Strong general answers; needs real GPU memory.",
     },
@@ -145,6 +160,7 @@ pub const LLAMA_MODELS: &[LlamaModel] = &[
         label: "Qwen2.5 Coder 14B",
         repo: "Qwen/Qwen2.5-Coder-14B-Instruct-GGUF",
         file: "qwen2.5-coder-14b-instruct-q4_k_m.gguf",
+        revision: "d0a692ef765eefbf2fabb130b3cb2e8917e3d225",
         size_mb: 8572,
         note: "Only worth it with a GPU that has 10 GB or more of memory.",
     },
@@ -153,6 +169,7 @@ pub const LLAMA_MODELS: &[LlamaModel] = &[
         label: "DeepSeek Coder V2 Lite",
         repo: "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
         file: "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf",
+        revision: "8f248fa2072348f77a8bc37754e470de1f61866e",
         size_mb: 9884,
         note: "Largest option. A mixture-of-experts coder; needs 12 GB of GPU memory.",
     },
@@ -237,48 +254,130 @@ fn binary_file_name(s: &EngineSpec) -> String {
     }
 }
 
-/// Marks an artifact whose SHA-256 has not been recorded yet.
-///
-/// An unpinned download proceeds with a warning rather than failing, because
-/// refusing outright would break every install until this table is filled in.
-/// Replace one of the constants below with a real digest and verification becomes
-/// mandatory for that artifact immediately: there is no second switch to remember,
-/// and no way to pin a digest without also enforcing it.
+/// Marks an artifact with no recorded SHA-256. Nothing unpinned is installed.
 pub(crate) const UNPINNED: &str = "UNPINNED";
 
-/// SHA-256 of every artifact Duckle downloads and then EXECUTES.
+/// SHA-256 of every artifact Duckle downloads, by the exact URL it requests
+/// (#288).
 ///
-/// Until these are filled in, the only thing standing between a user and a
-/// substituted binary is TLS to the host serving it. That is not nothing, but it
-/// trusts the host, anyone who can obtain a certificate for it, and every redirect
-/// in between - and two of these fetch a MUTABLE reference (`releases/latest` and
-/// `resolve/main`), so the bytes behind the URL can change without the URL doing so.
+/// The URL names the tool, its version, the platform and the asset, so a
+/// version bump asks for a URL with no pin here, and the install refuses until
+/// one is recorded. `every_artifact_a_supported_platform_can_download_is_pinned`
+/// walks every URL each supported platform can request, so that refusal happens
+/// in CI rather than on a user's machine. Every URL names a fixed version or
+/// revision: a pin against a moving one (`latest`, `main`) would only turn a
+/// silent substitution into a failed install.
 ///
-/// To fill one in: download the exact asset the constant names, run
-/// `sha256sum <file>` (or `Get-FileHash -Algorithm SHA256`), and paste the hex.
-/// Pin the upstream reference to a tag or revision at the same time, because a
-/// digest against a moving target only turns a silent substitution into a failed
-/// install.
-pub(crate) const DUCKDB_SHA256: &str = UNPINNED;
-pub(crate) const UV_SHA256: &str = UNPINNED;
-pub(crate) const FUSION_SHA256: &str = UNPINNED;
+/// Recorded from what the publishers publish, never by downloading: GitHub's
+/// release-asset digest, the `.sha256` dbt puts beside each archive, and the
+/// sha256 Hugging Face reports for each file.
+const PINS: &[(&str, &str)] = &[
+    ("https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-windows-amd64.tar.gz", "91663c2f36c2a334b0e5e639006d8c29c29e013af0c477d80bb931df68870312"),
+    ("https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-windows-arm64.tar.gz", "4b5d1e4611debf676a693a8a6896dc29b352a9c3b11b706e7421d1d6082e05fd"),
+    ("https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz", "c6507206baf7793c6013dbd82368469a45f20dc0e17a6f92f204602f652ed2bc"),
+    ("https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-arm64.tar.gz", "859e1875d2a9515fbb4bf8871061437a14af82320da68c753f094c4b776348fe"),
+    ("https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-osx-universal.tar.gz", "8a8f67e7c7f7d1392fa63ba3971948391392fe2a25fca63e7008e33c50beb4c2"),
+    ("https://github.com/SouravRoy-ETL/slothdb/releases/download/v0.2.7/slothdb.exe", "4e82163a38a281abc5a4c8acedcacf5d8e27b473eb37b3f2c4f5f7de9fc8cfad"),
+    ("https://github.com/SouravRoy-ETL/slothdb/releases/download/v0.2.7/slothdb-linux-x64", "6976509996e486aa3b2044dde222e759e02b7a2f13b1a068b6eefdf59bfbd3f0"),
+    ("https://github.com/SouravRoy-ETL/slothdb/releases/download/v0.2.7/slothdb-macos", "85738d640d10ce4a2f373a721481424c5651ed44db97620ab407a9abde112940"),
+    ("https://github.com/ggml-org/llama.cpp/releases/download/b9305/llama-b9305-bin-win-cpu-x64.zip", "bc247f4779981db6abef123448b104b1e7a9fe386899a5b47ac36bbf4d6d9c0d"),
+    ("https://github.com/ggml-org/llama.cpp/releases/download/b9305/llama-b9305-bin-win-cpu-arm64.zip", "5feca290e2ac798e02b60533f93c154583e25ef0519ac792d07e9bb26d08fd3a"),
+    ("https://github.com/ggml-org/llama.cpp/releases/download/b9305/llama-b9305-bin-ubuntu-x64.tar.gz", "0a32013a7cca1c51652bba69799d793886372ec922dbc3aa0788a1f45a7059ba"),
+    ("https://github.com/ggml-org/llama.cpp/releases/download/b9305/llama-b9305-bin-ubuntu-arm64.tar.gz", "06b1bb12fc77a5c6842c61f1720c672ec755387492a775d5d2aeb07b5a54bd22"),
+    ("https://github.com/ggml-org/llama.cpp/releases/download/b9305/llama-b9305-bin-macos-arm64.tar.gz", "3c8bae495555472bbbcc2051fd8f8af2fbe060a537494cc2f33051e2f226e69a"),
+    ("https://github.com/ggml-org/llama.cpp/releases/download/b9305/llama-b9305-bin-macos-x64.tar.gz", "74ddbcae1012759fa9e8ce81a28135df575db7141ea1f2881d06eadf912f72ca"),
+    ("https://github.com/astral-sh/uv/releases/download/0.13.8/uv-x86_64-pc-windows-msvc.zip", "529e78a9cec6cd7e3e014f7ecd8bda0c113969d4ed0f2efeedb85c30943325b8"),
+    ("https://github.com/astral-sh/uv/releases/download/0.13.8/uv-aarch64-pc-windows-msvc.zip", "59e6d919bed1f72035e622a7c930058f08a8931c4c78ceaf9f56e7fb74dd2c48"),
+    ("https://github.com/astral-sh/uv/releases/download/0.13.8/uv-x86_64-unknown-linux-gnu.tar.gz", "5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91"),
+    ("https://github.com/astral-sh/uv/releases/download/0.13.8/uv-aarch64-unknown-linux-gnu.tar.gz", "74f2f5c6024d397481db228db8fc25eed420db192243f88438c118e7e013e585"),
+    ("https://github.com/astral-sh/uv/releases/download/0.13.8/uv-x86_64-apple-darwin.tar.gz", "a04c2ffeac28b2003a2c13caf538ab425fcd7def3e4a41571f4a8fb370a66af3"),
+    ("https://github.com/astral-sh/uv/releases/download/0.13.8/uv-aarch64-apple-darwin.tar.gz", "6b71028a6b904f2ae3340ef52e595512de807d06c0a20eaef2f692581b246558"),
+    ("https://public.cdn.getdbt.com/fs/cli/fs-v2.0.11-x86_64-pc-windows-msvc.zip", "48a4bdba30b84716313e1cc8298643484a3daa3d5f16bf7e941fb0b9e1fb0572"),
+    ("https://public.cdn.getdbt.com/fs/cli/fs-v2.0.11-x86_64-unknown-linux-gnu.tar.gz", "773c6c195e0928c42cdd18be125aa42a837ed4f14c69dff70cd25e65c4018556"),
+    ("https://public.cdn.getdbt.com/fs/cli/fs-v2.0.11-aarch64-unknown-linux-gnu.tar.gz", "5fea14ea629f3232a793847d20f3ba76b15ff05b26c3bad75e2ea01108d626ec"),
+    ("https://public.cdn.getdbt.com/fs/cli/fs-v2.0.11-x86_64-apple-darwin.tar.gz", "f0b49a56b54686d56f2160ef76ec78bd60a21d9f60fe7fa2e43a298d4f4ba7f7"),
+    ("https://public.cdn.getdbt.com/fs/cli/fs-v2.0.11-aarch64-apple-darwin.tar.gz", "99838a3a20b4ad688c8fce5fb557ca1c0126749e4c50ab294cfc2988b6e52f1b"),
+    ("https://huggingface.co/Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF/resolve/ebb2015119c907b064c512bf053e945850b5875f/qwen2.5-coder-0.5b-instruct-q4_k_m.gguf", "1d9614638d18024d0fbb36575a15f1302a3adf044df10345688ec4f6e1c4ff32"),
+    ("https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/067b946cf014b7c697f3654f621d577a3e3afd1c/Llama-3.2-1B-Instruct-Q4_K_M.gguf", "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83"),
+    ("https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/f86cb2c1fa58255f8052cc32aeede1b7482d4361/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf", "cc324af070c2ecbfd324a30884d2f951a7ff756aba85cb811a6ec436933bb046"),
+    ("https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/5ab33fa94d1d04e903623ae72c95d1696f09f9e8/Llama-3.2-3B-Instruct-Q4_K_M.gguf", "6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff"),
+    ("https://huggingface.co/Qwen/Qwen2.5-Coder-3B-Instruct-GGUF/resolve/f74adce6aa16316c625447af059dbebe4983757c/qwen2.5-coder-3b-instruct-q4_k_m.gguf", "724fb256bec1ff062b2f65e4569e871ad2e95ab2a3989723d1769c54294730b7"),
+    ("https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/6d70da17e749a471ccb62ade694486011a75cda3/Phi-3.5-mini-instruct-Q4_K_M.gguf", "e4165e3a71af97f1b4820da61079826d8752a2088e313af0c7d346796c38eff5"),
+    ("https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/a06e946bb6b655725eafa393f4a9745d460374c9/Qwen3-4B-Instruct-2507-Q4_K_M.gguf", "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597"),
+    ("https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/61fd4167fff3ab01ee1cfe0da183fa27a944db48/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "1270d22c0fbb3d092fb725d4d96c457b7b687a5f5a715abe1e818da303e562b6"),
+    ("https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/13fb94bfda8c8cf22497dc57b78f391a9acb426a/qwen2.5-coder-7b-instruct-q4_k_m.gguf", "509287f78cb4d4cf6b3843734733b914b2c158e43e22a7f4bf5e963800894d3c"),
+    ("https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/8911e8a47f92bac19d6f5c64a2e2095bd2f7d031/Qwen2.5-7B-Instruct-Q4_K_M.gguf", "65b8fcd92af6b4fefa935c625d1ac27ea29dcb6ee14589c55a8f115ceaaa1423"),
+    ("https://huggingface.co/unsloth/Qwen3-8B-GGUF/resolve/a6adef130ffb23ddaf1a62fec9dced968c9bc482/Qwen3-8B-Q4_K_M.gguf", "120307ba529eb2439d6c430d94104dabd578497bc7bfe7e322b5d9933b449bd4"),
+    ("https://huggingface.co/bartowski/gemma-2-9b-it-GGUF/resolve/d731033f3dc4018261fd39896e50984d398b4ac5/gemma-2-9b-it-Q4_K_M.gguf", "13b2a7b4115bbd0900162edcebe476da1ba1fc24e718e8b40d32f6e300f56dfe"),
+    ("https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-GGUF/resolve/d0a692ef765eefbf2fabb130b3cb2e8917e3d225/qwen2.5-coder-14b-instruct-q4_k_m.gguf", "c1e659736d89ac1065fb495330fb824d94001974a4bfa78e7270e43476a8d940"),
+    ("https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/8f248fa2072348f77a8bc37754e470de1f61866e/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf", "603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8"),
+];
 
-/// Per-engine digests, keyed by spec id and version so a version bump cannot keep
-/// silently matching an old pin.
-pub(crate) fn expected_engine_sha256(id: &str, version: &str) -> &'static str {
-    match (id, version) {
-        // ("llamacpp", "b1234") => "…",
-        // ("slothdb", "1.5.4") => "…",
-        _ => UNPINNED,
-    }
+/// The pinned SHA-256 for `url`, or [`UNPINNED`].
+pub(crate) fn pinned_sha256(url: &str) -> &'static str {
+    PINS.iter().find(|(u, _)| *u == url).map(|(_, d)| *d).unwrap_or(UNPINNED)
 }
 
-/// Per-model digest, keyed by the Hugging Face repo and file.
-pub(crate) fn expected_model_sha256(repo: &str, file: &str) -> &'static str {
-    match (repo, file) {
-        // ("Qwen/…", "…gguf") => "…",
-        _ => UNPINNED,
+/// Where an engine's release asset is published.
+fn engine_url(s: &EngineSpec, asset: &str) -> String {
+    // Tag naming convention varies per upstream: DuckDB + SlothDB
+    // both use v-prefixed semver tags (v1.5.3); llama.cpp uses raw
+    // build tags (b9305). Pre-prepending `v` to every version
+    // produces a 404 against ggml-org/llama.cpp.
+    let tag = if s.id == "llamacpp" { s.version.to_string() } else { format!("v{}", s.version) };
+    format!("https://github.com/{}/releases/download/{}/{}", s.repo, tag, asset)
+}
+
+/// Where a model file is published, at its pinned revision.
+pub(crate) fn model_url(m: &LlamaModel) -> String {
+    format!("https://huggingface.co/{}/resolve/{}/{}", m.repo, m.revision, m.file)
+}
+
+/// An artifact's bytes, from a local folder or from the network.
+pub(crate) struct Artifact {
+    pub(crate) reader: Box<dyn Read + Send>,
+    /// The size, when it is known before reading.
+    pub(crate) len: Option<u64>,
+}
+
+/// Downloads are forbidden (#288): a production machine provisioned in
+/// advance, which must never fetch a runtime for itself.
+pub(crate) fn offline() -> bool {
+    std::env::var("DUCKLE_OFFLINE")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// Open an artifact by the URL it is published at (#288).
+///
+/// A file named like the URL's last segment in `DUCKLE_ARTIFACT_DIR` is used
+/// with no network at all, which is how an air-gapped machine installs.
+/// Otherwise it is downloaded, unless `DUCKLE_OFFLINE` forbids the network, and
+/// then the error names the file to put in that folder. The caller checks a
+/// local file against the same pin as a download.
+pub(crate) fn open_artifact(client: &reqwest::blocking::Client, url: &str) -> Result<Artifact, String> {
+    let name = url.rsplit('/').next().unwrap_or(url);
+    let dir = std::env::var_os("DUCKLE_ARTIFACT_DIR").filter(|d| !d.is_empty()).map(PathBuf::from);
+    if let Some(path) = dir.as_ref().map(|d| d.join(name)).filter(|p| p.is_file()) {
+        let file = std::fs::File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let len = file.metadata().ok().map(|m| m.len());
+        return Ok(Artifact { reader: Box::new(file), len });
     }
+    if offline() {
+        let folder = match &dir {
+            Some(d) => format!("the folder DUCKLE_ARTIFACT_DIR names ({})", d.display()),
+            None => "a folder and point DUCKLE_ARTIFACT_DIR at it".to_string(),
+        };
+        return Err(format!(
+            "offline (DUCKLE_OFFLINE), so {name} is not downloaded. Put the file published at {url} in {folder}."
+        ));
+    }
+    let resp = client.get(url).send().map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {} from {url}", resp.status().as_u16()));
+    }
+    let len = resp.content_length();
+    Ok(Artifact { reader: Box::new(resp), len })
 }
 
 pub(crate) fn hex_sha256(bytes: &[u8]) -> String {
@@ -291,14 +390,13 @@ pub(crate) fn hex_sha256(bytes: &[u8]) -> String {
 /// Compare a computed digest against the pinned one.
 ///
 /// Fails closed: a mismatch is an error, never a warning, because the artifact is
-/// about to be executed. The caller must delete any partially written file before
+/// about to be executed - and so is an artifact with no pin at all. The caller must delete any partially written file before
 /// propagating, or the next run finds it on disk and skips the download entirely.
 pub(crate) fn verify_download(label: &str, actual_hex: &str, expected: &str) -> Result<(), String> {
     if expected == UNPINNED {
-        eprintln!(
-            "duckle: {label} is not pinned to a checksum, so only TLS vouches for it. See UNPINNED in engine_manager.rs."
-        );
-        return Ok(());
+        return Err(format!(
+            "{label} has no pinned checksum, so it was not installed: nothing but TLS would vouch for it. Record its SHA-256 in PINS in engine_manager.rs."
+        ));
     }
     if !actual_hex.eq_ignore_ascii_case(expected) {
         return Err(format!(
@@ -373,8 +471,12 @@ pub fn llama_model_path(app_data: &Path) -> PathBuf {
 
 /// Release asset name for this OS/arch, or None if unsupported.
 fn asset_for(s: &EngineSpec) -> Option<String> {
-    let os = std::env::consts::OS;
-    let arch = std::env::consts::ARCH;
+    asset_for_platform(s, std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// An engine's release asset for an OS/arch, so the pin check can walk every
+/// platform rather than only the one it runs on.
+fn asset_for_platform(s: &EngineSpec, os: &str, arch: &str) -> Option<String> {
     match s.id {
         "duckdb" => Some(
             match (os, arch) {
@@ -454,27 +556,17 @@ pub fn ensure_cross_duckdb(app_data: &Path, os: &str, arch: &str) -> Result<Path
     }
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
-    let url = format!(
-        "https://github.com/{}/releases/download/v{}/{}",
-        DUCKDB.repo, DUCKDB_VERSION, asset
-    );
+    let url = engine_url(&DUCKDB, asset);
     let client = reqwest::blocking::Client::builder()
         .user_agent("duckle")
         .use_preconfigured_tls(duckle_duckdb_engine::tls::build_client_config())
         .build()
         .map_err(|e| e.to_string())?;
-    let resp = client.get(&url).send().map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Couldn't download DuckDB for {}-{} (HTTP {}). The release v{} may not exist yet.",
-            os,
-            arch,
-            resp.status().as_u16(),
-            DUCKDB_VERSION
-        ));
-    }
-    let expected = resp.content_length();
-    let bytes = resp.bytes().map_err(|e| e.to_string())?;
+    let mut fetched = open_artifact(&client, &url)
+        .map_err(|e| format!("Couldn't download DuckDB {} for {}-{}: {}", DUCKDB_VERSION, os, arch, e))?;
+    let expected = fetched.len;
+    let mut bytes = Vec::new();
+    fetched.reader.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     // Reject a truncated transfer before baking the binary into a shipped
     // artifact: a short read here would otherwise produce a corrupt bundled
     // duckdb that only fails on the target. A DuckDB CLI archive is multi-MB, so a
@@ -499,7 +591,7 @@ pub fn ensure_cross_duckdb(app_data: &Path, os: &str, arch: &str) -> Result<Path
         ));
     }
     // Before the archive is opened, let alone the binary extracted and run.
-    verify_download("the DuckDB CLI download", &hex_sha256(&bytes), DUCKDB_SHA256)?;
+    verify_download("the DuckDB CLI download", &hex_sha256(&bytes), pinned_sha256(&url))?;
 
     // DuckDB CLI archives ship a single self-contained binary named duckdb(.exe).
     if !extract_tar_gz(&bytes, &dir, &target, bin_name, bin_name)? {
@@ -611,6 +703,11 @@ fn probed_version(bin: &Path, s: &EngineSpec) -> Option<String> {
 /// and the rest of the extensions; the missing one will autoload (or
 /// fail loudly) the first time it's actually used.
 fn install_duckdb_extensions<F: FnMut(InstallProgress)>(bin: &Path, on_progress: &mut F) {
+    // Offline, the extensions come with the machine's provisioning: DuckDB
+    // fetching them itself is a download like any other (#288).
+    if offline() {
+        return;
+    }
     let total = DUCKDB_EXTENSIONS.len() as u32;
     for (i, ext) in DUCKDB_EXTENSIONS.iter().enumerate() {
         on_progress(InstallProgress::InstallingExtension {
@@ -912,19 +1009,7 @@ fn install_spec<F: FnMut(InstallProgress)>(
             std::env::consts::ARCH
         )
     })?;
-    // Tag naming convention varies per upstream: DuckDB + SlothDB
-    // both use v-prefixed semver tags (v1.5.3); llama.cpp uses raw
-    // build tags (b9305). Pre-prepending `v` to every version
-    // produces a 404 against ggml-org/llama.cpp.
-    let tag = if s.id == "llamacpp" {
-        s.version.to_string()
-    } else {
-        format!("v{}", s.version)
-    };
-    let url = format!(
-        "https://github.com/{}/releases/download/{}/{}",
-        s.repo, tag, asset
-    );
+    let url = engine_url(s, &asset);
 
     let dir = engine_dir(app_data, s);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -936,22 +1021,15 @@ fn install_spec<F: FnMut(InstallProgress)>(
         .use_preconfigured_tls(duckle_duckdb_engine::tls::build_client_config())
         .build()
         .map_err(|e| e.to_string())?;
-    let mut resp = client.get(&url).send().map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Couldn't download {} (HTTP {}). The release {} may not exist yet.",
-            s.name,
-            resp.status().as_u16(),
-            s.version
-        ));
-    }
-    let total = resp.content_length();
+    let mut fetched = open_artifact(&client, &url)
+        .map_err(|e| format!("Couldn't download {} {}: {}", s.name, s.version, e))?;
+    let total = fetched.len;
     let mut buf: Vec<u8> = Vec::with_capacity(total.unwrap_or(0) as usize);
     let mut chunk = [0u8; 64 * 1024];
     let mut received: u64 = 0;
     on_progress(InstallProgress::Downloading { received: 0, total });
     loop {
-        let n = resp.read(&mut chunk).map_err(|e| e.to_string())?;
+        let n = fetched.reader.read(&mut chunk).map_err(|e| e.to_string())?;
         if n == 0 {
             break;
         }
@@ -965,7 +1043,7 @@ fn install_spec<F: FnMut(InstallProgress)>(
     verify_download(
         &format!("the {} download", s.name),
         &hex_sha256(&buf),
-        expected_engine_sha256(s.id, s.version),
+        pinned_sha256(&url),
     )?;
 
     let target = binary_path(app_data, s);
@@ -1189,10 +1267,7 @@ fn install_llama_model<F: FnMut(InstallProgress)>(
             return Ok(());
         }
     }
-    let url = format!(
-        "https://huggingface.co/{}/resolve/main/{}",
-        model.repo, model.file
-    );
+    let url = model_url(model);
     let client = reqwest::blocking::Client::builder()
         .user_agent("duckle")
         // No global timeout - the model is over a GB on home internet.
@@ -1201,14 +1276,10 @@ fn install_llama_model<F: FnMut(InstallProgress)>(
         .use_preconfigured_tls(duckle_duckdb_engine::tls::build_client_config())
         .build()
         .map_err(|e| e.to_string())?;
-    let mut resp = client.get(&url).send().map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Couldn't download Qwen model (HTTP {}). HuggingFace may be rate-limiting; try again in a minute.",
-            resp.status().as_u16()
-        ));
-    }
-    let total = resp.content_length();
+    let mut fetched = open_artifact(&client, &url).map_err(|e| {
+        format!("Couldn't download the {} model: {e}. Hugging Face may be rate-limiting; try again in a minute.", model.label)
+    })?;
+    let total = fetched.len;
     on_progress(InstallProgress::DownloadingModel { received: 0, total });
     // Stream to a temp sibling, validate, then rename into place - so a
     // truncated or interrupted download never lands at the model path where the
@@ -1222,7 +1293,7 @@ fn install_llama_model<F: FnMut(InstallProgress)>(
     let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
     let validated = (|| -> Result<(), String> {
         loop {
-            let n = resp.read(&mut chunk).map_err(|e| e.to_string())?;
+            let n = fetched.reader.read(&mut chunk).map_err(|e| e.to_string())?;
             if n == 0 {
                 break;
             }
@@ -1262,7 +1333,7 @@ fn install_llama_model<F: FnMut(InstallProgress)>(
         verify_download(
             &format!("the {} model download", model.file),
             &digest,
-            expected_model_sha256(model.repo, model.file),
+            pinned_sha256(&url),
         )?;
         Ok(())
     })();
@@ -1272,6 +1343,28 @@ fn install_llama_model<F: FnMut(InstallProgress)>(
         return Err(e);
     }
     finalize_download(&tmp, &target)
+}
+
+/// DUCKLE_ARTIFACT_DIR and DUCKLE_OFFLINE are process-wide, so the tests that set
+/// them, here and in dbt_engine, take turns.
+#[cfg(test)]
+pub(crate) static DOWNLOAD_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A wrong file in a fresh artifact folder, offline, so an install can only find
+/// the planted bytes, and nothing reaches the network.
+#[cfg(test)]
+pub(crate) fn plant_wrong_artifact(name: &str, len: usize) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(name), vec![7u8; len]).unwrap();
+    std::env::set_var("DUCKLE_ARTIFACT_DIR", dir.path());
+    std::env::set_var("DUCKLE_OFFLINE", "1");
+    dir
+}
+
+#[cfg(test)]
+pub(crate) fn clear_artifact_env() {
+    std::env::remove_var("DUCKLE_ARTIFACT_DIR");
+    std::env::remove_var("DUCKLE_OFFLINE");
 }
 
 #[cfg(test)]
@@ -1307,13 +1400,150 @@ mod download_verification_tests {
         verify_download("test artifact", &d.to_uppercase(), &d).unwrap();
     }
 
-    /// An unpinned artifact still installs, because refusing every download until
-    /// the table is filled in would break every install. Pinning one is what turns
-    /// enforcement on for it, with no second switch to forget.
+    /// #288: nothing unpinned is installed. Only TLS would vouch for it.
     #[test]
-    fn an_unpinned_artifact_warns_rather_than_failing() {
-        verify_download("test artifact", &hex_sha256(b"anything"), UNPINNED)
-            .expect("an unpinned artifact must not block the install");
+    fn an_unpinned_artifact_is_refused() {
+        let err = verify_download("test artifact", &hex_sha256(b"anything"), UNPINNED)
+            .expect_err("an unpinned artifact must not be installed");
+        assert!(err.contains("no pinned checksum"), "unhelpful: {err}");
+    }
+
+    /// Every URL any supported platform can download, through the same
+    /// functions the installs build them with.
+    fn every_download_url() -> Vec<String> {
+        const PLATFORMS: [(&str, &str); 6] = [
+            ("windows", "x86_64"),
+            ("windows", "aarch64"),
+            ("linux", "x86_64"),
+            ("linux", "aarch64"),
+            ("macos", "x86_64"),
+            ("macos", "aarch64"),
+        ];
+        let mut urls: Vec<String> = Vec::new();
+        for (os, arch) in PLATFORMS {
+            for s in ENGINES {
+                if let Some(asset) = asset_for_platform(s, os, arch) {
+                    urls.push(engine_url(s, &asset));
+                }
+            }
+            if let Some(asset) = duckdb_asset(os, arch) {
+                urls.push(engine_url(&DUCKDB, asset));
+            }
+            urls.extend(crate::dbt_engine::uv_url_for(os, arch));
+            urls.extend(crate::dbt_engine::fusion_url_for(os, arch));
+        }
+        urls.extend(LLAMA_MODELS.iter().map(model_url));
+        urls.sort();
+        urls.dedup();
+        urls
+    }
+
+    /// #288: a version bump without its digests fails here, in CI, rather than
+    /// as a refused install on somebody's machine.
+    #[test]
+    fn every_artifact_a_supported_platform_can_download_is_pinned() {
+        let urls = every_download_url();
+        let unpinned: Vec<&String> = urls.iter().filter(|u| pinned_sha256(u) == UNPINNED).collect();
+        assert!(unpinned.is_empty(), "no pin for {unpinned:#?}");
+        assert!(urls.len() >= 39, "only {} download URLs found - the walk is broken", urls.len());
+    }
+
+    /// And the other way: a pin no download asks for is a stale version's,
+    /// left behind by a bump.
+    #[test]
+    fn every_pin_is_for_a_download_something_makes() {
+        let urls = every_download_url();
+        let stale: Vec<&str> = PINS.iter().map(|(u, _)| *u).filter(|u| !urls.iter().any(|x| x == u)).collect();
+        assert!(stale.is_empty(), "pins nothing downloads: {stale:#?}");
+    }
+
+    use super::DOWNLOAD_ENV as ENV;
+
+    /// #288: an air-gapped machine installs from a folder. Port 9 has nothing
+    /// listening, so getting the bytes at all proves no request was made.
+    #[test]
+    fn a_file_in_the_artifact_folder_is_used_without_the_network() {
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("tool.tar.gz"), b"local bytes").unwrap();
+        std::env::set_var("DUCKLE_ARTIFACT_DIR", dir.path());
+        std::env::set_var("DUCKLE_OFFLINE", "1");
+        let got = open_artifact(&reqwest::blocking::Client::new(), "http://127.0.0.1:9/releases/tool.tar.gz");
+        std::env::remove_var("DUCKLE_ARTIFACT_DIR");
+        std::env::remove_var("DUCKLE_OFFLINE");
+        let mut fetched = got.expect("served from the folder");
+        let mut bytes = Vec::new();
+        fetched.reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"local bytes");
+        assert_eq!(fetched.len, Some(11));
+    }
+
+    /// #288: offline, nothing is fetched, and the error says what to provide.
+    #[test]
+    fn offline_refuses_to_download_and_names_the_file_to_provide() {
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("DUCKLE_ARTIFACT_DIR");
+        std::env::set_var("DUCKLE_OFFLINE", "1");
+        let got = open_artifact(&reqwest::blocking::Client::new(), "http://127.0.0.1:9/releases/tool.tar.gz");
+        std::env::remove_var("DUCKLE_OFFLINE");
+        let err = got.err().expect("an offline machine downloads nothing");
+        assert!(err.contains("tool.tar.gz") && err.contains("DUCKLE_ARTIFACT_DIR"), "{err}");
+    }
+
+    /// #288: DuckDB fetches its own extensions, so offline it is not asked to.
+    #[test]
+    fn offline_does_not_fetch_duckdb_extensions() {
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("DUCKLE_OFFLINE", "1");
+        let mut events = 0;
+        install_duckdb_extensions(Path::new("no-such-duckdb"), &mut |_| events += 1);
+        std::env::remove_var("DUCKLE_OFFLINE");
+        assert_eq!(events, 0, "an offline install asked DuckDB for its extensions");
+    }
+
+    /// #288: a file from the folder is held to the same pin a download is. A
+    /// cross-target DuckDB is the build-a-bundle path; over 1 MB so it passes
+    /// the size check and reaches the pin.
+    #[test]
+    fn the_cross_target_duckdb_refuses_a_wrong_file_from_the_folder() {
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let app = tempfile::tempdir().unwrap();
+        let _dir = plant_wrong_artifact("duckdb-cli-linux-amd64.tar.gz", 1_100_000);
+        let got = ensure_cross_duckdb(app.path(), "linux", "x86_64");
+        clear_artifact_env();
+        let err = got.expect_err("a file that does not match its pin is not installed");
+        assert!(err.contains("failed checksum verification"), "{err}");
+    }
+
+    /// The same for an engine install, with this machine's asset.
+    #[test]
+    fn an_engine_install_refuses_a_wrong_file_from_the_folder() {
+        let Some(asset) = asset_for(&SLOTHDB) else { return };
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let app = tempfile::tempdir().unwrap();
+        let _dir = plant_wrong_artifact(&asset, 4096);
+        let got = install(app.path(), "slothdb", None, |_| {});
+        clear_artifact_env();
+        let err = got.expect_err("a file that does not match its pin is not installed");
+        assert!(err.contains("failed checksum verification"), "{err}");
+    }
+
+    /// The same for a Duckie model. GGUF magic first, so the header check passes
+    /// and the pin is what refuses it; and nothing is left at the model path.
+    #[test]
+    fn a_model_install_refuses_a_wrong_file_from_the_folder() {
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let app = tempfile::tempdir().unwrap();
+        let model = llama_model(None);
+        // The engine's own install makes this folder before the model's.
+        std::fs::create_dir_all(engine_dir(app.path(), &LLAMACPP)).unwrap();
+        let dir = plant_wrong_artifact(model.file, 0);
+        std::fs::write(dir.path().join(model.file), b"GGUF and then not the model").unwrap();
+        let got = install_llama_model(app.path(), None, &mut |_| {});
+        clear_artifact_env();
+        let err = got.expect_err("a file that does not match its pin is not installed");
+        assert!(err.contains("failed checksum verification"), "{err}");
+        assert!(!engine_dir(app.path(), &LLAMACPP).join(model.file).exists());
     }
 }
 
