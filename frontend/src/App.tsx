@@ -98,7 +98,7 @@ import ConfirmModal from './workflow-ui/ConfirmModal';
 import EdgeEditorModal from './canvas/EdgeEditorModal';
 import BreakpointModal from './canvas/BreakpointModal';
 import RecycleBinModal from './workflow-ui/RecycleBinModal';
-import { SubflowPortsContext, subflowPorts } from './canvas/subflow-ports';
+import { SubflowPortsContext, subflowPorts, subflowStepLabels } from './canvas/subflow-ports';
 import { extractSubflow } from './canvas/subflow-extract';
 import { linkPort, linkRows, withBreakpoint } from './link-rows';
 import VisualMapperModal, {
@@ -1717,10 +1717,11 @@ export default function App() {
     }, []);
 
     const nodeLabels = useMemo(() => {
-        const m: Record<string, string> = {};
+        // A Sub-flow node's steps run under ids the canvas does not show.
+        const m: Record<string, string> = subflowStepLabels(nodes, id => pipelineData[id] as Parameters<typeof subflowPorts>[0]);
         for (const n of nodes) m[n.id] = n.data.label;
         return m;
-    }, [nodes]);
+    }, [nodes, pipelineData]);
 
     // A link as people read it: "Read orders -> Keep paid", with its port when not main.
     const linkLabel = useCallback(

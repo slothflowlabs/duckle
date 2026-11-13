@@ -53,7 +53,7 @@ import {
 } from '../src/geo/map-view';
 import { getManifest } from '../src/workflow-ui/fields/component-manifests';
 import { batchesOf, describeBatch, restoredRepo, trashEntry, trashFileName } from '../src/recycle-bin';
-import { subflowPorts } from '../src/canvas/subflow-ports';
+import { subflowPorts, subflowStepLabels } from '../src/canvas/subflow-ports';
 import { extractSubflow } from '../src/canvas/subflow-extract';
 import { caseProblem, cleaned, dummyInput, guessGenerator, listOf, newCase, newSuite } from '../src/test-cases';
 import {
@@ -2224,6 +2224,29 @@ function context(name: string, vars: Record<string, string>): RepoItem {
 {
     const codes = validatePipeline([node('c', 'ctl.subflow', { subflowRef: 'p_sub' })], []).issues.map(i => i.code);
     check('subflow: a Sub-flow node with no upstream is not flagged as missing one', !codes.includes('missing-required-input'), codes.join(','));
+}
+
+// ---------------------------------------------------------------------------
+// A run names a sub-flow's steps <node>__<step>; the run panel shows them as
+// the engine labels them, "<node> / <step>", nested sub-flows included.
+// ---------------------------------------------------------------------------
+{
+    const step = (id: string, componentId: string, label: string, properties: Record<string, unknown> = {}) => ({
+        id, data: { label, componentId, properties },
+    });
+    const pipelines: Record<string, { nodes: ReturnType<typeof step>[] }> = {
+        p_outer: { nodes: [step('in', 'ctl.subflow.in', 'In'), step('tidy', 'xf.filter', 'Tidy'),
+                           step('inner', 'ctl.subflow', 'Inner', { subflowRef: 'p_inner' }), step('out', 'ctl.subflow.out', 'Out')] },
+        p_inner: { nodes: [step('in', 'ctl.subflow.in', 'In'), step('dbl', 'xf.addcol', 'Double'), step('out', 'ctl.subflow.out', 'Out')] },
+    };
+    const labels = subflowStepLabels([step('call', 'ctl.subflow', 'Clean', { subflowRef: 'p_outer' })], id => pipelines[id]);
+    check(
+        'subflow-labels: steps, a nested call and its steps are named as the engine names them; boundaries are not steps',
+        JSON.stringify(labels) === JSON.stringify({
+            call__tidy: 'Clean / Tidy', call__inner: 'Clean / Inner', call__inner__dbl: 'Clean / Inner / Double',
+        }),
+        JSON.stringify(labels),
+    );
 }
 
 if (failures.length) {
