@@ -45,6 +45,10 @@ export function serverSchedule(s: Schedule | undefined, name: string): Record<st
         ...(s.timezone ? { timezone: s.timezone } : {}),
         ...(s.exclude ? { exclude: s.exclude } : {}),
         ...(s.params ? { params: s.params } : {}),
+        // #296: the server's schedule API takes the policies now; absent keeps its own.
+        ...(s.overlap ? { overlap: s.overlap } : {}),
+        ...(s.misfire ? { misfire: s.misfire } : {}),
+        ...(s.catchup ? { catchup: s.catchup } : {}),
     };
 }
 

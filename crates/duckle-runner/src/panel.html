@@ -696,21 +696,33 @@ function renderSchedules(){
           ${['seconds','minutes','hours','days'].map(u=>`<option value="${u}"${splitEvery(sc.intervalSeconds||0).unit===u?' selected':''}>${u}</option>`).join('')}
         </select>
         <span class="muted" style="margin:0 4px">or cron</span>
-        <input type="text" id="cr-${esc(p.id)}" value="${esc(sc.cron||'')}" placeholder="0 9 * * 1" title="5-field cron in local time (min hour day-of-month month day-of-week); overrides the interval when set" style="width:104px"></td>
+        <input type="text" id="cr-${esc(p.id)}" value="${esc(sc.cron||'')}" placeholder="0 9 * * 1" title="5-field cron in local time (min hour day-of-month month day-of-week); overrides the interval when set" style="width:104px">
+        <div class="muted" style="margin-top:6px">if still running
+          <select id="ov-${esc(p.id)}" title="What becomes of an occurrence that comes due while the previous run is still going. Every outcome is recorded.">
+            ${OVERLAP.map(([v,l])=>`<option value="${v}"${(sc.overlap||'skip')===v?' selected':''}>${l}</option>`).join('')}
+          </select>
+          <span style="margin-left:6px">missed while down</span>
+          <select id="mf-${esc(p.id)}" title="What becomes of cron occurrences that came due while the server was down, within the schedule's catch-up bounds">
+            ${MISFIRE.map(([v,l])=>`<option value="${v}"${(sc.misfire||'skip')===v?' selected':''}>${l}</option>`).join('')}
+          </select></div></td>
       <td style="text-align:right"><button class="btn" onclick="saveSched(${jsq(p.id)})">Save</button>
         <button class="btn primary" onclick="runJob(${jsq(p.file)},${jsq(p.id)},this)">Run now</button></td>
     </tr>`;
   }).join('');
 }
+// #296: what a schedule does when a run is still going, and with occurrences it missed.
+const OVERLAP=[['skip','skip it'],['queue','run it after'],['replace','stop the old run'],['allow','run both']];
+const MISFIRE=[['skip','skip them'],['latest','run the latest'],['all','run each']];
 async function saveSched(id){
   const cron=($('cr-'+id).value||'').trim();
   const enabled=$('en-'+id).checked;
   const intervalSeconds=joinEvery(parseInt($('iv-'+id).value||'0',10), $('iu-'+id).value);
+  const overlap=$('ov-'+id).value, misfire=$('mf-'+id).value;
   const r=await api('/api/schedules',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id, enabled, intervalSeconds, cron})});
+    body:JSON.stringify({id, enabled, intervalSeconds, cron, overlap, misfire})});
   if(r&&r.error){ toast(r.error); return; }
   toast('Schedule saved for '+id);
-  const p=PIPES.find(x=>x.id===id); if(p) p.schedule={enabled,intervalSeconds,cron};
+  const p=PIPES.find(x=>x.id===id); if(p) p.schedule={...p.schedule,enabled,intervalSeconds,cron,overlap,misfire};
   renderJobs();
 }
 

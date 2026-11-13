@@ -44,6 +44,11 @@ pub enum Decision {
     /// An exclusion calendar covered it (#296). Separate from `Skipped` because
     /// it is a configured intention rather than a policy consequence.
     Excluded,
+    /// It came due while the schedule's previous run was still going, and the
+    /// overlap policy holds it until that run ends (#296). Recorded again, as
+    /// `fired` or `skipped`, once that is decided: an occurrence is what its
+    /// latest record says, and the ledger stays append-only.
+    Queued { reason: String },
 }
 
 impl Decision {
@@ -52,6 +57,7 @@ impl Decision {
             Decision::Fired => "fired",
             Decision::Skipped { .. } => "skipped",
             Decision::Excluded => "excluded",
+            Decision::Queued { .. } => "queued",
         }
     }
 }
@@ -206,6 +212,87 @@ pub fn read(workspace: &Path) -> Vec<Occurrence> {
 /// The ids already recorded, for the duplicate check a restart depends on.
 pub fn recorded(workspace: &Path) -> std::collections::BTreeSet<String> {
     read(workspace).into_iter().map(|o| o.occurrence_id).collect()
+}
+
+/// The same occurrence, decided again. The ledger is append-only, so a queued
+/// occurrence that runs, or is superseded, gets a second record with the same id.
+pub fn decided(occ: &Occurrence, decision: Decision, decided_at: &str) -> Occurrence {
+    Occurrence { decision, decided_at: decided_at.to_string(), ..occ.clone() }
+}
+
+/// This schedule's occurrences whose latest record is `queued`, oldest first:
+/// the ones still waiting for a previous run to end.
+///
+/// Read from the ledger rather than kept in memory, so an occurrence that was
+/// waiting when the server stopped still runs when it comes back.
+pub fn waiting(workspace: &Path, schedule_id: &str) -> Vec<Occurrence> {
+    let mut latest: std::collections::BTreeMap<String, Occurrence> = Default::default();
+    for occ in read(workspace).into_iter().filter(|o| o.schedule_id == schedule_id) {
+        latest.insert(occ.occurrence_id.clone(), occ);
+    }
+    let mut out: Vec<Occurrence> =
+        latest.into_values().filter(|o| matches!(o.decision, Decision::Queued { .. })).collect();
+    out.sort_by(|a, b| a.scheduled_for.cmp(&b.scheduled_for));
+    out
+}
+
+/// What to do with an occurrence that comes due while the schedule's previous
+/// run is still going (#296).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Overlap {
+    /// Record it as skipped and run nothing. What every schedule did before the
+    /// policy existed, and the default, so none of them changes (AC5).
+    #[default]
+    Skip,
+    /// Run it once the previous run ends.
+    Queue,
+    /// Stop the previous run, then run this one.
+    Replace,
+    /// Run it alongside the previous run. Resource pools still apply.
+    Allow,
+}
+
+/// What becomes of an occurrence that came due while its schedule's previous run
+/// is still going.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OnOverlap {
+    /// Start it anyway.
+    Run,
+    /// Record it as skipped, for this reason.
+    Skip(String),
+    /// Record it as queued, for this reason, and start it once the schedule is
+    /// free. `stop_running` asks the run in the way to stop first; `supersede`
+    /// are waiting occurrences this one takes the place of, recorded skipped.
+    Wait { reason: String, stop_running: bool, supersede: Vec<Occurrence> },
+}
+
+/// Decide what the overlap policy makes of an occurrence that came due while the
+/// previous run is still going, given what is already waiting.
+///
+/// One occurrence waits at most. A scheduled run is not told which occurrence it
+/// is, so a second waiting run would repeat the first with the same inputs, and a
+/// schedule that is always slower than its interval would queue without end.
+pub fn on_overlap(policy: Overlap, waiting: &[Occurrence]) -> OnOverlap {
+    match policy {
+        Overlap::Allow => OnOverlap::Run,
+        Overlap::Skip => OnOverlap::Skip(
+            "the previous run was still going, and this schedule's overlap policy is skip".into(),
+        ),
+        Overlap::Queue if !waiting.is_empty() => OnOverlap::Skip(
+            "an earlier occurrence is already waiting for the previous run to end".into(),
+        ),
+        Overlap::Queue => OnOverlap::Wait {
+            reason: "waiting for the previous run to end".into(),
+            stop_running: false,
+            supersede: Vec::new(),
+        },
+        Overlap::Replace => OnOverlap::Wait {
+            reason: "stopping the previous run to run this one".into(),
+            stop_running: true,
+            supersede: waiting.to_vec(),
+        },
+    }
 }
 
 /// What to do about occurrences that came due while nobody was listening.
@@ -813,5 +900,120 @@ mod catching_up {
         let ws = tempfile::tempdir().unwrap();
         fired(ws.path(), utc(5, 3));
         assert!(overdue(ws.path(), Misfire::All, utc(5, 4)).is_empty(), "not due again yet");
+    }
+}
+
+/// #296: what an occurrence becomes when the previous run is still going.
+#[cfg(test)]
+mod overlapping {
+    use super::*;
+
+    fn queued(ws: &Path, schedule: &str, at: &str) -> Occurrence {
+        let occ = Occurrence {
+            occurrence_id: occurrence_id(schedule, at),
+            schedule_id: schedule.into(),
+            scheduled_for: at.into(),
+            local: String::new(),
+            timezone: None,
+            decision: Decision::Queued { reason: "waiting".into() },
+            run_id: None,
+            decided_at: at.into(),
+        };
+        record(ws, &occ).unwrap();
+        occ
+    }
+
+    /// Two instants whose ids sort the other way round from their times, so the
+    /// order `waiting` returns can only be the times' if it sorts by them.
+    fn times_whose_ids_sort_backwards() -> (String, String) {
+        for minute in 1..60 {
+            let (early, late) = ("2026-11-13T09:00:00+00:00".to_string(), format!("2026-11-13T10:{minute:02}:00+00:00"));
+            if occurrence_id("s", &early) > occurrence_id("s", &late) {
+                return (early, late);
+            }
+        }
+        unreachable!("an hour of minutes has a pair whose ids sort backwards")
+    }
+
+    #[test]
+    fn an_occurrence_waits_until_a_later_record_decides_it() {
+        let ws = tempfile::tempdir().unwrap();
+        let (early_at, late_at) = times_whose_ids_sort_backwards();
+        // Recorded newest first, so neither the ids nor the ledger's order is time.
+        let late = queued(ws.path(), "s", &late_at);
+        let early = queued(ws.path(), "s", &early_at);
+        queued(ws.path(), "other", "2026-11-13T09:00:00+00:00");
+        let ids = |w: Vec<Occurrence>| w.into_iter().map(|o| o.occurrence_id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(waiting(ws.path(), "s")),
+            vec![early.occurrence_id.clone(), late.occurrence_id.clone()],
+            "oldest first, and only this schedule's"
+        );
+
+        record(ws.path(), &decided(&early, Decision::Fired, "2026-11-13T10:05:00+00:00")).unwrap();
+        assert_eq!(ids(waiting(ws.path(), "s")), vec![late.occurrence_id.clone()], "it ran");
+        let skipped = Decision::Skipped { reason: "replaced".into() };
+        record(ws.path(), &decided(&late, skipped, "2026-11-13T10:06:00+00:00")).unwrap();
+        assert!(waiting(ws.path(), "s").is_empty(), "skipped is decided too");
+    }
+
+    #[test]
+    fn a_queued_decision_is_recorded_as_queued_with_its_reason() {
+        let occ = Occurrence {
+            occurrence_id: "occ-1".into(),
+            schedule_id: "s".into(),
+            scheduled_for: "2026-11-13T09:00:00+00:00".into(),
+            local: String::new(),
+            timezone: None,
+            decision: Decision::Queued { reason: "waiting".into() },
+            run_id: None,
+            decided_at: "2026-11-13T09:00:01+00:00".into(),
+        };
+        let json = serde_json::to_value(&occ).unwrap();
+        assert_eq!(json["decision"], "queued");
+        assert_eq!(json["reason"], "waiting");
+        assert_eq!(serde_json::from_value::<Occurrence>(json).unwrap(), occ);
+        assert_eq!(occ.decision.as_str(), "queued");
+    }
+
+    #[test]
+    fn skip_is_the_default_and_the_policy_reads_as_written() {
+        assert_eq!(Overlap::default(), Overlap::Skip);
+        for (text, policy) in [
+            ("skip", Overlap::Skip),
+            ("queue", Overlap::Queue),
+            ("replace", Overlap::Replace),
+            ("allow", Overlap::Allow),
+        ] {
+            assert_eq!(serde_json::from_value::<Overlap>(serde_json::json!(text)).unwrap(), policy);
+        }
+        assert!(serde_json::from_value::<Overlap>(serde_json::json!("qeue")).is_err());
+    }
+
+    #[test]
+    fn each_policy_decides_an_overlap_its_own_way() {
+        let ws = tempfile::tempdir().unwrap();
+        let older = queued(ws.path(), "s", "2026-11-13T09:00:00+00:00");
+
+        assert_eq!(on_overlap(Overlap::Allow, &[]), OnOverlap::Run);
+        assert!(matches!(on_overlap(Overlap::Skip, &[]), OnOverlap::Skip(r) if r.contains("still going")));
+        assert!(matches!(
+            on_overlap(Overlap::Queue, &[]),
+            OnOverlap::Wait { stop_running: false, ref supersede, .. } if supersede.is_empty()
+        ));
+        // One waits at most: a second would repeat the first with the same inputs.
+        assert!(matches!(
+            on_overlap(Overlap::Queue, std::slice::from_ref(&older)),
+            OnOverlap::Skip(r) if r.contains("already waiting")
+        ));
+        // Replace takes the place of whatever was waiting, and stops the run.
+        assert_eq!(
+            on_overlap(Overlap::Replace, std::slice::from_ref(&older)),
+            OnOverlap::Wait {
+                reason: "stopping the previous run to run this one".into(),
+                stop_running: true,
+                supersede: vec![older.clone()],
+            }
+        );
     }
 }

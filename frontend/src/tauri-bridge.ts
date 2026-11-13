@@ -1182,6 +1182,7 @@ export type Schedule = {
     exclude?: { weekdays?: string[]; dates?: string[] };
     misfire?: 'skip' | 'latest' | 'all';
     catchup?: { maxCatchupRuns: number; maxCatchupAgeDays: number };
+    overlap?: 'skip' | 'queue' | 'replace' | 'allow';
     /**
      * #317: the parameter values this schedule's runs are given, checked against the
      * pipeline's declared contract. Absent means "this save did not say", which the

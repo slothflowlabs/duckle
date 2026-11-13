@@ -629,6 +629,35 @@ Real holiday calendars vary by country, region and year; a first version that
 tried to know them would be wrong somewhere and confidently so. A date list is
 something an operator can check by reading it.
 
+### When a run is still going, or was missed
+
+Each schedule says what becomes of an occurrence that comes due while its previous run is still going:
+
+| `overlap` | what happens |
+|---|---|
+| `skip` (default) | it is recorded as skipped, with the reason. What every schedule did before. |
+| `queue` | it waits, and runs once the previous run ends. One waits at most: a scheduled run is not told which occurrence it is, so a second waiting run would repeat the first with the same inputs. |
+| `replace` | the previous run is stopped and this one runs. Only a run a schedule started is stopped: a run a person started finishes, and the occurrence waits for it. |
+| `allow` | it runs alongside. Resource pools still apply. |
+
+And of the occurrences that came due while the server was down:
+
+| `misfire` | what happens |
+|---|---|
+| `skip` (default) | each is recorded as skipped. |
+| `latest` | only the newest runs. |
+| `all` | each runs, oldest first, within `catchup: { maxCatchupRuns: 31, maxCatchupAgeDays: 45 }`. When there are more, the newest are kept. |
+
+Every outcome of a cron schedule goes into the occurrence ledger (`.duckle/occurrences.ndjson`), so "it was skipped" and "nothing happened" are never the same silence. A waiting occurrence is held there too, not in memory, so one that was waiting when the server stopped still runs when it comes back; that is the only record an interval schedule writes, since a sub-minute one would otherwise add a line per tick. The policies are set on the console's Schedules tab, through the schedule API, or in the `schedule` of a deploy. A value that is not one of a policy's names is refused, not read as the default:
+
+```bash
+curl -X POST https://duckle.internal/api/schedules \
+  -H "Authorization: Bearer $DUCKLE_TOKEN" \
+  -d '{"id":"orders-load","enabled":true,"cron":"0 3 * * *","overlap":"queue","misfire":"latest"}'
+```
+
+`duckle-runner serve` honours all of them. The desktop app's own scheduler honours the zone and the exclusion calendar, skips an occurrence that overlaps a run, and runs a missed one once when it next ticks.
+
 ### Typed pipeline parameters
 
 A pipeline can declare what it takes, and the contract is checked once for every
@@ -3219,7 +3248,7 @@ Open `http://localhost:8080`. The panel has eight views:
 
 - **Overview** - every pipeline with its last status, duration and next scheduled run, and a Run button.
 - **Runs** - run history across every pipeline (status, duration, rows, errors) with expandable per-pipeline run logs and optional auto-refresh.
-- **Schedules** - an editable cron or interval schedule per pipeline, showing what is running now and what is due next. An interval runs on the clock rather than from whenever a process started: every 15 minutes means :00, :15, :30 and :45 UTC, and every 24 hours means midnight UTC. That is what lets everything scheduling a workspace agree on what is due, and a restart neither fires early nor pushes the next run back.
+- **Schedules** - an editable cron or interval schedule per pipeline, showing what is running now and what is due next. An interval runs on the clock rather than from whenever a process started: every 15 minutes means :00, :15, :30 and :45 UTC, and every 24 hours means midnight UTC. That is what lets everything scheduling a workspace agree on what is due, and a restart neither fires early nor pushes the next run back. Each row also says what happens when the last run is still going and to occurrences missed while the server was down (see [When a run is still going, or was missed](#when-a-run-is-still-going-or-was-missed)).
 - **Plans** - several pipelines in the order you chose. See [Plans](#plans-several-pipelines-in-an-order-you-chose).
 - **Catalog** - everything the workspace reads and writes, who owns it, and what is written but never read. See [Workspace catalog](#workspace-catalog-what-reads-and-writes-what).
 - **Batches** - work queued for workers: progress, what is running now, what failed, and a retry for the failures.

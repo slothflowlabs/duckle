@@ -735,6 +735,25 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         bare !== null && !('timezone' in bare) && !('exclude' in bare),
         `sent ${JSON.stringify(bare)}`,
     );
+    // #296: and its overlap, misfire and catch-up policies, which the server's
+    // schedule API takes now. A schedule with none sends none, so the server keeps
+    // what it has.
+    const policed = serverSchedule(
+        { ...cron, overlap: 'queue', misfire: 'latest', catchup: { maxCatchupRuns: 3, maxCatchupAgeDays: 2 } },
+        'nightly',
+    );
+    check(
+        '#296: a deployed schedule carries its overlap, misfire and catch-up policies',
+        policed?.overlap === 'queue' &&
+            policed?.misfire === 'latest' &&
+            JSON.stringify(policed?.catchup) === JSON.stringify({ maxCatchupRuns: 3, maxCatchupAgeDays: 2 }),
+        `sent ${JSON.stringify(policed)}`,
+    );
+    check(
+        '#296: a schedule with no policies sends none',
+        bare !== null && !('overlap' in bare) && !('misfire' in bare) && !('catchup' in bare),
+        `sent ${JSON.stringify(bare)}`,
+    );
 }
 
 // ---------------------------------------------------------------------------

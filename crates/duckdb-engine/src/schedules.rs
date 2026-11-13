@@ -94,6 +94,10 @@ pub struct Schedule {
     /// difference between a catch-up and an outage.
     #[serde(default)]
     pub catchup: crate::occurrences::Bounds,
+    /// #296: what to do with an occurrence that comes due while this schedule's
+    /// previous run is still going. `skip` is the default and today's behaviour.
+    #[serde(default)]
+    pub overlap: crate::occurrences::Overlap,
     /// #317: the parameter values this schedule's runs are given, checked against
     /// the pipeline's declared contract like a value from any other surface.
     ///
@@ -270,6 +274,7 @@ mod tests {
             exclude: Default::default(),
             misfire: Default::default(),
             catchup: Default::default(),
+            overlap: Default::default(),
             params: None,
             id: format!("id-{pipeline}"),
             pipeline_id: pipeline.into(),

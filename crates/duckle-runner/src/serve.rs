@@ -249,6 +249,9 @@ struct LiveRun {
     /// DuckDB child, so even a long query stops promptly.
     engine: DuckdbEngine,
     finished: Option<Value>,
+    /// Started by a schedule (#296). `overlap: replace` stops only these: a run a
+    /// person started is never ended by a schedule coming due.
+    scheduled: bool,
 }
 
 /// How many finished runs to remember in memory. The durable answer is the run
@@ -2080,7 +2083,7 @@ fn metrics_body(state: &State) -> String {
         ),
         (
             "duckle_runs_tracked",
-            "Async runs this process is still holding, finished or not.",
+            "Runs this process is still holding, API and scheduled, finished or not.",
             accepted,
         ),
         (
@@ -3003,6 +3006,7 @@ fn dispatch_console(req: &Request, state: &Arc<State>, who: console_auth::Identi
                         started_at: chrono::Utc::now().to_rfc3339(),
                         engine: engine.clone(),
                         finished: None,
+                        scheduled: false,
                     },
                 );
             }
@@ -3766,6 +3770,8 @@ fn load_schedules(state: &State) -> Result<Value, String> {
                 // policy that does nothing.
                 "misfire": s.misfire,
                 "catchup": s.catchup,
+                // #296: and the overlap policy, which the tick reads from here.
+                "overlap": s.overlap,
                 // #317: the parameter values the schedule binds, for the same
                 // reason as every field above - absent here, absent to the run.
                 "params": s.params,
@@ -3833,6 +3839,11 @@ fn migrate_legacy_schedules(workspace: &Path) {
                     .unwrap_or_default(),
                 catchup: cfg
                     .get("catchup")
+                    .cloned()
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .unwrap_or_default(),
+                overlap: cfg
+                    .get("overlap")
                     .cloned()
                     .and_then(|v| serde_json::from_value(v).ok())
                     .unwrap_or_default(),
@@ -3963,6 +3974,29 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
     if let Some(calendar) = &exclude {
         calendar.validate()?;
     }
+    // #296: the policies, which no surface could set before: a schedule got one
+    // only by editing schedules.json by hand. The same three answers as above,
+    // and a name that is not one of a policy's is refused, not read as the default.
+    let overlap: Option<duckle_duckdb_engine::occurrences::Overlap> = body
+        .get("overlap")
+        .map(|v| {
+            serde_json::from_value(v.clone())
+                .map_err(|_| format!("Invalid overlap policy {v}: use skip, queue, replace or allow"))
+        })
+        .transpose()?;
+    let misfire: Option<duckle_duckdb_engine::occurrences::Misfire> = body
+        .get("misfire")
+        .map(|v| {
+            serde_json::from_value(v.clone())
+                .map_err(|_| format!("Invalid misfire policy {v}: use skip, latest or all"))
+        })
+        .transpose()?;
+    let catchup: Option<duckle_duckdb_engine::occurrences::Bounds> = body
+        .get("catchup")
+        .map(|v| {
+            serde_json::from_value(v.clone()).map_err(|e| format!("Invalid catch-up bounds: {e}"))
+        })
+        .transpose()?;
     // Seconds are what the store holds. A console that sends only minutes is
     // still honoured, but one that echoes back the intervalSeconds it was given
     // keeps a sub-minute schedule exactly as the desktop editor set it.
@@ -4030,6 +4064,15 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
                 if let Some(values) = params.clone() {
                     s.params = Some(values);
                 }
+                if let Some(policy) = overlap {
+                    s.overlap = policy;
+                }
+                if let Some(policy) = misfire {
+                    s.misfire = policy;
+                }
+                if let Some(bounds) = catchup {
+                    s.catchup = bounds;
+                }
                 // A changed trigger invalidates the time this process armed.
                 s.next_run_at = None;
             }
@@ -4042,11 +4085,11 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
                 kind,
                 timezone: timezone.clone().flatten(),
                 exclude: exclude.clone().unwrap_or_default(),
-                // #296: this route does not edit the misfire policy, so a
-                // schedule it CREATES takes the default (skip), which is the
-                // behaviour every schedule had before the policy existed.
-                misfire: Default::default(),
-                catchup: Default::default(),
+                // #296: a policy this save does not name takes its default,
+                // which is the behaviour every schedule had before it existed.
+                misfire: misfire.unwrap_or_default(),
+                catchup: catchup.unwrap_or_default(),
+                overlap: overlap.unwrap_or_default(),
                 params: params.clone(),
                 last_run_at: None,
                 last_run_status: None,
@@ -4118,17 +4161,61 @@ impl Drop for RunningGuard<'_> {
 /// disk. Skipping is the right response to a clash: the next tick comes round
 /// anyway, and two runs of one pipeline race on the sink and on the
 /// `xf.incremental` watermark, which is how a load quietly skips rows.
-fn run_scheduled(state: &State, id: &str, file: &str, params: &HashMap<String, String>) {
-    let _lock = match duckle_duckdb_engine::runlock::try_acquire(&state.workspace, id) {
-        Some(l) => l,
-        None => {
-            eprintln!("duckle-runner: scheduled {id} already running elsewhere, skipped");
-            return;
-        }
+fn run_scheduled(
+    state: &Arc<State>,
+    id: &str,
+    file: &str,
+    params: &HashMap<String, String>,
+    guard: RunGuard,
+) {
+    let _lock = match guard {
+        RunGuard::Held(lock) => Some(lock),
+        RunGuard::Shared => None,
+        RunGuard::Take => match duckle_duckdb_engine::runlock::try_acquire(&state.workspace, id) {
+            Some(l) => Some(l),
+            None => {
+                eprintln!("duckle-runner: scheduled {id} already running elsewhere, skipped");
+                return;
+            }
+        },
     };
+    // #296: registered like a run the API started, so the console's Stop, a
+    // cancel passed on by another server, and `overlap: replace` all reach it.
+    // A scheduled run used to keep its engine to itself, so stopping one wrote
+    // a request that nothing read, and the run went on to write its sinks.
+    let run_id = new_run_id(id);
+    let engine = DuckdbEngine::new(state.duckdb.clone());
+    if let Ok(mut runs) = state.runs.lock() {
+        runs.insert(
+            run_id.clone(),
+            LiveRun {
+                pipeline_id: id.to_string(),
+                started_at: chrono::Utc::now().to_rfc3339(),
+                engine: engine.clone(),
+                finished: None,
+                scheduled: true,
+            },
+        );
+    }
+    let (watching, watched) = (Arc::clone(state), run_id.clone());
+    std::thread::spawn(move || watch_for_remote_cancel(&watching, &watched));
     // #317: named as the schedule's, so the run's provenance record says where
-    // each value came from.
-    match execute_one_with(state, file, "scheduled", &sourced(params, "schedule"), None, None) {
+    // each value came from. A panic is an outcome like any other here: an
+    // unwind would leave the registered run unfinished, and its cancel watcher
+    // polling for it, for the life of the process.
+    let outcome = outcome_or_panic_error("the scheduled run", || {
+        execute_one_with(state, file, "scheduled", &sourced(params, "schedule"), Some(engine), Some(&run_id))
+    });
+    if let Ok(mut runs) = state.runs.lock() {
+        if let Some(live) = runs.get_mut(&run_id) {
+            live.finished = Some(match &outcome {
+                Ok(v) => v.clone(),
+                Err(e) => json!({ "id": id, "status": "error", "error": e }),
+            });
+        }
+        forget_oldest_finished_runs(&mut runs);
+    }
+    match outcome {
         Ok(v) => {
             let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("?");
             eprintln!("duckle-runner: scheduled {} -> {}", id, status);
@@ -4841,12 +4928,12 @@ fn catch_up_schedule(
                 eprintln!("duckle-runner: schedule {id}: occurrence not recorded ({e})");
             }
             eprintln!("duckle-runner: {id}: catching up {}", occ.at.to_rfc3339());
-            fire_schedule(&state, &id, &cfg, &pipes);
+            fire_schedule(&state, &id, &cfg, &pipes, RunGuard::Take);
         }
     });
 }
 
-/// #296: write the occurrence this tick is firing into the durable ledger.
+/// #296: write what became of an occurrence this tick decided into the durable ledger.
 ///
 /// Best effort, and deliberately: a ledger that could not be written is a gap
 /// in the record, and refusing to run the schedule because of it would turn a
@@ -4859,6 +4946,7 @@ fn record_occurrence(
     cfg: &Value,
     due: chrono::DateTime<chrono::Utc>,
     now: chrono::DateTime<chrono::Utc>,
+    decision: duckle_duckdb_engine::occurrences::Decision,
 ) {
     use duckle_duckdb_engine::occurrences;
     let timezone = cfg.get("timezone").and_then(|v| v.as_str());
@@ -4871,13 +4959,203 @@ fn record_occurrence(
         scheduled_for: due.to_rfc3339(),
         local,
         timezone: timezone.map(str::to_string),
-        decision: occurrences::Decision::Fired,
+        decision,
         run_id: None,
         decided_at: now.to_rfc3339(),
     };
     if let Err(e) = occurrences::record(&state.workspace, &entry) {
         eprintln!("duckle-runner: schedule {schedule_id}: occurrence not recorded ({e})");
     }
+}
+
+/// How a scheduled run keeps clear of another run of its pipeline (#296).
+enum RunGuard {
+    /// Taken by the tick while deciding, so nothing could start in between.
+    Held(duckle_duckdb_engine::runlock::RunLock),
+    /// Taken by the run itself, which is skipped when another process has it.
+    Take,
+    /// None: `overlap: allow` runs alongside whatever is going.
+    Shared,
+}
+
+/// Whether a schedule runs a plan, which takes no lock of its own: each of its
+/// pipelines takes one as the plan reaches it.
+fn runs_a_plan(cfg: &Value) -> bool {
+    cfg.get("planId").and_then(|v| v.as_str()).is_some_and(|p| !p.trim().is_empty())
+}
+
+/// #296: start an occurrence that has come due or, when the schedule's previous
+/// run is still going, do with it what the schedule's overlap policy says.
+///
+/// Decided before anything is recorded. The tick used to record `fired` and
+/// then hand over, so an occurrence the still-running schedule turned away was
+/// in the ledger as one that ran: exactly the silence AC1 exists to end.
+///
+/// `ledger` is false for an interval schedule, which records only an occurrence
+/// that waits, because the record is what keeps that one across a restart. A
+/// sub-minute schedule would otherwise append a line per tick to a ledger that
+/// is read whole.
+#[allow(clippy::too_many_arguments)]
+fn start_due(
+    state: &Arc<State>,
+    in_flight: &Arc<Mutex<std::collections::HashSet<String>>>,
+    idle: &mut std::collections::HashSet<String>,
+    id: &str,
+    cfg: &Value,
+    pipes: &HashMap<String, PathBuf>,
+    due: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+    ledger: bool,
+) {
+    use duckle_duckdb_engine::occurrences::{self, Decision, OnOverlap};
+    let busy_here = in_flight.lock().unwrap_or_else(|p| p.into_inner()).contains(id);
+    // Taken here and handed to the run, so nothing can start between finding the
+    // pipeline free and running it.
+    let free = if busy_here {
+        None
+    } else if runs_a_plan(cfg) {
+        Some(RunGuard::Take)
+    } else {
+        duckle_duckdb_engine::runlock::try_acquire(&state.workspace, id).map(RunGuard::Held)
+    };
+    if let Some(guard) = free {
+        if ledger {
+            record_occurrence(state, id, cfg, due, now, Decision::Fired);
+        }
+        dispatch(state, in_flight, id, cfg, pipes, guard);
+        return;
+    }
+    let overlap = cfg
+        .get("overlap")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    match occurrences::on_overlap(overlap, &occurrences::waiting(&state.workspace, id)) {
+        OnOverlap::Run => {
+            if ledger {
+                record_occurrence(state, id, cfg, due, now, Decision::Fired);
+            }
+            // Not through `dispatch`, which turns away a schedule already in
+            // flight - the very thing allowed here - and whose set holds one
+            // entry per schedule, so the first run to end would clear it while
+            // the other was still going.
+            let (state, id, cfg, pipes) = (Arc::clone(state), id.to_string(), cfg.clone(), pipes.clone());
+            std::thread::spawn(move || fire_schedule(&state, &id, &cfg, &pipes, RunGuard::Shared));
+        }
+        OnOverlap::Skip(reason) => {
+            eprintln!("duckle-runner: scheduled {id}: {reason}");
+            if ledger {
+                record_occurrence(state, id, cfg, due, now, Decision::Skipped { reason });
+            }
+        }
+        OnOverlap::Wait { reason, stop_running, supersede } => {
+            let at = now.to_rfc3339();
+            for older in &supersede {
+                let replaced = Decision::Skipped { reason: "replaced by a newer occurrence".into() };
+                if let Err(e) = occurrences::record(&state.workspace, &occurrences::decided(older, replaced, &at)) {
+                    eprintln!("duckle-runner: schedule {id}: occurrence not recorded ({e})");
+                }
+            }
+            // Recorded for an interval schedule too: it is what keeps the
+            // occurrence waiting across a restart.
+            record_occurrence(state, id, cfg, due, now, Decision::Queued { reason: reason.clone() });
+            idle.remove(id);
+            eprintln!("duckle-runner: scheduled {id}: {reason}");
+            if stop_running {
+                let asked = stop_runs_of(state, id);
+                eprintln!("duckle-runner: scheduled {id}: asked {asked} run(s) of it to stop");
+            }
+        }
+    }
+}
+
+/// #296: start the occurrence that has been waiting for this schedule's
+/// previous run, once that run has ended.
+///
+/// Read from the ledger, so an occurrence that was waiting when the server
+/// stopped still runs when it comes back. `idle` holds the schedules known to
+/// have none, so the ledger is read for each once after a start and afterwards
+/// only when one is queued.
+fn start_waiting(
+    state: &Arc<State>,
+    in_flight: &Arc<Mutex<std::collections::HashSet<String>>>,
+    idle: &mut std::collections::HashSet<String>,
+    id: &str,
+    cfg: &Value,
+    pipes: &HashMap<String, PathBuf>,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    use duckle_duckdb_engine::occurrences::{self, Decision};
+    if idle.contains(id) || in_flight.lock().unwrap_or_else(|p| p.into_inner()).contains(id) {
+        return;
+    }
+    if occurrences::waiting(&state.workspace, id).is_empty() {
+        idle.insert(id.to_string());
+        return;
+    }
+    let guard = if runs_a_plan(cfg) {
+        RunGuard::Take
+    } else {
+        match duckle_duckdb_engine::runlock::try_acquire(&state.workspace, id) {
+            Some(lock) => RunGuard::Held(lock),
+            // Still going in another process; asked again next tick.
+            None => return,
+        }
+    };
+    // Again, now the lock is held: another server may have started it meanwhile.
+    let Some(next) = occurrences::waiting(&state.workspace, id).into_iter().next() else {
+        idle.insert(id.to_string());
+        return;
+    };
+    let fired = occurrences::decided(&next, Decision::Fired, &now.to_rfc3339());
+    if let Err(e) = occurrences::record(&state.workspace, &fired) {
+        eprintln!("duckle-runner: schedule {id}: occurrence not recorded ({e})");
+    }
+    eprintln!("duckle-runner: scheduled {id}: running the occurrence that waited ({})", next.scheduled_for);
+    dispatch(state, in_flight, id, cfg, pipes, guard);
+}
+
+/// Ask every scheduled run of this pipeline that is still going to stop, for
+/// `overlap: replace`. This server's own directly; another server's through its
+/// receipt, which that server watches. How many were asked.
+///
+/// Only runs a schedule started: one a person started runs to the end, and the
+/// occurrence waits for it.
+fn stop_runs_of(state: &State, pipeline_id: &str) -> usize {
+    use duckle_duckdb_engine::retry;
+    let mut asked = 0;
+    let mut here = std::collections::HashSet::new();
+    if let Ok(runs) = state.runs.lock() {
+        for (run_id, live) in runs.iter() {
+            here.insert(run_id.clone());
+            if live.scheduled && live.pipeline_id == pipeline_id && live.finished.is_none() {
+                live.engine.request_cancel();
+                asked += 1;
+            }
+        }
+    }
+    let Ok(entries) = std::fs::read_dir(retry::dir(&state.workspace)) else { return asked };
+    for path in entries.flatten().map(|e| e.path()) {
+        if path.extension().is_none_or(|x| x != "json") {
+            continue;
+        }
+        let Some(r) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<retry::RunReceipt>(&t).ok())
+        else {
+            continue;
+        };
+        let going = r.state == retry::QUEUED || r.state == retry::RUNNING;
+        if going
+            && r.trigger == "scheduled"
+            && !here.contains(&r.run_id)
+            && receipt_pipeline(&r) == pipeline_id
+            && retry::request_cancel(&state.workspace, &r.run_id).is_ok()
+        {
+            asked += 1;
+        }
+    }
+    asked
 }
 
 /// #329: hand a due schedule to its own thread and return.
@@ -4910,6 +5188,7 @@ fn dispatch(
     id: &str,
     cfg: &Value,
     pipes: &HashMap<String, PathBuf>,
+    guard: RunGuard,
 ) {
     {
         let mut held = in_flight.lock().unwrap_or_else(|p| p.into_inner());
@@ -4927,7 +5206,7 @@ fn dispatch(
     // the point of handing it over.
     std::thread::spawn(move || {
         let _clear = InFlight::hold(in_flight, id.clone());
-        fire_schedule(&state, &id, &cfg, &pipes);
+        fire_schedule(&state, &id, &cfg, &pipes, guard);
     });
 }
 
@@ -5013,7 +5292,13 @@ impl Drop for Busy {
 /// Both triggers, cron and interval, arrive here, and both used to carry their own copy of
 /// the lookup. One copy means a schedule that names a plan is handled once rather than in
 /// two places that can drift.
-fn fire_schedule(state: &State, id: &str, cfg: &Value, pipes: &HashMap<String, PathBuf>) {
+fn fire_schedule(
+    state: &Arc<State>,
+    id: &str,
+    cfg: &Value,
+    pipes: &HashMap<String, PathBuf>,
+    guard: RunGuard,
+) {
     let plan_id = cfg
         .get("planId")
         .and_then(|v| v.as_str())
@@ -5031,7 +5316,7 @@ fn fire_schedule(state: &State, id: &str, cfg: &Value, pipes: &HashMap<String, P
     match pipes.get(id) {
         Some(path) => {
             let file = rel(&state.workspace, path);
-            run_scheduled(state, id, &file, &params);
+            run_scheduled(state, id, &file, &params, guard);
         }
         None => report_missing_pipeline(state, id),
     }
@@ -5166,6 +5451,8 @@ fn spawn_scheduler(state: Arc<State>) {
         // one, but only after paying for a thread to find out.
         let in_flight: Arc<Mutex<std::collections::HashSet<String>>> =
             Arc::new(Mutex::new(std::collections::HashSet::new()));
+        // #296: schedules known to have no occurrence waiting. See start_waiting.
+        let mut idle: std::collections::HashSet<String> = std::collections::HashSet::new();
         loop {
             std::thread::sleep(state.tick_interval);
             // First thing on every tick, so a tick that hangs or panics below
@@ -5263,6 +5550,9 @@ fn spawn_scheduler(state: Arc<State>) {
                                 // rather than re-arming from "now" and losing
                                 // the window - which is what this loop did,
                                 // because its arming state is in memory.
+                                // An occurrence left waiting for the previous run
+                                // goes first: it is older than anything below.
+                                start_waiting(&state, &in_flight, &mut idle, id, cfg, &pipes, now);
                                 catch_up_schedule(
                                     &state, &in_flight, id, cfg, &zone, &exclude, now, due, &pipes,
                                 );
@@ -5283,8 +5573,9 @@ fn spawn_scheduler(state: Arc<State>) {
                                         // schedule that fired and a schedule that
                                         // did not are otherwise the same silence
                                         // once the tick loop has moved on.
-                                        record_occurrence(&state, id, cfg, at, now);
-                                        dispatch(&state, &in_flight, id, cfg, &pipes);
+                                        start_due(
+                                            &state, &in_flight, &mut idle, id, cfg, &pipes, at, now, true,
+                                        );
                                     }
                                 }
                                 match rearm {
@@ -5315,13 +5606,15 @@ fn spawn_scheduler(state: Arc<State>) {
                     interval_armed.remove(id);
                     continue;
                 }
-                let slot = duckle_duckdb_engine::occurrences::interval_slot(chrono::Utc::now(), seconds);
+                let now = chrono::Utc::now();
+                start_waiting(&state, &in_flight, &mut idle, id, cfg, &pipes, now);
+                let slot = duckle_duckdb_engine::occurrences::interval_slot(now, seconds);
                 // First sighting arms and fires at the next instant on the grid, so a
                 // restart neither fires early nor pushes the schedule back. Re-armed whether
                 // or not the pipeline is there, so a missing one is not due on every tick.
                 let due = interval_armed.insert(id.clone(), slot).is_some_and(|armed| armed < slot);
                 if due && take_occurrence(&state, id, cfg, slot) {
-                    dispatch(&state, &in_flight, id, cfg, &pipes);
+                    start_due(&state, &in_flight, &mut idle, id, cfg, &pipes, slot, now, false);
                 }
             }
         }
@@ -5804,7 +6097,7 @@ mod tests {
 
         let pipes: std::collections::HashMap<String, std::path::PathBuf> =
             [("regional".to_string(), ws.join("pipelines").join("regional.json"))].into_iter().collect();
-        super::fire_schedule(&state, "regional", &cfg, &pipes);
+        super::fire_schedule(&state, "regional", &cfg, &pipes, super::RunGuard::Take);
         assert!(ws.join("out").join("us.csv").exists(), "the bound value did not reach the run");
         assert!(!ws.join("out").join("eu.csv").exists(), "the run fell back to the default");
     }
@@ -7405,6 +7698,7 @@ mod tests {
                 started_at: "2026-10-30T12:00:00Z".into(),
                 engine: engine.clone(),
                 finished: None,
+                scheduled: false,
             },
         );
         retry::accept(&ws, "run-1", "daily", "pipelines/daily.json");
@@ -7890,6 +8184,432 @@ mod tests {
             runs, fired,
             "the ledger says {fired} occurrences fired and {runs} runs actually happened"
         );
+    }
+
+    // ---- #296: overlap policies -------------------------------------------------
+
+    type InFlightSet = std::sync::Arc<Mutex<std::collections::HashSet<String>>>;
+
+    /// A workspace with one pipeline `p` that takes `wait_ms` to run.
+    fn overlap_workspace(
+        wait_ms: u64,
+    ) -> (tempfile::TempDir, std::path::PathBuf, std::collections::HashMap<String, std::path::PathBuf>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(ws.join("in.csv"), "id\n1\n").unwrap();
+        let file = ws.join("pipelines").join("p.json");
+        std::fs::write(
+            &file,
+            serde_json::json!({
+                "name": "p",
+                "nodes": [
+                    { "id": "s", "position": {"x":0,"y":0}, "data": { "label": "in", "componentId": "src.csv",
+                      "properties": { "path": ws.join("in.csv").to_string_lossy(), "hasHeader": true } } },
+                    { "id": "w", "position": {"x":0,"y":0}, "data": { "label": "wait", "componentId": "ctl.wait",
+                      "properties": { "duration": wait_ms, "unit": "ms" } } },
+                    { "id": "k", "position": {"x":0,"y":0}, "data": { "label": "out", "componentId": "snk.csv",
+                      "properties": { "path": ws.join("out.csv").to_string_lossy(), "hasHeader": true } } }
+                ],
+                "edges": [
+                    { "id": "e1", "source": "s", "target": "w", "data": { "connectionType": "main" } },
+                    { "id": "e2", "source": "w", "target": "k", "data": { "connectionType": "main" } }
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let pipes = [("p".to_string(), file)].into_iter().collect();
+        (tmp, ws, pipes)
+    }
+
+    /// Wait for `done`, failing rather than hanging when it never comes.
+    fn eventually(what: &str, done: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while !done() {
+            assert!(std::time::Instant::now() < deadline, "{what} never happened");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
+    /// Every ledger record for `p`, oldest first: (scheduled for, decision, reason).
+    fn ledger_of_p(ws: &std::path::Path) -> Vec<(String, String, String)> {
+        use duckle_duckdb_engine::occurrences::{self, Decision};
+        occurrences::read(ws)
+            .into_iter()
+            .filter(|o| o.schedule_id == "p")
+            .map(|o| {
+                let reason = match &o.decision {
+                    Decision::Skipped { reason } | Decision::Queued { reason } => reason.clone(),
+                    _ => String::new(),
+                };
+                (o.scheduled_for, o.decision.as_str().to_string(), reason)
+            })
+            .collect()
+    }
+
+    fn statuses_of_p(ws: &std::path::Path) -> Vec<String> {
+        let mut s: Vec<String> =
+            duckle_duckdb_engine::history::load_run_history(ws, "p").into_iter().map(|r| r.status).collect();
+        s.sort();
+        s
+    }
+
+    fn overlap_cfg(policy: &str) -> serde_json::Value {
+        serde_json::json!({ "id": "sched-p", "cron": "0 * * * *", "timezone": "UTC", "overlap": policy })
+    }
+
+    fn at(minute: u32) -> chrono::DateTime<chrono::Utc> {
+        use chrono::TimeZone;
+        chrono::Utc.with_ymd_and_hms(2026, 11, 13, 9, minute, 0).single().unwrap()
+    }
+
+    /// AC1: an occurrence the still-running schedule turned away is in the ledger
+    /// as skipped, with its reason. It was recorded as fired, before the hand-off
+    /// that then declined to run it.
+    #[test]
+    fn an_occurrence_that_overlaps_a_run_is_recorded_skipped_not_fired() {
+        let Ok(duckdb) = std::env::var("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipped: needs DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let (_tmp, ws, pipes) = overlap_workspace(0);
+        let state = local_state_using(&ws, duckdb.into());
+        let in_flight = InFlightSet::default();
+        let mut idle = std::collections::HashSet::new();
+        // Another process is running `p`.
+        let other = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+
+        super::start_due(&state, &in_flight, &mut idle, "p", &overlap_cfg("skip"), &pipes, at(0), at(0), true);
+        eventually("the hand-off settling", || in_flight.lock().unwrap().is_empty());
+        drop(other);
+
+        let ledger = ledger_of_p(&ws);
+        assert_eq!(ledger.len(), 1, "{ledger:?}");
+        assert_eq!(ledger[0].1, "skipped", "{ledger:?}");
+        assert!(ledger[0].2.contains("still going"), "{ledger:?}");
+        assert!(statuses_of_p(&ws).is_empty(), "nothing was to run");
+    }
+
+    /// `queue`: the occurrence waits in the ledger while the run in its way goes
+    /// on, then runs once that run has ended, recorded under the same identity.
+    #[test]
+    fn a_queued_occurrence_runs_once_the_run_in_its_way_has_ended() {
+        let Ok(duckdb) = std::env::var("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipped: needs DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let (_tmp, ws, pipes) = overlap_workspace(0);
+        let state = local_state_using(&ws, duckdb.into());
+        let in_flight = InFlightSet::default();
+        let mut idle = std::collections::HashSet::new();
+        let cfg = overlap_cfg("queue");
+        let other = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+
+        super::start_due(&state, &in_flight, &mut idle, "p", &cfg, &pipes, at(0), at(0), true);
+        super::start_waiting(&state, &in_flight, &mut idle, "p", &cfg, &pipes, at(1));
+        assert_eq!(
+            ledger_of_p(&ws).iter().map(|r| r.1.as_str()).collect::<Vec<_>>(),
+            vec!["queued"],
+            "nothing may start while the other run holds the pipeline"
+        );
+        assert!(statuses_of_p(&ws).is_empty());
+
+        drop(other);
+        super::start_waiting(&state, &in_flight, &mut idle, "p", &cfg, &pipes, at(2));
+        eventually("the waiting run", || statuses_of_p(&ws).len() == 1);
+        eventually("the hand-off settling", || in_flight.lock().unwrap().is_empty());
+
+        let ledger = ledger_of_p(&ws);
+        assert_eq!(
+            ledger.iter().map(|r| (r.0.as_str(), r.1.as_str())).collect::<Vec<_>>(),
+            vec![(ledger[0].0.as_str(), "queued"), (ledger[0].0.as_str(), "fired")],
+            "the same occurrence, queued and then run"
+        );
+        assert_eq!(statuses_of_p(&ws), vec!["ok"]);
+        assert!(duckle_duckdb_engine::occurrences::waiting(&ws, "p").is_empty());
+    }
+
+    /// One waits at most, and an interval schedule records only the one that
+    /// waits: its turned-away occurrences are not appended to the ledger.
+    #[test]
+    fn a_second_occurrence_does_not_queue_behind_one_already_waiting() {
+        let Ok(duckdb) = std::env::var("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipped: needs DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let (_tmp, ws, pipes) = overlap_workspace(0);
+        let state = local_state_using(&ws, duckdb.into());
+        let in_flight = InFlightSet::default();
+        let mut idle = std::collections::HashSet::new();
+        let cfg = overlap_cfg("queue");
+        let _other = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+
+        super::start_due(&state, &in_flight, &mut idle, "p", &cfg, &pipes, at(0), at(0), true);
+        super::start_due(&state, &in_flight, &mut idle, "p", &cfg, &pipes, at(1), at(1), true);
+        let ledger = ledger_of_p(&ws);
+        assert_eq!(ledger.iter().map(|r| r.1.as_str()).collect::<Vec<_>>(), vec!["queued", "skipped"]);
+        assert!(ledger[1].2.contains("already waiting"), "{ledger:?}");
+
+        // As an interval schedule, the third is turned away without a record.
+        super::start_due(&state, &in_flight, &mut idle, "p", &cfg, &pipes, at(2), at(2), false);
+        assert_eq!(ledger_of_p(&ws).len(), 2, "an interval schedule recorded a turned-away occurrence");
+    }
+
+    /// The waiting occurrence is in the ledger, not only in memory: a server that
+    /// stopped with one waiting runs it when it comes back.
+    #[test]
+    fn an_occurrence_left_waiting_by_a_stopped_server_runs_when_it_comes_back() {
+        let Ok(duckdb) = std::env::var("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipped: needs DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        use duckle_duckdb_engine::occurrences;
+        let (_tmp, ws, pipes) = overlap_workspace(0);
+        let waited = occurrences::entry(
+            "p",
+            &duckle_duckdb_engine::cronzone::Occurrence {
+                at: at(0),
+                local: String::new(),
+                offset_seconds: 0,
+                adjustment: None,
+            },
+            Some("UTC"),
+            occurrences::Decision::Queued { reason: "waiting for the previous run to end".into() },
+            None,
+            &at(0).to_rfc3339(),
+        );
+        occurrences::record(&ws, &waited).unwrap();
+
+        // A fresh process: nothing in memory says anything is waiting.
+        let state = local_state_using(&ws, duckdb.into());
+        let in_flight = InFlightSet::default();
+        let mut idle = std::collections::HashSet::new();
+        super::start_waiting(&state, &in_flight, &mut idle, "p", &overlap_cfg("queue"), &pipes, at(5));
+        eventually("the run that waited", || statuses_of_p(&ws).len() == 1);
+        eventually("the hand-off settling", || in_flight.lock().unwrap().is_empty());
+        assert_eq!(statuses_of_p(&ws), vec!["ok"]);
+        assert!(occurrences::waiting(&ws, "p").is_empty());
+    }
+
+    /// `allow` runs alongside the run in its way, which still holds the pipeline.
+    #[test]
+    fn allow_runs_an_occurrence_alongside_the_run_still_going() {
+        let Ok(duckdb) = std::env::var("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipped: needs DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let (_tmp, ws, pipes) = overlap_workspace(0);
+        let state = local_state_using(&ws, duckdb.into());
+        let in_flight = InFlightSet::default();
+        let mut idle = std::collections::HashSet::new();
+        let _other = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+
+        super::start_due(&state, &in_flight, &mut idle, "p", &overlap_cfg("allow"), &pipes, at(0), at(0), true);
+        eventually("the run alongside", || statuses_of_p(&ws).len() == 1);
+        assert_eq!(statuses_of_p(&ws), vec!["ok"]);
+        assert_eq!(ledger_of_p(&ws).iter().map(|r| r.1.as_str()).collect::<Vec<_>>(), vec!["fired"]);
+    }
+
+    /// `replace`: the scheduled run in the way is stopped and the new occurrence
+    /// runs once it has.
+    #[test]
+    fn replace_stops_the_scheduled_run_in_the_way_and_runs_the_new_occurrence() {
+        let Ok(duckdb) = std::env::var("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipped: needs DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let (_tmp, ws, pipes) = overlap_workspace(3_000);
+        let state = local_state_using(&ws, duckdb.into());
+        let in_flight = InFlightSet::default();
+        let mut idle = std::collections::HashSet::new();
+        let cfg = overlap_cfg("replace");
+
+        super::start_due(&state, &in_flight, &mut idle, "p", &cfg, &pipes, at(0), at(0), true);
+        eventually("the first run starting", || {
+            state.runs.lock().unwrap().values().any(|r| r.scheduled && r.finished.is_none())
+        });
+        let asked = std::time::Instant::now();
+        super::start_due(&state, &in_flight, &mut idle, "p", &cfg, &pipes, at(1), at(1), true);
+        eventually("the first run ending", || in_flight.lock().unwrap().is_empty());
+        assert!(asked.elapsed() < std::time::Duration::from_millis(2_500), "it ran out its wait: not stopped");
+
+        super::start_waiting(&state, &in_flight, &mut idle, "p", &cfg, &pipes, at(2));
+        eventually("the replacing run", || statuses_of_p(&ws).len() == 2);
+        assert_eq!(statuses_of_p(&ws), vec!["cancelled", "ok"]);
+        let ledger = ledger_of_p(&ws);
+        assert_eq!(
+            ledger.iter().map(|r| r.1.as_str()).collect::<Vec<_>>(),
+            vec!["fired", "queued", "fired"],
+            "{ledger:?}"
+        );
+    }
+
+    /// `replace` takes the place of an occurrence already waiting, which is
+    /// recorded as replaced rather than left to run after it.
+    #[test]
+    fn replace_takes_the_place_of_the_occurrence_already_waiting() {
+        let Ok(duckdb) = std::env::var("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipped: needs DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let (_tmp, ws, pipes) = overlap_workspace(0);
+        let state = local_state_using(&ws, duckdb.into());
+        let in_flight = InFlightSet::default();
+        let mut idle = std::collections::HashSet::new();
+        let cfg = overlap_cfg("replace");
+        let _other = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+
+        super::start_due(&state, &in_flight, &mut idle, "p", &cfg, &pipes, at(0), at(0), true);
+        super::start_due(&state, &in_flight, &mut idle, "p", &cfg, &pipes, at(1), at(1), true);
+        let ledger = ledger_of_p(&ws);
+        assert_eq!(
+            ledger.iter().map(|r| (r.0.clone(), r.1.as_str())).collect::<Vec<_>>(),
+            vec![
+                (at(0).to_rfc3339(), "queued"),
+                (at(0).to_rfc3339(), "skipped"),
+                (at(1).to_rfc3339(), "queued"),
+            ],
+            "{ledger:?}"
+        );
+        assert!(ledger[1].2.contains("replaced"), "{ledger:?}");
+        let waiting = duckle_duckdb_engine::occurrences::waiting(&ws, "p");
+        assert_eq!(waiting.iter().map(|o| o.scheduled_for.clone()).collect::<Vec<_>>(), vec![at(1).to_rfc3339()]);
+    }
+
+    /// `replace` ends only a run a schedule started. A person's run goes on, and
+    /// the occurrence waits for it.
+    #[test]
+    fn replace_leaves_a_run_a_person_started_alone() {
+        let Ok(duckdb) = std::env::var("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipped: needs DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let (_tmp, ws, pipes) = overlap_workspace(1_500);
+        let state = local_state_using(&ws, duckdb.into());
+        let in_flight = InFlightSet::default();
+        let mut idle = std::collections::HashSet::new();
+        let cfg = overlap_cfg("replace");
+
+        let mut req = request("POST", "/api/run/async", None);
+        req.body = serde_json::to_vec(&serde_json::json!({ "file": "pipelines/p.json" })).unwrap();
+        let reply = route_console(&req, &state);
+        let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        let run_id = body["runId"].as_str().expect("an async run was accepted").to_string();
+
+        super::start_due(&state, &in_flight, &mut idle, "p", &cfg, &pipes, at(0), at(0), true);
+        assert_eq!(ledger_of_p(&ws).iter().map(|r| r.1.as_str()).collect::<Vec<_>>(), vec!["queued"]);
+        eventually("the person's run ending", || {
+            state.runs.lock().unwrap().get(&run_id).is_some_and(|r| r.finished.is_some())
+        });
+        assert_eq!(statuses_of_p(&ws), vec!["ok"], "a schedule stopped a run a person started");
+    }
+
+    /// A scheduled run can be stopped from the console like one the API started.
+    /// It kept its engine to itself, so Stop wrote a request nothing read, said
+    /// "cancelling", and the run went on to write its sink.
+    #[test]
+    fn a_scheduled_run_can_be_stopped_from_the_console() {
+        let Ok(duckdb) = std::env::var("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipped: needs DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let (_tmp, ws, pipes) = overlap_workspace(5_000);
+        let state = local_state_using(&ws, duckdb.into());
+        let in_flight = InFlightSet::default();
+        let mut idle = std::collections::HashSet::new();
+
+        super::start_due(&state, &in_flight, &mut idle, "p", &overlap_cfg("skip"), &pipes, at(0), at(0), true);
+        // The id the console reads, from a whole receipt: one still being written is a
+        // `.json.tmp`, whose name is no run's id.
+        let receipt = || -> Option<String> {
+            std::fs::read_dir(duckle_duckdb_engine::retry::dir(&ws))
+                .ok()?
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "json"))
+                .find_map(|p| {
+                    let text = std::fs::read_to_string(p).ok()?;
+                    serde_json::from_str::<duckle_duckdb_engine::retry::RunReceipt>(&text).ok()
+                })
+                .map(|r| r.run_id)
+        };
+        eventually("the receipt of the scheduled run", || receipt().is_some());
+        let run_id = receipt().unwrap();
+        let mut stop = request("DELETE", "/api/run", None);
+        stop.query.insert("runId".into(), run_id.clone());
+        let reply = route_console(&stop, &state);
+        assert_eq!(reply.code(), 200, "{}", String::from_utf8_lossy(&reply.body));
+
+        eventually("the run ending", || in_flight.lock().unwrap().is_empty());
+        assert_eq!(statuses_of_p(&ws), vec!["cancelled"]);
+        assert!(!ws.join("out.csv").exists(), "a stopped run still wrote its sink");
+    }
+
+    /// And by another server on the workspace, through the run's receipt, which
+    /// is how `replace` reaches a run another server started.
+    #[test]
+    fn a_scheduled_run_stops_when_another_server_asks() {
+        let Ok(duckdb) = std::env::var("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipped: needs DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let (_tmp, ws, pipes) = overlap_workspace(5_000);
+        let state = local_state_using(&ws, duckdb.into());
+        let in_flight = InFlightSet::default();
+        let mut idle = std::collections::HashSet::new();
+
+        super::start_due(&state, &in_flight, &mut idle, "p", &overlap_cfg("skip"), &pipes, at(0), at(0), true);
+        eventually("the scheduled run starting", || {
+            state.runs.lock().unwrap().values().any(|r| r.scheduled && r.finished.is_none())
+        });
+        let other = local_state_using(&ws, std::path::PathBuf::from("duckdb"));
+        assert_eq!(super::stop_runs_of(&other, "p"), 1, "the other server found no run to stop");
+
+        eventually("the run ending", || in_flight.lock().unwrap().is_empty());
+        assert_eq!(statuses_of_p(&ws), vec!["cancelled"]);
+    }
+
+    /// The policies can be set through the API, reach the tick through the
+    /// projection it reads, and survive a save that does not mention them. No
+    /// surface could set them before: only an edit of schedules.json by hand.
+    #[test]
+    fn the_policies_are_set_through_the_api_and_reach_the_tick() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let policies = serde_json::json!({
+            "enabled": true, "intervalSeconds": 60,
+            "overlap": "queue", "misfire": "latest",
+            "catchup": { "maxCatchupRuns": 3, "maxCatchupAgeDays": 2 }
+        });
+        let with_id = |id: &str, body: &serde_json::Value| {
+            let mut body = body.clone();
+            body["id"] = serde_json::json!(id);
+            body
+        };
+        // `p` is created with them; `q` exists first and is given them later.
+        save_schedule_at(&ws, &with_id("p", &policies)).expect("saves");
+        save_schedule_at(&ws, &serde_json::json!({ "id": "q", "enabled": true, "intervalSeconds": 60 })).unwrap();
+        save_schedule_at(&ws, &with_id("q", &policies)).expect("saves");
+        for id in ["p", "q"] {
+            save_schedule_at(&ws, &serde_json::json!({ "id": id, "enabled": true, "intervalSeconds": 120 }))
+                .expect("a save that names no policy");
+        }
+
+        let state = local_state_using(&ws, std::path::PathBuf::from("duckdb"));
+        for id in ["p", "q"] {
+            let cfg = load_schedules(&state).unwrap()[id].clone();
+            assert_eq!(cfg["overlap"], "queue", "{id}: {cfg}");
+            assert_eq!(cfg["misfire"], "latest", "{id}: {cfg}");
+            assert_eq!(cfg["catchup"]["maxCatchupRuns"], 3, "{id}: {cfg}");
+        }
+
+        let refused = |body: serde_json::Value| save_schedule_at(&ws, &body).expect_err("refused");
+        let e = refused(serde_json::json!({ "id": "p", "enabled": true, "intervalSeconds": 60, "overlap": "qeue" }));
+        assert!(e.contains("skip, queue, replace or allow"), "{e}");
+        let e = refused(serde_json::json!({ "id": "p", "enabled": true, "intervalSeconds": 60, "misfire": "often" }));
+        assert!(e.contains("skip, latest or all"), "{e}");
+        assert_eq!(load_schedules(&state).unwrap()["p"]["overlap"], "queue", "a refused save changed it");
     }
 
     /// #317: a run the editor starts is held to the pipeline's parameter
@@ -9257,6 +9977,7 @@ mod serve_honours_the_schedule {
             exclude: serde_json::from_value(serde_json::json!({ "dates": ["2026-12-25"] })).unwrap(),
             misfire: Default::default(),
             catchup: Default::default(),
+            overlap: Default::default(),
             params: None,
             last_run_at: None,
             last_run_status: None,
