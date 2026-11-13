@@ -28697,9 +28697,14 @@ fn src_rest_keeps_to_its_requests_per_second() {
     assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3);
     let seen: Vec<_> = rx.try_iter().collect();
     assert_eq!(seen.len(), 3);
+    // These are arrivals at a test server whose accept loop polls, so on a loaded
+    // runner its stamps carry scheduling noise that a 20 ms margin did not cover.
+    // Half the pace still tells a paced walk from an unpaced one, whose requests
+    // land milliseconds apart; the exact spacing is pinned, without a clock, by
+    // HttpWalk's own tests.
     for pair in seen.windows(2) {
         let gap = pair[1].0.duration_since(pair[0].0);
-        assert!(gap >= std::time::Duration::from_millis(230), "4 a second is 250 ms apart, got {gap:?}");
+        assert!(gap >= std::time::Duration::from_millis(125), "4 a second is 250 ms apart, got {gap:?}");
     }
 }
 

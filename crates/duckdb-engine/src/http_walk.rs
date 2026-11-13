@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 pub struct HttpWalk {
     /// The least time between two sends, from the node's requests-per-second.
     interval: Option<Duration>,
-    /// When the latest send was, or is reserved to be.
+    /// When the latest request went.
     last_sent: Option<Instant>,
     /// Present when the node keeps cookies.
     cookies: Option<CookieJar>,
@@ -29,19 +29,25 @@ impl HttpWalk {
         }
     }
 
-    /// Reserve the next send: how long from `now` to wait before sending, with
-    /// that moment recorded as the latest send. Reserving rather than recording
-    /// after the fact is what keeps requests on several threads to one pace.
-    pub fn reserve(&mut self, now: Instant) -> Duration {
+    /// How long a request about to go must still wait, or zero when it may go now,
+    /// in which case `now` is recorded as when the latest request went.
+    ///
+    /// Asked at the moment of sending and asked again after each wait, so the pace
+    /// counts from when the previous request actually went. Booking a slot ahead
+    /// spaced the slots rather than the sends: a request that set off late, its
+    /// sleep overrunning, left the next closer than the pace. On several threads,
+    /// one goes per turn and the others are told to wait on.
+    pub fn turn(&mut self, now: Instant) -> Duration {
         let Some(interval) = self.interval else {
             return Duration::ZERO;
         };
-        let at = match self.last_sent {
-            Some(last) => (last + interval).max(now),
-            None => now,
-        };
-        self.last_sent = Some(at);
-        at - now
+        match self.last_sent {
+            Some(last) if now < last + interval => last + interval - now,
+            _ => {
+                self.last_sent = Some(now);
+                Duration::ZERO
+            }
+        }
     }
 
     /// The `Cookie` header for a request to `url`, when there is one to send.
@@ -144,17 +150,42 @@ mod tests {
         HttpWalk::new(&HttpPacing { requests_per_second: None, keep_cookies: true })
     }
 
+    fn four_a_second() -> HttpWalk {
+        HttpWalk::new(&HttpPacing { requests_per_second: Some(4.0), keep_cookies: false })
+    }
+
+    /// Spaced from when the previous request actually went, not from a slot booked
+    /// for it. Booking slots ahead let a request that set off late, its sleep
+    /// overrunning, leave the next one closer than the pace: on a loaded CI runner a
+    /// walk at 4 a second sent two requests 186 ms apart.
     #[test]
-    fn a_pace_spaces_every_send_including_ones_reserved_together() {
-        let mut w = HttpWalk::new(&HttpPacing { requests_per_second: Some(4.0), keep_cookies: false });
+    fn the_next_turn_counts_from_when_the_last_request_actually_went() {
+        let mut w = four_a_second();
         let t = Instant::now();
-        assert_eq!(w.reserve(t), Duration::ZERO, "the first send goes at once");
-        // Two more asked for at the same moment, as two worker threads would.
-        assert_eq!(w.reserve(t), Duration::from_millis(250));
-        assert_eq!(w.reserve(t), Duration::from_millis(500));
+        assert_eq!(w.turn(t), Duration::ZERO, "the first send goes at once");
+        assert_eq!(w.turn(t), Duration::from_millis(250), "the next waits out the pace");
+        // Its sleep overran by 40 ms. It goes then, and that is its turn.
+        assert_eq!(w.turn(t + Duration::from_millis(290)), Duration::ZERO);
+        // So the one after is 250 ms from 290, not from the 250 it was due at.
+        assert_eq!(w.turn(t + Duration::from_millis(500)), Duration::from_millis(40));
+        assert_eq!(w.turn(t + Duration::from_millis(540)), Duration::ZERO);
+    }
+
+    /// On several threads, one goes per turn and the rest wait on.
+    #[test]
+    fn requests_asking_together_go_one_per_turn() {
+        let mut w = four_a_second();
+        let t = Instant::now();
+        assert_eq!(w.turn(t), Duration::ZERO);
+        // Two threads asking at the same moment are both told to wait.
+        assert_eq!(w.turn(t), Duration::from_millis(250));
+        assert_eq!(w.turn(t), Duration::from_millis(250));
+        // At the turn the first to ask again goes, and the other waits a whole pace more.
+        assert_eq!(w.turn(t + Duration::from_millis(250)), Duration::ZERO);
+        assert_eq!(w.turn(t + Duration::from_millis(250)), Duration::from_millis(250));
         let later = t + Duration::from_secs(5);
-        assert_eq!(w.reserve(later), Duration::ZERO, "after a long gap nothing is owed");
-        assert_eq!(HttpWalk::new(&HttpPacing::default()).reserve(t), Duration::ZERO, "no pace, no wait");
+        assert_eq!(w.turn(later), Duration::ZERO, "after a long gap nothing is owed");
+        assert_eq!(HttpWalk::new(&HttpPacing::default()).turn(t), Duration::ZERO, "no pace, no wait");
     }
 
     #[test]

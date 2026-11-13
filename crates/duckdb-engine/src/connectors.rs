@@ -11424,11 +11424,17 @@ impl DuckdbEngine {
         let mut attempt = 0;
         loop {
             self.check_cancelled()?;
-            // Reserved under the lock, waited out without it, so requests on
-            // several threads keep to one pace together.
-            let wait = lock().reserve(std::time::Instant::now());
-            self.ai_sleep_cancellable(wait.as_millis() as u64)?;
             let mut req = make();
+            // Paced at the moment of sending, and asked again after each wait, so
+            // requests on several threads keep to one pace together. See
+            // HttpWalk::turn. Rounded up: a wait under a millisecond is slept, not spun.
+            loop {
+                let wait = lock().turn(std::time::Instant::now());
+                if wait.is_zero() {
+                    break;
+                }
+                self.ai_sleep_cancellable((wait.as_micros() as u64).div_ceil(1000))?;
+            }
             if let Some(kept) = lock().cookie_header(url) {
                 let cookie = match req.header("Cookie") {
                     Some(own) => format!("{own}; {kept}"),
