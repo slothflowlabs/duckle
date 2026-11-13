@@ -3782,7 +3782,6 @@ Database sinks support an optional **dead-letter (validate-before-insert)** step
 | **Sequence Anchor** | Does no work itself: ordering links attach to it, to say what runs after it or what must finish first. It never joins the data flow (`ctl.anchor`) |
 | **Iterate** | Run a sub-pipeline N times with `${ITER_INDEX}` substitution |
 | **For Each** | Run a sub-pipeline once per input row with `${ITER_ITEM_<FIELD>}` substitution; an optional item key column names each run so per-row watermarks stay separate |
-
 | **Try / Catch** | Install a fallback sub-pipeline if the wrapped stage fails |
 | **Retry** | Per-stage retry policy (configure on Advanced tab) |
 | **Log Message** | Emit an info log line (`{rows}` = upstream count), pass rows through (`ctl.log`) |
