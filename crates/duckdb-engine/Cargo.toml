@@ -87,7 +87,7 @@ oracle = { version = "0.6", optional = true }
 # manager at build time (odbc32 on Windows - always present; unixODBC on
 # Linux/macOS). Off by default so a plain engine build/test needs no ODBC; the
 # shipped binaries (desktop, runner, mcp) turn it on.
-odbc-api = { version = "29", optional = true }
+odbc-api = { version = "30", optional = true }
 # Direct (optional) handle on odbc-api's ODBC FFI crate so the `teradata-static`
 # feature can flip it to static linking. Base entry carries no static features;
 # the Linux override below adds them (see that table + build.rs + issue #131).
@@ -116,7 +116,7 @@ rskafka = { version = "0.6", features = ["transport-tls"] }
 # .avro / .ocf files that exporters drop on object storage.
 apache-avro = "0.22"
 # NATS / JetStream. Pure-Rust client by the NATS team.
-async-nats = "0.50"
+async-nats = "0.52"
 # XML reader/writer. Used by src.xml (walks a row path, emits each
 # match as a JSON object) and snk.xml (wraps rows in row elements).
 # Pure Rust.
@@ -125,7 +125,7 @@ quick-xml = "0.42"
 # cssparser + selectors), no native toolchain, and already resolved in this
 # workspace's lockfile via tauri-utils and wry, so it adds no new dependency
 # tree - only the compile of those crates in the headless runner build.
-dom_query = "0.28"
+dom_query = "0.29"
 # PDF page text + geometry for src.pdf (#248). Both pure Rust - pdf-extract is
 # the font-encoding and character-mapping work, lopdf the page tree, MediaBox
 # and Info dictionary - so no native toolchain and no rendering engine. OCR is
@@ -207,7 +207,7 @@ glob = "0.3"
 # trust store. The accompanying mail-parser decodes RFC 822 envelopes + MIME
 # bodies.
 imap = { version = "=3.0.0-alpha.15", default-features = false }
-mail-parser = "0.11"
+mail-parser = "1.0"
 rustls-connector = { version = "0.23", default-features = false, features = ["rustls--ring"] }
 # SMTP client for snk.email. Pure Rust with rustls-tls. Symmetric
 # to src.email (the IMAP reader). Builder + smtp-transport features;
@@ -220,8 +220,8 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "s
 # workspace arrow/parquet pins so the driver's RecordBatch and the parquet
 # writer share one arrow version. The driver .dll/.so/.dylib is bundled
 # per-OS (conda-forge) and located at runtime; absent driver -> clear error.
-adbc_core = "0.24"
-adbc_driver_manager = "0.24"
+adbc_core = "0.25"
+adbc_driver_manager = "0.25"
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 parquet = { workspace = true }
