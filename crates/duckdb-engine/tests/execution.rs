@@ -27275,7 +27275,7 @@ fn src_druid_types_columns_from_the_sql_header_in_query_order() {
     assert_eq!(sent["header"], true);
     assert_eq!(sent["typesHeader"], true);
     assert_eq!(sent["sqlTypesHeader"], true);
-    assert_eq!(sent["context"], json!({ "sqlTimeZone": "UTC" }), "the query context goes as an object");
+    assert_eq!(sent["context"]["sqlTimeZone"], "UTC", "the query context goes as an object: {sent}");
 
     assert_eq!(
         parquet_columns(&out),
@@ -27344,28 +27344,59 @@ fn src_druid_fails_a_result_cut_off_before_its_trailer() {
 
 #[test]
 fn src_druid_reads_dates_and_arrays_as_their_own_types() {
-    // Druid sends a DATE as a full ISO timestamp, and an array column as a
-    // JSON array.
+    // As Druid 38 answers: a DATE comes as a full ISO timestamp, and an array
+    // column's SQL type is only ARRAY - its element type is in the Druid-type
+    // row. Arrays come as arrays only when the query sets sqlStringifyArrays
+    // to false; otherwise Druid sends each one as its JSON text.
     let engine = engine_or_skip!();
     let body = druid_array_lines(
-        [r#"["day","tags"]"#, r#"["LONG","ARRAY<STRING>"]"#, r#"["DATE","VARCHAR ARRAY"]"#],
-        &[r#"["2016-06-27T00:00:00.000Z",["a","b"]]"#],
+        [
+            r#"["day","tags","counts","ratios"]"#,
+            r#"["LONG","ARRAY<STRING>","ARRAY<LONG>","ARRAY<DOUBLE>"]"#,
+            r#"["DATE","ARRAY","ARRAY","ARRAY"]"#,
+        ],
+        &[r#"["2016-06-27T00:00:00.000Z",["a","b"],[1,2],[1.5]]"#],
     );
-    let (r, out, _tmp, _req) = run_druid_source(&engine, 200, body, json!({}));
+    let context = json!({ "context": r#"{"sqlTimeZone":"Etc/UTC","sqlStringifyArrays":true}"# });
+    let (r, out, _tmp, req) = run_druid_source(&engine, 200, body, context);
     assert_eq!(r.status, "ok", "druid source failed: {:?}", r.error);
+    let sent = druid_request_json(&req.expect("the stub saw the query"));
+    assert_eq!(sent["context"]["sqlStringifyArrays"], json!(false), "ask for arrays as arrays: {sent}");
+    assert_eq!(sent["context"]["sqlTimeZone"], "Etc/UTC", "the pipeline's own context is kept: {sent}");
     assert_eq!(
         parquet_columns(&out),
         vec![
             ("day".to_string(), "DATE".to_string()),
             ("tags".to_string(), "VARCHAR[]".to_string()),
+            ("counts".to_string(), "BIGINT[]".to_string()),
+            ("ratios".to_string(), "DOUBLE[]".to_string()),
         ]
     );
     let rows = duckdb_json(&format!(
-        "SELECT CAST(day AS VARCHAR) AS day, tags FROM read_parquet('{}')",
+        "SELECT CAST(day AS VARCHAR) AS day, tags, counts, ratios FROM read_parquet('{}')",
         out
     ));
     assert_eq!(rows[0]["day"], "2016-06-27");
     assert_eq!(rows[0]["tags"], json!(["a", "b"]));
+    assert_eq!(rows[0]["counts"], json!([1, 2]));
+    assert_eq!(rows[0]["ratios"], json!([1.5]));
+}
+
+#[test]
+fn src_druid_reads_a_nested_column_as_json() {
+    // As Druid 38 answers: a nested column's SQL type is OTHER and its Druid
+    // type COMPLEX<json>, and each value comes as JSON text.
+    let engine = engine_or_skip!();
+    let body = druid_array_lines(
+        [r#"["obj"]"#, r#"["COMPLEX<json>"]"#, r#"["OTHER"]"#],
+        &[r#"["{\"a\":1,\"b\":\"x\"}"]"#],
+    );
+    let (r, out, _tmp, _req) = run_druid_source(&engine, 200, body, json!({}));
+    assert_eq!(r.status, "ok", "druid source failed: {:?}", r.error);
+    assert_eq!(parquet_columns(&out), vec![("obj".to_string(), "JSON".to_string())]);
+    let rows = duckdb_json(&format!("SELECT json_type(obj) AS t, obj->>'b' AS b FROM read_parquet('{}')", out));
+    assert_eq!(rows[0]["t"], "OBJECT", "the object itself, not a string holding it: {:?}", rows);
+    assert_eq!(rows[0]["b"], "x");
 }
 
 #[test]

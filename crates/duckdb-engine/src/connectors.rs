@@ -16134,9 +16134,13 @@ impl DuckdbEngine {
             "typesHeader": true,
             "sqlTypesHeader": true,
         });
-        if let Some(context) = &spec.context {
-            body["context"] = context.clone();
-        }
+        // The pipeline's context, asking for arrays as arrays: Druid sends each
+        // one as its JSON text unless told not to, and every column is typed
+        // here from what Druid says it is. A context is a JSON object (checked
+        // when the pipeline is planned).
+        let mut context = spec.context.clone().unwrap_or_else(|| serde_json::json!({}));
+        context["sqlStringifyArrays"] = JsonValue::Bool(false);
+        body["context"] = context;
         self.check_cancelled()?;
         let response =
             match druid_request("POST", &url, spec.username.as_deref(), spec.password.as_deref())
@@ -16169,12 +16173,13 @@ impl DuckdbEngine {
                 })
         };
         let names = header("column-name")?;
-        let _druid_types = header("Druid-type")?;
+        let druid_types = header("Druid-type")?;
         let sql_types = header("SQL-type")?;
-        if sql_types.len() != names.len() {
+        if sql_types.len() != names.len() || druid_types.len() != names.len() {
             return Err(EngineError::Query(format!(
-                "druid: the header names {} column(s) but types {}",
+                "druid: the header names {} column(s) but types {} and {}",
                 names.len(),
+                druid_types.len(),
                 sql_types.len()
             )));
         }
@@ -16213,7 +16218,7 @@ impl DuckdbEngine {
                 rows
             )));
         }
-        let (columns_spec, select_list) = druid_columns(&names, &sql_types);
+        let (columns_spec, select_list) = druid_columns(&names, &druid_types, &sql_types);
         writer.finalize_typed(&self.bin, db, &spec.node_id, &columns_spec, &select_list)?;
         Ok(format!(
             "druid: materialized {} rows ({} columns) into {}",
@@ -20065,12 +20070,12 @@ fn druid_submit_task(
 /// result. Cells are keyed by position (c0, c1, ...), so the query's own
 /// column names - any characters, in the query's order - appear only in the
 /// projection.
-fn druid_columns(names: &[String], sql_types: &[String]) -> (String, String) {
+fn druid_columns(names: &[String], druid_types: &[String], sql_types: &[String]) -> (String, String) {
     let mut columns = Vec::with_capacity(names.len());
     let mut select = Vec::with_capacity(names.len());
-    for (i, (name, sql_type)) in names.iter().zip(sql_types).enumerate() {
+    for (i, ((name, druid_type), sql_type)) in names.iter().zip(druid_types).zip(sql_types).enumerate() {
         let key = format!("c{}", i);
-        let (read_as, cast_to) = druid_duckdb_type(sql_type);
+        let (read_as, cast_to) = druid_duckdb_type(druid_type, sql_type);
         columns.push(format!("'{}': '{}'", key, read_as));
         let cell = plan::quote_ident(&key);
         let expr = match cast_to {
@@ -20082,14 +20087,29 @@ fn druid_columns(names: &[String], sql_types: &[String]) -> (String, String) {
     (columns.join(", "), select.join(", "))
 }
 
-/// The DuckDB type a Druid SQL type is read as, and a cast after it where
+/// The DuckDB type a Druid column is read as, and a cast after it where
 /// read_json cannot produce the type directly (Druid sends a DATE as a full
-/// ISO timestamp).
-fn druid_duckdb_type(sql_type: &str) -> (String, Option<&'static str>) {
-    let t = sql_type.trim().to_uppercase();
-    if let Some(inner) = t.strip_suffix(" ARRAY") {
-        return (format!("{}[]", druid_duckdb_type(inner).0), None);
+/// ISO timestamp, and a nested value as JSON text).
+///
+/// From the SQL-type row, except for arrays and nested values: there that row
+/// says only ARRAY or OTHER, and the Druid-type row says ARRAY<LONG> or
+/// COMPLEX<json>, as Druid 38 answers.
+fn druid_duckdb_type(druid_type: &str, sql_type: &str) -> (String, Option<&'static str>) {
+    let native = druid_type.trim().to_uppercase();
+    if let Some(element) = native.strip_prefix("ARRAY<").and_then(|t| t.strip_suffix('>')) {
+        let element = match element {
+            "LONG" => "BIGINT",
+            "DOUBLE" | "FLOAT" => "DOUBLE",
+            "STRING" => "VARCHAR",
+            // An array of anything else: kept as its JSON text.
+            _ => return ("VARCHAR".to_string(), None),
+        };
+        return (format!("{}[]", element), None);
     }
+    if native == "COMPLEX<JSON>" {
+        return ("VARCHAR".to_string(), Some("JSON"));
+    }
+    let t = sql_type.trim().to_uppercase();
     let read_as = match t.as_str() {
         "TIMESTAMP" => "TIMESTAMP",
         "DATE" => return ("TIMESTAMP".to_string(), Some("DATE")),
@@ -20097,7 +20117,6 @@ fn druid_duckdb_type(sql_type: &str) -> (String, Option<&'static str>) {
         "BOOLEAN" => "BOOLEAN",
         "VARCHAR" | "CHAR" => "VARCHAR",
         _ if ["DOUBLE", "FLOAT", "REAL", "DECIMAL"].iter().any(|p| t.starts_with(p)) => "DOUBLE",
-        _ if t.starts_with("COMPLEX<JSON>") => "JSON",
         // OTHER (sketches and the like) and anything newer: kept as text.
         _ => "VARCHAR",
     };
