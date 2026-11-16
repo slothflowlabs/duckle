@@ -12,7 +12,7 @@ use duckle_duckdb_engine::{
 };
 use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -63,10 +63,10 @@ struct SchedulerInner {
     watchers: HashMap<String, Debouncer<RecommendedWatcher>>,
     /// Receiver for file-watch fires; taken by `spawn_ticker`.
     fire_rx: Option<UnboundedReceiver<String>>,
-    /// #296: the occurrence each schedule has waiting for the run in its way,
-    /// under `overlap: queue` or `replace`. In memory: this scheduler keeps no
-    /// ledger, so a waiting occurrence does not outlive the app.
-    waiting: HashMap<String, duckle_duckdb_engine::occurrences::Occurrence>,
+    /// #296: the schedules known to have no occurrence waiting for a run in their
+    /// way. A waiting occurrence is kept in the workspace's ledger, so it outlives
+    /// the app; this spares reading that ledger for each schedule on every tick.
+    idle: HashSet<String>,
     /// #296: the cancel handle of each run a schedule started that is still going,
     /// by schedule id, with its pipeline, for `overlap: replace`.
     scheduled_runs: HashMap<String, (String, DuckdbEngine)>,
@@ -314,7 +314,7 @@ impl Scheduler {
                 load_error: None,
                 watchers: HashMap::new(),
                 fire_rx: Some(fire_rx),
-                waiting: HashMap::new(),
+                idle: HashSet::new(),
                 scheduled_runs: HashMap::new(),
             })),
             engine,
@@ -327,6 +327,8 @@ impl Scheduler {
     pub fn set_workspace(&self, path: Option<PathBuf>) {
         let mut g = self.inner.lock().expect("scheduler poisoned");
         g.workspace_path = path;
+        // Another workspace, another ledger.
+        g.idle.clear();
         self.reload(&mut g);
         self.rebuild_watchers(&mut g);
     }
@@ -946,29 +948,43 @@ impl Scheduler {
     /// decides with; true when it should run anyway.
     fn overlapped(&self, id: &str, pipeline_id: &str, due: DateTime<Utc>) -> bool {
         use duckle_duckdb_engine::occurrences::{self, Decision, OnOverlap};
-        let mut g = self.inner.lock().expect("scheduler poisoned");
-        let Some(policy) = g.schedules.iter().find(|s| s.id == id).map(|s| s.overlap) else {
-            return false;
+        let (policy, ws) = {
+            let g = self.inner.lock().expect("scheduler poisoned");
+            let Some(policy) = g.schedules.iter().find(|s| s.id == id).map(|s| s.overlap) else {
+                return false;
+            };
+            (policy, g.workspace_path.clone())
         };
-        let waiting: Vec<occurrences::Occurrence> = g.waiting.get(id).cloned().into_iter().collect();
-        match occurrences::on_overlap(policy, &waiting) {
+        // A run is only ever in the way on a workspace: without one nothing is locked.
+        let Some(ws) = ws else { return false };
+        match occurrences::on_overlap(policy, &occurrences::waiting(&ws, id)) {
             OnOverlap::Run => true,
             OnOverlap::Skip(reason) => {
                 warn!("Schedule {} ({}): {}", id, pipeline_id, reason);
                 false
             }
-            OnOverlap::Wait { reason, stop_running, .. } => {
+            OnOverlap::Wait { reason, stop_running, supersede } => {
                 warn!("Schedule {} ({}): {}", id, pipeline_id, reason);
+                let decided_at = Utc::now().to_rfc3339();
+                for older in &supersede {
+                    let replaced = Decision::Skipped { reason: "replaced by a newer occurrence".into() };
+                    if let Err(e) = occurrences::record(&ws, &occurrences::decided(older, replaced, &decided_at)) {
+                        warn!("Schedule {}: the occurrence it replaced was not recorded: {}", id, e);
+                    }
+                }
                 let at = duckle_duckdb_engine::cronzone::Occurrence {
                     at: due,
                     local: String::new(),
                     offset_seconds: 0,
                     adjustment: None,
                 };
-                let queued = Decision::Queued { reason };
-                let occ = occurrences::entry(id, &at, None, queued, None, &Utc::now().to_rfc3339());
-                // In place of whatever was waiting: that one is what `supersede` names.
-                g.waiting.insert(id.to_string(), occ);
+                let queued = occurrences::entry(id, &at, None, Decision::Queued { reason }, None, &decided_at);
+                // In the ledger rather than in memory, so it outlives the app.
+                if let Err(e) = occurrences::record(&ws, &queued) {
+                    warn!("Schedule {}: the occurrence left waiting was not recorded: {}", id, e);
+                }
+                let mut g = self.inner.lock().expect("scheduler poisoned");
+                g.idle.remove(id);
                 if stop_running {
                     for (pipeline, run) in g.scheduled_runs.values() {
                         if pipeline == pipeline_id {
@@ -981,19 +997,66 @@ impl Scheduler {
         }
     }
 
-    /// #296: the occurrences waiting for a run that was in their way, handed back
-    /// to be fired again. One whose pipeline is still running comes straight back.
-    fn take_waiting(&self) -> Vec<(String, Option<String>, DateTime<Utc>)> {
-        let mut g = self.inner.lock().expect("scheduler poisoned");
-        let waiting = std::mem::take(&mut g.waiting);
-        waiting
-            .into_iter()
-            .filter_map(|(id, occ)| {
-                let key = g.schedules.iter().find(|s| s.id == id).and_then(lock_key)?.to_string();
-                let at = DateTime::parse_from_rfc3339(&occ.scheduled_for).ok()?.with_timezone(&Utc);
-                Some((id, Some(key), at))
-            })
-            .collect()
+    /// #296: start the occurrence a schedule has waiting for a run that was in its
+    /// way, once that run has ended, as `duckle serve` starts it.
+    ///
+    /// Read from the workspace's ledger, so an occurrence left waiting when the
+    /// app closed still runs when it starts again. `idle` holds the schedules known
+    /// to have none, so the ledger is read for each once after a start, and after
+    /// that only when one is queued.
+    ///
+    /// The pipeline is taken before the occurrence is recorded as fired, and held
+    /// until its run ends. An occurrence due in the same tick then finds this run
+    /// in its way and waits behind it, rather than taking the pipeline from one
+    /// already recorded as fired.
+    fn start_waiting(&self, now: DateTime<Utc>) {
+        use duckle_duckdb_engine::occurrences::{self, Decision};
+        let (ws, candidates) = {
+            let g = self.inner.lock().expect("scheduler poisoned");
+            let Some(ws) = g.workspace_path.clone() else { return };
+            let candidates: Vec<(String, String)> = g
+                .schedules
+                .iter()
+                .filter(|s| s.enabled && !g.idle.contains(&s.id))
+                .filter_map(|s| Some((s.id.clone(), lock_key(s)?.to_string())))
+                .collect();
+            (ws, candidates)
+        };
+        for (id, pipeline_id) in candidates {
+            if occurrences::waiting(&ws, &id).is_empty() {
+                self.inner.lock().expect("scheduler poisoned").idle.insert(id);
+                continue;
+            }
+            let lock = match claim_run(Some(&ws), &pipeline_id) {
+                Claim::Ours(lock) => lock,
+                // Still going: the next tick asks again, and nothing is recorded meanwhile.
+                Claim::Taken => continue,
+                Claim::Unusable(why) => {
+                    warn!(
+                        "Cannot take a run lock for {} in this workspace, so the occurrence \
+                         schedule {} has waiting cannot start: {}",
+                        pipeline_id, id, why
+                    );
+                    continue;
+                }
+            };
+            // Again, now the pipeline is held: another scheduler on the workspace may
+            // have started it meanwhile.
+            let Some(next) = occurrences::waiting(&ws, &id).into_iter().next() else {
+                self.inner.lock().expect("scheduler poisoned").idle.insert(id);
+                continue;
+            };
+            let fired = occurrences::decided(&next, Decision::Fired, &now.to_rfc3339());
+            if let Err(e) = occurrences::record(&ws, &fired) {
+                warn!("Schedule {}: the occurrence that waited was not recorded: {}", id, e);
+            }
+            let (me, permit) = (self.clone(), pool_permits(&ws, &pool_of(&ws, &pipeline_id)));
+            tokio::spawn(async move {
+                let _lock = lock;
+                let _slot = permit.acquire_owned().await;
+                me.fire_and_record(&id, "Scheduled").await;
+            });
+        }
     }
 
     /// Take every schedule that is due, and claim it so nothing else takes it.
@@ -1082,9 +1145,8 @@ impl Scheduler {
         self.catch_up(now);
         // #296: what waited for a run in its way goes first: it is older than
         // anything due now.
-        let mut due = self.take_waiting();
-        due.extend(self.claim_due(now));
-        for (id, pipeline_id, at) in due {
+        self.start_waiting(now);
+        for (id, pipeline_id, at) in self.claim_due(now) {
             let me = self.clone();
             let workspace = workspace.clone();
             // #289: the pool this pipeline asks for, resolved against what the
@@ -2574,8 +2636,11 @@ mod tests {
         s
     }
 
+    /// Whether the schedule has an occurrence waiting, as the workspace's ledger
+    /// says: that is where one is kept, so it outlives the app.
     fn waiting(sched: &Scheduler, id: &str) -> bool {
-        sched.inner.lock().unwrap().waiting.contains_key(id)
+        let ws = sched.inner.lock().unwrap().workspace_path.clone().expect("a workspace");
+        !duckle_duckdb_engine::occurrences::waiting(&ws, id).is_empty()
     }
 
     /// `queue`: the occurrence waits while another process runs the pipeline, then
@@ -2641,8 +2706,9 @@ mod tests {
         assert!(asked.elapsed() < Duration::from_millis(2_500), "it ran out its wait: not stopped");
 
         eventually("the pipeline coming free", || !sched.inner.lock().unwrap().scheduled_runs.contains_key(&id)).await;
-        sched.fire_due().await;
-        eventually("the replacing run", || statuses(&ws).len() == 2).await;
+        // The stopped run gives its lock back a moment after it leaves that list,
+        // and a tick that comes in between leaves the occurrence to the next one.
+        tick_until(&sched, "the replacing run", || statuses(&ws).len() == 2).await;
         assert_eq!(statuses(&ws), vec!["cancelled", "ok"]);
     }
 
@@ -2683,6 +2749,139 @@ mod tests {
         sched.fire_tx.send(id.clone()).unwrap();
         eventually("the file-watch fire waiting", || waiting(&sched, &id)).await;
         assert!(statuses(&ws).is_empty(), "it ran beside the run in its way");
+    }
+
+    /// The occurrence that waits is recorded once, however many ticks it waits
+    /// through, and again as fired when it runs. A record a tick would grow a
+    /// file every scheduler on the workspace reads whole.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_waiting_occurrence_is_recorded_once_then_as_fired() {
+        let Some((_tmp, ws, sched, id)) = overlapping("queue", 0) else { return };
+        let from = Utc::now() - chrono::Duration::minutes(10);
+        let other = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+        due_since(&sched, 2);
+        sched.fire_due().await;
+        eventually("the occurrence waiting", || waiting(&sched, &id)).await;
+        for _ in 0..3 {
+            sched.fire_due().await;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let queued = decided(&ws, &id, from);
+        assert_eq!(queued.iter().map(|(_, d)| d.as_str()).collect::<Vec<_>>(), ["queued"]);
+
+        drop(other);
+        tick_until(&sched, "the run that waited", || statuses(&ws).len() == 1).await;
+        assert_eq!(decided(&ws, &id, from), vec![queued[0].clone(), (queued[0].0, "fired".to_string())]);
+    }
+
+    /// An occurrence left waiting when the app closed runs when it starts again.
+    /// The scheduler that queued it is gone, and with it anything it held in memory.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_occurrence_left_waiting_when_the_app_closed_runs_when_it_starts_again() {
+        let Some((_tmp, ws, sched, id)) = overlapping("queue", 0) else { return };
+        let other = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+        due_since(&sched, 2);
+        sched.fire_due().await;
+        eventually("the occurrence waiting", || waiting(&sched, &id)).await;
+        drop(sched);
+        drop(other);
+
+        let bin = std::env::var("DUCKLE_DUCKDB_BIN").unwrap();
+        let again = Scheduler::new(DuckdbEngine::new(PathBuf::from(bin)));
+        again.set_workspace(Some(ws.clone()));
+        tick_until(&again, "the occurrence that waited", || statuses(&ws).len() == 1).await;
+        assert_eq!(statuses(&ws), vec!["ok"]);
+        assert!(!waiting(&again, &id));
+    }
+
+    /// `replace`, with an occurrence already waiting: the newer one takes its
+    /// place, and the one it replaced is recorded skipped rather than left to run.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn replace_records_the_waiting_occurrence_it_takes_the_place_of_as_skipped() {
+        let Some((_tmp, ws, sched, id)) = overlapping("replace", 0) else { return };
+        let from = Utc::now() - chrono::Duration::minutes(10);
+        // Another process's run, which `replace` cannot stop, so both have to wait.
+        let other = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+        due_since(&sched, 120);
+        sched.fire_due().await;
+        eventually("the first occurrence waiting", || waiting(&sched, &id)).await;
+        due_since(&sched, 60);
+        sched.fire_due().await;
+        eventually("the second taking its place", || decided(&ws, &id, from).len() == 3).await;
+        let d = decided(&ws, &id, from);
+        let (first, second) = (d[0].0, d[2].0);
+        assert!(first < second);
+        assert_eq!(d, vec![(first, "queued".into()), (first, "skipped".into()), (second, "queued".into())]);
+
+        drop(other);
+        tick_until(&sched, "the occurrence that took its place", || statuses(&ws).len() == 1).await;
+        assert_eq!(decided(&ws, &id, from).last(), Some(&(second, "fired".to_string())));
+        assert!(!waiting(&sched, &id), "the replaced occurrence is still waiting to run");
+    }
+
+    /// A disabled schedule starts nothing, an occurrence it left waiting included.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_disabled_schedule_does_not_start_the_occurrence_it_left_waiting() {
+        let Some((_tmp, ws, sched, id)) = overlapping("queue", 0) else { return };
+        let other = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+        due_since(&sched, 2);
+        sched.fire_due().await;
+        eventually("the occurrence waiting", || waiting(&sched, &id)).await;
+        {
+            let mut g = sched.inner.lock().unwrap();
+            sched.commit(&mut g, |list| list.iter_mut().for_each(|s| s.enabled = false)).unwrap();
+        }
+        drop(other);
+        for _ in 0..3 {
+            sched.fire_due().await;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(waiting(&sched, &id), "a disabled schedule started the occurrence that waited");
+        assert!(statuses(&ws).is_empty(), "a disabled schedule ran");
+    }
+
+    /// An occurrence due in the tick that starts the one that waited finds that
+    /// run in its way and waits behind it, rather than running beside a run the
+    /// ledger already says was fired.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_occurrence_due_as_a_waiting_one_starts_waits_behind_it() {
+        let Some((_tmp, ws, sched, id)) = overlapping("queue", 0) else { return };
+        let from = Utc::now() - chrono::Duration::minutes(10);
+        let other = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+        due_since(&sched, 120);
+        sched.fire_due().await;
+        eventually("the occurrence waiting", || waiting(&sched, &id)).await;
+        drop(other);
+        due_since(&sched, 60);
+        sched.fire_due().await;
+        eventually("the newer occurrence waiting", || decided(&ws, &id, from).len() == 3).await;
+        let d = decided(&ws, &id, from);
+        let (first, second) = (d[0].0, d[2].0);
+        assert_eq!(d, vec![(first, "queued".into()), (first, "fired".into()), (second, "queued".into())]);
+
+        tick_until(&sched, "both runs", || statuses(&ws).len() == 2).await;
+        assert_eq!(statuses(&ws), vec!["ok", "ok"]);
+    }
+
+    /// Opening a workspace reads what waits in its ledger afresh: an occurrence
+    /// another scheduler left there runs, though this one had found none before.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn opening_a_workspace_reads_what_waits_in_its_ledger_afresh() {
+        use duckle_duckdb_engine::occurrences::{self, Decision};
+        let Some((_tmp, ws, sched, id)) = overlapping("queue", 0) else { return };
+        sched.fire_due().await;
+        let at = duckle_duckdb_engine::cronzone::Occurrence {
+            at: Utc::now() - chrono::Duration::seconds(30),
+            local: String::new(),
+            offset_seconds: 0,
+            adjustment: None,
+        };
+        let left = Decision::Queued { reason: "waiting for the previous run to end".into() };
+        occurrences::record(&ws, &occurrences::entry(&id, &at, None, left, None, &Utc::now().to_rfc3339())).unwrap();
+
+        sched.set_workspace(Some(ws.clone()));
+        tick_until(&sched, "the occurrence left waiting", || statuses(&ws).len() == 1).await;
+        assert!(!waiting(&sched, &id));
     }
 
     // ---- #296: misfire, decided as `duckle serve` decides it ---------------------

@@ -658,7 +658,7 @@ curl -X POST https://duckle.internal/api/schedules \
   -d '{"id":"orders-load","enabled":true,"cron":"0 3 * * *","overlap":"queue","misfire":"latest"}'
 ```
 
-`duckle-runner serve` honours all of them, and so does the desktop app's own scheduler, set in its Schedules dialog. The desktop works out what it missed from the last occurrence that ran or was skipped on the workspace, whichever scheduler decided it, and records each missed one, skipped or run, in the same ledger. It keeps a waiting occurrence in memory, though, so one does not outlive the app.
+`duckle-runner serve` honours all of them, and so does the desktop app's own scheduler, set in its Schedules dialog. The desktop works out what it missed from the last occurrence that ran or was skipped on the workspace, whichever scheduler decided it, and records each missed one, skipped or run, in the same ledger. A waiting occurrence is kept there as well, so one left waiting when the app closed runs when it starts again.
 
 ### Typed pipeline parameters
 
