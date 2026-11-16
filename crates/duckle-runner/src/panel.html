@@ -556,7 +556,7 @@ async function refreshAll(){
     SCHED_ERROR = r.ok ? null : ((await r.json().catch(()=>({}))).error || 'schedules.json could not be read');
   } catch (e) { SCHED_ERROR = String(e); }
   if(!$('tab-runs').classList.contains('hidden')) renderRuns();
-  if(!$('tab-schedules').classList.contains('hidden')) renderSchedules();
+  if(!$('tab-schedules').classList.contains('hidden') && !editingSchedule()) renderSchedules();
 }
 
 // ── Overview (grouped by job) ──
@@ -682,28 +682,30 @@ function renderSchedules(){
   $('sched-empty').classList.toggle('hidden', PIPES.length>0 || !!SCHED_ERROR);
   $('sched-body').innerHTML=PIPES.map(p=>{
     const sc=p.schedule||{};
+    // An edit nobody has saved yet is shown as it was left, not as the server has it.
+    const f=SCHED_DRAFTS[p.id]||schedForm(sc);
     // Live status: while a run is in flight (scheduled or "Run now") the console
     // marks the pipeline running; otherwise show its last outcome (discussion #155).
     const eff=p.running?'running':p.lastStatus;
     const nextHtml=p.running?'<span class="col-v">running now</span>':`<span class="col-v">${relFuture(p.nextRunAt)}</span>`;
-    return `<tr>
+    return `<tr data-sched="${esc(p.id)}">
       <td><b>${esc(p.name||p.id)}</b><div class="job-file">${esc(p.file)}</div></td>
       <td>${eff?pill(eff):'<span class="muted">never</span>'}<div class="col-k">${relTime(p.lastAt)}</div></td>
       <td>${nextHtml}</td>
-      <td><label class="muted" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="en-${esc(p.id)}" ${sc.enabled?'checked':''}> every</label>
-        <input type="number" min="0" id="iv-${esc(p.id)}" value="${splitEvery(sc.intervalSeconds||0).value}">
+      <td><label class="muted" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="en-${esc(p.id)}" ${f.enabled?'checked':''}> every</label>
+        <input type="number" min="0" id="iv-${esc(p.id)}" value="${esc(f.value)}">
         <select id="iu-${esc(p.id)}" title="The desktop editor writes the same schedules, and it can set an interval in seconds, so this offers the same units rather than rounding one to the nearest minute">
-          ${['seconds','minutes','hours','days'].map(u=>`<option value="${u}"${splitEvery(sc.intervalSeconds||0).unit===u?' selected':''}>${u}</option>`).join('')}
+          ${['seconds','minutes','hours','days'].map(u=>`<option value="${u}"${f.unit===u?' selected':''}>${u}</option>`).join('')}
         </select>
         <span class="muted" style="margin:0 4px">or cron</span>
-        <input type="text" id="cr-${esc(p.id)}" value="${esc(sc.cron||'')}" placeholder="0 9 * * 1" title="5-field cron in local time (min hour day-of-month month day-of-week); overrides the interval when set" style="width:104px">
+        <input type="text" id="cr-${esc(p.id)}" value="${esc(f.cron)}" placeholder="0 9 * * 1" title="5-field cron in local time (min hour day-of-month month day-of-week); overrides the interval when set" style="width:104px">
         <div class="muted" style="margin-top:6px">if still running
           <select id="ov-${esc(p.id)}" title="What becomes of an occurrence that comes due while the previous run is still going. Every outcome is recorded.">
-            ${OVERLAP.map(([v,l])=>`<option value="${v}"${(sc.overlap||'skip')===v?' selected':''}>${l}</option>`).join('')}
+            ${OVERLAP.map(([v,l])=>`<option value="${v}"${f.overlap===v?' selected':''}>${l}</option>`).join('')}
           </select>
           <span style="margin-left:6px">missed while down</span>
           <select id="mf-${esc(p.id)}" title="What becomes of cron occurrences that came due while the server was down, within the schedule's catch-up bounds">
-            ${MISFIRE.map(([v,l])=>`<option value="${v}"${(sc.misfire||'skip')===v?' selected':''}>${l}</option>`).join('')}
+            ${MISFIRE.map(([v,l])=>`<option value="${v}"${f.misfire===v?' selected':''}>${l}</option>`).join('')}
           </select></div></td>
       <td style="text-align:right"><button class="btn" onclick="saveSched(${jsq(p.id)})">Save</button>
         <button class="btn primary" onclick="runJob(${jsq(p.file)},${jsq(p.id)},this)">Run now</button></td>
@@ -713,6 +715,29 @@ function renderSchedules(){
 // #296: what a schedule does when a run is still going, and with occurrences it missed.
 const OVERLAP=[['skip','skip it'],['queue','run it after'],['replace','stop the old run'],['allow','run both']];
 const MISFIRE=[['skip','skip them'],['latest','run the latest'],['all','run each']];
+// Edits not saved yet, by pipeline id. Every refresh rebuilds this table from the
+// server, and rebuilding from the server alone threw away whatever had been typed
+// or picked in a row and not saved.
+const SCHED_DRAFTS={};
+function schedForm(sc){
+  const every=splitEvery(sc.intervalSeconds||0);
+  return {enabled:!!sc.enabled, value:String(every.value), unit:every.unit, cron:sc.cron||'',
+    overlap:sc.overlap||'skip', misfire:sc.misfire||'skip'};
+}
+function readSchedForm(id){
+  return {enabled:$('en-'+id).checked, value:$('iv-'+id).value, unit:$('iu-'+id).value,
+    cron:$('cr-'+id).value, overlap:$('ov-'+id).value, misfire:$('mf-'+id).value};
+}
+['input','change'].forEach(ev=>$('sched-body').addEventListener(ev, e=>{
+  const row=e.target.closest('tr[data-sched]');
+  if(row) SCHED_DRAFTS[row.dataset.sched]=readSchedForm(row.dataset.sched);
+}));
+// Someone is in one of the table's fields. A rebuild would replace the field under
+// them, and the focus and the caret would go with it, in the middle of a word.
+function editingSchedule(){
+  const a=document.activeElement;
+  return !!a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) && $('sched-body').contains(a);
+}
 async function saveSched(id){
   const cron=($('cr-'+id).value||'').trim();
   const enabled=$('en-'+id).checked;
@@ -722,6 +747,7 @@ async function saveSched(id){
     body:JSON.stringify({id, enabled, intervalSeconds, cron, overlap, misfire})});
   if(r&&r.error){ toast(r.error); return; }
   toast('Schedule saved for '+id);
+  delete SCHED_DRAFTS[id];
   const p=PIPES.find(x=>x.id===id); if(p) p.schedule={...p.schedule,enabled,intervalSeconds,cron,overlap,misfire};
   renderJobs();
 }
