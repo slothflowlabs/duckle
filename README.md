@@ -217,7 +217,7 @@ Pick the binary for your OS from the [latest release](https://github.com/slothfl
 
 | OS | Asset | How to run |
 |---|---|---|
-| **Windows** | `Duckle-windows-x64.exe` | Double-click. Unsigned binary - Windows SmartScreen will warn the first time; click "More info" -> "Run anyway". |
+| **Windows** | `Duckle-windows-x64.exe` | Double-click. Unsigned binary - Windows SmartScreen will warn the first time; click "More info" -> "Run anyway". If **Smart App Control** blocks it instead, there is no "Run anyway": Smart App Control has no per-app allow, so the only way through is turning it off (Windows Security -> App & browser control -> Smart App Control settings). Recent Windows 11 updates let you turn it back on later; on older builds it stays off until Windows is reset. |
 | **macOS** (Apple Silicon) | `Duckle-macos-arm64` | `chmod +x Duckle-macos-arm64 && ./Duckle-macos-arm64`. Right-click -> Open the first time to bypass Gatekeeper. |
 | **Linux** (x86_64) | `Duckle-linux-x64` | `chmod +x Duckle-linux-x64 && ./Duckle-linux-x64`. Requires WebKitGTK 4.1 (`libwebkit2gtk-4.1-0` on Debian / Ubuntu) and a desktop session, X11 or Wayland with or without XWayland. On a server with no display, `./Duckle-linux-x64 serve` runs the scheduler and web console without a window. |
 
@@ -4645,6 +4645,7 @@ See the [Contributing](#contributing) section and `crates/duckdb-engine/src/plan
 | **"Couldn't download Duckie AI Assistant (HTTP 404)"** | Pinned llama.cpp build temporarily unavailable from upstream | Bump `LLAMACPP_BUILD` in `apps/desktop/src/engine_manager.rs` to a recent stable, rebuild |
 | **Linux: app won't launch, missing libwebkit** | WebKitGTK 4.1 isn't installed | `sudo apt install libwebkit2gtk-4.1-0` (Debian/Ubuntu) or your distro's equivalent |
 | **macOS: "App can't be opened because Apple cannot check it"** | Gatekeeper, unsigned binary | Right-click the binary -> Open -> Open Anyway |
+| **Windows: Smart App Control blocks the app, with no "Run anyway"** | Smart App Control, unsigned binary. It has no per-app allow | Windows Security -> App & browser control -> Smart App Control settings -> Off. Recent Windows 11 updates let you turn it back on later; on older builds it stays off until Windows is reset |
 | **Pipeline runs but a connector errors with "extension not loaded"** | Lazy-loaded extension (e.g. `spatial`) downloaded mid-run and failed | Run `duckdb :memory: -c "INSTALL spatial; LOAD spatial;"` from a terminal to pre-install; relaunch Duckle |
 | **Chat panel says "AI engine not registered"** | Old version of Duckle before AI shipped (pre-v0.0.10) | Update to latest release |
 | **Duckie generates a pipeline but Insert doesn't put anything on the canvas** | Active pipeline tab has been closed; nothing to insert into | Open a pipeline (or create a new one) before clicking Insert |
