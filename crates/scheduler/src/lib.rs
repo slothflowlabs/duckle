@@ -2525,8 +2525,15 @@ mod tests {
             let (sched, id) = (sched.clone(), id.clone());
             tokio::spawn(async move { sched.run_now(&id).await })
         };
+        // run_now takes the lock before the run starts, and the run writes its
+        // receipt as it starts, so a receipt means the lock is held. Asking the
+        // lock itself took it whenever it was free, and a person's run that came
+        // for it in that moment was refused as already running: the test then
+        // waited out its 90 s for a run that never was (Windows CI, 2da33b87).
         eventually("the person's run holding the pipeline", || {
-            duckle_duckdb_engine::runlock::try_acquire(&ws, "p").is_none()
+            std::fs::read_dir(duckle_duckdb_engine::retry::dir(&ws))
+                .map(|d| d.flatten().any(|e| e.path().extension().is_some_and(|x| x == "json")))
+                .unwrap_or(false)
         })
         .await;
         due_since(&sched, 2);
