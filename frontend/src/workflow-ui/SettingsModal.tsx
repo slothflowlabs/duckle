@@ -17,6 +17,8 @@ import {
     settingsSetContextFile,
 } from '../tauri-bridge';
 import { loadPersisted, savePersisted } from '../persistence';
+import { readMapTiles, saveMapTiles, type MapTiles } from '../geo/map-tiles';
+import { usableTileUrl } from '../geo/map-view';
 import { openExternal } from '../tauri-io';
 import {
     DEFAULT_FONT_SIZE,
@@ -191,6 +193,13 @@ export function SettingsModal({
         setShowDives(next);
         savePersisted('hideDivesButton', !next);
         window.dispatchEvent(new Event('duckle:dives-visibility'));
+    };
+
+    // #372: local UI pref, applied immediately like the toolbar's; a map reads it as it opens.
+    const [mapTiles, setMapTiles] = useState(readMapTiles);
+    const changeMapTiles = (next: MapTiles) => {
+        setMapTiles(next);
+        saveMapTiles(next);
     };
 
     const toggleMinimap = (next: boolean) => {
@@ -542,6 +551,41 @@ export function SettingsModal({
                             <input type="checkbox" checked={showMinimap} onChange={e => toggleMinimap(e.target.checked)} />
                             Show the minimap in the corner of the canvas
                         </label>
+                    </Section>
+
+                    <Section expanded={expanded} onToggle={toggleSection} id="maptiles" title="Map tiles">
+                        <p style={help}>
+                            Off by default: a map of a GEOMETRY column draws its shapes on a plain background and
+                            reaches no server. Give an XYZ tile URL to draw longitude/latitude shapes over a basemap,
+                            for example https://tile.openstreetmap.org/{'{z}'}/{'{x}'}/{'{y}'}.png. The tiles come
+                            from that server, which then sees the area you look at, so use one whose terms allow
+                            it. Applies to the next map you open.
+                        </p>
+                        <input
+                            id="settings-map-tiles"
+                            type="text"
+                            value={mapTiles.url}
+                            onChange={e => changeMapTiles({ ...mapTiles, url: e.target.value })}
+                            placeholder="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                            spellCheck={false}
+                            autoComplete="off"
+                            style={aiInput}
+                        />
+                        {mapTiles.url.trim() && !usableTileUrl(mapTiles.url) ? (
+                            <p style={{ ...help, marginTop: 6, color: 'var(--danger, #ff4d6d)', opacity: 1 }}>
+                                Not used: a tile URL starts with http:// or https:// and names {'{z}'}, {'{x}'} and {'{y}'}.
+                            </p>
+                        ) : null}
+                        <input
+                            id="settings-map-attribution"
+                            type="text"
+                            value={mapTiles.attribution}
+                            onChange={e => changeMapTiles({ ...mapTiles, attribution: e.target.value })}
+                            placeholder="Credit shown on the map, e.g. © OpenStreetMap contributors"
+                            spellCheck={false}
+                            autoComplete="off"
+                            style={{ ...aiInput, marginTop: 8 }}
+                        />
                     </Section>
 
                     <Section expanded={expanded} onToggle={toggleSection} id="security" title="Security and privacy">

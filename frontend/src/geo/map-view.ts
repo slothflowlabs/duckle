@@ -1,9 +1,10 @@
 // #372: the arithmetic behind the map of a preview's GEOMETRY column.
 //
-// No basemap is drawn: tiles would come from a third-party server, and nothing
-// in a preview should reach the network. So the shapes alone have to come out
-// the right way up, the right shape and under the cursor where they belong,
-// which is all this file does. Kept free of React so check-logic can run it.
+// No basemap is drawn unless the user names a tile server in Settings: tiles
+// come from a third party, and nothing in a preview should reach the network
+// unasked. So the shapes alone have to come out the right way up, the right
+// shape and under the cursor where they belong, and over tiles they have to sit
+// where the tiles put the ground. Kept free of React so check-logic can run it.
 
 import { parseWkt, type Geometry, type Position } from './wkt';
 
@@ -167,6 +168,90 @@ export function zoomAt(view: View, factor: number, sx: number, sy: number): View
     const [mx, my] = toMap(view, [sx, sy]);
     const scale = view.scale * factor;
     return { scale, xStretch: view.xStretch, tx: sx - mx * scale * view.xStretch, ty: sy + my * scale };
+}
+
+/** The latitude Web Mercator stops at, where its square ends. */
+const MERCATOR_MAX_LAT = 85.0511287798066;
+
+/**
+ * #372: a longitude/latitude in Web Mercator, the projection map tiles are cut
+ * in, as a point of the unit square they cover: x from 0 at 180°W to 1 at
+ * 180°E, y from 0 at the south edge to 1 at the north (north up, as drawn).
+ */
+export function toMercator([lon, lat]: Position): Position {
+    const clamped = Math.max(Math.min(lat, MERCATOR_MAX_LAT), -MERCATOR_MAX_LAT);
+    const s = Math.sin((clamped * Math.PI) / 180);
+    return [(lon + 180) / 360, 0.5 + Math.log((1 + s) / (1 - s)) / (4 * Math.PI)];
+}
+
+/** The longitude/latitude of a point of the Mercator square; see toMercator. */
+export function fromMercator([x, y]: Position): Position {
+    const lat = (Math.atan(Math.sinh((y - 0.5) * 2 * Math.PI)) * 180) / Math.PI;
+    return [x * 360 - 180, lat];
+}
+
+/** `g` with every position passed through `f`. */
+export function mapPositions(g: Geometry, f: (p: Position) => Position): Geometry {
+    switch (g.type) {
+        case 'Point':
+            return { type: 'Point', coordinates: f(g.coordinates) };
+        case 'LineString':
+        case 'MultiPoint':
+            return { type: g.type, coordinates: g.coordinates.map(f) };
+        case 'Polygon':
+        case 'MultiLineString':
+            return { type: g.type, coordinates: g.coordinates.map(ring => ring.map(f)) };
+        case 'MultiPolygon':
+            return { type: 'MultiPolygon', coordinates: g.coordinates.map(poly => poly.map(ring => ring.map(f))) };
+        case 'GeometryCollection':
+            return { type: 'GeometryCollection', geometries: g.geometries.map(s => mapPositions(s, f)) };
+    }
+}
+
+/** One map tile and where it is drawn: its top-left corner and side, in screen pixels. */
+export type Tile = { z: number; x: number; y: number; sx: number; sy: number; size: number };
+
+/** The deepest zoom tile servers commonly serve. */
+const MAX_TILE_ZOOM = 19;
+
+/**
+ * #372: the tiles covering a `width` x `height` view of the Mercator square
+ * (see toMercator), at the zoom whose tiles come out nearest 256 pixels across.
+ * Rows count from the north edge, as XYZ tile servers number them.
+ */
+export function tilesFor(view: View, width: number, height: number): Tile[] {
+    const z = Math.max(0, Math.min(MAX_TILE_ZOOM, Math.round(Math.log2(view.scale / 256))));
+    const n = 2 ** z;
+    const size = (view.scale * view.xStretch) / n;
+    const [west, north] = toMap(view, [0, 0]);
+    const [east, south] = toMap(view, [width, height]);
+    // A view edge on a tile edge does not reach into the next tile; the slack
+    // keeps rounding in the division from fetching a tile nobody sees.
+    const span = (from: number, to: number): [number, number] => [
+        Math.max(0, Math.floor(from * n + 1e-9)),
+        Math.min(n - 1, Math.ceil(to * n - 1e-9) - 1),
+    ];
+    const [col0, col1] = span(west, east);
+    const [row0, row1] = span(1 - north, 1 - south);
+    const tiles: Tile[] = [];
+    for (let x = col0; x <= col1; x++) {
+        for (let y = row0; y <= row1; y++) {
+            const [sx, sy] = toScreen(view, [x / n, 1 - y / n]);
+            tiles.push({ z, x, y, sx, sy, size });
+        }
+    }
+    return tiles;
+}
+
+/** A tile's address from an XYZ template such as https://tile.example.org/{z}/{x}/{y}.png. */
+export function tileUrl(template: string, t: Tile): string {
+    return template.replace(/\{z\}/g, String(t.z)).replace(/\{x\}/g, String(t.x)).replace(/\{y\}/g, String(t.y));
+}
+
+/** A template a map can fetch tiles with: http(s), naming {z}, {x} and {y}. */
+export function usableTileUrl(template: string): boolean {
+    const t = template.trim();
+    return /^https?:\/\//i.test(t) && ['{z}', '{x}', '{y}'].every(p => t.includes(p));
 }
 
 /**

@@ -44,11 +44,17 @@ import {
     collectFeatures,
     crsOfType,
     fitView,
+    fromMercator,
     geometryColumns,
     isGeographic,
+    mapPositions,
     pathParts,
+    tileUrl,
+    tilesFor,
     toMap,
+    toMercator,
     toScreen,
+    usableTileUrl,
     zoomAt,
 } from '../src/geo/map-view';
 import { getManifest } from '../src/workflow-ui/fields/component-manifests';
@@ -2347,6 +2353,62 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         names(previewColumns({ schemaSource: 'upstream', hasOwnRows: true, ran, output: [col('x')], declared: [], upstream: [col('y')] })) ===
             names([col('x')]),
         'output x expected',
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #372: tiles under a map line up with its shapes only when both are in Web
+// Mercator and each tile is the one an XYZ server numbers for that ground.
+// ---------------------------------------------------------------------------
+{
+    const near = (a: number, b: number, eps = 1e-9) => Math.abs(a - b) < eps;
+    const [x0, y0] = toMercator([0, 0]);
+    check('#372: 0°, 0° is the middle of the Mercator square', near(x0, 0.5) && near(y0, 0.5), `${x0}, ${y0}`);
+    const [xw, yn] = toMercator([-180, 89]);
+    check('#372: 180°W at a latitude past the square is its north-west corner', near(xw, 0) && near(yn, 1, 1e-9), `${xw}, ${yn}`);
+    const [lx, ly] = toMercator([-0.1278, 51.5074]);
+    const at10 = [Math.floor(lx * 1024), Math.floor((1 - ly) * 1024)];
+    check('#372: London is in tile 10/511/340, as XYZ servers number it', at10[0] === 511 && at10[1] === 340, JSON.stringify(at10));
+    const back = fromMercator(toMercator([12.5, -33.9]));
+    check('#372: fromMercator undoes toMercator', near(back[0], 12.5) && near(back[1], -33.9), JSON.stringify(back));
+
+    // The whole square fitted in 512 x 512 is zoom 1: four tiles of 256 px.
+    const square = fitView({ minX: 0, minY: 0, maxX: 1, maxY: 1 }, 512, 512, 0, false);
+    const tiles = tilesFor(square, 512, 512);
+    check('#372: the square in 512 px is four zoom-1 tiles of 256 px', tiles.length === 4 && tiles.every(t => t.z === 1 && near(t.size, 256)), JSON.stringify(tiles));
+    const nw = tiles.find(t => t.x === 0 && t.y === 0);
+    check('#372: tile 1/0/0 is the north-west one, at the top left', !!nw && near(nw.sx, 0) && near(nw.sy, 0), JSON.stringify(nw));
+    const se = tiles.find(t => t.x === 1 && t.y === 1);
+    check('#372: tile 1/1/1 is the south-east one, at 256, 256', !!se && near(se.sx, 256) && near(se.sy, 256), JSON.stringify(se));
+    // Zoomed in on the north-east quarter, only its own tiles are fetched.
+    const quarter = tilesFor(fitView({ minX: 0.5, minY: 0.5, maxX: 1, maxY: 1 }, 512, 512, 0, false), 512, 512);
+    check(
+        '#372: a view of one quarter fetches that quarter at zoom 2',
+        quarter.length === 4 && quarter.every(t => t.z === 2 && t.x >= 2 && t.y <= 1),
+        JSON.stringify(quarter.map(t => `${t.z}/${t.x}/${t.y}`)),
+    );
+
+    check(
+        '#372: a template is filled with z, x and y',
+        tileUrl('https://t.example/{z}/{x}/{y}.png', { z: 3, x: 4, y: 5, sx: 0, sy: 0, size: 256 }) === 'https://t.example/3/4/5.png',
+        tileUrl('https://t.example/{z}/{x}/{y}.png', { z: 3, x: 4, y: 5, sx: 0, sy: 0, size: 256 }),
+    );
+    check(
+        '#372: only an http(s) template naming z, x and y is used',
+        usableTileUrl('https://t.example/{z}/{x}/{y}.png') &&
+            !usableTileUrl('t.example/{z}/{x}/{y}.png') &&
+            !usableTileUrl('https://t.example/{z}/{x}.png'),
+        'usableTileUrl',
+    );
+    const moved = mapPositions(
+        { type: 'GeometryCollection', geometries: [{ type: 'Point', coordinates: [0, 0] }, { type: 'MultiPolygon', coordinates: [[[[0, 0], [1, 1]]]] }] },
+        ([x, y]) => [x + 1, y + 2],
+    );
+    check(
+        '#372: every position of a shape is moved',
+        JSON.stringify(moved) ===
+            JSON.stringify({ type: 'GeometryCollection', geometries: [{ type: 'Point', coordinates: [1, 2] }, { type: 'MultiPolygon', coordinates: [[[[1, 2], [2, 3]]]] }] }),
+        JSON.stringify(moved),
     );
 }
 

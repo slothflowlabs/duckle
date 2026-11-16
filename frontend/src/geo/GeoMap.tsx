@@ -1,9 +1,10 @@
 // #372: a map of a preview's GEOMETRY column, drawn above the table it came from.
 //
-// Points, lines and polygons are drawn as SVG on a plain background. There is no
-// basemap on purpose: tiles come from a third-party server, and opening a
-// preview must not reach the network. Selection is shared with the table: a
-// shape clicked here is the row highlighted there, and the other way round.
+// Points, lines and polygons are drawn as SVG on a plain background. A basemap
+// is drawn only once the user names a tile server in Settings: tiles come from a
+// third party, and opening a preview must not reach the network unasked.
+// Selection is shared with the table: a shape clicked here is the row
+// highlighted there, and the other way round.
 
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { LocateFixed, Maximize2, Minus, Plus, X } from 'lucide-react';
@@ -13,14 +14,21 @@ import {
     collectFeatures,
     crsOfType,
     fitView,
+    fromMercator,
     geometryColumns,
     isGeographic,
+    mapPositions,
     pathParts,
+    tileUrl,
+    tilesFor,
     toMap,
+    toMercator,
+    usableTileUrl,
     zoomAt,
     type MapFeature,
     type View,
 } from './map-view';
+import { readMapTiles } from './map-tiles';
 
 export const FEATURE_LIMIT_DEFAULT = 1000;
 export const FEATURE_LIMIT_MAX = 10_000;
@@ -115,13 +123,25 @@ export function GeoMap({
     };
 
     const set = useMemo(() => collectFeatures(rows, column ?? '', limit), [rows, column, limit]);
-    const bounds = useMemo(() => boundsOf(set.features), [set]);
+    const setBounds = useMemo(() => boundsOf(set.features), [set]);
+    const crs = column ? crsOfType(sqlTypeOf?.(column)) : null;
+    const geographic = setBounds ? isGeographic(crs, setBounds) : false;
+    // Over tiles, longitude/latitude is drawn in Web Mercator, the projection
+    // tiles are cut in, so each shape sits where the tiles put the ground. The
+    // setting is read as a map opens; a change in Settings shows on the next.
+    const tileSource = useMemo(readMapTiles, []);
+    const tiled = geographic && usableTileUrl(tileSource.url);
+    const features = useMemo(
+        () => (tiled ? set.features.map(f => ({ ...f, geometry: mapPositions(f.geometry, toMercator) })) : set.features),
+        [set, tiled],
+    );
+    const bounds = useMemo(() => (tiled ? boundsOf(features) : setBounds), [tiled, features, setBounds]);
     const origin = useMemo<Position | null>(
         () => (bounds ? [(bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2] : null),
         [bounds],
     );
-    const crs = column ? crsOfType(sqlTypeOf?.(column)) : null;
-    const geographic = bounds ? isGeographic(crs, bounds) : false;
+    // Mercator is already true to shape where it is drawn, so it is not narrowed.
+    const narrow = geographic && !tiled;
 
     const boxRef = useRef<HTMLDivElement>(null);
     const svgRef = useRef<SVGSVGElement>(null);
@@ -137,15 +157,15 @@ export function GeoMap({
 
     const [view, setView] = useState<View | null>(null);
     const fit = useCallback(() => {
-        if (bounds && width > 0) setView(fitView(bounds, width, height, PAD, geographic));
-    }, [bounds, width, height, geographic]);
+        if (bounds && width > 0) setView(fitView(bounds, width, height, PAD, narrow));
+    }, [bounds, width, height, narrow]);
     // Fit once per set of shapes; a later resize keeps whatever the user zoomed to.
     const fittedFor = useRef<typeof set | null>(null);
     useEffect(() => {
         if (!bounds || width <= 0 || (fittedFor.current === set && view)) return;
         fittedFor.current = set;
-        setView(fitView(bounds, width, height, PAD, geographic));
-    }, [set, bounds, width, height, geographic, view]);
+        setView(fitView(bounds, width, height, PAD, narrow));
+    }, [set, bounds, width, height, narrow, view]);
 
     const hasShapes = set.features.length > 0;
     // React's onWheel is passive, so it cannot stop the panel scrolling under a zoom.
@@ -191,7 +211,8 @@ export function GeoMap({
             setView({ ...d.view, tx: d.view.tx + dx, ty: d.view.ty + dy });
         } else if (view) {
             const r = e.currentTarget.getBoundingClientRect();
-            setCursor(toMap(view, [e.clientX - r.left, e.clientY - r.top]));
+            const at = toMap(view, [e.clientX - r.left, e.clientY - r.top]);
+            setCursor(tiled ? fromMercator(at) : at);
         }
     };
     const onPointerUp = () => {
@@ -202,16 +223,16 @@ export function GeoMap({
     };
     const zoomCentre = (factor: number) => setView(v => (v && width > 0 ? zoomAt(v, factor, width / 2, height / 2) : v));
 
-    const selectedFeature = selectedRow === null ? undefined : set.features.find(f => f.row === selectedRow);
+    const selectedFeature = selectedRow === null ? undefined : features.find(f => f.row === selectedRow);
     const zoomToSelected = () => {
         if (!selectedFeature) return;
         const b = boundsOf([selectedFeature]);
-        if (b && width > 0) setView(fitView(b, width, height, PAD * 3, geographic));
+        if (b && width > 0) setView(fitView(b, width, height, PAD * 3, narrow));
     };
 
     const layer = useMemo(
-        () => (origin ? set.features.map(f => <Shape key={f.row} feature={f} origin={origin} />) : null),
-        [set, origin],
+        () => (origin ? features.map(f => <Shape key={f.row} feature={f} origin={origin} />) : null),
+        [features, origin],
     );
 
     if (!column) return null;
@@ -296,6 +317,21 @@ export function GeoMap({
                         onPointerCancel={onPointerUp}
                         onPointerLeave={() => setCursor(null)}
                     >
+                        {tiled && view ? (
+                            <g className="geo-tiles">
+                                {tilesFor(view, width, height).map(t => (
+                                    <image
+                                        key={`${t.z}/${t.x}/${t.y}`}
+                                        href={tileUrl(tileSource.url, t)}
+                                        x={t.sx}
+                                        y={t.sy}
+                                        width={t.size}
+                                        height={t.size}
+                                        preserveAspectRatio="none"
+                                    />
+                                ))}
+                            </g>
+                        ) : null}
                         {transform ? (
                             <g transform={transform}>
                                 {layer}
@@ -336,6 +372,9 @@ export function GeoMap({
                     <div className="geo-cursor">
                         {cursor[0].toFixed(digits)}, {cursor[1].toFixed(digits)}
                     </div>
+                ) : null}
+                {tiled && tileSource.attribution.trim() ? (
+                    <div className="geo-attribution">{tileSource.attribution}</div>
                 ) : null}
             </div>
             <div className="geo-status">

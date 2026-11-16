@@ -3943,6 +3943,20 @@ html[dir='rtl'] .topbar-lang {
     pointer-events: none;
 }
 
+/* #372: the credit a tile server's terms ask for, kept clear of the cursor readout. */
+.geo-attribution {
+    position: absolute;
+    left: 6px;
+    bottom: 6px;
+    max-width: 60%;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--bg-1);
+    color: var(--text-3);
+    font-size: 0.7692rem;
+    pointer-events: none;
+}
+
 .geo-card {
     position: absolute;
     top: 6px;

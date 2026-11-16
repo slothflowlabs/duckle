@@ -1520,10 +1520,18 @@ Clicking a shape selects its row in the table and shows that row's values, and
 clicking a row selects its shape. The CRS comes from the column's type
 (`GEOMETRY('EPSG:4326')`) and is shown when there is one.
 
-There is no basemap. Tiles come from a third-party server, and opening a
-preview should not reach the network, so the shapes are drawn on a plain
-background, with longitude narrowed by the cosine of the latitude so they keep
-their shape.
+By default there is no basemap. Tiles come from a third-party server, and
+opening a preview should not reach the network unasked, so the shapes are drawn
+on a plain background, with longitude narrowed by the cosine of the latitude so
+they keep their shape.
+
+To draw longitude/latitude shapes over a basemap, give an XYZ tile URL under
+**Settings -> Map tiles**, for example
+`https://tile.openstreetmap.org/{z}/{x}/{y}.png`, and the credit its terms ask
+for, which is shown on the map. The shapes are then drawn in Web Mercator, the
+projection tiles are cut in, so each sits on the ground the tiles show. The
+server sees the area you look at, so use one whose terms allow it. Shapes in a
+projected CRS stay on the plain background.
 
 A run keeps 100 rows of each step, which is a sample rather than a map.
 **Feature limit** caps how many shapes are drawn (1,000 by default, up to
