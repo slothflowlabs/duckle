@@ -1414,6 +1414,20 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     check("#296: the dialog's overlap choice is saved", chosen.overlap === 'replace', JSON.stringify(chosen));
 }
 
+// #296: the desktop scheduler honours misfire now, so the dialog sets it too, and a
+// save that does not mention it keeps the one set through the server's API.
+{
+    const loaded = {
+        id: 's1', pipeline_id: 'p', name: 'n', enabled: true,
+        kind: { type: 'cron' as const, expr: '0 0 3 * * *' }, misfire: 'latest' as const,
+    };
+    const base = { id: 's1', pipelineId: 'p', name: 'n', enabled: true, kind: loaded.kind };
+    const kept = scheduleForSave(loaded, base);
+    check('#296: a save that does not mention the misfire policy keeps it', kept.misfire === 'latest', JSON.stringify(kept));
+    const chosen = scheduleForSave(loaded, { ...base, misfire: 'all' });
+    check("#296: the dialog's misfire choice is saved", chosen.misfire === 'all', JSON.stringify(chosen));
+}
+
 // #384: a tour card is as tall as its text and the font size make it, and on a first run
 // its Next button is the only way forward. A collapsed bottom panel in a 915px window, with
 // a card taller than the old fixed guess, pushed the buttons off the window.

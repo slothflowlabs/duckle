@@ -640,13 +640,15 @@ Each schedule says what becomes of an occurrence that comes due while its previo
 | `replace` | the previous run is stopped and this one runs. Only a run a schedule started is stopped: a run a person started finishes, and the occurrence waits for it. |
 | `allow` | it runs alongside. Resource pools still apply. |
 
-And of the occurrences that came due while the server was down:
+And of the cron occurrences that came due while nothing was there to run them, the server down or the app closed:
 
 | `misfire` | what happens |
 |---|---|
 | `skip` (default) | each is recorded as skipped. |
 | `latest` | only the newest runs. |
 | `all` | each runs, oldest first, within `catchup: { maxCatchupRuns: 31, maxCatchupAgeDays: 45 }`. When there are more, the newest are kept. |
+
+A machine that slept with the scheduler running still runs the occurrence it was waiting for when it wakes; `misfire` decides the ones after it.
 
 Every outcome of a cron schedule goes into the occurrence ledger (`.duckle/occurrences.ndjson`), so "it was skipped" and "nothing happened" are never the same silence. A waiting occurrence is held there too, not in memory, so one that was waiting when the server stopped still runs when it comes back; that is the only record an interval schedule writes, since a sub-minute one would otherwise add a line per tick. The policies are set on the console's Schedules tab, through the schedule API, or in the `schedule` of a deploy. A value that is not one of a policy's names is refused, not read as the default:
 
@@ -656,7 +658,7 @@ curl -X POST https://duckle.internal/api/schedules \
   -d '{"id":"orders-load","enabled":true,"cron":"0 3 * * *","overlap":"queue","misfire":"latest"}'
 ```
 
-`duckle-runner serve` honours all of them. The desktop app's own scheduler honours the zone, the exclusion calendar and `overlap` too, set in its Schedules dialog; it keeps a waiting occurrence in memory, since it writes no ledger, so one does not outlive the app. A missed occurrence runs once there when it next ticks, whatever `misfire` says.
+`duckle-runner serve` honours all of them, and so does the desktop app's own scheduler, set in its Schedules dialog. The desktop works out what it missed from the last occurrence that ran or was skipped on the workspace, whichever scheduler decided it, and records each missed one, skipped or run, in the same ledger. It keeps a waiting occurrence in memory, though, so one does not outlive the app.
 
 ### Typed pipeline parameters
 

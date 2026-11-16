@@ -167,7 +167,7 @@ pub fn claim(
 ) -> Result<bool, String> {
     let name = occurrence_id(schedule_id, "claim");
     let _guard = crate::runlock::lock_store(workspace, &name)?;
-    let path = workspace.join(".duckle").join("claims").join(format!("{name}.json"));
+    let path = claim_path(workspace, schedule_id);
     let claimed: Option<Claimed> = match std::fs::read_to_string(&path) {
         Ok(text) => serde_json::from_str(&text).ok(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -185,6 +185,26 @@ pub fn claim(
     std::fs::write(&temp, text).map_err(|e| format!("{}: {e}", temp.display()))?;
     std::fs::rename(&temp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(true)
+}
+
+fn claim_path(workspace: &Path, schedule_id: &str) -> PathBuf {
+    let name = occurrence_id(schedule_id, "claim");
+    workspace.join(".duckle").join("claims").join(format!("{name}.json"))
+}
+
+/// The newest occurrence of this schedule that any scheduler on the workspace has
+/// taken, or None when none ever has.
+///
+/// What the desktop's catch-up measures from. Every scheduler takes an occurrence
+/// through [`claim`] whatever it then does with it, so this is where the schedule
+/// was last decided, by this process or another one; and it is one instant per
+/// schedule, where the ledger is a line per decision and read whole.
+pub fn claimed_through(
+    workspace: &Path,
+    schedule_id: &str,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let text = std::fs::read_to_string(claim_path(workspace, schedule_id)).ok()?;
+    serde_json::from_str::<Claimed>(&text).ok().map(|c| c.through)
 }
 
 /// Append one occurrence. Append-only, like the materialization log and for the
@@ -448,6 +468,32 @@ pub fn catch_up(
         return Ok(Vec::new());
     };
     Ok(decide(&missed(expr, zone, exclude, after, now, bounds)?, misfire))
+}
+
+/// How long a live scheduler can go without ticking, in milliseconds.
+pub fn stall_allowance(tick: std::time::Duration) -> u64 {
+    (tick.as_millis() as u64).saturating_mul(5).max(60_000)
+}
+
+/// Up to where a tick may decide what a schedule missed.
+///
+/// An occurrence that is merely recent may belong to another scheduler that has not ticked
+/// yet: deciding it here, under a misfire policy of skip, would claim it and record it as
+/// skipped while that scheduler was about to run it. So only an occurrence older than a live
+/// scheduler can be counted as missed. A restart comes back to a fresh one a minute later.
+///
+/// And never the occurrence this tick has armed, which is this tick's to fire. The walk ran
+/// past it, so a schedule on time was recorded as overdue on every firing as well as fired.
+///
+/// Shared by both schedulers, `duckle serve`'s and the desktop's, so a missed occurrence
+/// means the same thing to each.
+pub fn catch_up_horizon(
+    now: chrono::DateTime<chrono::Utc>,
+    tick: std::time::Duration,
+    armed: Option<chrono::DateTime<chrono::Utc>>,
+) -> chrono::DateTime<chrono::Utc> {
+    let settled = now - chrono::Duration::milliseconds(stall_allowance(tick) as i64);
+    armed.map_or(settled, |at| settled.min(at - chrono::Duration::milliseconds(1)))
 }
 
 /// Build the record for one occurrence.
@@ -746,6 +792,21 @@ mod tests {
         write!(f, "{{\"occurrenceId\":\"half").unwrap();
         drop(f);
         assert_eq!(read(ws.path()).len(), 1, "one torn line hid a complete record");
+    }
+
+    /// A catch-up measures from the newest occurrence taken, and a schedule nobody has
+    /// taken one of has nothing to measure from.
+    #[test]
+    fn claimed_through_is_the_newest_occurrence_taken_for_that_schedule() {
+        let ws = tempfile::tempdir().unwrap();
+        assert_eq!(claimed_through(ws.path(), "s"), None);
+        let (first, second) = (utc(2026, 11, 14, 3), utc(2026, 11, 15, 3));
+        assert!(claim(ws.path(), "s", first).unwrap());
+        assert!(claim(ws.path(), "s", second).unwrap());
+        // An older one is refused, and the newest stays what it was.
+        assert!(!claim(ws.path(), "s", first).unwrap());
+        assert_eq!(claimed_through(ws.path(), "s"), Some(second));
+        assert_eq!(claimed_through(ws.path(), "other"), None);
     }
 }
 

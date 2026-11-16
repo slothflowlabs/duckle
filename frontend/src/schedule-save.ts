@@ -14,6 +14,8 @@ export type ScheduleEdit = {
     params?: Record<string, string>;
     /** #296: what becomes of an occurrence that comes due while the last run is still going. */
     overlap?: Schedule['overlap'];
+    /** #296: what becomes of the cron occurrences missed while the app was closed. */
+    misfire?: Schedule['misfire'];
 };
 
 /**
@@ -94,5 +96,6 @@ export function scheduleForSave(loaded: Schedule | undefined, edit: ScheduleEdit
         kind: edit.kind,
         ...(edit.params !== undefined ? { params: edit.params } : {}),
         ...(edit.overlap !== undefined ? { overlap: edit.overlap } : {}),
+        ...(edit.misfire !== undefined ? { misfire: edit.misfire } : {}),
     };
 }

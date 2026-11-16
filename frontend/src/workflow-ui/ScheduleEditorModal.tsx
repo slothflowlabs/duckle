@@ -51,6 +51,8 @@ type Draft = {
     params: Record<string, string>;
     /** #296: what becomes of an occurrence that comes due while the last run is still going. */
     overlap: NonNullable<Schedule['overlap']>;
+    /** #296: what becomes of the cron occurrences missed while the app was closed. */
+    misfire: NonNullable<Schedule['misfire']>;
 };
 
 const OVERLAP_CHOICES: { value: Draft['overlap']; label: string }[] = [
@@ -58,6 +60,12 @@ const OVERLAP_CHOICES: { value: Draft['overlap']; label: string }[] = [
     { value: 'queue', label: 'Run it after the current run' },
     { value: 'replace', label: 'Stop the current run and run it' },
     { value: 'allow', label: 'Run both at once' },
+];
+
+const MISFIRE_CHOICES: { value: Draft['misfire']; label: string }[] = [
+    { value: 'skip', label: 'Skip them' },
+    { value: 'latest', label: 'Run the latest one' },
+    { value: 'all', label: 'Run each of them, oldest first' },
 ];
 
 const CRON_PRESETS: { label: string; expr: string }[] = [
@@ -126,6 +134,7 @@ export default function ScheduleEditorModal({
             watchRecursive: true,
             params: {},
             overlap: 'skip',
+            misfire: 'skip',
         });
         setError(null);
     };
@@ -148,6 +157,7 @@ export default function ScheduleEditorModal({
                 Object.entries(s.params ?? {}).map(([k, v]) => [k, declared[k] ? toParamInput(declared[k], v) : v]),
             ),
             overlap: s.overlap ?? 'skip',
+            misfire: s.misfire ?? 'skip',
         });
         setError(null);
     };
@@ -181,7 +191,16 @@ export default function ScheduleEditorModal({
             : undefined;
         const draft = scheduleForSave(
             schedules.find(s => s.id === editing.id),
-            { id: editing.id, pipelineId, name: editing.name, enabled: editing.enabled, kind, params, overlap: editing.overlap },
+            {
+                id: editing.id,
+                pipelineId,
+                name: editing.name,
+                enabled: editing.enabled,
+                kind,
+                params,
+                overlap: editing.overlap,
+                misfire: editing.misfire,
+            },
         );
         try {
             await scheduleUpsert(draft);
@@ -666,6 +685,26 @@ function ScheduleForm({
                     started, never one started with Run now.
                 </p>
             </div>
+            {draft.mode === 'cron' ? (
+                <div className="modal-field">
+                    <label className="modal-field-label">Times missed while Duckle was closed or asleep</label>
+                    <select
+                        className="modal-input modal-select"
+                        value={draft.misfire}
+                        onChange={e => onChange({ ...draft, misfire: e.target.value as Draft['misfire'] })}
+                    >
+                        {MISFIRE_CHOICES.map(c => (
+                            <option key={c.value} value={c.value}>
+                                {c.label}
+                            </option>
+                        ))}
+                    </select>
+                    <p className="modal-field-hint">
+                        After a sleep, the time it was waiting for still runs, and this decides the ones
+                        after it. Running each stops at 31 runs and 45 days back, by default.
+                    </p>
+                </div>
+            ) : null}
             <div className="modal-field">
                 <label className="schedule-toggle">
                     <input

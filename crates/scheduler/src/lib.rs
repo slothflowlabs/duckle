@@ -1077,6 +1077,9 @@ impl Scheduler {
         // Read the workspace under the same lock as the due list, so the path
         // used for the run lock is the one this tick actually decided against.
         let workspace = { self.inner.lock().expect("scheduler poisoned").workspace_path.clone() };
+        // #296: what came due while nothing was ticking, decided before this tick
+        // moves on the occurrences it has armed.
+        self.catch_up(now);
         // #296: what waited for a run in its way goes first: it is older than
         // anything due now.
         let mut due = self.take_waiting();
@@ -1144,6 +1147,133 @@ impl Scheduler {
             });
         }
     }
+
+    /// #296: what the cron schedules missed while nothing was ticking, run or
+    /// recorded as each schedule's misfire policy says: the app closed, or the
+    /// machine asleep past more than the one occurrence it was waiting for.
+    ///
+    /// Decided by the functions `duckle serve` decides with, and recorded in the
+    /// same ledger. The desktop used to run at most the occurrence it had armed
+    /// and nothing else, whatever the policy said, and on a fresh start not even
+    /// that.
+    ///
+    /// Measured from the newest occurrence any scheduler on the workspace took,
+    /// rather than from the ledger as serve measures: the desktop records only
+    /// what it decides about missed occurrences, because a record per run is a
+    /// line a minute for a minutely schedule, in a file a catch-up reads whole.
+    fn catch_up(&self, now: DateTime<Utc>) {
+        use duckle_duckdb_engine::{cronzone, occurrences};
+        let (workspace, list) = {
+            let g = self.inner.lock().expect("scheduler poisoned");
+            (g.workspace_path.clone(), g.schedules.clone())
+        };
+        // What was taken is kept in the workspace: with none there is nothing to measure from.
+        let Some(ws) = workspace else { return };
+        for s in list.into_iter().filter(|s| s.enabled) {
+            let ScheduleKind::Cron { expr } = &s.kind else { continue };
+            // Never taken: a schedule seen for the first time arms, it does not
+            // catch up, or a new schedule would run its whole history.
+            let Some(after) = occurrences::claimed_through(&ws, &s.id) else { continue };
+            // An unusable zone is reported where its next run is worked out.
+            let Ok(zone) = cronzone::resolve_zone(s.timezone.as_deref()) else { continue };
+            // The occurrence armed now is this tick's to fire, however late it is.
+            let horizon = occurrences::catch_up_horizon(now, tick_interval(), s.next_run_at);
+            let missed = match occurrences::missed(expr, &zone, &s.exclude, after, horizon, &s.catchup) {
+                Ok(missed) => missed,
+                Err(e) => {
+                    warn!("Schedule {}: could not work out what it missed: {}", s.id, e);
+                    continue;
+                }
+            };
+            let decided_at = now.to_rfc3339();
+            let mut to_run = Vec::new();
+            for (occ, decision) in occurrences::decide(&missed, s.misfire) {
+                if decision == occurrences::Decision::Fired {
+                    // Recorded by the catch-up run, immediately before its own run.
+                    to_run.push(occ);
+                    continue;
+                }
+                if !take_occurrence(&ws, &s.id, occ.at) {
+                    continue;
+                }
+                let entry = occurrences::entry(&s.id, &occ, s.timezone.as_deref(), decision, None, &decided_at);
+                if let Err(e) = occurrences::record(&ws, &entry) {
+                    warn!("Schedule {}: a missed occurrence was not recorded: {}", s.id, e);
+                }
+            }
+            if !to_run.is_empty() {
+                self.run_missed(&ws, s, to_run);
+            }
+        }
+    }
+
+    /// #296: run the missed occurrences a catch-up decided, one after another on
+    /// one task, oldest first. That is what `all` means: each of them, in order,
+    /// rather than whichever won a race for the pipeline.
+    fn run_missed(&self, ws: &Path, s: Schedule, to_run: Vec<duckle_duckdb_engine::cronzone::Occurrence>) {
+        use duckle_duckdb_engine::occurrences;
+        // One scheduler catches a schedule up at a time, across processes, under
+        // the name `duckle serve` takes the same turn under. Held, it is the one
+        // already doing it, here or elsewhere, and the next tick asks again.
+        let Some(turn) = runlock::try_acquire_nested(ws, "catch-up", &s.id) else { return };
+        let (me, ws) = (self.clone(), ws.to_path_buf());
+        tokio::spawn(async move {
+            let _turn = turn;
+            let key = lock_key(&s).map(str::to_string);
+            for occ in to_run {
+                // The permit a run of this pipeline takes, as `fire_due` takes it.
+                let _slot = match &key {
+                    Some(pipeline_id) => Some(pool_permits(&ws, &pool_of(&ws, pipeline_id)).acquire_owned().await),
+                    None => None,
+                };
+                // The pipeline first, the occurrence second. A claimed occurrence can
+                // never be taken again, so one claimed while its pipeline was busy
+                // would be lost rather than left to the next tick, which finds
+                // these still missed and starts again from the oldest.
+                let _claim = match &key {
+                    None => None,
+                    Some(pipeline_id) => match claim_run(Some(&ws), pipeline_id) {
+                        Claim::Ours(lock) => lock,
+                        Claim::Taken => return,
+                        Claim::Unusable(why) => {
+                            warn!(
+                                "Cannot take a run lock for {} in this workspace, so schedule {} \
+                                 cannot catch up: {}",
+                                pipeline_id, s.id, why
+                            );
+                            return;
+                        }
+                    },
+                };
+                if !take_occurrence(&ws, &s.id, occ.at) {
+                    continue;
+                }
+                let decided_at = Utc::now().to_rfc3339();
+                let entry = occurrences::entry(
+                    &s.id,
+                    &occ,
+                    s.timezone.as_deref(),
+                    occurrences::Decision::Fired,
+                    None,
+                    &decided_at,
+                );
+                if let Err(e) = occurrences::record(&ws, &entry) {
+                    warn!("Schedule {}: the occurrence it caught up was not recorded: {}", s.id, e);
+                }
+                me.fire_and_record(&s.id, "Catch-up").await;
+            }
+        });
+    }
+}
+
+/// Take one occurrence for this process, or leave it to whichever got there
+/// first. A claim that cannot be made at all goes ahead, as `claim_due` does:
+/// bookkeeping that failed must not quietly stop a schedule.
+fn take_occurrence(workspace: &Path, id: &str, at: DateTime<Utc>) -> bool {
+    duckle_duckdb_engine::occurrences::claim(workspace, id, at).unwrap_or_else(|e| {
+        warn!("Could not claim the occurrence of {}, deciding it anyway: {}", id, e);
+        true
+    })
 }
 
 /// How many scheduled pipelines may execute at once.
@@ -2553,5 +2683,174 @@ mod tests {
         sched.fire_tx.send(id.clone()).unwrap();
         eventually("the file-watch fire waiting", || waiting(&sched, &id)).await;
         assert!(statuses(&ws).is_empty(), "it ran beside the run in its way");
+    }
+
+    // ---- #296: misfire, decided as `duckle serve` decides it ---------------------
+
+    /// A scheduler whose pipeline `p` missed three daily occurrences, as if the app
+    /// last ran three days before the newest of them: that one is claimed, which is
+    /// what a catch-up measures from. `overlapping`'s workspace, with its schedule
+    /// made a daily cron at a UTC time two hours back, so the three are the same
+    /// three whatever the clock says. Armed as the app arms it on start, at the next
+    /// one. Returns the three, oldest first.
+    fn missed_three(
+        misfire: &str,
+    ) -> Option<(tempfile::TempDir, PathBuf, Scheduler, String, Vec<DateTime<Utc>>)> {
+        use chrono::Timelike;
+        use duckle_duckdb_engine::occurrences;
+        let (tmp, ws, sched, id) = overlapping("skip", 0)?;
+        let newest = (Utc::now() - chrono::Duration::hours(2))
+            .with_nanosecond(0)
+            .and_then(|t| t.with_second(0))
+            .unwrap();
+        let expr = format!("{} {} * * *", newest.minute(), newest.hour());
+        let policy: occurrences::Misfire = serde_json::from_value(serde_json::json!(misfire)).unwrap();
+        {
+            let mut g = sched.inner.lock().unwrap();
+            sched
+                .commit(&mut g, move |list| {
+                    for s in list.iter_mut() {
+                        s.kind = ScheduleKind::Cron { expr: expr.clone() };
+                        s.timezone = Some("UTC".into());
+                        s.misfire = policy;
+                        // Recomputed by the commit, from now.
+                        s.next_run_at = None;
+                    }
+                })
+                .unwrap();
+        }
+        assert!(occurrences::claim(&ws, &id, newest - chrono::Duration::days(3)).unwrap());
+        let missed = (0..3).rev().map(|d| newest - chrono::Duration::days(d)).collect();
+        Some((tmp, ws, sched, id, missed))
+    }
+
+    /// What the ledger says of this schedule's occurrences from `from` on, in the
+    /// order it was written.
+    fn decided(ws: &Path, id: &str, from: DateTime<Utc>) -> Vec<(DateTime<Utc>, String)> {
+        duckle_duckdb_engine::occurrences::read(ws)
+            .into_iter()
+            .filter(|o| o.schedule_id == id)
+            .filter_map(|o| {
+                let at = DateTime::parse_from_rfc3339(&o.scheduled_for).ok()?.with_timezone(&Utc);
+                (at >= from).then(|| (at, o.decision.as_str().to_string()))
+            })
+            .collect()
+    }
+
+    /// Tick until `done`, the way the ticker would: a tick may leave work to the next.
+    async fn tick_until(sched: &Scheduler, what: &str, done: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(90);
+        while !done() {
+            assert!(std::time::Instant::now() < deadline, "{what} never happened");
+            sched.fire_due().await;
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    fn each(at: &[DateTime<Utc>], decision: &str) -> Vec<(DateTime<Utc>, String)> {
+        at.iter().map(|t| (*t, decision.to_string())).collect()
+    }
+
+    /// `all`: each missed occurrence runs, oldest first, and is recorded as fired
+    /// before its run. The desktop ran none of them: it armed from "now" on start,
+    /// and an occurrence it had missed was never looked at again.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn misfire_all_runs_each_missed_occurrence_oldest_first() {
+        let Some((_tmp, ws, sched, id, missed)) = missed_three("all") else { return };
+        tick_until(&sched, "every missed occurrence run", || statuses(&ws).len() == 3).await;
+        assert_eq!(statuses(&ws), vec!["ok", "ok", "ok"]);
+        assert_eq!(decided(&ws, &id, missed[0]), each(&missed, "fired"));
+    }
+
+    /// `latest`: only the newest runs, and the two before it are recorded as skipped.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn misfire_latest_runs_only_the_newest_missed_occurrence() {
+        let Some((_tmp, ws, sched, id, missed)) = missed_three("latest") else { return };
+        tick_until(&sched, "the newest missed occurrence run", || statuses(&ws).len() == 1).await;
+        sched.fire_due().await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(statuses(&ws), vec!["ok"], "more than the newest ran");
+        let mut want = each(&missed[..2], "skipped");
+        want.push((missed[2], "fired".into()));
+        assert_eq!(decided(&ws, &id, missed[0]), want);
+    }
+
+    /// `skip`, the default: none of them runs, and each is recorded as skipped, so
+    /// "it was skipped" is not the same silence as "nothing happened".
+    #[tokio::test(flavor = "multi_thread")]
+    async fn misfire_skip_records_each_missed_occurrence_and_runs_none() {
+        let Some((_tmp, ws, sched, id, missed)) = missed_three("skip") else { return };
+        // Twice: the next tick must not decide them again.
+        for _ in 0..2 {
+            sched.fire_due().await;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(statuses(&ws).is_empty(), "a missed occurrence ran under skip: {:?}", statuses(&ws));
+        assert_eq!(decided(&ws, &id, missed[0]), each(&missed, "skipped"));
+    }
+
+    /// The occurrence the app was waiting for when the machine went to sleep is still
+    /// the tick's to fire when it wakes, as it is for `duckle serve`, and misfire
+    /// decides the ones after it. Decided as missed, it would be claimed as skipped
+    /// and the run it was armed for refused.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_occurrence_armed_before_a_sleep_runs_and_misfire_decides_the_rest() {
+        let Some((_tmp, ws, sched, id, missed)) = missed_three("skip") else { return };
+        let armed = missed[0];
+        {
+            let mut g = sched.inner.lock().unwrap();
+            sched.commit(&mut g, move |list| list.iter_mut().for_each(|s| s.next_run_at = Some(armed))).unwrap();
+        }
+        tick_until(&sched, "the armed occurrence run and the rest decided", || {
+            statuses(&ws).len() == 1 && decided(&ws, &id, missed[0]).len() == 2
+        })
+        .await;
+        assert_eq!(statuses(&ws), vec!["ok"]);
+        // The armed one ran as any occurrence runs, unrecorded; the two after it were missed.
+        assert_eq!(decided(&ws, &id, missed[0]), each(&missed[1..], "skipped"));
+    }
+
+    /// A catch-up that finds its pipeline running leaves the missed occurrences to a
+    /// later tick, claiming none: an occurrence once claimed can never be taken
+    /// again, so one claimed while the pipeline was busy would be lost.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_catch_up_leaves_the_missed_occurrences_while_the_pipeline_is_running() {
+        let Some((_tmp, ws, sched, id, missed)) = missed_three("all") else { return };
+        let other = duckle_duckdb_engine::runlock::try_acquire(&ws, "p").expect("free to take");
+        for _ in 0..2 {
+            sched.fire_due().await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        assert!(statuses(&ws).is_empty(), "it ran beside the run in its way");
+        assert_eq!(decided(&ws, &id, missed[0]), vec![], "decided while it could run none");
+        drop(other);
+        tick_until(&sched, "every missed occurrence run", || statuses(&ws).len() == 3).await;
+        assert_eq!(decided(&ws, &id, missed[0]), each(&missed, "fired"));
+    }
+
+    /// A schedule no scheduler has taken an occurrence of is seen for the first time:
+    /// it arms and catches nothing up, or a new schedule would run its whole history.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_schedule_never_taken_catches_nothing_up() {
+        let Some((_tmp, ws, sched, id, missed)) = missed_three("all") else { return };
+        std::fs::remove_dir_all(ws.join(".duckle").join("claims")).unwrap();
+        sched.fire_due().await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(decided(&ws, &id, missed[0] - chrono::Duration::days(45)), vec![]);
+        assert!(statuses(&ws).is_empty());
+    }
+
+    /// A disabled schedule catches nothing up, as it fires nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_disabled_schedule_catches_nothing_up() {
+        let Some((_tmp, ws, sched, id, missed)) = missed_three("all") else { return };
+        {
+            let mut g = sched.inner.lock().unwrap();
+            sched.commit(&mut g, |list| list.iter_mut().for_each(|s| s.enabled = false)).unwrap();
+        }
+        sched.fire_due().await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(decided(&ws, &id, missed[0]), vec![], "a disabled schedule caught up");
+        assert!(statuses(&ws).is_empty());
     }
 }

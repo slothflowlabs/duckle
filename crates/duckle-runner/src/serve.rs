@@ -4794,28 +4794,10 @@ fn take_occurrence(
     })
 }
 
-/// How long a live scheduler can go without ticking. See [`scheduler_stall`].
-fn stall_allowance(tick: Duration) -> u64 {
-    (tick.as_millis() as u64).saturating_mul(5).max(60_000)
-}
-
-/// Up to where a tick may decide what a schedule missed.
-///
-/// An occurrence that is merely recent may belong to another scheduler that has not ticked
-/// yet: deciding it here, under a misfire policy of skip, would claim it and record it as
-/// skipped while that scheduler was about to run it. So only an occurrence older than a live
-/// scheduler can be counted as missed. A restart comes back to a fresh one a minute later.
-///
-/// And never the occurrence this tick has armed, which is this tick's to fire. The walk ran
-/// past it, so a schedule on time was recorded as overdue on every firing as well as fired.
-fn catch_up_horizon(
-    now: chrono::DateTime<chrono::Utc>,
-    tick: Duration,
-    armed: Option<chrono::DateTime<chrono::Utc>>,
-) -> chrono::DateTime<chrono::Utc> {
-    let settled = now - chrono::Duration::milliseconds(stall_allowance(tick) as i64);
-    armed.map_or(settled, |at| settled.min(at - chrono::Duration::milliseconds(1)))
-}
+// How long a live scheduler can go without ticking (see `scheduler_stall`), and up to where a
+// tick may decide what a schedule missed. In the engine, because the desktop's scheduler
+// decides missed occurrences by the same rule.
+use duckle_duckdb_engine::occurrences::{catch_up_horizon, stall_allowance};
 
 /// #296: run and record whatever this schedule missed.
 ///
