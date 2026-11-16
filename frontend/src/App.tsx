@@ -23,7 +23,7 @@ import EditorHeader, { type Job } from './workflow-ui/EditorHeader';
 import EngineSelector, { normalizeEngineId, type EngineId } from './workflow-ui/EngineSelector';
 import { useTheme } from './theme';
 import { loadPersisted, savePersisted } from './persistence';
-import { resolveOutputSchema } from './schema-resolve';
+import { resolveOutputSchema, schemaAfterRun } from './schema-resolve';
 import {
     cancelPipeline,
     compilePipelineSql,
@@ -1492,21 +1492,11 @@ export default function App() {
                         ns.map(n => {
                             const p = byId.get(n.id);
                             if (!p) return n;
-                            // A source node's schema is the user's declared input
-                            // schema (set via Autodetect / the Schema panel) and the
-                            // engine consumes it (e.g. CSV `types=`). A run must NOT
-                            // overwrite it, or re-running keeps replacing a curated
-                            // schema (issue #18). Keep an existing source schema and
-                            // only refresh the preview rows; everything else (and a
-                            // source with no schema yet) still takes the run columns.
-                            const isSource = (n.data.componentId ?? '').startsWith('src.');
-                            const keepSchema =
-                                isSource && Array.isArray(n.data.schema) && n.data.schema.length > 0;
                             return {
                                 ...n,
                                 data: {
                                     ...n.data,
-                                    schema: keepSchema ? n.data.schema : p.columns,
+                                    schema: schemaAfterRun(n.data.componentId, n.data.schema, p.columns),
                                     sampleRows: p.rows,
                                 },
                             };

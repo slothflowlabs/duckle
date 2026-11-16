@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import { useTranslation } from 'react-i18next';
 import type { Edge, Node } from '@xyflow/react';
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Map as MapIcon, MousePointer2, Workflow } from 'lucide-react';
-import { resolveUpstreamSchema, resolveUpstreamSampleRows, resolveOutputSchema, deriveSchemaFromEngine, diagnosticsFor } from '../schema-resolve';
+import { resolveUpstreamSchema, resolveUpstreamSampleRows, resolveOutputSchema, deriveSchemaFromEngine, diagnosticsFor, previewColumns } from '../schema-resolve';
 import { analyzeNodeSql, type NodePreview } from '../tauri-bridge';
 import { useRunStatus } from '../canvas/run-status-context';
 import { GeoMap } from '../geo/GeoMap';
@@ -804,25 +804,17 @@ export default function PropertiesPanel({
 
                     {tab === 'preview'
                         ? (() => {
-                              // #207 / #206: a run stores this node's OWN preview
-                              // rows keyed by the engine's OUTPUT columns, so the
-                              // headers must come from outputSchema, not the raw
-                              // upstream input names - otherwise headers and row
-                              // keys mismatch and every cell renders empty (rename
-                              // shows the old names; geo.create hides geom). Pre-run
-                              // there are only upstream sample rows (input-keyed),
-                              // so keep upstreamSchema in that case.
                               const hasOwnRows = !!(
                                   data.sampleRows && data.sampleRows.length > 0
                               );
-                              const previewSchema =
-                                  manifest?.schemaSource === 'upstream'
-                                      ? hasOwnRows
-                                          ? outputSchema
-                                          : upstreamSchema
-                                      : declaredSchema.length > 0
-                                        ? declaredSchema
-                                        : upstreamSchema;
+                              const previewSchema = previewColumns({
+                                  schemaSource: manifest?.schemaSource,
+                                  hasOwnRows,
+                                  ran: runPreview?.columns,
+                                  output: outputSchema,
+                                  declared: declaredSchema,
+                                  upstream: upstreamSchema,
+                              });
                               // #372: the run reported each column's DuckDB type,
                               // which is where a geometry's CRS is written.
                               const sqlTypeOf = (column: string) => {

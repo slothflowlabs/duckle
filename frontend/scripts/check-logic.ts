@@ -8,7 +8,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Edge, Node } from '@xyflow/react';
-import type { DuckleNodeData } from '../src/pipeline-types';
+import type { Column, DuckleNodeData } from '../src/pipeline-types';
 import type { RepoItem } from '../src/repo-types';
 import { livePreviewable } from '../src/live-preview';
 import { buildContextVars, discoverParams, pipelineRunFields, resolveForRun, resolveTimeBuiltin } from '../src/run-resolve';
@@ -22,7 +22,7 @@ import { CONNECTION_TYPES } from '../src/workflow-ui/editors/ConnectionEditorMod
 import { gitActionRewritesFiles } from '../src/git-actions';
 import { validatePipeline } from '../src/validation';
 import { deriveNodeSubtitle } from '../src/node-subtitle';
-import { resolveOutputSchema } from '../src/schema-resolve';
+import { previewColumns, resolveOutputSchema, schemaAfterRun } from '../src/schema-resolve';
 import { placeTip } from '../src/tour-place';
 import { pipelinesUsingConnections } from '../src/connection-usage';
 import { arrange } from '../src/canvas/arrange';
@@ -2297,6 +2297,56 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'http transport: the editor makes one, offering exactly what the engine reads',
         JSON.stringify(offered) === JSON.stringify(read),
         `offered ${JSON.stringify(offered)}, read ${JSON.stringify(read)}`,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #364: a source's schema is filled from its first run and then kept, so one
+// taken from an earlier query or driver stayed: an ADBC node first run against
+// DuckDB kept `ID int32` after it moved to ClickHouse. Its Preview headed the
+// run's rows with that column, so every cell showed empty.
+// ---------------------------------------------------------------------------
+{
+    const col = (name: string, type: Column['type'] = 'string'): Column => ({ name, type }) as Column;
+    const ran = [col('SHOP_AREA'), col('DATE_ID', 'timestamp'), col('Daily_Order', 'int64')];
+    const names = (cs: Column[]) => JSON.stringify(cs.map(c => `${c.name}:${c.type}`));
+    check(
+        '#364: a declared schema sharing no column with the run gives way to what ran',
+        names(schemaAfterRun('src.adbc', [col('ID', 'int32')], ran)) === names(ran),
+        names(schemaAfterRun('src.adbc', [col('ID', 'int32')], ran)),
+    );
+    // Named in another case than the run's DATE_ID: DuckDB matches names that way.
+    const curated = [col('Date_Id', 'date')];
+    check(
+        '#364: a declared schema that names a column the run returned is still kept (#18)',
+        names(schemaAfterRun('src.csv', curated, ran)) === names(curated),
+        names(schemaAfterRun('src.csv', curated, ran)),
+    );
+    check(
+        '#364: a source with nothing declared takes the run',
+        names(schemaAfterRun('src.adbc', [], ran)) === names(ran) &&
+            names(schemaAfterRun('src.adbc', undefined, ran)) === names(ran),
+        names(schemaAfterRun('src.adbc', [], ran)),
+    );
+    check(
+        '#364: a transform takes the run whatever it held',
+        names(schemaAfterRun('xf.filter', curated, ran)) === names(ran),
+        names(schemaAfterRun('xf.filter', curated, ran)),
+    );
+    const heads = (hasOwnRows: boolean, declared: Column[]) =>
+        names(previewColumns({ schemaSource: 'declared', hasOwnRows, ran, output: declared, declared, upstream: [] }));
+    check('#364: the run rows are headed with the run columns', heads(true, [col('ID', 'int32')]) === names(ran), heads(true, [col('ID', 'int32')]));
+    check(
+        '#364: before a run the declared columns head the preview',
+        names(previewColumns({ schemaSource: 'declared', hasOwnRows: false, ran: undefined, output: [], declared: [col('ID')], upstream: [] })) ===
+            names([col('ID')]),
+        'declared ID expected',
+    );
+    check(
+        '#364: an upstream-schema node keeps heading its rows with its output',
+        names(previewColumns({ schemaSource: 'upstream', hasOwnRows: true, ran, output: [col('x')], declared: [], upstream: [col('y')] })) ===
+            names([col('x')]),
+        'output x expected',
     );
 }
 

@@ -179,6 +179,56 @@ export function resolveOutputSchema(
     }
 }
 
+/**
+ * The schema a node keeps after a run that returned `ran`.
+ *
+ * A source's schema is the user's declared input schema (set via Autodetect or
+ * the Schema panel) and the engine consumes it (e.g. CSV `types=`). A run must
+ * NOT overwrite it, or re-running keeps replacing a curated schema (issue #18).
+ * Everything else, and a source with no schema yet, takes the run's columns.
+ *
+ * #364: so does a source whose schema shares no column with what ran. The first
+ * run fills an empty schema and later runs keep it, so one taken from an earlier
+ * query or driver stayed after the node moved on (an ADBC node first run against
+ * DuckDB kept `ID int32` against ClickHouse), and the columns it offered
+ * downstream were not there. A schema naming any column the run returned is the
+ * user's, and stays.
+ */
+export function schemaAfterRun(componentId: string | undefined, declared: Column[] | undefined, ran: Column[]): Column[] {
+    const isSource = (componentId ?? '').startsWith('src.');
+    const ranNames = new Set(ran.map(c => c.name.toLowerCase()));
+    const describesRun = (declared ?? []).some(c => ranNames.has(c.name.toLowerCase()));
+    const keep = isSource && Array.isArray(declared) && declared.length > 0 && describesRun;
+    return keep ? declared! : ran;
+}
+
+/**
+ * The columns a node's Preview tab heads its rows with.
+ *
+ * #207 / #206: a run stores this node's OWN preview rows keyed by the engine's
+ * OUTPUT columns, so the headers must come from outputSchema, not the raw
+ * upstream input names - otherwise headers and row keys mismatch and every cell
+ * renders empty (rename shows the old names; geo.create hides geom). Pre-run
+ * there are only upstream sample rows (input-keyed), so keep upstreamSchema in
+ * that case.
+ *
+ * #364: the same holds for a node with a schema of its own. Its run rows are
+ * keyed by the columns the run returned, which a declared schema need not match,
+ * so those rows are headed with the run's columns.
+ */
+export function previewColumns(o: {
+    schemaSource: string | undefined;
+    hasOwnRows: boolean;
+    ran: Column[] | undefined;
+    output: Column[];
+    declared: Column[];
+    upstream: Column[];
+}): Column[] {
+    if (o.schemaSource === 'upstream') return o.hasOwnRows ? o.output : o.upstream;
+    if (o.hasOwnRows && o.ran && o.ran.length > 0) return o.ran;
+    return o.declared.length > 0 ? o.declared : o.upstream;
+}
+
 function computeNodeSchema(
     node: Node<DuckleNodeData>,
     nodes: Node<DuckleNodeData>[],
