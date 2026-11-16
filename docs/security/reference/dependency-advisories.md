@@ -124,26 +124,6 @@ when that does.
 
 ---
 
-## RUSTSEC-2026-0435 - `thrift` 0.17.0, unbounded allocation in the binary protocol
-
-**Is there a fix?** On 0.23.0. This copy is pinned by `parquet` 58.4.0, whose 58 line
-requires `thrift` 0.17, in the optional `duckle-lance` sidecar: `lancedb` 0.40, `lance` 13
-and `vortex` 0.75 hold the sidecar on arrow 58. The engine's own `parquet` is 59, which no
-longer uses the `thrift` crate.
-
-**Is it reachable?** No. `read_bytes` allocates whatever length prefix it is given before
-it reads the bytes, so a crafted Parquet footer can exhaust memory. The sidecar reads
-Parquet in two places, `write` and `write-vortex` (`crates/duckle-lance/src/main.rs`), and
-both are handed a file the engine has just written itself with DuckDB's
-`COPY ... (FORMAT parquet)`, beside the run's database (`run_lance_sink` and
-`run_vortex_sink` in `crates/duckdb-engine/src/connectors.rs`). Every length in a footer the
-sidecar decodes is DuckDB's; a Parquet file from outside never reaches it.
-
-**Remove when:** `lancedb`, `lance` and `vortex` move to arrow 59, so the sidecar can take
-`parquet` 59, or `parquet` 58 takes `thrift` 0.23 or later.
-
----
-
 ## Informational warnings
 
 `cargo audit` also reports unmaintained, unsound and yanked crates. These do not

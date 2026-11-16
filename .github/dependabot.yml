@@ -42,24 +42,33 @@ updates:
     #   error[E0308]: expected `arrow_schema::schema::Schema`,
     #                    found `lancedb::arrow::arrow_schema::Schema`
     #
-    # So arrow tracks lancedb and vortex rather than "latest". Patches inside
-    # the current major still arrive; only the major is withheld. Drop these
-    # four entries when lancedb and vortex both declare the next arrow.
+    # So duckle-lance's arrow tracks lancedb and vortex rather than "latest".
+    # arrow-select, which only duckle-lance declares, has only its major
+    # withheld, so its patches still arrive. Drop that entry when lancedb and
+    # vortex both declare the next arrow.
     #
     # This is not hypothetical: the same grouped bump has now been proposed and
     # withdrawn twice (#337, #339). The LanceDB sidecar workflow catches it, but
     # a gate that fires every month on a change nobody can take is noise, and
     # the point of an ignore is to stop proposing what cannot be merged.
+    #
+    # arrow-array, arrow-schema and parquet are withheld entirely. The engine
+    # is on arrow 59 (see arrow-flight below) and duckle-lance on 58, so the
+    # lock holds both majors on purpose and the workspace declares these three
+    # at both. Dependabot keeps one version per crate name: in #401 it moved
+    # duckle-lance's 58.4.0 to 58.4.1 by rewriting the workspace's
+    # `arrow-array = "59"` and `parquet = "59"` to "58", which put both majors
+    # in the engine and failed every Rust build. Move them by hand, each major
+    # with the crates it has to agree with. An arrow advisory still reaches us
+    # through the cargo-audit job. Drop these three entries when duckle-lance
+    # can take the engine's arrow major.
     ignore:
       - dependency-name: "lopdf"
       - dependency-name: "arrow-array"
-        update-types: ["version-update:semver-major"]
       - dependency-name: "arrow-schema"
-        update-types: ["version-update:semver-major"]
       - dependency-name: "arrow-select"
         update-types: ["version-update:semver-major"]
       - dependency-name: "parquet"
-        update-types: ["version-update:semver-major"]
       # vortex 0.85 is a measured RUNTIME regression, not a compile problem.
       # Once the arrow bridge is repointed it builds, and then refuses to write:
       # "Extension DType vortex.date not permitted by enabled editions", and
