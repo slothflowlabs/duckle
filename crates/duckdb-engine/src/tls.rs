@@ -282,6 +282,15 @@ pub fn http_agent_unshared(transport: &HttpTransport) -> ureq::Agent {
     build_agent(&resolved(transport))
 }
 
+/// #398: an agent that hands a redirect back instead of following it, for a
+/// request that carries a body. ureq follows a 301, 302 or 303 by sending a GET
+/// with no body, and hands a 307 or 308 back unfollowed, so either way the body
+/// never reaches the server it was meant for. With this agent the caller sees
+/// the 3xx and decides. Built per use, like the unshared agent: once a node run.
+pub fn http_agent_no_redirects(transport: &HttpTransport) -> ureq::Agent {
+    agent_builder(&resolved(transport)).redirects(0).build()
+}
+
 fn resolved(transport: &HttpTransport) -> HttpTransport {
     HttpTransport {
         proxy: transport.proxy.clone().or_else(current_proxy),
@@ -302,6 +311,10 @@ fn resolved(transport: &HttpTransport) -> HttpTransport {
 }
 
 fn build_agent(want: &HttpTransport) -> ureq::Agent {
+    agent_builder(want).build()
+}
+
+fn agent_builder(want: &HttpTransport) -> ureq::AgentBuilder {
     let mut builder = ureq::AgentBuilder::new().tls_config(Arc::new(build_client_config()));
     if crate::policy::network_is_restricted() {
         builder = with_network_policy(builder, want.proxy.is_some());
@@ -321,7 +334,7 @@ fn build_agent(want: &HttpTransport) -> ureq::Agent {
     if let Some(ua) = &want.user_agent {
         builder = builder.user_agent(ua);
     }
-    builder.build()
+    builder
 }
 
 #[cfg(test)]

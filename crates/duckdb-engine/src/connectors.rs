@@ -420,7 +420,10 @@ impl DuckdbEngine {
         // Reuse one Agent across all dispatches; in row mode this loops once
         // per row against the same host, so connection pooling avoids a fresh
         // handshake per row.
-        let agent = crate::tls::http_agent();
+        // #398: one that hands a redirect back instead of following it. ureq
+        // re-sent a redirected POST as a GET with no body, and that GET's answer
+        // counted as the rows' delivery.
+        let agent = crate::tls::http_agent_no_redirects(&Default::default());
         let dispatch = |body: String, default_ct: &str| -> Result<(), EngineError> {
             let mut req = agent.request(&method, &spec.url);
             let has_ct = spec
@@ -434,6 +437,21 @@ impl DuckdbEngine {
                 req = req.set("content-type", default_ct);
             }
             match req.send_string(&body) {
+                // #398: a 303 says the server took the request. The page it
+                // points to is not the delivery, so it is not fetched.
+                Ok(r) if r.status() == 303 => Ok(()),
+                Ok(r) if (300..400).contains(&r.status()) => {
+                    let to = redirect_target(&spec.url, &r);
+                    Err(EngineError::Query(format!(
+                        "HTTP {} from {} {}: the server redirects to {}, and the rows were not sent there. \
+                         Set the URL to {}.",
+                        r.status(),
+                        method,
+                        spec.url,
+                        to,
+                        to
+                    )))
+                }
                 Ok(_) => Ok(()),
                 Err(ureq::Error::Status(code, response)) => {
                     let body = response.into_string().unwrap_or_default();
@@ -16565,9 +16583,14 @@ impl DuckdbEngine {
         // #256: one agent for the whole walk, built from this node's transport
         // so a proxy, a timeout or a User-Agent set on a saved connection
         // applies to every request the node makes.
-        let agent = match &spec.transport {
-            Some(t) => crate::tls::http_agent_with(t),
-            None => crate::tls::http_agent(),
+        let transport = spec.transport.clone().unwrap_or_default();
+        let agent = crate::tls::http_agent_with(&transport);
+        // #398: a request with a body goes out on an agent that hands a redirect
+        // back instead of following it, because following one drops the body.
+        // `agent` still fetches what a 303 points to, which is a plain GET.
+        let send_agent = match spec.body {
+            Some(_) => crate::tls::http_agent_no_redirects(&transport),
+            None => agent.clone(),
         };
         // #166: src.salesforce OAuth client-credentials. Mint a fresh token once
         // per run and inject it as the Authorization header (replacing any static
@@ -16700,7 +16723,7 @@ impl DuckdbEngine {
                     .iter()
                     .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
                 let make = || {
-                    let mut req = agent.request(&spec.method, &url);
+                    let mut req = send_agent.request(&spec.method, &url);
                     for (k, v) in &eff_headers {
                         req = req.set(k, v);
                     }
@@ -16709,22 +16732,81 @@ impl DuckdbEngine {
                     }
                     req
                 };
-                let resp_result = self.http_send(&session, &url, &make, spec.body.as_deref())?;
+                let mut resp_result = self.http_send(&session, &url, &make, spec.body.as_deref())?;
+                // What answered, for the messages below: the request as made, or
+                // the GET a 303 pointed to.
+                let (mut answered_method, mut answered_url) = (spec.method.as_str(), url.clone());
+                let mut carried_body = spec.body.is_some();
+                // #398: a 303 says the request was taken and its answer is at
+                // Location, fetched with a GET and no body: what ureq did for every
+                // redirect before a body's agent stopped following them. With the
+                // headers ureq's own follow keeps: none of the body's, no
+                // credentials, no cookies (the jar adds its own for the new URL).
+                let see_other = match &resp_result {
+                    Ok(r) if r.status() == 303 => Some(redirect_target(&url, r)),
+                    _ => None,
+                };
+                if let Some(to) = see_other {
+                    let follow = || {
+                        let mut req = agent.get(&to);
+                        for (k, v) in &eff_headers {
+                            let dropped = ["content-type", "content-length", "authorization", "cookie"];
+                            if !dropped.iter().any(|d| k.eq_ignore_ascii_case(d)) {
+                                req = req.set(k, v);
+                            }
+                        }
+                        req
+                    };
+                    resp_result = self.http_send(&session, &to, &follow, None)?;
+                    (answered_method, answered_url, carried_body) = ("GET", to, false);
+                }
                 let response_raw = match resp_result {
+                    // #398: a redirect that was not followed is not the data. On a
+                    // body's agent that is any but a 303; through a proxy on a
+                    // restricted network, any at all (see tls.rs).
+                    Ok(r) if (300..400).contains(&r.status()) => {
+                        let to = redirect_target(&answered_url, &r);
+                        let why = if carried_body {
+                            "Duckle does not follow a redirect with a request that carries a body, \
+                             because the body would be dropped on the way"
+                        } else {
+                            "It was not followed"
+                        };
+                        return Err(EngineError::Query(format!(
+                            "REST HTTP {} from {} {}: the server redirects to {}. {}. Set the URL to {}.",
+                            r.status(),
+                            answered_method,
+                            answered_url,
+                            to,
+                            why,
+                            to
+                        )));
+                    }
                     Ok(r) => r,
                     Err(ureq::Error::Status(code, r)) => {
                         let body = r.into_string().unwrap_or_default();
+                        // #398: the form starts on GET and most servers ignore a
+                        // GET's body, so a body left on GET arrives as an empty
+                        // request. Said where the refusal is read.
+                        let hint = if carried_body && answered_method == "GET" {
+                            " This request was a GET with a body, which many servers ignore: \
+                             if the API expects the body, set Method to POST."
+                        } else {
+                            ""
+                        };
                         return Err(EngineError::Query(format!(
-                            "REST HTTP {} from {}: {}",
+                            "REST HTTP {} from {} {}: {}{}",
                             code,
-                            url,
-                            body.chars().take(300).collect::<String>()
+                            answered_method,
+                            answered_url,
+                            body.chars().take(300).collect::<String>(),
+                            hint
                         )));
                     }
                     Err(e) => {
                         return Err(EngineError::Query(format!(
                             "REST HTTP transport to {}: {}",
-                            url, e
+                            answered_url, e
                         )));
                     }
                 };
@@ -20476,6 +20558,16 @@ fn odbc_type_to_duckdb(dt: &odbc_api::DataType) -> Option<String> {
         D::Timestamp { .. } => Some("TIMESTAMP".into()),
         _ => None,
     }
+}
+
+/// #398: where a 3xx answer points, made absolute against the URL that was
+/// asked the way a client resolves it, or the header as sent when it cannot be.
+fn redirect_target(asked: &str, answer: &ureq::Response) -> String {
+    let location = answer.header("location").unwrap_or_default().trim();
+    url::Url::parse(asked)
+        .and_then(|base| base.join(location))
+        .map(String::from)
+        .unwrap_or_else(|_| location.to_string())
 }
 
 /// The rows in one REST response document: the whole document when no

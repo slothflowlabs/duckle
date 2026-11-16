@@ -4377,6 +4377,7 @@ dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "tonic",
  "ureq",
+ "url",
  "uuid",
  "wasmi",
  "wat",

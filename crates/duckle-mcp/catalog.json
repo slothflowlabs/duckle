@@ -11593,7 +11593,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -12435,7 +12436,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -12904,7 +12906,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -13341,7 +13344,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -13821,7 +13825,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -14272,7 +14277,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -14723,7 +14729,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -15986,7 +15993,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -16907,7 +16915,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -49018,7 +49027,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -49683,7 +49693,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -50134,7 +50145,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -50585,7 +50597,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -51036,7 +51049,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -51487,7 +51501,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -51938,7 +51953,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -52389,7 +52405,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -52840,7 +52857,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -53291,7 +53309,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -53742,7 +53761,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -54193,7 +54213,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -54644,7 +54665,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -55095,7 +55117,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -56050,7 +56073,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -56441,7 +56465,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -56838,7 +56863,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -57289,7 +57315,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -58074,7 +58101,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -58525,7 +58553,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -58976,7 +59005,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -59427,7 +59457,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -59878,7 +59909,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -60329,7 +60361,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -60780,7 +60813,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",
@@ -61231,7 +61265,8 @@
                 "key": "body",
                 "label": "Request body",
                 "kind": "textarea",
-                "rows": 4
+                "rows": 4,
+                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
               },
               {
                 "key": "headers",

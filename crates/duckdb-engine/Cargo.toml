@@ -27,6 +27,9 @@ duckle-secrets = { workspace = true }
 # raw gzip bytes and JSON parsing dies with "expected value at line 1 column 1"
 # on any result that splits into >1 partition (GitHub #24).
 ureq = { version = "2.10", default-features = false, features = ["tls", "json", "gzip"] }
+# Resolves a redirect's Location against the URL that was asked (#398), the
+# same crate ureq resolves it with.
+url = "2"
 # TLS trust roots for the HTTP clients above. We build one rustls config
 # that unions the bundled Mozilla roots (webpki-roots, the prior default)
 # with the OS native store (rustls-native-certs) so connections succeed

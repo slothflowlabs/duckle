@@ -641,7 +641,16 @@ const restMethodAndBodyFields = (): Field[] => [
             { label: 'DELETE', value: 'DELETE' },
         ],
     },
-    { key: 'body', label: 'Request body', kind: 'textarea', rows: 4 },
+    {
+        key: 'body',
+        label: 'Request body',
+        kind: 'textarea',
+        rows: 4,
+        // #398: the method starts on GET, and a body sent with GET reached the
+        // server as an empty request.
+        description:
+            'Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one.',
+    },
 ];
 
 const httpTransportFields = (): Field[] => [

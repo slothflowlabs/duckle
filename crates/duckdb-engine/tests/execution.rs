@@ -10707,6 +10707,211 @@ fn src_rest_sse_event_that_is_not_json_is_named() {
     assert!(err.contains("event 2") && err.contains("[DONE]"), "{err}");
 }
 
+/// #398: answer each request with the next scripted reply, so a test can
+/// redirect and then see what, if anything, followed. Every request's raw text
+/// is sent down the channel before it is answered, so once the run returns the
+/// channel holds everything it sent.
+fn serve_script(replies: Vec<String>) -> (u16, std::sync::mpsc::Receiver<String>) {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let n = replies.len();
+        for (stream, reply) in incoming_bounded(&listener, n).zip(replies) {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
+            let mut buf = Vec::with_capacity(8192);
+            let mut chunk = [0u8; 4096];
+            for _ in 0..16 {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let _ = tx.send(String::from_utf8_lossy(&buf).to_string());
+            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+    (port, rx)
+}
+
+/// One raw HTTP answer for [`serve_script`]. `headers` is zero or more
+/// `Name: value\r\n` lines.
+fn http_reply(status: &str, headers: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\n{headers}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// A src.rest node that POSTs `body` to `path` on the stub, into a JSONL sink.
+fn rest_post_doc(port: u16, path: &str, method: &str, body: &str, out: &str) -> PipelineDoc {
+    doc(
+        json!([
+            node("q", "src.rest", json!({
+                "url": format!("http://127.0.0.1:{port}{path}"),
+                "method": method,
+                "body": body,
+                "responsePath": "/data",
+            })),
+            node("k", "snk.jsonl", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "q", "k")]),
+    )
+}
+
+/// #398: ureq follows a 301 or 302 the way a browser does, re-sending a POST as
+/// a GET with no body. The server then answered an empty request ("Report
+/// Request cannot be null"), and where the GET happened to answer 200 the run
+/// went green on rows for a request nobody made. It now stops at the redirect,
+/// sends nothing without its body, and says where to point the node.
+#[test]
+fn src_rest_does_not_follow_a_redirect_that_would_drop_its_body() {
+    let engine = engine_or_skip!();
+    let (port, rx) = serve_script(vec![
+        http_reply("302 Found", "Location: /v2/query\r\n", ""),
+        http_reply("200 OK", "", r#"{"data":[{"ok":1}]}"#),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "never.jsonl");
+    let r = engine.execute_pipeline(&rest_post_doc(port, "/query", "POST", r#"{"report":{"id":7}}"#, &out));
+    let sent: Vec<String> = rx.try_iter().collect();
+    assert_eq!(r.status, "error", "a body that never arrived must not go green; sent {sent:?}");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains(&format!("http://127.0.0.1:{port}/v2/query")), "names where the server points: {err}");
+    assert!(err.contains("302") && err.contains("body"), "says what happened and why it stopped: {err}");
+    assert_eq!(sent.len(), 1, "nothing goes out without its body: {sent:?}");
+}
+
+/// #398: a 307 or 308 was handed back unfollowed and then read as the data, so
+/// the run failed on "REST response not JSON" with nothing about a redirect.
+#[test]
+fn src_rest_names_a_307_instead_of_reading_it_as_data() {
+    let engine = engine_or_skip!();
+    let (port, _rx) = serve_script(vec![http_reply("307 Temporary Redirect", "Location: /query/\r\n", "")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "never.jsonl");
+    let r = engine.execute_pipeline(&rest_post_doc(port, "/query", "POST", r#"{"report":{"id":7}}"#, &out));
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(
+        err.contains("307") && err.contains(&format!("http://127.0.0.1:{port}/query/")),
+        "names the redirect and its target: {err}"
+    );
+}
+
+/// #398: a 303 is the one redirect whose answer is meant to be fetched with a
+/// GET and no body (the request was taken, the result is over there), so it is
+/// still followed, and its rows are the node's. The token stays behind, as it
+/// did when ureq followed: a redirect does not carry credentials on.
+#[test]
+fn src_rest_follows_a_303_to_its_result_with_a_get() {
+    let engine = engine_or_skip!();
+    let (port, rx) = serve_script(vec![
+        http_reply("303 See Other", "Location: /results/1\r\n", ""),
+        http_reply("200 OK", "", r#"{"data":[{"id":1},{"id":2}]}"#),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "result.jsonl");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("q", "src.rest", json!({
+                "url": format!("http://127.0.0.1:{port}/jobs"),
+                "method": "POST",
+                "body": r#"{"report":{"id":7}}"#,
+                "responsePath": "/data",
+                "authType": "bearer",
+                "authToken": "t0k3n",
+            })),
+            node("k", "snk.jsonl", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "q", "k")]),
+    ));
+    let sent: Vec<String> = rx.try_iter().collect();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(std::fs::read_to_string(&out).unwrap().lines().count(), 2);
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert!(sent[0].starts_with("POST /jobs ") && sent[0].contains("Bearer t0k3n"), "{}", sent[0]);
+    assert!(sent[1].starts_with("GET /results/1 "), "{}", sent[1]);
+    assert!(sent[1].ends_with("\r\n\r\n"), "the GET carries no body: {:?}", sent[1]);
+    assert!(!sent[1].contains("t0k3n"), "nor the token: {:?}", sent[1]);
+}
+
+/// #398: the form starts on GET and most servers ignore a GET's body, so a body
+/// typed in and left on GET reached the server as an empty request. A refusal
+/// now says which method went out, and what to change.
+#[test]
+fn src_rest_says_when_a_refused_request_was_a_get_with_a_body() {
+    let engine = engine_or_skip!();
+    let (port, _rx) = serve_script(vec![http_reply(
+        "400 Bad Request",
+        "",
+        r#"{"errors":[{"code":400,"message":"Report Request cannot be null"}]}"#,
+    )]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "never.jsonl");
+    let r = engine.execute_pipeline(&rest_post_doc(port, "/query", "GET", r#"{"report":{"id":7}}"#, &out));
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains(&format!("from GET http://127.0.0.1:{port}/query")), "names the method: {err}");
+    assert!(err.contains("Report Request cannot be null"), "keeps the server's answer: {err}");
+    assert!(err.contains("Method to POST"), "says what to change: {err}");
+}
+
+/// A src.csv of one row into an snk.rest on the stub.
+fn rest_sink_doc(port: u16, dir: &Path) -> PipelineDoc {
+    let csv = write_file(dir, "in.csv", "id,name\n1,alice\n");
+    doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("w", "snk.rest", json!({ "url": format!("http://127.0.0.1:{port}/hook") })),
+        ]),
+        json!([main_edge("e1", "s", "w")]),
+    )
+}
+
+/// #398: the sink's rows went the same way. A 302 was followed as a GET with no
+/// body, the GET's 200 counted as delivered, and the run went green with the
+/// rows sent nowhere.
+#[test]
+fn snk_rest_fails_when_its_rows_are_redirected() {
+    let engine = engine_or_skip!();
+    let (port, rx) = serve_script(vec![
+        http_reply("302 Found", "Location: /moved\r\n", ""),
+        http_reply("200 OK", "", "{}"),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let r = engine.execute_pipeline(&rest_sink_doc(port, tmp.path()));
+    let sent: Vec<String> = rx.try_iter().collect();
+    assert_eq!(r.status, "error", "rows that never arrived must not go green; sent {sent:?}");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains(&format!("http://127.0.0.1:{port}/moved")), "names where the server points: {err}");
+    assert_eq!(sent.len(), 1, "{sent:?}");
+}
+
+/// #398: a 303 after a POST says the server took it, so the rows are delivered,
+/// even when the page it points to is not there. Following it turned a delivered
+/// batch into a failed run on the 404 of a thank-you page.
+#[test]
+fn snk_rest_counts_a_303_as_delivered() {
+    let engine = engine_or_skip!();
+    let (port, rx) = serve_script(vec![
+        http_reply("303 See Other", "Location: /thanks\r\n", ""),
+        http_reply("404 Not Found", "", "{}"),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let r = engine.execute_pipeline(&rest_sink_doc(port, tmp.path()));
+    let sent: Vec<String> = rx.try_iter().collect();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(sent.len(), 1, "the page it points to is not fetched: {sent:?}");
+}
+
 #[test]
 fn src_dhis2_alias_routes_through_rest_path() {
     // DHIS2 is a thin engine alias of src.rest. This exercises the exact
