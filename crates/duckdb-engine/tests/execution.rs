@@ -10912,6 +10912,91 @@ fn snk_rest_counts_a_303_as_delivered() {
     assert_eq!(sent.len(), 1, "the page it points to is not fetched: {sent:?}");
 }
 
+/// #399: one page of the shape the issue gives, rows under data.results and the
+/// API's own word on whether another page exists under data.pagination.hasMore.
+fn more_pages_reply(ids: &[u32], has_more: &str) -> String {
+    let rows: Vec<String> = ids.iter().map(|i| format!(r#"{{"id":{i}}}"#)).collect();
+    http_reply(
+        "200 OK",
+        "",
+        &format!(r#"{{"data":{{"results":[{}],"pagination":{{"hasMore":{has_more}}}}}}}"#, rows.join(",")),
+    )
+}
+
+/// A src.rest node paging with `pagination` props, reading data.results and
+/// stopping on data.pagination.hasMore, into a JSONL sink.
+fn more_pages_doc(port: u16, pagination: Value, out: &str) -> PipelineDoc {
+    let mut props = json!({
+        "url": format!("http://127.0.0.1:{port}/items"),
+        "responsePath": "/data/results",
+        "hasMorePath": "/data/pagination/hasMore",
+    });
+    props.as_object_mut().unwrap().extend(pagination.as_object().unwrap().clone());
+    doc(
+        json!([
+            node("q", "src.rest", props),
+            node("k", "snk.jsonl", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "q", "k")]),
+    )
+}
+
+/// #399: page numbers ran until a page came back empty, one request past what
+/// the API had said was its last. That extra page is an error on some APIs and
+/// the last page again on others, which repeats rows until Max pages fails the
+/// run. A more-pages flag now ends it where the API says.
+#[test]
+fn src_rest_page_pagination_stops_where_the_api_says() {
+    let engine = engine_or_skip!();
+    let (port, rx) = serve_script(vec![
+        more_pages_reply(&[1, 2], "true"),
+        more_pages_reply(&[3], "false"),
+        more_pages_reply(&[3], "false"),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "items.jsonl");
+    let r = engine.execute_pipeline(&more_pages_doc(port, json!({ "paginationType": "page" }), &out));
+    let sent: Vec<String> = rx.try_iter().collect();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(std::fs::read_to_string(&out).unwrap().lines().count(), 3);
+    assert_eq!(sent.len(), 2, "no request past the page that said it was the last: {sent:?}");
+    assert!(sent[1].starts_with("GET /items?page=2 "), "{}", sent[1]);
+}
+
+/// #399: offset paging took a page shorter than Page size as the end, so an API
+/// that caps its page below the size asked for stopped after one page, green,
+/// with the rest never read. With a more-pages flag the API's word decides, and
+/// the next offset counts the rows that came back. The pointer is written here
+/// without its leading `/`, as the total-count one may be.
+#[test]
+fn src_rest_offset_pagination_follows_the_flag_past_a_short_page() {
+    let engine = engine_or_skip!();
+    let (port, rx) = serve_script(vec![more_pages_reply(&[1, 2], "true"), more_pages_reply(&[3], "false")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "items.jsonl");
+    let pagination = json!({ "paginationType": "offset", "pageSize": 100, "hasMorePath": "data/pagination/hasMore" });
+    let r = engine.execute_pipeline(&more_pages_doc(port, pagination, &out));
+    let sent: Vec<String> = rx.try_iter().collect();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(std::fs::read_to_string(&out).unwrap().lines().count(), 3, "every page was read");
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert!(sent[1].starts_with("GET /items?offset=2 "), "the next offset counts the rows returned: {}", sent[1]);
+}
+
+/// #399: a flag that is not there, or not true or false, fails the node and
+/// names the path. Guessing either way would stop early or never stop.
+#[test]
+fn src_rest_more_pages_flag_that_is_not_a_boolean_fails() {
+    let engine = engine_or_skip!();
+    let (port, _rx) = serve_script(vec![http_reply("200 OK", "", r#"{"data":{"results":[{"id":1}]}}"#)]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "never.jsonl");
+    let r = engine.execute_pipeline(&more_pages_doc(port, json!({ "paginationType": "page" }), &out));
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("/data/pagination/hasMore") && err.contains("missing"), "{err}");
+}
+
 #[test]
 fn src_dhis2_alias_routes_through_rest_path() {
     // DHIS2 is a thin engine alias of src.rest. This exercises the exact

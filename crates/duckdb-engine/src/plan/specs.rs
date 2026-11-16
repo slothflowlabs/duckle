@@ -1903,10 +1903,15 @@ pub enum RestPagination {
     /// `/total_count`), also stop once `offset + page_size >= total`, since
     /// such APIs return HTTP 200 with an empty array past the end and the
     /// status code cannot signal the end (issue #41).
-    Offset { offset_param: String, page_size: u64, total_path: Option<String> },
+    ///
+    /// #399: with `has_more_path`, the API's own true/false at that JSON
+    /// pointer decides instead, and the next offset counts the rows returned,
+    /// so an API that caps its page below `page_size` is read to the end.
+    Offset { offset_param: String, page_size: u64, total_path: Option<String>, has_more_path: Option<String> },
     /// Increment `?<page_param>=N` starting at `start_page` (default 1)
-    /// until a page returns 0 rows.
-    Page { page_param: String, start_page: u64 },
+    /// until a page returns 0 rows, or, with `has_more_path` (#399), until
+    /// the true/false at that JSON pointer says there is no other page.
+    Page { page_param: String, start_page: u64, has_more_path: Option<String> },
     /// Follow RFC 5988 `Link` response header with rel="next".
     Link,
     /// Take the value at `next_path` from the response body and use it

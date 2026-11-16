@@ -5593,6 +5593,13 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
                     description: 'Optional. JSON pointer to a total-row count in the response (e.g. /total_count for Redmine). When set, offset paging stops once offset + page size reaches the total, instead of relying on a short page.',
                 },
                 {
+                    key: 'hasMorePath',
+                    label: 'More-pages flag JSON pointer (offset and page styles)',
+                    kind: 'text',
+                    placeholder: '/data/pagination/hasMore',
+                    description: 'Optional. JSON pointer to a true/false in each response saying whether another page exists. When set, paging goes on while it is true and stops when it is false, instead of stopping on an empty page (page style) or a short one (offset style, where the next offset then counts the rows returned). The node fails if it is missing or not true/false.',
+                },
+                {
                     key: 'pageParam',
                     label: 'Page query parameter (page style)',
                     kind: 'text',

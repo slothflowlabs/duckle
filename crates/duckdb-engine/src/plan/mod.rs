@@ -6492,6 +6492,13 @@ fn build_stage(
                     "none".into()
                 }
             });
+        // #399: a JSON pointer to the API's own true/false for "another page
+        // exists", read by the offset and page styles. A leading `/` is
+        // supplied, as for the total-count pointer.
+        let has_more_path = string_prop(&props, "hasMorePath")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .map(|s| if s.starts_with('/') { s } else { format!("/{}", s) });
         let pagination = match pagination_type.as_str() {
             "cursor" => {
                 let next_path = string_prop(&props, "cursorNextPath").filter(|s| !s.is_empty());
@@ -6514,7 +6521,7 @@ fn build_stage(
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
                     .map(|s| if s.starts_with('/') { s } else { format!("/{}", s) });
-                RestPagination::Offset { offset_param: param, page_size, total_path }
+                RestPagination::Offset { offset_param: param, page_size, total_path, has_more_path }
             }
             "page" => {
                 let param = string_prop(&props, "pageParam")
@@ -6524,7 +6531,7 @@ fn build_stage(
                     .get("startPage")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(1);
-                RestPagination::Page { page_param: param, start_page }
+                RestPagination::Page { page_param: param, start_page, has_more_path }
             }
             "link" => RestPagination::Link,
             "nextUrl" => {

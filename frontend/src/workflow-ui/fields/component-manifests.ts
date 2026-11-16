@@ -1611,7 +1611,7 @@ function withCloudReadOptions(id: string, m: ComponentManifest): ComponentManife
 // that array by hand removed the wrong half twice.
 const GRAPHQL_DEAD_KEYS = new Set([
     'paginationType', 'pageParam', 'pageSize', 'startPage', 'maxPages',
-    'cursorParam', 'cursorNextPath', 'offsetParam', 'totalCountPath',
+    'cursorParam', 'cursorNextPath', 'offsetParam', 'totalCountPath', 'hasMorePath',
     'urlTemplate', 'parentKeyColumn', 'maxRequests', 'concurrency',
     'checkpoint', 'onParentError', 'nextUrlPath',
 ]);

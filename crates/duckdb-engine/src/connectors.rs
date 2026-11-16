@@ -16712,7 +16712,7 @@ impl DuckdbEngine {
             // Seed the FIRST request with the start page; the loop only appends the
             // page param on subsequent requests, so without this the first call hit
             // the server's default page and a non-default start_page was skipped.
-            if let RestPagination::Page { page_param, start_page } = &spec.pagination {
+            if let RestPagination::Page { page_param, start_page, .. } = &spec.pagination {
                 let sep = if url.contains('?') { '&' } else { '?' };
                 url = format!("{}{}{}={}", url, sep, page_param, start_page);
             }
@@ -17017,12 +17017,23 @@ impl DuckdbEngine {
                             None => false,
                         }
                     }
-                    RestPagination::Offset { offset_param, page_size, total_path } => {
+                    RestPagination::Offset { offset_param, page_size, total_path, has_more_path } => {
+                        // #399: the API's own word, where it gives one, decides.
+                        // A page shorter than the one asked for is then not the
+                        // end (an API may cap its page below Page size), so the
+                        // next offset counts the rows that came back.
+                        let more = match has_more_path {
+                            Some(p) => Some(more_pages(&response, p)?),
+                            None => None,
+                        };
                         // A short page means we have reached the end.
-                        if (row_count as u64) < *page_size {
+                        if more == Some(false) || (more.is_none() && (row_count as u64) < *page_size) {
                             false
                         } else {
-                            let next_offset = offset.saturating_add(*page_size);
+                            let next_offset = match more {
+                                Some(_) => offset.saturating_add(row_count as u64),
+                                None => offset.saturating_add(*page_size),
+                            };
                             // Body-driven stop (issue #41): an API that reports a
                             // total row count (e.g. Redmine `total_count`) returns
                             // HTTP 200 + an empty array past the end, so the status
@@ -17047,8 +17058,14 @@ impl DuckdbEngine {
                             }
                         }
                     }
-                    RestPagination::Page { page_param, .. } => {
-                        if row_count == 0 {
+                    RestPagination::Page { page_param, has_more_path, .. } => {
+                        // #399: the API's own word where it gives one, else an
+                        // empty page.
+                        let more = match has_more_path {
+                            Some(p) => more_pages(&response, p)?,
+                            None => row_count > 0,
+                        };
+                        if !more {
                             false
                         } else {
                             page_no = page_no.saturating_add(1);
@@ -20557,6 +20574,20 @@ fn odbc_type_to_duckdb(dt: &odbc_api::DataType) -> Option<String> {
         D::Time { .. } => Some("TIME".into()),
         D::Timestamp { .. } => Some("TIMESTAMP".into()),
         _ => None,
+    }
+}
+
+/// #399: the API's own word on whether another page exists, the true or false
+/// at `path`. Anything else fails the node rather than guessing, because a
+/// guess either stops early, losing pages, or never stops.
+fn more_pages(response: &JsonValue, path: &str) -> Result<bool, EngineError> {
+    match response.pointer(path) {
+        Some(JsonValue::Bool(b)) => Ok(*b),
+        found => Err(EngineError::Query(format!(
+            "rest: the more-pages flag at {path} is {}, where true or false was expected. \
+             Check the path against a response.",
+            found.map_or("missing".to_string(), |v| v.to_string())
+        ))),
     }
 }
 
