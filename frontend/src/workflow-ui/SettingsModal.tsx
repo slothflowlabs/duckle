@@ -27,6 +27,46 @@ import {
 } from '../font-size';
 
 /**
+ * One collapsible category of settings.
+ *
+ * Declared here, not inside SettingsModal (#400): a component declared inside
+ * another is a new component on every render, so React rebuilt each category,
+ * and the field being typed in, on every keystroke. The focus fell to the page,
+ * and the next key opened the canvas's quick-add search behind the dialog.
+ */
+function Section({
+    id,
+    title,
+    expanded,
+    onToggle,
+    children,
+}: {
+    id: string;
+    title: string;
+    expanded: Set<string>;
+    onToggle: (id: string) => void;
+    children: ReactNode;
+}) {
+    const open = expanded.has(id);
+    return (
+        <div className="settings-section">
+            <button
+                type="button"
+                className="settings-section-header"
+                aria-expanded={open}
+                onClick={() => onToggle(id)}
+            >
+                <span className="settings-cat-chevron" aria-hidden="true">
+                    {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </span>
+                <span className="settings-section-title">{title}</span>
+            </button>
+            {open ? <div className="settings-section-body">{children}</div> : null}
+        </div>
+    );
+}
+
+/**
  * App settings, grouped into collapsible categories so the panel stays simple
  * (#102). Workspace settings (proxy, memory cap, context file, AI endpoint) are
  * persisted per workspace to .duckle/settings.json via the Save button; UI
@@ -220,26 +260,6 @@ export function SettingsModal({
     const secGood: React.CSSProperties = { color: 'var(--success)', textAlign: 'right' };
     const secWarn: React.CSSProperties = { color: 'var(--accent-warn, #d0902f)', textAlign: 'right' };
 
-    const Section = ({ id, title, children }: { id: string; title: string; children: ReactNode }) => {
-        const open = expanded.has(id);
-        return (
-            <div className="settings-section">
-                <button
-                    type="button"
-                    className="settings-section-header"
-                    aria-expanded={open}
-                    onClick={() => toggleSection(id)}
-                >
-                    <span className="settings-cat-chevron" aria-hidden="true">
-                        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                    </span>
-                    <span className="settings-section-title">{title}</span>
-                </button>
-                {open ? <div className="settings-section-body">{children}</div> : null}
-            </div>
-        );
-    };
-
     return createPortal(
         <div className="modal-backdrop" onClick={handleBackdrop}>
             <div
@@ -267,7 +287,7 @@ export function SettingsModal({
                         </p>
                     ) : null}
 
-                    <Section id="appearance" title="Appearance">
+                    <Section expanded={expanded} onToggle={toggleSection} id="appearance" title="Appearance">
                         <label style={{ display: 'block', fontWeight: 600, marginBottom: 6 }}>
                             Font size
                         </label>
@@ -308,7 +328,7 @@ export function SettingsModal({
                         </div>
                     </Section>
 
-                    <Section id="proxy" title="HTTP / HTTPS proxy">
+                    <Section expanded={expanded} onToggle={toggleSection} id="proxy" title="HTTP / HTTPS proxy">
                         <p style={help}>
                             Routes REST and cloud-API connectors and the in-app updater through a proxy, so
                             Duckle works behind a corporate proxy without setting a system environment
@@ -327,7 +347,7 @@ export function SettingsModal({
                         />
                     </Section>
 
-                    <Section id="memory" title="Memory limit">
+                    <Section expanded={expanded} onToggle={toggleSection} id="memory" title="Memory limit">
                         <p style={help}>
                             Caps total RAM for every run in this workspace (sets DuckDB's memory_limit for
                             both batched and per-stage execution). Leave empty for the engine default
@@ -345,7 +365,7 @@ export function SettingsModal({
                         />
                     </Section>
 
-                    <Section id="power" title="Power mode">
+                    <Section expanded={expanded} onToggle={toggleSection} id="power" title="Power mode">
                         <p style={help}>
                             Throughput settings for this workspace. Independent pipelines scale well
                             across cores, so running several at once is the lever that pays; splitting a
@@ -390,7 +410,7 @@ export function SettingsModal({
                         </p>
                     </Section>
 
-                    <Section id="unsigned" title="Unsigned extensions">
+                    <Section expanded={expanded} onToggle={toggleSection} id="unsigned" title="Unsigned extensions">
                         <p style={help}>
                             Allow loading unsigned or community DuckDB extensions (for example a custom{' '}
                             <code>quack</code> build). When on, the engine starts DuckDB with{' '}
@@ -408,7 +428,7 @@ export function SettingsModal({
                         </label>
                     </Section>
 
-                    <Section id="context" title="Global context file">
+                    <Section expanded={expanded} onToggle={toggleSection} id="context" title="Global context file">
                         <p style={help}>
                             Auto-load context variables from a key/value file before every run, so{' '}
                             <code>{'${KEY}'}</code> resolves everywhere without wiring a node. Supports .env /
@@ -428,7 +448,7 @@ export function SettingsModal({
                         />
                     </Section>
 
-                    <Section id="ai" title="AI assistant endpoint">
+                    <Section expanded={expanded} onToggle={toggleSection} id="ai" title="AI assistant endpoint">
                         <p style={help}>
                             Point Duckie at an external OpenAI-compatible API (OpenAI, Ollama, LM Studio,
                             vLLM, ...) instead of the bundled local model. Leave the base URL empty to use
@@ -513,7 +533,7 @@ export function SettingsModal({
                         />
                     </Section>
 
-                    <Section id="toolbar" title="Toolbar">
+                    <Section expanded={expanded} onToggle={toggleSection} id="toolbar" title="Toolbar">
                         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem', cursor: 'pointer' }}>
                             <input type="checkbox" checked={showDives} onChange={e => toggleDives(e.target.checked)} />
                             Show the Dives button (live data views &amp; dashboards) in the toolbar
@@ -524,7 +544,7 @@ export function SettingsModal({
                         </label>
                     </Section>
 
-                    <Section id="security" title="Security and privacy">
+                    <Section expanded={expanded} onToggle={toggleSection} id="security" title="Security and privacy">
                         <p style={help}>
                             Where this workspace keeps credentials, and what is protected. The
                             same facts are in the architecture guide, with citations.
@@ -594,7 +614,7 @@ export function SettingsModal({
                         </button>
                     </Section>
 
-                    <Section id="tour" title="First run">
+                    <Section expanded={expanded} onToggle={toggleSection} id="tour" title="First run">
                         <p style={help}>
                             Everything you were shown the first time you opened Duckle, available
                             again whenever you want it.
