@@ -123,7 +123,7 @@ use plan::{
     FormatFileSourceSpec, FormatKind, FtpSinkSpec, FtpSourceSpec, GitSourceSpec,
     GizmoSqlSinkSpec, GizmoSqlSourceSpec, HtmlSourceSpec, ModelCardSpec, PdfSourceSpec, HuggingFaceSinkSpec,
     JavaScriptSpec, JqSpec, PythonSpec,
-    GSheetsAuth, GSheetsSourceSpec, KafkaSinkSpec, KafkaSourceSpec, KinesisSinkSpec, KinesisSourceSpec,
+    GSheetsAuth, GSheetsSinkSpec, GSheetsSourceSpec, GSheetsWriteMode, KafkaSinkSpec, KafkaSourceSpec, KinesisSinkSpec, KinesisSourceSpec,
     LanceSinkSpec, LanceSourceSpec,
     PixeltableSinkSpec, PixeltableSourceSpec,
     VortexSinkSpec, VortexSourceSpec,
@@ -2860,6 +2860,7 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::KafkaSink(spec)) => self.run_kafka_sink(&db_path, spec),
                     Some(RuntimeSpec::KinesisSink(spec)) => self.run_kinesis_sink(&db_path, spec),
                     Some(RuntimeSpec::GSheetsSource(spec)) => self.run_gsheets_source(&db_path, spec),
+                    Some(RuntimeSpec::GSheetsSink(spec)) => self.run_gsheets_sink(&db_path, spec),
                     Some(RuntimeSpec::KafkaSource(spec)) => {
                         self.run_kafka_source(&db_path, spec, pipeline_name, &mut pending_writes)
                     }

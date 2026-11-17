@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 426,
+  "componentCount": 427,
   "components": [
     {
       "id": "src.csv",
@@ -38258,6 +38258,115 @@
                 "kind": "text",
                 "placeholder": "${workspace}/out/sf-results",
                 "description": "When set, writes Data-Loader-style per-run result files, stamped {object}_{operation}_{runtime}: ..._success.csv (input columns + sf__Id) and ..._error.csv (+ sf__StatusCode, sf__Message) - written even when the run fails."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
+      "id": "snk.gsheets",
+      "label": "Google Sheets",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "Write the upstream rows into a Google Sheet through the Sheets API: replace a range (cleared, then a header and the rows) or append below what is there. Values are written as they are, so one that looks like a formula stays text. Signs in with a service account key, the sheet shared with its email as an editor.",
+      "category": "Sinks",
+      "group": "SaaS Connectors",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.gsheets",
+        "kind": "sink",
+        "label": "Google Sheets",
+        "description": "Write the upstream rows into a Google Sheet through the Sheets API: replace a range (cleared, then a header and the rows) or append below what is there. Values are written as they are, so one that looks like a formula stays text. Signs in with a service account key, the sheet shared with its email as an editor.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Spreadsheet",
+            "fields": [
+              {
+                "key": "spreadsheet",
+                "label": "Spreadsheet",
+                "kind": "text",
+                "required": true,
+                "placeholder": "https://docs.google.com/spreadsheets/d/1AbC.../edit",
+                "description": "The link from the browser's address bar, or the id in it."
+              },
+              {
+                "key": "range",
+                "label": "Range",
+                "kind": "text",
+                "placeholder": "Orders!A1",
+                "description": "Where the rows go: a sheet, or a sheet and the cell to start at, in A1 notation. Left empty, the first sheet."
+              },
+              {
+                "key": "mode",
+                "label": "Write mode",
+                "kind": "select",
+                "defaultValue": "replace",
+                "options": [
+                  {
+                    "label": "Replace the range",
+                    "value": "replace"
+                  },
+                  {
+                    "label": "Append below what is there",
+                    "value": "append"
+                  }
+                ],
+                "description": "Replace clears the range, then writes a header and the rows. Append adds the rows below the table already there, inserting rows so nothing under it is written over."
+              },
+              {
+                "key": "writeHeader",
+                "label": "Write a header row",
+                "kind": "bool",
+                "defaultValue": true,
+                "visibleWhen": [
+                  {
+                    "key": "mode",
+                    "equals": "replace"
+                  }
+                ],
+                "description": "The column names as the first row. Append never writes one, since the sheet has its own."
+              }
+            ]
+          },
+          {
+            "label": "Sign in",
+            "fields": [
+              {
+                "key": "serviceAccountKey",
+                "label": "Service account key (JSON)",
+                "kind": "text",
+                "required": true,
+                "placeholder": "${ENV:GOOGLE_SHEETS_KEY}",
+                "description": "The key file Google Cloud gives a service account. Share the sheet with the account's email (client_email in the file) as an editor. Use ${ENV:NAME} rather than pasting the key into the pipeline.",
+                "secret": true
+              },
+              {
+                "key": "endpoint",
+                "label": "API endpoint",
+                "kind": "text",
+                "placeholder": "https://sheets.googleapis.com",
+                "description": "Leave empty for Google. Set it for a Private Service Connect endpoint."
               }
             ]
           }

@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 426 components, 412 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 207 connectors (128 sources / 79 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 427 components, 413 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 208 connectors (128 sources / 80 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -219,7 +219,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.yaml` YAML: Read a YAML file as a table. Top-level YAML arrays become one row per element; non-array docs become a single row. Suits config-data ETL (Helm values, GitHub Actions matrices) not bulk logs
 - `src.zendesk` Zendesk: Zendesk Support REST. Basic auth (email/token + API token). Cursor pagination via `meta.after_cursor` + `page[after]` param. responsePath /tickets (or whatever resource)
 
-### Destinations (write) (83)
+### Destinations (write) (84)
 
 - `snk.access` Microsoft Access: Write a table into an Access database (.accdb / .mdb), creating the file and the table when missing. Append or overwrite in one transaction; an empty upstream leaves the table alone. Windows only, through the Microsoft Access ODBC driver
 - `snk.avro` Avro: Write rows as an Apache Avro container file via the pure-Rust `apache-avro` crate. Schema is inferred from the first row's column types (long / double / string / boolean) - or supply a JSON Avro schema via the schemaJson field to override. recordName names the inferred record (default `Row`)
@@ -246,6 +246,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.gcs` Google Cloud Storage: Write via DuckDB httpfs
 - `snk.gizmosql` GizmoSQL: Write rows to a table on a GizmoSQL (Arrow Flight SQL) server via CREATE + batched INSERT over the clean-room pure-Rust Flight SQL client. Append or overwrite; TLS optional
 - `snk.graphql` GraphQL Mutation: POST a GraphQL mutation per upstream row. The mutation body can reference row fields via ${field} substitution
+- `snk.gsheets` Google Sheets: Write the upstream rows into a Google Sheet through the Sheets API: replace a range (cleared, then a header and the rows) or append below what is there. Values are written as they are, so one that looks like a formula stays text. Signs in with a service account key, the sheet shared with its email as an editor
 - `snk.huggingface` Hugging Face dataset: Push the pipeline output to a Hugging Face Hub dataset repo. The engine materializes a Parquet and commits it over the Hub API (create-repo -> preupload -> git-LFS -> commit). Needs a write-scoped token; the repo is created if it does not exist
 - `snk.iceberg` Apache Iceberg: Write a full Iceberg table (data/ + metadata/) via DuckDB v1.5
 - `snk.jdbc` Generic JDBC [planned]: Writes data to Generic JDBC

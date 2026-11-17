@@ -434,6 +434,11 @@ COMPONENTS = {
         'summary': 'POST a GraphQL mutation per upstream row. The mutation body can reference row fields via ${field} substitution.',
         'params': ['url', 'method', 'headers', 'batchMode', 'bodyType', 'bodyTemplate', 'authType', 'authToken', 'authHeader'],
     },
+    'snk.gsheets': {
+        'kind': 'sink',
+        'summary': 'Write the upstream rows into a Google Sheet through the Sheets API: replace a range (cleared, then a header and the rows) or append below what is there. Values are written as they are, so one that looks like a formula stays text. Signs in with a service account key, the sheet shared with its emai...',
+        'params': ['spreadsheet', 'range', 'mode', 'writeHeader', 'serviceAccountKey', 'endpoint'],
+    },
     'snk.huggingface': {
         'kind': 'sink',
         'summary': 'Push the pipeline output to a Hugging Face Hub dataset repo. The engine materializes a Parquet and commits it over the Hub API (create-repo -> preupload -> git-LFS -> commit). Needs a write-scoped token; the repo is created if it does not exist.',

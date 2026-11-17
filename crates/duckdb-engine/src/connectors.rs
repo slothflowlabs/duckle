@@ -12225,28 +12225,7 @@ impl DuckdbEngine {
             if let Some(key) = &api_key {
                 req = req.set("X-goog-api-key", key);
             }
-            match req.call() {
-                Ok(r) => r
-                    .into_json()
-                    .map_err(|e| EngineError::Query(format!("gsheets: Google's answer is not JSON: {e}"))),
-                Err(ureq::Error::Status(code, r)) => {
-                    let body: JsonValue = r.into_json().unwrap_or_default();
-                    let said = body.pointer("/error/message").and_then(JsonValue::as_str).unwrap_or("no reason given");
-                    let hint = match (code, &account) {
-                        (403, Some(email)) => format!(
-                            " Share the sheet with {email} as a viewer, and check that the Google Sheets API \
-                             is on for the key's project."
-                        ),
-                        (403, None) => " An API key reads only a sheet anyone with the link can view, and only \
-                                        with the Google Sheets API on for its project."
-                            .to_string(),
-                        (404, _) => format!(" Check the spreadsheet id {}.", spec.spreadsheet_id),
-                        _ => String::new(),
-                    };
-                    Err(EngineError::Query(format!("gsheets: Google answered HTTP {code}: {said}.{hint}")))
-                }
-                Err(e) => Err(EngineError::Query(format!("gsheets: transport: {e}"))),
-            }
+            google_sheets_call(req, None, account.as_deref(), &spec.spreadsheet_id, "a viewer")
         };
         let id = urlencode_simple(&spec.spreadsheet_id);
         let range = match &spec.range {
@@ -12291,6 +12270,79 @@ impl DuckdbEngine {
             range,
             spec.node_id
         ))
+    }
+
+    /// snk.gsheets: write the upstream rows into a Google Sheet. Replace clears
+    /// the range, then writes a header and the rows; append adds the rows below
+    /// the table already there, inserting rows. Values go as they are (RAW), so
+    /// one that looks like a formula stays text, and a null is an empty cell.
+    /// Calls stay under 2 MiB, the header in the first.
+    pub(crate) fn run_gsheets_sink(&self, db: &Path, spec: &GSheetsSinkSpec) -> Result<String, EngineError> {
+        const CALL_BYTES: usize = 2 * 1024 * 1024;
+        self.check_cancelled()?;
+        let view = plan::quote_ident(&spec.from_view);
+        // In the upstream's order, which an empty upstream still has.
+        let columns: Vec<String> = self
+            .run_rows(Some(db), &format!("DESCRIBE SELECT * FROM {view}"))?
+            .iter()
+            .filter_map(|c| c.get("column_name").and_then(JsonValue::as_str).map(str::to_string))
+            .collect();
+        let rows = self.run_rows(Some(db), &format!("SELECT * FROM {view}"))?;
+        let agent = crate::tls::http_agent();
+        let (email, private_key, token_uri) = plan::google_service_account(&spec.service_account_key)
+            .map_err(|e| EngineError::Config(format!("gsheets: {e}")))?;
+        let token = google_access_token(&agent, &email, &private_key, &token_uri, SHEETS_WRITE)?;
+        let bearer = format!("Bearer {token}");
+        let call = |req: ureq::Request, body: Option<&JsonValue>| {
+            google_sheets_call(req.set("Authorization", &bearer), body, Some(email.as_str()), &spec.spreadsheet_id, "an editor")
+        };
+        let id = urlencode_simple(&spec.spreadsheet_id);
+        let range = match &spec.range {
+            Some(range) => range.clone(),
+            None => {
+                let meta = call(
+                    agent.get(&format!("{}/v4/spreadsheets/{id}?fields=sheets.properties.title", spec.endpoint)),
+                    None,
+                )?;
+                let title = meta.pointer("/sheets/0/properties/title").and_then(JsonValue::as_str).ok_or_else(|| {
+                    EngineError::Query(format!("gsheets: spreadsheet {} has no sheet to write", spec.spreadsheet_id))
+                })?;
+                format!("'{}'", title.replace('\'', "''"))
+            }
+        };
+        let target = format!("{}/v4/spreadsheets/{id}/values/{}", spec.endpoint, urlencode_simple(&range));
+        let mut grid: Vec<JsonValue> = Vec::with_capacity(rows.len() + 1);
+        if spec.mode == GSheetsWriteMode::Replace && spec.write_header {
+            grid.push(serde_json::json!(columns));
+        }
+        for row in &rows {
+            grid.push(JsonValue::Array(columns.iter().map(|c| sheet_cell(row.get(c))).collect()));
+        }
+        let insert = match spec.mode {
+            GSheetsWriteMode::Replace => {
+                call(agent.post(&format!("{target}:clear")), Some(&serde_json::json!({})))?;
+                "OVERWRITE"
+            }
+            GSheetsWriteMode::Append => "INSERT_ROWS",
+        };
+        let url = format!("{target}:append?valueInputOption=RAW&insertDataOption={insert}");
+        let mut start = 0;
+        while start < grid.len() {
+            self.check_cancelled()?;
+            // As many rows as 2 MiB holds, and always at least one.
+            let (mut end, mut bytes) = (start, 0);
+            while end < grid.len() {
+                let size = grid[end].to_string().len() + 1;
+                if end > start && bytes + size > CALL_BYTES {
+                    break;
+                }
+                bytes += size;
+                end += 1;
+            }
+            call(agent.post(&url), Some(&serde_json::json!({ "values": &grid[start..end] })))?;
+            start = end;
+        }
+        Ok(format!("gsheets: wrote {} row(s) into {} {}", rows.len(), spec.spreadsheet_id, range))
     }
 
     /// src.dynamodb: scan a DynamoDB table via direct HTTP + AWS
@@ -20885,6 +20937,56 @@ fn more_pages(response: &JsonValue, path: &str) -> Result<bool, EngineError> {
 
 /// What src.gsheets asks Google for: reading spreadsheets, nothing more.
 const SHEETS_READ_ONLY: &str = "https://www.googleapis.com/auth/spreadsheets.readonly";
+/// What snk.gsheets asks Google for: writing spreadsheets.
+const SHEETS_WRITE: &str = "https://www.googleapis.com/auth/spreadsheets";
+
+/// One Sheets API call, with Google's refusal in its own words. A 403 says whom
+/// to share the sheet with and as what (`share_as`: a viewer, an editor), or,
+/// with no account, what an API key can read.
+fn google_sheets_call(
+    req: ureq::Request,
+    body: Option<&JsonValue>,
+    account: Option<&str>,
+    spreadsheet_id: &str,
+    share_as: &str,
+) -> Result<JsonValue, EngineError> {
+    let result = match body {
+        Some(b) => req.send_json(b),
+        None => req.call(),
+    };
+    match result {
+        Ok(r) => r
+            .into_json()
+            .map_err(|e| EngineError::Query(format!("gsheets: Google's answer is not JSON: {e}"))),
+        Err(ureq::Error::Status(code, r)) => {
+            let body: JsonValue = r.into_json().unwrap_or_default();
+            let said = body.pointer("/error/message").and_then(JsonValue::as_str).unwrap_or("no reason given");
+            let hint = match (code, account) {
+                (403, Some(email)) => format!(
+                    " Share the sheet with {email} as {share_as}, and check that the Google Sheets API \
+                     is on for the key's project."
+                ),
+                (403, None) => " An API key reads only a sheet anyone with the link can view, and only \
+                                with the Google Sheets API on for its project."
+                    .to_string(),
+                (404, _) => format!(" Check the spreadsheet id {spreadsheet_id}."),
+                _ => String::new(),
+            };
+            Err(EngineError::Query(format!("gsheets: Google answered HTTP {code}: {said}.{hint}")))
+        }
+        Err(e) => Err(EngineError::Query(format!("gsheets: transport: {e}"))),
+    }
+}
+
+/// A value as a Sheets cell: numbers, true/false and text as they are, a null
+/// as an empty cell, and a list or a record as its JSON text.
+fn sheet_cell(value: Option<&JsonValue>) -> JsonValue {
+    match value {
+        None | Some(JsonValue::Null) => JsonValue::String(String::new()),
+        Some(v @ (JsonValue::String(_) | JsonValue::Number(_) | JsonValue::Bool(_))) => v.clone(),
+        Some(other) => JsonValue::String(other.to_string()),
+    }
+}
 
 /// A Google OAuth access token for a service account: a JWT its private key
 /// signs (RS256), for `scope`, traded at its token endpoint.

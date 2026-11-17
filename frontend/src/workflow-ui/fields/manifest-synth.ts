@@ -10509,6 +10509,75 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
     if (groupId === 'src.vector') return synthVectorSource(comp);
 
     // Sinks
+    // snk.gsheets sits in snk.saas, which has no synthesizer of its own. Keys
+    // mirror GSheetsSinkSpec's parse in plan/mod.rs.
+    if (comp.id === 'snk.gsheets') {
+        return base(
+            comp,
+            [
+                {
+                    label: 'Spreadsheet',
+                    fields: [
+                        {
+                            key: 'spreadsheet',
+                            label: 'Spreadsheet',
+                            kind: 'text',
+                            required: true,
+                            placeholder: 'https://docs.google.com/spreadsheets/d/1AbC.../edit',
+                            description: "The link from the browser's address bar, or the id in it.",
+                        },
+                        {
+                            key: 'range',
+                            label: 'Range',
+                            kind: 'text',
+                            placeholder: 'Orders!A1',
+                            description: 'Where the rows go: a sheet, or a sheet and the cell to start at, in A1 notation. Left empty, the first sheet.',
+                        },
+                        {
+                            key: 'mode',
+                            label: 'Write mode',
+                            kind: 'select',
+                            defaultValue: 'replace',
+                            options: [
+                                { label: 'Replace the range', value: 'replace' },
+                                { label: 'Append below what is there', value: 'append' },
+                            ],
+                            description: 'Replace clears the range, then writes a header and the rows. Append adds the rows below the table already there, inserting rows so nothing under it is written over.',
+                        },
+                        {
+                            key: 'writeHeader',
+                            label: 'Write a header row',
+                            kind: 'bool',
+                            defaultValue: true,
+                            visibleWhen: [{ key: 'mode', equals: 'replace' }],
+                            description: 'The column names as the first row. Append never writes one, since the sheet has its own.',
+                        },
+                    ],
+                },
+                {
+                    label: 'Sign in',
+                    fields: [
+                        {
+                            key: 'serviceAccountKey',
+                            label: 'Service account key (JSON)',
+                            kind: 'text',
+                            required: true,
+                            placeholder: '${ENV:GOOGLE_SHEETS_KEY}',
+                            description: "The key file Google Cloud gives a service account. Share the sheet with the account's email (client_email in the file) as an editor. Use ${ENV:NAME} rather than pasting the key into the pipeline.",
+                        },
+                        {
+                            key: 'endpoint',
+                            label: 'API endpoint',
+                            kind: 'text',
+                            placeholder: 'https://sheets.googleapis.com',
+                            description: 'Leave empty for Google. Set it for a Private Service Connect endpoint.',
+                        },
+                    ],
+                },
+            ],
+            'upstream',
+        );
+    }
     if (groupId === 'snk.files') return synthFileSink(comp);
     if (comp.id === 'snk.execsource') return synthExecSource(comp);
     // snk.salesforce[.bulk] live in the new snk.saas palette group; their field

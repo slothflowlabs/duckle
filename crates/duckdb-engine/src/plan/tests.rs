@@ -7161,6 +7161,53 @@ mod gsheets_source {
         assert!(crate::util::is_secret_prop_key("apiKey"));
     }
 
+    /// The sink writes as a service account and nothing else: an API key only reads.
+    #[test]
+    fn the_sink_writes_as_a_service_account_and_never_with_an_api_key() {
+        let sink = |props: serde_json::Value| -> Result<crate::plan::GSheetsSinkSpec, crate::EngineError> {
+            let doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+                "nodes": [
+                    {"id":"s","position":{"x":0,"y":0},
+                     "data":{"label":"in","componentId":"src.csv","properties":{"path":"/tmp/i.csv"}}},
+                    {"id":"k","position":{"x":0,"y":0},
+                     "data":{"label":"Sheet","componentId":"snk.gsheets","properties": props}}
+                ],
+                "edges":[{"id":"x","source":"s","target":"k","data":{"connectionType":"main"}}]
+            }))
+            .unwrap();
+            let plan = compile(&doc)?;
+            Ok(plan
+                .stages
+                .iter()
+                .find_map(|s| match s.runtime.as_ref() {
+                    Some(crate::plan::RuntimeSpec::GSheetsSink(g)) => Some(g.clone()),
+                    _ => None,
+                })
+                .expect("a Sheets write"))
+        };
+        let key = serde_json::json!({
+            "client_email": "w@b.iam.gserviceaccount.com",
+            "private_key": "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n",
+        })
+        .to_string();
+        let s = sink(serde_json::json!({
+            "spreadsheet": "https://docs.google.com/spreadsheets/d/1W/edit", "serviceAccountKey": key,
+        }))
+        .unwrap();
+        assert_eq!(s.spreadsheet_id, "1W");
+        assert_eq!(s.mode, crate::plan::GSheetsWriteMode::Replace, "a new node replaces its range");
+        assert!(s.write_header);
+        assert_eq!(s.range, None, "the first sheet");
+        let no_header = sink(serde_json::json!({ "spreadsheet": "1W", "serviceAccountKey": key, "writeHeader": false }));
+        assert!(!no_header.unwrap().write_header, "a header turned off stays off");
+        let e = sink(serde_json::json!({ "spreadsheet": "1W", "apiKey": "k" })).unwrap_err().to_string();
+        assert!(e.contains("service account") && e.contains("API key"), "{e}");
+        let e = sink(serde_json::json!({ "spreadsheet": "1W", "serviceAccountKey": key, "mode": "upsert" }))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("upsert"), "{e}");
+    }
+
     /// A key kept in the environment is only there at run time, so planning
     /// does not try to read it.
     #[test]

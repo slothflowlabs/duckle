@@ -11907,6 +11907,157 @@ fn src_gsheets_names_every_column_once() {
     );
 }
 
+/// The claims of the JWT a token request carried, checked as signed by the test
+/// service account's key for its token endpoint at `base`.
+fn google_assertion_claims(form_body: &str, base: &str) -> serde_json::Value {
+    let assertion = url::form_urlencoded::parse(form_body.as_bytes())
+        .find(|(k, _)| k == "assertion")
+        .map(|(_, v)| v.to_string())
+        .expect("a signed assertion");
+    let mut check = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256);
+    check.set_audience(&[format!("{base}/token")]);
+    check.set_issuer(&[SHEETS_READER]);
+    jsonwebtoken::decode::<serde_json::Value>(
+        &assertion,
+        &jsonwebtoken::DecodingKey::from_rsa_pem(throwaway_rsa_key().1.as_bytes()).unwrap(),
+        &check,
+    )
+    .expect("signed by the service account's key, for its token_uri")
+    .claims
+}
+
+/// snk.gsheets replaces a range: it clears it, then writes a header and the rows
+/// as they are (RAW, so a value that looks like a formula stays text). A null is
+/// an empty cell, and the token asks to write spreadsheets.
+#[test]
+fn snk_gsheets_replaces_a_range_with_a_header_and_the_rows() {
+    let engine = engine_or_skip!();
+    let (base, seen, handle) =
+        google_endpoint(vec![(200, GOOGLE_TOKEN), (200, "{}"), (200, r#"{"updates":{"updatedRows":4}}"#)]);
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name,amount\n1,alice,9.5\n2,=1+1,\n3,carol,12\n");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k", "snk.gsheets", json!({
+                "spreadsheet": "https://docs.google.com/spreadsheets/d/1Out/edit",
+                "range": "Orders!A1",
+                "serviceAccountKey": service_account_key(&base),
+                "endpoint": base,
+            })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let calls = seen.lock().unwrap().clone();
+    assert_eq!(calls.len(), 3, "a token, a clear and one write");
+    assert_eq!(
+        google_assertion_claims(&calls[0].1, &base)["scope"],
+        "https://www.googleapis.com/auth/spreadsheets"
+    );
+    assert!(calls[1].0.starts_with("POST /v4/spreadsheets/1Out/values/Orders%21A1:clear "), "{}", calls[1].0);
+    assert!(
+        calls[2].0.starts_with(
+            "POST /v4/spreadsheets/1Out/values/Orders%21A1:append?valueInputOption=RAW&insertDataOption=OVERWRITE "
+        ),
+        "{}",
+        calls[2].0
+    );
+    let body: serde_json::Value = serde_json::from_str(&calls[2].1).unwrap();
+    assert_eq!(
+        body["values"],
+        json!([["id", "name", "amount"], [1, "alice", 9.5], [2, "=1+1", ""], [3, "carol", 12.0]])
+    );
+}
+
+/// Append adds the rows below what the sheet holds: nothing cleared, no header,
+/// and rows inserted so nothing under the table is written over.
+#[test]
+fn snk_gsheets_appends_below_what_is_there() {
+    let engine = engine_or_skip!();
+    let (base, seen, handle) = google_endpoint(vec![(200, GOOGLE_TOKEN), (200, r#"{"updates":{"updatedRows":2}}"#)]);
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,event\n1,a\n2,b\n");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k", "snk.gsheets", json!({
+                "spreadsheet": "1Log", "range": "Log", "mode": "append",
+                "serviceAccountKey": service_account_key(&base), "endpoint": base,
+            })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let calls = seen.lock().unwrap().clone();
+    assert_eq!(calls.len(), 2, "a token and one write, nothing cleared");
+    assert!(
+        calls[1].0.starts_with("POST /v4/spreadsheets/1Log/values/Log:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS "),
+        "{}",
+        calls[1].0
+    );
+    let body: serde_json::Value = serde_json::from_str(&calls[1].1).unwrap();
+    assert_eq!(body["values"], json!([[1, "a"], [2, "b"]]));
+}
+
+/// The rows go in calls of at most 2 MiB, the header in the first.
+#[test]
+fn snk_gsheets_writes_in_calls_of_bounded_size() {
+    let engine = engine_or_skip!();
+    let (base, seen, handle) = google_endpoint(vec![(200, GOOGLE_TOKEN), (200, "{}"), (200, "{}"), (200, "{}")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let blob = "x".repeat(900_000);
+    let csv = write_file(tmp.path(), "big.csv", &format!("id,blob\n1,{blob}\n2,{blob}\n3,{blob}\n"));
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k", "snk.gsheets", json!({
+                "spreadsheet": "1Big", "range": "Sheet1",
+                "serviceAccountKey": service_account_key(&base), "endpoint": base,
+            })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let calls = seen.lock().unwrap().clone();
+    assert_eq!(calls.len(), 4, "a token, a clear and two writes");
+    let sizes: Vec<usize> = calls[2..]
+        .iter()
+        .map(|(_, b)| serde_json::from_str::<serde_json::Value>(b).unwrap()["values"].as_array().unwrap().len())
+        .collect();
+    assert_eq!(sizes, [3, 1], "the header and two rows, then the third");
+}
+
+/// Google's refusal to write names the account the sheet has to be shared with,
+/// as an editor this time.
+#[test]
+fn snk_gsheets_names_the_account_to_share_with_as_an_editor() {
+    let engine = engine_or_skip!();
+    let (base, _seen, handle) = google_endpoint(vec![
+        (200, GOOGLE_TOKEN),
+        (403, r#"{"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}}"#),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k", "snk.gsheets", json!({
+                "spreadsheet": "1Locked", "range": "Sheet1",
+                "serviceAccountKey": service_account_key(&base), "endpoint": base,
+            })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "error");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains(SHEETS_READER) && e.contains("editor"), "{e}");
+}
+
 /// A sheet with a header and no rows yet reads as an empty table with its
 /// columns, not as an error.
 #[test]

@@ -513,6 +513,48 @@ pub struct GSheetsSourceSpec {
     pub endpoint: String,
 }
 
+/// snk.gsheets: write the upstream rows into a Google Sheet through the Sheets API.
+#[derive(Clone)]
+pub struct GSheetsSinkSpec {
+    pub from_view: String,
+    pub spreadsheet_id: String,
+    /// A1 notation of where the rows go. None writes to the first sheet.
+    pub range: Option<String>,
+    pub mode: GSheetsWriteMode,
+    /// A header row first, in replace mode. Append never writes one.
+    pub write_header: bool,
+    /// A service account's key file, as given, read at run time. Writing needs
+    /// an account: an API key only reads.
+    pub service_account_key: String,
+    /// The API's base URL: `https://sheets.googleapis.com` unless set.
+    pub endpoint: String,
+}
+
+/// Written by hand so a plan printed for a person never carries the key.
+impl std::fmt::Debug for GSheetsSinkSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GSheetsSinkSpec")
+            .field("from_view", &self.from_view)
+            .field("spreadsheet_id", &self.spreadsheet_id)
+            .field("range", &self.range)
+            .field("mode", &self.mode)
+            .field("write_header", &self.write_header)
+            .field("service_account_key", &"***")
+            .field("endpoint", &self.endpoint)
+            .finish()
+    }
+}
+
+/// How snk.gsheets writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GSheetsWriteMode {
+    /// Clear the range, then write a header and the rows.
+    Replace,
+    /// Add the rows below the table already there, inserting rows so nothing
+    /// under it is written over.
+    Append,
+}
+
 /// Who reads the sheet.
 #[derive(Clone)]
 pub enum GSheetsAuth {
