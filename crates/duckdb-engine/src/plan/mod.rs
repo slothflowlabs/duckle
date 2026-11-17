@@ -635,6 +635,7 @@ pub enum RuntimeSpec {
     AccessSource(AccessSourceSpec),
     AccessSink(AccessSinkSpec),
     SharePointSource(SharePointSourceSpec),
+    ExcelOnlineSource(ExcelOnlineSourceSpec),
     SharePointSink(SharePointSinkSpec),
     AttachParquetSource(AttachParquetSourceSpec),
     /// materialize = "duckdb"/"duckdbfile": persist the stage into a DuckDB file.
@@ -2244,6 +2245,7 @@ fn build_stage(
     let mut access_source: Option<AccessSourceSpec> = None;
     let mut access_sink: Option<AccessSinkSpec> = None;
     let mut sharepoint_source: Option<SharePointSourceSpec> = None;
+    let mut excel_online_source: Option<ExcelOnlineSourceSpec> = None;
     let mut sharepoint_sink: Option<SharePointSinkSpec> = None;
     let mut attach_parquet_source: Option<AttachParquetSourceSpec> = None;
     let mut materialize_duckdb: Option<MaterializeDuckDbSpec> = None;
@@ -6377,6 +6379,37 @@ fn build_stage(
                 .min(5000),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.excel-online" {
+        let need = |key: &str| {
+            string_prop(&props, key)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| EngineError::Config(format!("{}: {} required", component_id, key)))
+        };
+        // The props src.excel reads a workbook by, for the downloaded file.
+        let read: serde_json::Map<String, JsonValue> = ["sheet", "allSheets", "sheetColumn", "range", "hasHeader"]
+            .into_iter()
+            .filter_map(|k| props.get(k).map(|v| (k.to_string(), v.clone())))
+            .collect();
+        // Microsoft's public cloud, unless the node names a national cloud's hosts.
+        let host = |key: &str, public: &str| {
+            string_prop(&props, key)
+                .map(|s| s.trim().trim_end_matches('/').to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| public.to_string())
+        };
+        excel_online_source = Some(ExcelOnlineSourceSpec {
+            node_id: node.id.clone(),
+            tenant_id: need("tenantId")?,
+            client_id: need("clientId")?,
+            client_secret: need("clientSecret")?,
+            workbook: need("workbook")?,
+            read: JsonValue::Object(read),
+            declared: node.data.schema.clone(),
+            login_endpoint: host("loginEndpoint", "https://login.microsoftonline.com"),
+            graph_endpoint: host("graphEndpoint", "https://graph.microsoft.com"),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.access" {
         let query = string_prop(&props, "query").filter(|s| !s.trim().is_empty());
         let table = string_prop(&props, "tableName").filter(|s| !s.trim().is_empty());
@@ -7839,6 +7872,7 @@ fn build_stage(
         .or_else(|| access_source.map(RuntimeSpec::AccessSource))
         .or_else(|| access_sink.map(RuntimeSpec::AccessSink))
         .or_else(|| sharepoint_source.map(RuntimeSpec::SharePointSource))
+        .or_else(|| excel_online_source.map(RuntimeSpec::ExcelOnlineSource))
         .or_else(|| sharepoint_sink.map(RuntimeSpec::SharePointSink))
         .or_else(|| attach_parquet_source.map(RuntimeSpec::AttachParquetSource))
         .or_else(|| materialize_duckdb.map(RuntimeSpec::MaterializeDuckDb))

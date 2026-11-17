@@ -12011,6 +12011,213 @@ fn kinesis_writes_and_reads_back_every_shard_of_a_live_stream() {
     );
 }
 
+/// A Microsoft endpoint on localhost (sign-in and Graph alike) that answers each
+/// request with the next of `answers`: a status, header lines (`{base}` stands
+/// for this server's address) and a body. Each request's head and body is kept.
+fn microsoft_endpoint(
+    answers: Vec<(u16, &'static str, Vec<u8>)>,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>, std::thread::JoinHandle<()>) {
+    use std::io::{BufRead, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let keep = seen.clone();
+    let url = base.clone();
+    let handle = std::thread::spawn(move || {
+        let n = answers.len();
+        for (stream, (status, headers, body)) in incoming_bounded(&listener, n).zip(answers) {
+            let Ok(stream) = stream else { break };
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).ok();
+            let mut reader = std::io::BufReader::new(stream);
+            let (mut head, mut len) = (String::new(), 0usize);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap_or(0);
+                }
+                head.push_str(&line);
+            }
+            let mut request_body = vec![0u8; len];
+            let _ = reader.read_exact(&mut request_body);
+            keep.lock().unwrap().push((head, String::from_utf8_lossy(&request_body).into_owned()));
+            let mut stream = reader.into_inner();
+            let mut reply =
+                format!("HTTP/1.1 {status} Answer\r\nContent-Length: {}\r\nConnection: close\r\n", body.len())
+                    .into_bytes();
+            for line in headers.lines().filter(|l| !l.is_empty()) {
+                reply.extend_from_slice(line.replace("{base}", &base).as_bytes());
+                reply.extend_from_slice(b"\r\n");
+            }
+            reply.extend_from_slice(b"\r\n");
+            reply.extend_from_slice(&body);
+            let _ = stream.write_all(&reply);
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+    (url, seen, handle)
+}
+
+const EXCEL_LINK: &str =
+    "https://contoso.sharepoint.com/:x:/s/Finance/EbWhcXUvLy9Gt0j5S5cGsd8BY0KfgR8RT2Gb6s7Wd8Uc?e=4Yk6Pq";
+/// EXCEL_LINK as Graph's /shares takes it: "u!" and the link in unpadded
+/// base64url. Worked out apart from the engine; its plain base64 has a '/' and
+/// a pad, which this form has neither of.
+const EXCEL_SHARE: &str = "u!aHR0cHM6Ly9jb250b3NvLnNoYXJlcG9pbnQuY29tLzp4Oi9zL0ZpbmFuY2UvRWJXaGNYVXZMeTlHdDBqNVM1Y0dzZDhCWTBLZmdSOFJUMkdiNnM3V2Q4VWM_ZT00WWs2UHE";
+const GRAPH_TOKEN: &str = r#"{"token_type":"Bearer","expires_in":3599,"access_token":"graph-token"}"#;
+
+fn excel_online(endpoint: &str, extra: serde_json::Value) -> serde_json::Value {
+    let mut props = json!({
+        "tenantId": "contoso.onmicrosoft.com",
+        "clientId": "app-id",
+        "clientSecret": "s3cret",
+        "workbook": EXCEL_LINK,
+        "loginEndpoint": endpoint,
+        "graphEndpoint": endpoint,
+    });
+    for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+        props[k] = v;
+    }
+    node("x", "src.excel-online", props)
+}
+
+/// A workbook of three rows on its one sheet, as the bytes Graph would hand over.
+fn excel_workbook(dir: &std::path::Path) -> Vec<u8> {
+    let xlsx = out_path(dir, "book.xlsx");
+    duckdb_exec(
+        ":memory:",
+        &format!(
+            "INSTALL excel; LOAD excel; \
+             COPY (SELECT * FROM (VALUES (1,'alice'),(2,'bob'),(3,'carol')) t(id,name)) \
+             TO '{}' (FORMAT 'xlsx', HEADER true)",
+            xlsx
+        ),
+    );
+    std::fs::read(&xlsx).unwrap()
+}
+
+/// src.excel-online signs in as the app (client credentials, for Graph's
+/// .default scope), asks Graph for the workbook by its link, follows Graph's
+/// redirect to the file without the token, and reads it as src.excel would: the
+/// range named, the header row as the names.
+#[test]
+fn src_excel_online_reads_a_workbook_by_its_link() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let (endpoint, seen, handle) = microsoft_endpoint(vec![
+        (200, "Content-Type: application/json", GRAPH_TOKEN.as_bytes().to_vec()),
+        (302, "Location: {base}/download/book.xlsx?tempauth=pre-signed", Vec::new()),
+        (200, "Content-Type: application/octet-stream", excel_workbook(tmp.path())),
+    ]);
+    let out = out_path(tmp.path(), "rows.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            excel_online(&endpoint, json!({ "range": "A1:B3", "loginEndpoint": format!("{endpoint}/login") })),
+            node("o", "snk.csv", json!({ "path": &out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "x", "o")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        duckdb_json(&format!("SELECT list(name ORDER BY id) AS names FROM read_csv_auto('{}')", out))[0]["names"],
+        json!(["alice", "bob"]),
+        "the header row names the columns, and the range ends at the second row"
+    );
+    let calls = seen.lock().unwrap().clone();
+    assert_eq!(calls.len(), 3);
+    let (sign_in, form) = &calls[0];
+    assert!(sign_in.starts_with("POST /login/contoso.onmicrosoft.com/oauth2/v2.0/token "), "{sign_in}");
+    let form: std::collections::HashMap<String, String> =
+        url::form_urlencoded::parse(form.as_bytes()).into_owned().collect();
+    assert_eq!(form.get("grant_type").map(String::as_str), Some("client_credentials"));
+    assert_eq!(form.get("client_id").map(String::as_str), Some("app-id"));
+    assert_eq!(form.get("client_secret").map(String::as_str), Some("s3cret"));
+    assert_eq!(form.get("scope"), Some(&format!("{endpoint}/.default")), "the scope is Graph's, not the sign-in host's");
+    let (graph, _) = &calls[1];
+    assert!(graph.starts_with(&format!("GET /v1.0/shares/{EXCEL_SHARE}/driveItem/content ")), "{graph}");
+    assert!(graph.to_ascii_lowercase().contains("authorization: bearer graph-token"), "{graph}");
+    let (file, _) = &calls[2];
+    assert!(file.starts_with("GET /download/book.xlsx?tempauth=pre-signed "), "{file}");
+    assert!(!file.to_ascii_lowercase().contains("authorization"), "the token stays with Graph: {file}");
+}
+
+/// The node's declared columns shape the read as they do src.excel's: every
+/// cell read as text, then cast and kept to exactly those columns.
+#[test]
+fn src_excel_online_keeps_to_the_declared_columns() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let (endpoint, _seen, handle) = microsoft_endpoint(vec![
+        (200, "Content-Type: application/json", GRAPH_TOKEN.as_bytes().to_vec()),
+        (302, "Location: {base}/download/book.xlsx", Vec::new()),
+        (200, "Content-Type: application/octet-stream", excel_workbook(tmp.path())),
+    ]);
+    let mut source = excel_online(&endpoint, json!({}));
+    source["data"]["schema"] = json!([{ "name": "name", "type": "string" }]);
+    let out = out_path(tmp.path(), "names.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([source, node("o", "snk.csv", json!({ "path": &out, "hasHeader": true }))]),
+        json!([main_edge("e", "x", "o")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        duckdb_json(&format!("SELECT * FROM read_csv_auto('{}')", out)),
+        vec![json!({ "name": "alice" }), json!({ "name": "bob" }), json!({ "name": "carol" })]
+    );
+}
+
+/// Graph refusing the app says what the app needs: the Files.Read.All
+/// application permission, with an admin's consent.
+#[test]
+fn src_excel_online_names_the_permission_the_app_lacks() {
+    let engine = engine_or_skip!();
+    let (endpoint, _seen, handle) = microsoft_endpoint(vec![
+        (200, "Content-Type: application/json", GRAPH_TOKEN.as_bytes().to_vec()),
+        (403, "Content-Type: application/json", br#"{"error":{"code":"accessDenied","message":"Access denied"}}"#.to_vec()),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            excel_online(&endpoint, json!({})),
+            node("o", "snk.csv", json!({ "path": out_path(tmp.path(), "o.csv"), "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "x", "o")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "error");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("Access denied") && e.contains("Files.Read.All"), "{e}");
+}
+
+/// A refused sign-in shows Microsoft's reason, its AADSTS line, and not the trace
+/// and correlation ids that follow it.
+#[test]
+fn src_excel_online_says_why_the_sign_in_was_refused() {
+    let engine = engine_or_skip!();
+    let (endpoint, _seen, handle) = microsoft_endpoint(vec![(
+        401,
+        "Content-Type: application/json",
+        br#"{"error":"invalid_client","error_description":"AADSTS7000215: Invalid client secret provided. Ensure the secret being sent in the request is the client secret value, not the client secret ID.\r\nTrace ID: 0ab1\r\nCorrelation ID: 9cd2\r\nTimestamp: 2026-11-17 12:00:00Z"}"#.to_vec(),
+    )]);
+    let tmp = tempfile::tempdir().unwrap();
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            excel_online(&endpoint, json!({})),
+            node("o", "snk.csv", json!({ "path": out_path(tmp.path(), "o.csv"), "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "x", "o")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "error");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("AADSTS7000215") && !e.contains("Trace ID"), "{e}");
+}
+
 /// A Google endpoint on localhost (token and Sheets API alike) that answers each
 /// request with the next of `answers`, a status and a JSON body, and keeps each
 /// request's head and body.

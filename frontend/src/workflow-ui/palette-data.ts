@@ -871,7 +871,7 @@ export const PALETTE: Category[] = [
                     src('sharepoint', 'SharePoint Server', 'available', 'SharePoint Server on premises (2016 / 2019 / Subscription Edition) over REST, signed in with Windows authentication (NTLM). A list reads as rows, every page followed; a document library file reads by its format (CSV, TSV, Parquet, JSON, Excel).'),
                     src('monday', 'Monday.com', 'available', 'Monday.com GraphQL. Rides src.graphql; auth via Bearer token in Authorization header. POST a GraphQL query as `body`; responsePath /data.<query_name>. Base URL https://api.monday.com/v2.'),
                     src('gsheets', 'Google Sheets', 'available', 'Read a range of a Google Sheet as rows through the Sheets API: values as they are (numbers, true/false), not as formatted. The first row names the columns. Sign in with a service account key, with the sheet shared with its email, or with an API key for a sheet anyone with the link can view.'),
-                    src('excel-online', 'Microsoft Excel Online', 'planned'),
+                    src('excel-online', 'Microsoft Excel Online', 'available', 'Read a workbook in OneDrive or SharePoint Online through Microsoft Graph, signed in as an app registration (tenant, client id and secret) with the Files.Read.All application permission. Graph\'s workbook API takes no app-only token, so the workbook is downloaded and read as src.excel reads one: the sheets, range and header row it names.'),
                 ],
             },
             {

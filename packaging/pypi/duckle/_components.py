@@ -885,6 +885,11 @@ COMPONENTS = {
         'summary': 'Read .xlsx via the DuckDB excel extension',
         'params': ['path', 'encoding', 'glob', 'allSheets', 'sheet', 'sheetColumn', 'range', 'hasHeader'],
     },
+    'src.excel-online': {
+        'kind': 'source',
+        'summary': "Read a workbook in OneDrive or SharePoint Online through Microsoft Graph, signed in as an app registration (tenant, client id and secret) with the Files.Read.All application permission. Graph's workbook API takes no app-only token, so the workbook is downloaded and read as src.excel reads one: th...",
+        'params': ['workbook', 'tenantId', 'clientId', 'clientSecret', 'allSheets', 'sheet', 'sheetColumn', 'range', 'hasHeader', 'loginEndpoint', 'graphEndpoint'],
+    },
     'src.filelist': {
         'kind': 'source',
         'summary': 'One row per file in a directory - file (full path) and filename - so a pipeline can iterate a folder. Set a glob pattern and optionally recurse. Pair it with ForEach to process every file.',

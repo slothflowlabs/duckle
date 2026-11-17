@@ -133,7 +133,7 @@
 <span class="eyebrow">Reference</span>
 <h1>Component reference</h1>
 <!-- BEGIN GENERATED summary (website/scripts/build-llms.mjs writes this from the component catalog; edit it there) -->
-<p class="lead">Duckle ships 427 components across six kinds - 135 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 84 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 25 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 413 are available today; the 3 in preview and the 11 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
+<p class="lead">Duckle ships 427 components across six kinds - 135 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 84 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 25 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 414 are available today; the 3 in preview and the 10 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
 
 <div class="grid cols-3">
   <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span><h3>135 sources</h3><p>Files, lakehouse, databases, warehouses, object storage, streaming, SaaS APIs, NoSQL, vector DBs and more, all under <code>src.*</code>.</p></div>
@@ -394,7 +394,7 @@
     <tr><td>SharePoint Server<br><code>src.sharepoint</code></td><td>SharePoint Server on premises (2016 / 2019 / Subscription Edition) over REST, signed in with Windows authentication (NTLM). A list reads as rows, every page followed; a document library file reads by its format (CSV, TSV, Parquet, JSON, Excel)</td></tr>
     <tr><td>Monday.com<br><code>src.monday</code></td><td>Monday.com GraphQL. Rides src.graphql; auth via Bearer token in Authorization header. POST a GraphQL query as <code>body</code>; responsePath /data.&lt;query_name&gt;. Base URL https://api.monday.com/v2</td></tr>
     <tr><td>Google Sheets<br><code>src.gsheets</code></td><td>Read a range of a Google Sheet as rows through the Sheets API: values as they are (numbers, true/false), not as formatted. The first row names the columns. Sign in with a service account key, with the sheet shared with its email, or with an API key for a sheet anyone with the link can view</td></tr>
-    <tr><td>Microsoft Excel Online <span class="chip">Planned</span><br><code>src.excel-online</code></td><td>Reads data from Microsoft Excel Online</td></tr>
+    <tr><td>Microsoft Excel Online<br><code>src.excel-online</code></td><td>Read a workbook in OneDrive or SharePoint Online through Microsoft Graph, signed in as an app registration (tenant, client id and secret) with the Files.Read.All application permission. Graph's workbook API takes no app-only token, so the workbook is downloaded and read as src.excel reads one: the sheets, range and header row it names</td></tr>
   </tbody>
 </table>
 </div>

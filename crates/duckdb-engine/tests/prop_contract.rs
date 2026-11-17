@@ -668,7 +668,8 @@ fn every_available_component_is_one_the_engine_dispatches() {
         "crates/duckdb-engine/src/subflow.rs",
     ];
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    let id_lit = regex::Regex::new(r#""((?:src|snk|xf|ctl|code|qa)\.[a-z0-9_.]+)""#).unwrap();
+    // A hyphen too: src.excel-online is an id the engine names.
+    let id_lit = regex::Regex::new(r#""((?:src|snk|xf|ctl|code|qa)\.[a-z0-9_.-]+)""#).unwrap();
     let mut named: BTreeSet<String> = BTreeSet::new();
     for rel in ENGINE_SOURCES {
         let Ok(src) = std::fs::read_to_string(root.join(rel)) else { continue };

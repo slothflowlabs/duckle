@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 427 components, 413 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 208 connectors (128 sources / 80 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 427 components, 414 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 209 connectors (129 sources / 80 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -117,7 +117,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.email` Email (IMAP): Fetch the N most recent messages from an IMAP mailbox. TLS via rustls (default port 993). Basic auth (user/password). Each message becomes a row {uid, from, to, subject, date, body_text}. OAuth (gmail / o365) is on the roadmap
 - `src.eventhubs` Azure Event Hubs: Read an event hub through its namespace's Kafka endpoint, signed in with the connection string from the Azure portal (Shared access policies, a policy with Listen). Batch-consumes up to Max messages from one partition, or from every partition in turn, like src.kafka, and emits {offset, key, value, timestamp_ms} rows. Needs the Standard tier or higher: Basic has no Kafka endpoint
 - `src.excel` Excel (XLSX): Read .xlsx via the DuckDB excel extension
-- `src.excel-online` Microsoft Excel Online [planned]: Reads data from Microsoft Excel Online
+- `src.excel-online` Microsoft Excel Online: Read a workbook in OneDrive or SharePoint Online through Microsoft Graph, signed in as an app registration (tenant, client id and secret) with the Files.Read.All application permission. Graph's workbook API takes no app-only token, so the workbook is downloaded and read as src.excel reads one: the sheets, range and header row it names
 - `src.filelist` File List: One row per file in a directory - file (full path) and filename - so a pipeline can iterate a folder. Set a glob pattern and optionally recurse. Pair it with ForEach to process every file
 - `src.fixedwidth` Fixed-width: Read positional / fixed-width text files (mainframe / banking exports). Form provides a columns array - {name, start (1-based), width}; engine builds SUBSTR projections. Trailing whitespace stripped by default
 - `src.ftp` FTP: List + download files from an FTP server via the pure-Rust suppaftp client. Glob pattern filter (`*`, `?`); each file becomes one row {filename, size, modified, content_b64}. Use DuckDB `from_base64(content_b64)` downstream for the raw bytes. SFTP is a separate protocol and a separate component

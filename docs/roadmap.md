@@ -6,7 +6,7 @@ reel; this is the full ledger.
 
 The palette currently carries **427 components**, broken down:
 
-- **413 available** - executes on the DuckDB engine today
+- **414 available** - executes on the DuckDB engine today
 - **3 preview** - configurable in the designer (drag, wire, set
   properties); execution is being wired engine-by-engine
 - **11 planned** - reserved in the palette so the roadmap is visible,

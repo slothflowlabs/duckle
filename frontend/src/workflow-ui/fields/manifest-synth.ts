@@ -10470,6 +10470,69 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
             },
         ]);
     }
+    // src.excel-online sits in a saas.* group, which draws the REST form, and
+    // reads none of it. Keys mirror ExcelOnlineSourceSpec's parse in plan/mod.rs.
+    // The Format section is src.excel's: the downloaded workbook is read as one.
+    if (comp.id === 'src.excel-online') {
+        return base(comp, [
+            {
+                label: 'Workbook',
+                fields: [
+                    {
+                        key: 'workbook',
+                        label: 'Workbook link',
+                        kind: 'text',
+                        required: true,
+                        placeholder: 'https://contoso.sharepoint.com/:x:/s/Finance/...',
+                        description: 'The link Share > Copy link gives in Excel, for a workbook in OneDrive or SharePoint Online.',
+                    },
+                ],
+            },
+            {
+                label: 'App registration',
+                fields: [
+                    {
+                        key: 'tenantId',
+                        label: 'Tenant',
+                        kind: 'text',
+                        required: true,
+                        placeholder: 'contoso.onmicrosoft.com',
+                        description: 'The directory (tenant) id, or one of its domains.',
+                    },
+                    { key: 'clientId', label: 'Application (client) id', kind: 'text', required: true },
+                    {
+                        key: 'clientSecret',
+                        label: 'Client secret',
+                        kind: 'text',
+                        required: true,
+                        secret: true,
+                        placeholder: '••••••••',
+                        description: "The secret's value, not its id. The app needs the Files.Read.All application permission for Microsoft Graph, with an admin's consent.",
+                    },
+                ],
+            },
+            ...fileFormatSection({ ...comp, id: 'src.excel' }),
+            {
+                label: 'Advanced',
+                fields: [
+                    {
+                        key: 'loginEndpoint',
+                        label: 'Sign-in endpoint',
+                        kind: 'text',
+                        placeholder: 'https://login.microsoftonline.com',
+                        description: "Leave empty for Microsoft's public cloud. For a national cloud, set both endpoints.",
+                    },
+                    {
+                        key: 'graphEndpoint',
+                        label: 'Graph endpoint',
+                        kind: 'text',
+                        placeholder: 'https://graph.microsoft.com',
+                        description: "Leave empty for Microsoft's public cloud. For a national cloud, set both endpoints.",
+                    },
+                ],
+            },
+        ]);
+    }
     // src.gsheets sits in a saas.* group, which draws the REST form, and reads
     // none of it. Keys mirror GSheetsSourceSpec's parse in plan/mod.rs.
     if (comp.id === 'src.gsheets') {

@@ -84,7 +84,7 @@ duckle.xf.geo.reproject(geomColumn="geom", targetCrs="EPSG:3857")
 duckle.snk.salesforce.bulk(operation="upsert", externalIdField="Ext__c")
 ```
 
-128 sources, 80 sinks and 145 transforms: Postgres, MySQL, Oracle, SQL Server, Snowflake, Databricks, Teradata, SAP OData, Salesforce (including Bulk API 2.0), Kafka, WebSocket, S3, SFTP, IMAP, LanceDB and more.
+129 sources, 80 sinks and 145 transforms: Postgres, MySQL, Oracle, SQL Server, Snowflake, Databricks, Teradata, SAP OData, Salesforce (including Bulk API 2.0), Kafka, WebSocket, S3, SFTP, IMAP, LanceDB and more.
 
 ```python
 duckle.component_ids(contains="salesforce")

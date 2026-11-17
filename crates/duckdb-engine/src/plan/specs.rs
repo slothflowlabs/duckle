@@ -1237,6 +1237,46 @@ pub struct KinesisSourceSpec {
     pub endpoint: String,
 }
 
+/// src.excel-online: an Excel workbook in OneDrive or SharePoint Online, read
+/// through Microsoft Graph as an app registration (client credentials). Graph's
+/// workbook API takes no app-only token, so the file itself is downloaded and
+/// read as src.excel reads one on disk.
+#[derive(Clone)]
+pub struct ExcelOnlineSourceSpec {
+    pub node_id: String,
+    pub tenant_id: String,
+    pub client_id: String,
+    pub client_secret: String,
+    /// The workbook's link, as Share > Copy link gives it.
+    pub workbook: String,
+    /// The props src.excel reads a workbook by (sheet, allSheets, sheetColumn,
+    /// range, hasHeader), applied to the downloaded file.
+    pub read: serde_json::Value,
+    /// The node's declared columns, which src.excel types the read by.
+    pub declared: Option<Vec<duckle_metadata::Column>>,
+    /// Microsoft's sign-in host and Graph's: the public cloud's, unless the node
+    /// names a national cloud's.
+    pub login_endpoint: String,
+    pub graph_endpoint: String,
+}
+
+/// By hand, so a log or an error that prints a plan never prints the secret.
+impl std::fmt::Debug for ExcelOnlineSourceSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExcelOnlineSourceSpec")
+            .field("node_id", &self.node_id)
+            .field("tenant_id", &self.tenant_id)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"***")
+            .field("workbook", &self.workbook)
+            .field("read", &self.read)
+            .field("declared", &self.declared)
+            .field("login_endpoint", &self.login_endpoint)
+            .field("graph_endpoint", &self.graph_endpoint)
+            .finish()
+    }
+}
+
 /// src.webhook: bind 127.0.0.1:port, accept up to `max_requests`
 /// inbound HTTP requests with a global `timeout_ms` deadline, parse
 /// each request body as JSON (or fall back to a {body, method, path,

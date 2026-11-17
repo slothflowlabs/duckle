@@ -7158,6 +7158,92 @@ mod kinesis_source {
     }
 }
 
+/// src.excel-online: what a node needs to reach a workbook, worked out before the
+/// run.
+mod excel_online_source {
+    use super::*;
+
+    fn props(extra: serde_json::Value) -> serde_json::Value {
+        let mut p = serde_json::json!({
+            "tenantId": "contoso.onmicrosoft.com", "clientId": "app-id", "clientSecret": "s3cret",
+            "workbook": "https://contoso.sharepoint.com/:x:/s/Finance/EbWhc?e=4Yk6Pq",
+        });
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            p[k] = v;
+        }
+        p
+    }
+
+    fn spec(props: serde_json::Value) -> Result<crate::plan::ExcelOnlineSourceSpec, crate::EngineError> {
+        let doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                {"id":"x","position":{"x":0,"y":0},
+                 "data":{"label":"X","componentId":"src.excel-online","properties": props}},
+                {"id":"o","position":{"x":0,"y":0},
+                 "data":{"label":"out","componentId":"snk.csv","properties":{"path":"/tmp/o.csv"}}}
+            ],
+            "edges":[{"id":"e","source":"x","target":"o","data":{"connectionType":"main"}}]
+        }))
+        .unwrap();
+        Ok(compile(&doc)?
+            .stages
+            .iter()
+            .find_map(|s| match s.runtime.as_ref() {
+                Some(crate::plan::RuntimeSpec::ExcelOnlineSource(x)) => Some(x.clone()),
+                _ => None,
+            })
+            .expect("an Excel Online read"))
+    }
+
+    #[test]
+    fn what_cannot_sign_in_or_find_the_workbook_is_refused_before_the_run() {
+        for missing in ["tenantId", "clientId", "clientSecret", "workbook"] {
+            let mut p = props(serde_json::json!({}));
+            p.as_object_mut().unwrap().remove(missing);
+            let e = spec(p).unwrap_err().to_string();
+            assert!(e.contains(missing), "{missing}: {e}");
+        }
+    }
+
+    /// Microsoft's public cloud, unless the node names a national cloud's hosts.
+    #[test]
+    fn the_public_cloud_unless_another_is_named() {
+        let public = spec(props(serde_json::json!({}))).unwrap();
+        assert_eq!(public.login_endpoint, "https://login.microsoftonline.com");
+        assert_eq!(public.graph_endpoint, "https://graph.microsoft.com");
+        let us = spec(props(serde_json::json!({
+            "loginEndpoint": "https://login.microsoftonline.us/", "graphEndpoint": " https://graph.microsoft.us/ ",
+        })))
+        .unwrap();
+        assert_eq!(
+            (us.login_endpoint.as_str(), us.graph_endpoint.as_str()),
+            ("https://login.microsoftonline.us", "https://graph.microsoft.us")
+        );
+    }
+
+    /// The downloaded workbook is read by the props src.excel reads one by, and
+    /// by no other.
+    #[test]
+    fn the_workbook_is_read_by_the_props_src_excel_takes() {
+        let x = spec(props(serde_json::json!({
+            "sheet": "Q3", "range": "A1:D20", "hasHeader": false, "allSheets": false, "sheetColumn": true,
+            "path": "C:/elsewhere.xlsx",
+        })))
+        .unwrap();
+        assert_eq!(
+            x.read,
+            serde_json::json!({ "sheet": "Q3", "range": "A1:D20", "hasHeader": false, "allSheets": false, "sheetColumn": true })
+        );
+    }
+
+    #[test]
+    fn the_secret_never_prints() {
+        let x = spec(props(serde_json::json!({}))).unwrap();
+        assert!(!format!("{x:?}").contains("s3cret"));
+        assert!(crate::util::is_secret_prop_key("clientSecret"));
+    }
+}
+
 /// src.gsheets: what a node needs to reach a sheet, worked out before the run.
 #[cfg(test)]
 mod gsheets_source {

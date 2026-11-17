@@ -97,6 +97,7 @@ pub mod xsd;
 pub mod xsd_contract;
 mod connectors;
 mod sharepoint;
+mod excel_online;
 pub use connectors::remote_fingerprint;
 mod run_log;
 mod util;
@@ -2799,6 +2800,7 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::AccessSink(spec)) => self.run_access_sink(&db_path, spec),
                     Some(RuntimeSpec::SharePointSource(spec)) => self.run_sharepoint_source(&db_path, spec),
                     Some(RuntimeSpec::SharePointSink(spec)) => self.run_sharepoint_sink(&db_path, spec),
+                    Some(RuntimeSpec::ExcelOnlineSource(spec)) => self.run_excel_online_source(&db_path, spec),
                     Some(RuntimeSpec::ClickhouseSink(spec)) => {
                         self.run_clickhouse_sink(&db_path, spec)
                     }
