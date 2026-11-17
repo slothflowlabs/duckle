@@ -5077,6 +5077,9 @@ fn build_stage(
             bootstrap_servers: bootstrap,
             topic,
             partition_id: props.get("partitionId").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            // Off unless asked for, so a node saved before it reads the one
+            // partition it always read.
+            all_partitions: props.get("allPartitions").and_then(JsonValue::as_bool).unwrap_or(false),
             // The UI exposes `offset` = latest/earliest, not a numeric
             // startOffset. Map it onto the sentinel run_kafka_source reads:
             // -2 = latest tip (only new messages), -1 = earliest, >=0 = that

@@ -22177,7 +22177,9 @@ fn src_kafka_resumes_where_the_last_successful_run_stopped() {
         }
     };
     // A fresh topic per run, so a previous run's records cannot make this pass.
-    let topic = format!("duckle-resume-{}", std::process::id());
+    // The pid alone is not enough: Windows gives a finished process's id to a new
+    // one, and a broker that outlives the run still holds that topic.
+    let topic = format!("duckle-resume-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
 
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().join("ws");
@@ -22243,6 +22245,107 @@ fn src_kafka_resumes_where_the_last_successful_run_stopped() {
         serde_json::from_str(&std::fs::read_to_string(&state).unwrap()).unwrap();
     assert_eq!(v.get("topic").and_then(|x| x.as_str()), Some(topic.as_str()));
     assert_eq!(v.get("next_offset").and_then(|x| x.as_i64()), Some(6));
+}
+
+/// Reading every partition of a topic: the records of all of them, each with its
+/// partition, and with Resume on, the next run reads only what came after in
+/// each. Turned on for a node that read one partition, it keeps that place.
+/// Env-gated like the tests above (DUCKLE_KAFKA_BROKERS).
+#[test]
+fn src_kafka_reads_every_partition_and_resumes_each() {
+    let engine = engine_or_skip!();
+    let brokers = match std::env::var("DUCKLE_KAFKA_BROKERS").ok() {
+        Some(b) if !b.is_empty() => b,
+        _ => {
+            eprintln!("skipping: set DUCKLE_KAFKA_BROKERS to run Kafka tests");
+            return;
+        }
+    };
+    // Three partitions, made here: on a one-partition topic this would pass
+    // without reading more than one.
+    let topic = format!("duckle-allparts-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+        let client = rskafka::client::ClientBuilder::new(brokers.split(',').map(str::to_string).collect())
+            .build()
+            .await
+            .expect("a broker");
+        client.controller_client().unwrap().create_topic(&topic, 3, 1, 5_000).await.expect("a topic");
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", ws.to_string_lossy().to_string());
+
+    // The same rows into each partition, one sink per partition.
+    let produce = |csv_text: &str, name: &str| {
+        let csv = write_file(tmp.path(), name, csv_text);
+        let sink = |id: &str, p: i64| {
+            node(id, "snk.kafka", json!({ "brokers": &brokers, "topic": &topic, "partitionId": p }))
+        };
+        let r = engine.execute_pipeline(&doc(
+            json!([
+                node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                sink("k0", 0),
+                sink("k1", 1),
+                sink("k2", 2),
+            ]),
+            json!([main_edge("e0", "s", "k0"), main_edge("e1", "s", "k1"), main_edge("e2", "s", "k2")]),
+        ));
+        assert_eq!(r.status, "ok", "produce failed: {:?}", r.error);
+    };
+    // What one read took, as (partition, name) pairs, sorted. A one-partition
+    // read has no partition column; its records read as partition -1. Each value
+    // is the produced row as JSON, and its name says which row it was.
+    let consume = |out: &str, every: bool| -> Vec<(i64, String)> {
+        let which = if every { json!({ "allPartitions": true }) } else { json!({ "partitionId": 0 }) };
+        let mut props = json!({
+            "brokers": &brokers, "topic": &topic, "startOffset": -1, "maxRecords": 100, "trackOffset": true,
+        });
+        props.as_object_mut().unwrap().extend(which.as_object().unwrap().clone());
+        let r = engine.execute_pipeline_named(
+            &doc(
+                json!([node("k", "src.kafka", props), node("o", "snk.jsonl", json!({ "path": out }))]),
+                json!([main_edge("e", "k", "o")]),
+            ),
+            "all_partitions_demo",
+        );
+        assert_eq!(r.status, "ok", "consume failed: {:?}", r.error);
+        let mut seen: Vec<(i64, String)> = std::fs::read_to_string(out)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| {
+                let row: serde_json::Value = serde_json::from_str(line).unwrap();
+                let value: serde_json::Value = serde_json::from_str(row["value"].as_str().unwrap()).unwrap();
+                (row["partition"].as_i64().unwrap_or(-1), value["name"].as_str().unwrap().to_string())
+            })
+            .collect();
+        seen.sort();
+        seen
+    };
+    let pairs = |want: &[(i64, &str)]| -> Vec<(i64, String)> { want.iter().map(|(p, v)| (*p, v.to_string())).collect() };
+
+    produce("id,name\n1,a\n2,b\n", "first.csv");
+    assert_eq!(consume(&out_path(tmp.path(), "one.jsonl"), false), pairs(&[(-1, "a"), (-1, "b")]), "partition 0 alone");
+    // Turned on for a node that already read partition 0: that partition keeps
+    // its place, and the other two are read from the start.
+    assert_eq!(
+        consume(&out_path(tmp.path(), "all.jsonl"), true),
+        pairs(&[(1, "a"), (1, "b"), (2, "a"), (2, "b")]),
+        "the two other partitions, and partition 0 not again"
+    );
+
+    produce("id,name\n3,c\n", "second.csv");
+    assert_eq!(
+        consume(&out_path(tmp.path(), "next.jsonl"), true),
+        pairs(&[(0, "c"), (1, "c"), (2, "c")]),
+        "only what came after, in each partition"
+    );
+    let state: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(ws.join("state").join("all_partitions_demo").join("k.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(state["partitions"], json!({ "0": 3, "1": 3, "2": 3 }), "where each partition resumes");
 }
 
 /// #253 follow-up, reported after the first implementation shipped: a run that

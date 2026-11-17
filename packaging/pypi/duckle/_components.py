@@ -877,8 +877,8 @@ COMPONENTS = {
     },
     'src.eventhubs': {
         'kind': 'source',
-        'summary': "Read an event hub through its namespace's Kafka endpoint, signed in with the connection string from the Azure portal (Shared access policies, a policy with Listen). Batch-consumes up to Max messages from one partition, like src.kafka, and emits {offset, key, value, timestamp_ms} rows. Needs the S...",
-        'params': ['connectionString', 'eventHub', 'partitionId', 'offset', 'trackOffset', 'maxRecords'],
+        'summary': "Read an event hub through its namespace's Kafka endpoint, signed in with the connection string from the Azure portal (Shared access policies, a policy with Listen). Batch-consumes up to Max messages from one partition, or from every partition in turn, like src.kafka, and emits {offset, key, value...",
+        'params': ['connectionString', 'eventHub', 'allPartitions', 'partitionId', 'offset', 'trackOffset', 'maxRecords'],
     },
     'src.excel': {
         'kind': 'source',
@@ -997,8 +997,8 @@ COMPONENTS = {
     },
     'src.kafka': {
         'kind': 'source',
-        'summary': 'Batch-consume up to maxRecords messages from a single partition via the pure-Rust `rskafka` driver. Emits {offset, key, value, timestamp_ms} rows. startOffset negative = read from earliest available; positive = read from that offset. Batch ETL semantics - continuous streaming is on the roadmap.',
-        'params': ['brokers', 'topic', 'offset', 'trackOffset', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'format', 'schemaRegistryUrl', 'partitionId', 'maxRecords'],
+        'summary': 'Batch-consume up to maxRecords messages from one partition, or from every partition of the topic in turn (allPartitions, each row then carries its partition), via the pure-Rust `rskafka` driver. Emits {offset, key, value, timestamp_ms} rows. startOffset negative = read from earliest available; po...',
+        'params': ['brokers', 'topic', 'offset', 'trackOffset', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'format', 'schemaRegistryUrl', 'allPartitions', 'partitionId', 'maxRecords'],
     },
     'src.kinesis': {
         'kind': 'source',
@@ -1178,8 +1178,8 @@ COMPONENTS = {
     },
     'src.redpanda': {
         'kind': 'source',
-        'summary': 'Same wire protocol as Kafka - rides the rskafka driver. Use src.kafka semantics: batch-consume up to maxRecords from a single partition.',
-        'params': ['brokers', 'topic', 'offset', 'trackOffset', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'format', 'schemaRegistryUrl', 'partitionId', 'maxRecords'],
+        'summary': 'Same wire protocol as Kafka - rides the rskafka driver. Use src.kafka semantics: batch-consume up to maxRecords from one partition, or from every partition in turn.',
+        'params': ['brokers', 'topic', 'offset', 'trackOffset', 'security', 'saslMechanism', 'saslUsername', 'saslPassword', 'format', 'schemaRegistryUrl', 'allPartitions', 'partitionId', 'maxRecords'],
     },
     'src.redshift': {
         'kind': 'source',

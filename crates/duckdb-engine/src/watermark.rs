@@ -9,6 +9,7 @@
 //! | `incremental` | `xf.incremental`       | `{ value, type }`                        |
 //! | `snapshot`    | `src.ducklake.changes` | `{ snapshot_id }`                        |
 //! | `kafka`       | `src.kafka`            | `{ topic, partition, next_offset }`      |
+//! |               | (every partition)      | `{ topic, partitions }`                  |
 //! | `spool`       | `src.spool`            | `{ path, next_offset }`                  |
 //! | `tumble`      | `xf.tumble`            | `{ buffer, watermark, emitted_through }` |
 //! | `pg_lsn`      | `src.postgres.cdc`     | `{ slot, lsn }`                          |
@@ -54,7 +55,7 @@ pub struct WatermarkEntry {
 pub fn kind_of(v: &Value) -> &'static str {
     if v.get("buffer").is_some() && v.get("watermark").is_some() {
         "tumble"
-    } else if v.get("next_offset").is_some() && v.get("topic").is_some() {
+    } else if v.get("topic").is_some() && (v.get("next_offset").is_some() || v.get("partitions").is_some()) {
         "kafka"
     } else if v.get("next_offset").is_some() {
         "spool"
@@ -123,6 +124,16 @@ pub fn list(workspace: &Path, pipeline: &str) -> Vec<WatermarkEntry> {
         let value = match kind {
             "snapshot" => as_str(v.get("snapshot_id")),
             "incremental" => as_str(v.get("value")),
+            // A node reading every partition: each one's point, in turn.
+            "kafka" if v.get("partitions").is_some() => {
+                let points = v.get("partitions").and_then(Value::as_object);
+                let each: Vec<String> = points
+                    .into_iter()
+                    .flatten()
+                    .map(|(p, o)| format!("[{}] @ {}", p, as_str(Some(o))))
+                    .collect();
+                format!("{}{}", as_str(v.get("topic")), each.join(", "))
+            }
             "kafka" => format!(
                 "{}[{}] @ {}",
                 as_str(v.get("topic")),
@@ -638,6 +649,19 @@ mod shape_tests {
         write(d.path(), "p", "kaf", r#"{"topic":"orders","partition":0,"next_offset":991}"#);
         assert!(set_incremental(d.path(), "p", "kaf", "5", None).is_err());
         assert!(set_snapshot(d.path(), "p", "kaf", 5).is_err());
+    }
+
+    /// A node reading every partition keeps a point per partition. That is Kafka
+    /// state as much as the one-partition shape: listed as it, showing each
+    /// partition's point, and never hand-set.
+    #[test]
+    fn a_resume_point_for_every_partition_is_kafka_state() {
+        let d = ws();
+        write(d.path(), "p", "kaf", r#"{"topic":"orders","partitions":{"0":991,"1":17}}"#);
+        let got = list(d.path(), "p");
+        assert_eq!((got[0].kind.as_str(), got[0].editable), ("kafka", false));
+        assert_eq!(got[0].value, "orders[0] @ 991, [1] @ 17");
+        assert!(set_incremental(d.path(), "p", "kaf", "5", None).is_err());
     }
 
     /// Same kind is a normal edit, and a node with no state yet takes any -

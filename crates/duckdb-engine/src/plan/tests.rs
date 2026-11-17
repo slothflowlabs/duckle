@@ -7007,6 +7007,15 @@ mod eventhubs_source {
         assert_eq!((k.partition_id, k.start_offset, k.max_records), (3, -2, 50));
     }
 
+    /// Reading every partition is a switch, off unless turned on, so a node saved
+    /// before it reads the one partition it always read.
+    #[test]
+    fn every_partition_is_read_only_when_asked() {
+        assert!(!spec(serde_json::json!({ "connectionString": HUB_KEY })).unwrap().all_partitions);
+        let all = spec(serde_json::json!({ "connectionString": HUB_KEY, "allPartitions": true })).unwrap();
+        assert!(all.all_partitions);
+    }
+
     #[test]
     fn a_namespace_key_reads_the_hub_the_node_names() {
         let k = spec(serde_json::json!({ "connectionString": NAMESPACE_KEY, "eventHub": "clicks" })).unwrap();

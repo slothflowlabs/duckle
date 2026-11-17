@@ -10371,7 +10371,7 @@
       "label": "Apache Kafka",
       "kind": "source",
       "availability": "available",
-      "summary": "Batch-consume up to maxRecords messages from a single partition via the pure-Rust `rskafka` driver. Emits {offset, key, value, timestamp_ms} rows. startOffset negative = read from earliest available; positive = read from that offset. Batch ETL semantics - continuous streaming is on the roadmap.",
+      "summary": "Batch-consume up to maxRecords messages from one partition, or from every partition of the topic in turn (allPartitions, each row then carries its partition), via the pure-Rust `rskafka` driver. Emits {offset, key, value, timestamp_ms} rows. startOffset negative = read from earliest available; positive = read from that offset. Batch ETL semantics - continuous streaming is on the roadmap.",
       "category": "Sources",
       "group": "Streaming",
       "ports": {
@@ -10388,7 +10388,7 @@
         "id": "src.kafka",
         "kind": "source",
         "label": "Apache Kafka",
-        "description": "Batch-consume up to maxRecords messages from a single partition via the pure-Rust `rskafka` driver. Emits {offset, key, value, timestamp_ms} rows. startOffset negative = read from earliest available; positive = read from that offset. Batch ETL semantics - continuous streaming is on the roadmap.",
+        "description": "Batch-consume up to maxRecords messages from one partition, or from every partition of the topic in turn (allPartitions, each row then carries its partition), via the pure-Rust `rskafka` driver. Emits {offset, key, value, timestamp_ms} rows. startOffset negative = read from earliest available; positive = read from that offset. Batch ETL semantics - continuous streaming is on the roadmap.",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -10532,11 +10532,24 @@
                 ]
               },
               {
+                "key": "allPartitions",
+                "label": "Read every partition",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Read all the partitions the topic has, in turn, each record with its partition. Max messages covers them together, and Resume keeps each one's place."
+              },
+              {
                 "key": "partitionId",
                 "label": "Partition",
                 "kind": "integer",
                 "defaultValue": 0,
-                "description": "Which partition to read. This connector consumes one partition per node; point several nodes at a multi-partition topic and union them."
+                "visibleWhen": [
+                  {
+                    "key": "allPartitions",
+                    "equals": "false"
+                  }
+                ],
+                "description": "Which partition to read, when not reading every one."
               },
               {
                 "key": "maxRecords",
@@ -10745,7 +10758,7 @@
       "label": "Redpanda",
       "kind": "source",
       "availability": "available",
-      "summary": "Same wire protocol as Kafka - rides the rskafka driver. Use src.kafka semantics: batch-consume up to maxRecords from a single partition.",
+      "summary": "Same wire protocol as Kafka - rides the rskafka driver. Use src.kafka semantics: batch-consume up to maxRecords from one partition, or from every partition in turn.",
       "category": "Sources",
       "group": "Streaming",
       "ports": {
@@ -10762,7 +10775,7 @@
         "id": "src.redpanda",
         "kind": "source",
         "label": "Redpanda",
-        "description": "Same wire protocol as Kafka - rides the rskafka driver. Use src.kafka semantics: batch-consume up to maxRecords from a single partition.",
+        "description": "Same wire protocol as Kafka - rides the rskafka driver. Use src.kafka semantics: batch-consume up to maxRecords from one partition, or from every partition in turn.",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -10906,11 +10919,24 @@
                 ]
               },
               {
+                "key": "allPartitions",
+                "label": "Read every partition",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Read all the partitions the topic has, in turn, each record with its partition. Max messages covers them together, and Resume keeps each one's place."
+              },
+              {
                 "key": "partitionId",
                 "label": "Partition",
                 "kind": "integer",
                 "defaultValue": 0,
-                "description": "Which partition to read. This connector consumes one partition per node; point several nodes at a multi-partition topic and union them."
+                "visibleWhen": [
+                  {
+                    "key": "allPartitions",
+                    "equals": "false"
+                  }
+                ],
+                "description": "Which partition to read, when not reading every one."
               },
               {
                 "key": "maxRecords",
@@ -11189,7 +11215,7 @@
       "label": "Azure Event Hubs",
       "kind": "source",
       "availability": "available",
-      "summary": "Read an event hub through its namespace's Kafka endpoint, signed in with the connection string from the Azure portal (Shared access policies, a policy with Listen). Batch-consumes up to Max messages from one partition, like src.kafka, and emits {offset, key, value, timestamp_ms} rows. Needs the Standard tier or higher: Basic has no Kafka endpoint.",
+      "summary": "Read an event hub through its namespace's Kafka endpoint, signed in with the connection string from the Azure portal (Shared access policies, a policy with Listen). Batch-consumes up to Max messages from one partition, or from every partition in turn, like src.kafka, and emits {offset, key, value, timestamp_ms} rows. Needs the Standard tier or higher: Basic has no Kafka endpoint.",
       "category": "Sources",
       "group": "Streaming",
       "ports": {
@@ -11206,7 +11232,7 @@
         "id": "src.eventhubs",
         "kind": "source",
         "label": "Azure Event Hubs",
-        "description": "Read an event hub through its namespace's Kafka endpoint, signed in with the connection string from the Azure portal (Shared access policies, a policy with Listen). Batch-consumes up to Max messages from one partition, like src.kafka, and emits {offset, key, value, timestamp_ms} rows. Needs the Standard tier or higher: Basic has no Kafka endpoint.",
+        "description": "Read an event hub through its namespace's Kafka endpoint, signed in with the connection string from the Azure portal (Shared access policies, a policy with Listen). Batch-consumes up to Max messages from one partition, or from every partition in turn, like src.kafka, and emits {offset, key, value, timestamp_ms} rows. Needs the Standard tier or higher: Basic has no Kafka endpoint.",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -11229,11 +11255,24 @@
                 "description": "The event hub to read. Leave it empty when the connection string ends in EntityPath=..., which names it already; a string issued for one hub cannot read another."
               },
               {
+                "key": "allPartitions",
+                "label": "Read every partition",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Read all the partitions the event hub has, in turn, each record with its partition. Max messages covers them together, and Resume keeps each one's place."
+              },
+              {
                 "key": "partitionId",
                 "label": "Partition",
                 "kind": "integer",
                 "defaultValue": 0,
-                "description": "Which partition to read. One partition per node; point several nodes at a hub with several partitions and union them."
+                "visibleWhen": [
+                  {
+                    "key": "allPartitions",
+                    "equals": "false"
+                  }
+                ],
+                "description": "Which partition to read, when not reading every one."
               },
               {
                 "key": "offset",

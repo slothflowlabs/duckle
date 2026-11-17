@@ -15061,9 +15061,12 @@ impl DuckdbEngine {
             None
         };
         let prior = state_path.as_deref().and_then(crate::read_state_snapshot);
+        // Where each partition resumes. Read whichever shape the last run
+        // saved, so turning "Read every partition" on or off keeps the place.
         let resume = state_path
             .as_deref()
-            .and_then(|p| read_kafka_offset_state(p, &spec.topic, spec.partition_id));
+            .map(|p| read_kafka_resume_points(p, &spec.topic))
+            .unwrap_or_default();
         let bootstrap: Vec<String> = spec
             .bootstrap_servers
             .split(',')
@@ -15079,16 +15082,26 @@ impl DuckdbEngine {
             .enable_all()
             .build()
             .map_err(|e| EngineError::Query(format!("kafka: tokio rt: {}", e)))?;
-        let rows: Result<(Vec<JsonValue>, i64), String> = rt.block_on(async {
+        let rows: Result<(Vec<JsonValue>, std::collections::BTreeMap<i32, i64>), String> = rt.block_on(async {
             use rskafka::client::partition::UnknownTopicHandling;
             let client = kafka_client_builder(bootstrap, use_tls, sasl.as_ref())?
                 .build()
                 .await
                 .map_err(|e| format!("connect: {}", e))?;
-            let pc = client
-                .partition_client(&spec.topic, spec.partition_id, UnknownTopicHandling::Retry)
-                .await
-                .map_err(|e| format!("partition client: {}", e))?;
+            let partitions: Vec<i32> = if spec.all_partitions {
+                let topics = client.list_topics().await.map_err(|e| format!("list topics: {}", e))?;
+                let topic = topics
+                    .into_iter()
+                    .find(|t| t.name == spec.topic)
+                    .ok_or_else(|| format!("topic {} not found", spec.topic))?;
+                topic.partitions.into_iter().collect()
+            } else {
+                vec![spec.partition_id]
+            };
+            // Where each partition starts, worked out before any is read, so one
+            // the record budget does not reach still keeps where it would have
+            // started, rather than a `latest` start skipping ahead next run.
+            //
             // start_offset sentinels: -2 = latest tip (only messages produced
             // after this read starts), any other negative = earliest available,
             // >= 0 = that literal offset.
@@ -15096,84 +15109,103 @@ impl DuckdbEngine {
             // the whole point: `latest` would otherwise jump to the current tip
             // on every run and skip everything produced in between, while
             // `earliest` would re-read the entire backlog every time.
-            let mut next_offset = if let Some(o) = resume {
-                o
-            } else if spec.start_offset == -2 {
-                pc.get_offset(rskafka::client::partition::OffsetAt::Latest)
+            let mut clients = Vec::with_capacity(partitions.len());
+            let mut next: std::collections::BTreeMap<i32, i64> = Default::default();
+            for p in partitions {
+                let pc = client
+                    .partition_client(&spec.topic, p, UnknownTopicHandling::Retry)
                     .await
-                    .map_err(|e| format!("latest offset: {}", e))?
-            } else if spec.start_offset < 0 {
-                pc.get_offset(rskafka::client::partition::OffsetAt::Earliest)
-                    .await
-                    .map_err(|e| format!("earliest offset: {}", e))?
-            } else {
-                spec.start_offset
-            };
+                    .map_err(|e| format!("partition client: {}", e))?;
+                let start = if let Some(o) = resume.get(&p) {
+                    *o
+                } else if spec.start_offset == -2 {
+                    pc.get_offset(rskafka::client::partition::OffsetAt::Latest)
+                        .await
+                        .map_err(|e| format!("latest offset: {}", e))?
+                } else if spec.start_offset < 0 {
+                    pc.get_offset(rskafka::client::partition::OffsetAt::Earliest)
+                        .await
+                        .map_err(|e| format!("earliest offset: {}", e))?
+                } else {
+                    spec.start_offset
+                };
+                next.insert(p, start);
+                clients.push((p, pc));
+            }
             let mut schema_cache: std::collections::HashMap<u32, apache_avro::Schema> =
                 std::collections::HashMap::new();
             let http = crate::tls::http_agent();
             let mut out: Vec<JsonValue> = Vec::new();
-            while (out.len() as u64) < spec.max_records {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err("cancelled".into());
-                }
-                let (records, _hw) = pc
-                    .fetch_records(next_offset, 1..1_000_000, 1_000)
-                    .await
-                    .map_err(|e| format!("fetch: {}", e))?;
-                if records.is_empty() {
-                    break;
-                }
-                for r in records {
-                    let mut obj = serde_json::Map::new();
-                    obj.insert("offset".into(), JsonValue::from(r.offset));
-                    obj.insert(
-                        "timestamp_ms".into(),
-                        JsonValue::from(r.record.timestamp.timestamp_millis()),
-                    );
-                    // A Confluent-framed field is decoded against the schema
-                    // its id names; anything else stays text. Schemas are
-                    // fetched once per id and kept for the rest of the read.
-                    let mut decode = |b: &[u8]| -> Result<JsonValue, String> {
-                        if let Some(reg) = registry.as_deref() {
-                            if let Some((id, payload)) = confluent_envelope(b) {
-                                if !schema_cache.contains_key(&id) {
-                                    let sc = fetch_registry_schema(&http, reg, id)?;
-                                    schema_cache.insert(id, sc);
-                                }
-                                return avro_datum_to_json(&schema_cache[&id], payload);
-                            }
-                        }
-                        Ok(JsonValue::String(String::from_utf8_lossy(b).to_string()))
-                    };
-                    obj.insert(
-                        "key".into(),
-                        match r.record.key.as_ref() {
-                            Some(b) => decode(b)?,
-                            None => JsonValue::Null,
-                        },
-                    );
-                    obj.insert(
-                        "value".into(),
-                        match r.record.value.as_ref() {
-                            Some(b) => decode(b)?,
-                            None => JsonValue::Null,
-                        },
-                    );
-                    out.push(JsonValue::Object(obj));
-                    next_offset = r.offset + 1;
-                    if out.len() as u64 >= spec.max_records {
+            for (partition, pc) in &clients {
+                let mut next_offset = next[partition];
+                while (out.len() as u64) < spec.max_records {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err("cancelled".into());
+                    }
+                    let (records, _hw) = pc
+                        .fetch_records(next_offset, 1..1_000_000, 1_000)
+                        .await
+                        .map_err(|e| format!("fetch: {}", e))?;
+                    if records.is_empty() {
                         break;
                     }
+                    for r in records {
+                        let mut obj = serde_json::Map::new();
+                        obj.insert("offset".into(), JsonValue::from(r.offset));
+                        // Which partition it came from, when there is more than one.
+                        if spec.all_partitions {
+                            obj.insert("partition".into(), JsonValue::from(*partition));
+                        }
+                        obj.insert(
+                            "timestamp_ms".into(),
+                            JsonValue::from(r.record.timestamp.timestamp_millis()),
+                        );
+                        // A Confluent-framed field is decoded against the schema
+                        // its id names; anything else stays text. Schemas are
+                        // fetched once per id and kept for the rest of the read.
+                        let mut decode = |b: &[u8]| -> Result<JsonValue, String> {
+                            if let Some(reg) = registry.as_deref() {
+                                if let Some((id, payload)) = confluent_envelope(b) {
+                                    if !schema_cache.contains_key(&id) {
+                                        let sc = fetch_registry_schema(&http, reg, id)?;
+                                        schema_cache.insert(id, sc);
+                                    }
+                                    return avro_datum_to_json(&schema_cache[&id], payload);
+                                }
+                            }
+                            Ok(JsonValue::String(String::from_utf8_lossy(b).to_string()))
+                        };
+                        obj.insert(
+                            "key".into(),
+                            match r.record.key.as_ref() {
+                                Some(b) => decode(b)?,
+                                None => JsonValue::Null,
+                            },
+                        );
+                        obj.insert(
+                            "value".into(),
+                            match r.record.value.as_ref() {
+                                Some(b) => decode(b)?,
+                                None => JsonValue::Null,
+                            },
+                        );
+                        out.push(JsonValue::Object(obj));
+                        next_offset = r.offset + 1;
+                        if out.len() as u64 >= spec.max_records {
+                            break;
+                        }
+                    }
                 }
+                next.insert(*partition, next_offset);
             }
-            Ok((out, next_offset))
+            Ok((out, next))
         });
-        let (rows, next_offset) = match rows {
+        let (rows, next) = match rows {
             Ok(r) => r,
             Err(e) if e == "cancelled" => return Err(EngineError::Cancelled),
             Err(e) => return Err(EngineError::Query(format!("kafka source: {}", e))),
         };
+        let next_offset = next.get(&spec.partition_id).copied().unwrap_or(0);
         let count = rows.len();
         materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &rows)?;
         // Queue the resume point rather than writing it: it lands only if the
@@ -15186,24 +15218,32 @@ impl DuckdbEngine {
         // one resumes from it, instead of jumping to a new tip and skipping
         // whatever arrived in between.
         if let Some(path) = state_path {
-            pending.push(crate::PendingWrite::state(
-                path,
+            // Reading every partition keeps each one's point, by partition.
+            let state = if spec.all_partitions {
+                serde_json::json!({
+                    "topic": spec.topic,
+                    "partitions": next.iter().map(|(p, o)| (p.to_string(), JsonValue::from(*o))).collect::<serde_json::Map<_, _>>(),
+                })
+            } else {
                 serde_json::json!({
                     "topic": spec.topic,
                     "partition": spec.partition_id,
                     "next_offset": next_offset,
-                }),
-                prior,
-            ));
+                })
+            };
+            pending.push(crate::PendingWrite::state(path, state, prior));
         }
         Ok(format!(
             "kafka: materialized {} record(s) into {}{}",
             count,
             spec.node_id,
-            if spec.track_offset {
-                format!(" (resumes at offset {} if this run succeeds)", next_offset)
-            } else {
-                String::new()
+            match (spec.track_offset, spec.all_partitions) {
+                (false, _) => String::new(),
+                (true, true) => format!(
+                    " (each of its {} partitions resumes where it stopped, if this run succeeds)",
+                    next.len()
+                ),
+                (true, false) => format!(" (resumes at offset {} if this run succeeds)", next_offset),
             }
         ))
     }
@@ -22193,18 +22233,24 @@ fn read_spool_offset_state(path: &std::path::Path) -> Option<u64> {
 /// number means something else entirely - so a mismatch reads as "no saved
 /// offset" and the node falls back to its configured start rather than
 /// resuming at a position from another stream.
-fn read_kafka_offset_state(path: &std::path::Path, topic: &str, partition: i32) -> Option<i64> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let v: JsonValue = serde_json::from_str(&text).ok()?;
-    if v.get("topic").and_then(|x| x.as_str()) != Some(topic) {
-        return None;
+/// Where each partition of `topic` resumes, from a saved point of either shape:
+/// one partition's {"topic", "partition", "next_offset"}, or every partition's
+/// {"topic", "partitions": {"0": next_offset, ...}}. Another topic's points read
+/// as none, and so does a negative offset: it is not a position, and handed to
+/// the broker it would read as a sentinel for the wrong end.
+fn read_kafka_resume_points(path: &std::path::Path, topic: &str) -> std::collections::BTreeMap<i32, i64> {
+    let state = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<JsonValue>(&t).ok());
+    let Some(state) = state.filter(|v| v.get("topic").and_then(|x| x.as_str()) == Some(topic)) else {
+        return Default::default();
+    };
+    let point = |partition: Option<i64>, offset: &JsonValue| {
+        Some((i32::try_from(partition?).ok()?, offset.as_i64().filter(|o| *o >= 0)?))
+    };
+    match (state.get("partitions").and_then(JsonValue::as_object), state.get("next_offset")) {
+        (Some(points), _) => points.iter().filter_map(|(p, o)| point(p.parse().ok(), o)).collect(),
+        (None, Some(offset)) => point(state.get("partition").and_then(JsonValue::as_i64), offset).into_iter().collect(),
+        (None, None) => Default::default(),
     }
-    if v.get("partition").and_then(|x| x.as_i64()) != Some(partition as i64) {
-        return None;
-    }
-    v.get("next_offset")
-        .and_then(|x| x.as_i64())
-        .filter(|o| *o >= 0)
 }
 
 /// Read a saved DuckLake snapshot id from CDC state. Missing / unreadable
@@ -26439,6 +26485,9 @@ mod incremental_state_tests {
         // ignored rather than resumed from - reading another stream's position
         // would silently skip or re-read an arbitrary amount of data.
         let tmp = tempfile::tempdir().unwrap();
+        let read = |path: &std::path::Path, topic: &str, partition: i32| {
+            super::read_kafka_resume_points(path, topic).get(&partition).copied()
+        };
         let path = tmp.path().join("kafka.json");
         std::fs::write(
             &path,
@@ -26447,17 +26496,17 @@ mod incremental_state_tests {
         .unwrap();
 
         assert_eq!(
-            super::read_kafka_offset_state(&path, "orders", 0),
+            read(&path, "orders", 0),
             Some(4200),
             "the stream it was written for must resume"
         );
         assert_eq!(
-            super::read_kafka_offset_state(&path, "shipments", 0),
+            read(&path, "shipments", 0),
             None,
             "a different topic must not resume from this offset"
         );
         assert_eq!(
-            super::read_kafka_offset_state(&path, "orders", 3),
+            read(&path, "orders", 3),
             None,
             "a different partition must not resume from this offset"
         );
@@ -26465,12 +26514,12 @@ mod incremental_state_tests {
         // Nothing saved yet, and anything unreadable, both mean "start where
         // the node is configured to start" rather than failing the run.
         assert_eq!(
-            super::read_kafka_offset_state(&tmp.path().join("absent.json"), "orders", 0),
+            read(&tmp.path().join("absent.json"), "orders", 0),
             None
         );
         let bad = tmp.path().join("bad.json");
         std::fs::write(&bad, "not json at all").unwrap();
-        assert_eq!(super::read_kafka_offset_state(&bad, "orders", 0), None);
+        assert_eq!(read(&bad, "orders", 0), None);
 
         // A negative offset is not a position; treat it as absent rather than
         // handing it to the broker as a sentinel and reading the wrong end.
@@ -26480,7 +26529,7 @@ mod incremental_state_tests {
             r#"{"topic":"orders","partition":0,"next_offset":-1}"#,
         )
         .unwrap();
-        assert_eq!(super::read_kafka_offset_state(&neg, "orders", 0), None);
+        assert_eq!(read(&neg, "orders", 0), None);
 
         // Offset zero IS a valid position - the start of a partition - and must
         // not be confused with "nothing saved".
@@ -26490,7 +26539,31 @@ mod incremental_state_tests {
             r#"{"topic":"orders","partition":0,"next_offset":0}"#,
         )
         .unwrap();
-        assert_eq!(super::read_kafka_offset_state(&zero, "orders", 0), Some(0));
+        assert_eq!(read(&zero, "orders", 0), Some(0));
+    }
+
+    /// A node reading every partition keeps a point per partition, and a point of
+    /// either shape is read, so turning "Read every partition" on keeps the place
+    /// the one partition reached instead of re-reading it or skipping ahead.
+    #[test]
+    fn a_resume_point_of_either_shape_gives_each_partition_its_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let every = tmp.path().join("every.json");
+        std::fs::write(&every, r#"{"topic":"orders","partitions":{"0":5,"2":7,"1":-1}}"#).unwrap();
+        assert_eq!(
+            super::read_kafka_resume_points(&every, "orders"),
+            std::collections::BTreeMap::from([(0, 5), (2, 7)]),
+            "each partition's own point, and a negative one is no point"
+        );
+        assert!(super::read_kafka_resume_points(&every, "shipments").is_empty(), "another topic's points");
+
+        let one = tmp.path().join("one.json");
+        std::fs::write(&one, r#"{"topic":"orders","partition":3,"next_offset":4200}"#).unwrap();
+        assert_eq!(
+            super::read_kafka_resume_points(&one, "orders"),
+            std::collections::BTreeMap::from([(3, 4200)]),
+            "the place one partition reached carries over"
+        );
     }
 
     use super::{child_run_name, incremental_state_path, inherited_incremental_state};

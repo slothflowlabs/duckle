@@ -452,6 +452,41 @@ jobs:
           DUCKLE_ICEBERG_S3_SECRET: password
         run: cargo test -p duckle-duckdb-engine --test iceberg_rest
 
+  # Live streaming tests: the Kafka sources and sink against a Redpanda broker,
+  # the Kafka protocol Event Hubs speaks too. Started with docker run, because a
+  # service container cannot be given Redpanda's start command. One test thread:
+  # the resume tests each point DUCKLE_WORKSPACE at a folder of their own.
+  streaming-integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install DuckDB CLI
+        run: |
+          set -e
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
+          mkdir -p "$RUNNER_TEMP/duckdb"
+          tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
+          echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
+      - name: Start a Redpanda broker
+        run: |
+          set -e
+          for i in 1 2 3; do
+            docker pull redpandadata/redpanda:v26.2.7 && break
+            echo "docker pull attempt $i failed; retrying in 5s"; sleep 5
+          done
+          docker run -d --name redpanda -p 19092:19092 redpandadata/redpanda:v26.2.7 \
+            redpanda start --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092 \
+            --advertise-kafka-addr internal://localhost:9092,external://localhost:19092 \
+            --smp 1 --memory 1G --overprovisioned --mode dev-container
+          for i in $(seq 1 30); do docker exec redpanda rpk cluster info > /dev/null 2>&1 && break; sleep 2; done
+          docker exec redpanda rpk cluster info
+      - name: Run Kafka tests
+        env:
+          DUCKLE_KAFKA_BROKERS: localhost:19092
+        run: cargo test -p duckle-duckdb-engine --test execution -- kafka --test-threads 1
+
   # Live MySQL integration tests (also covers MariaDB, same wire).
   # SharePoint Server has no container, so tests/sharepoint.rs runs against
   # tests/sharepoint_mock.py: SharePoint's REST shapes behind a real NTLM

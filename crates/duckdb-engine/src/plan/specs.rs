@@ -615,6 +615,10 @@ pub struct KafkaSourceSpec {
     pub bootstrap_servers: String,
     pub topic: String,
     pub partition_id: i32,
+    /// Read every partition the topic has, in turn, rather than `partition_id`
+    /// alone. Each record then carries its partition, `max_records` covers
+    /// them together, and the resume point is kept per partition.
+    pub all_partitions: bool,
     pub start_offset: i64,
     pub max_records: u64,
     /// Remember where this node got to, and resume there next run.

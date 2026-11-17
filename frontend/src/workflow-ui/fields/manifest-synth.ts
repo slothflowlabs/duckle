@@ -4981,6 +4981,25 @@ const kafkaStartFields = (): Field[] => [
     },
 ];
 
+// Which partitions a Kafka-protocol read takes: one, or every one there is.
+const kafkaPartitionFields = (of: string): Field[] => [
+    {
+        key: 'allPartitions',
+        label: 'Read every partition',
+        kind: 'bool',
+        defaultValue: false,
+        description: `Read all the partitions the ${of} has, in turn, each record with its partition. Max messages covers them together, and Resume keeps each one's place.`,
+    },
+    {
+        key: 'partitionId',
+        label: 'Partition',
+        kind: 'integer',
+        defaultValue: 0,
+        visibleWhen: [{ key: 'allPartitions', equals: 'false' }],
+        description: 'Which partition to read, when not reading every one.',
+    },
+];
+
 function synthStreamingSource(comp: ComponentDef): ComponentManifest {
     // Event Hubs speaks Kafka on its namespace's port 9093 and signs in with the
     // connection string itself, so the broker and security blocks below are one
@@ -5007,13 +5026,7 @@ function synthStreamingSource(comp: ComponentDef): ComponentManifest {
                         placeholder: 'orders',
                         description: 'The event hub to read. Leave it empty when the connection string ends in EntityPath=..., which names it already; a string issued for one hub cannot read another.',
                     },
-                    {
-                        key: 'partitionId',
-                        label: 'Partition',
-                        kind: 'integer',
-                        defaultValue: 0,
-                        description: 'Which partition to read. One partition per node; point several nodes at a hub with several partitions and union them.',
-                    },
+                    ...kafkaPartitionFields('event hub'),
                     ...kafkaStartFields(),
                     {
                         key: 'maxRecords',
@@ -5150,13 +5163,7 @@ function synthStreamingSource(comp: ComponentDef): ComponentManifest {
                 // multi-partition topic came back silently short.
                 ...(comp.id === 'src.kafka' || comp.id === 'src.redpanda'
                     ? ([
-                          {
-                              key: 'partitionId',
-                              label: 'Partition',
-                              kind: 'integer',
-                              defaultValue: 0,
-                              description: 'Which partition to read. This connector consumes one partition per node; point several nodes at a multi-partition topic and union them.',
-                          },
+                          ...kafkaPartitionFields('topic'),
                           {
                               key: 'maxRecords',
                               label: 'Max messages',
