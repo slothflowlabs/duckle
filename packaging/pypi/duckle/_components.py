@@ -1120,9 +1120,8 @@ COMPONENTS = {
     },
     'src.pinecone': {
         'kind': 'source',
-        'summary': 'Fetch or similarity-search vectors (Pinecone has no list-all-vectors endpoint; the proper shape is a query node, on the roadmap)',
-        'params': ['endpoint', 'apiKey', 'collection', 'connectionRef', 'topK', 'filter'],
-        'unverified': ['queryMode', 'queryText'],
+        'summary': "Read every record of a serverless index's namespace: list its ids a page at a time (only those with a prefix, if one is named), then fetch them, each row {id, ...metadata[, vector]}. A namespace longer than Max pages fails the run rather than reading part of it.",
+        'params': ['indexHost', 'apiKey', 'namespace', 'prefix', 'withVector', 'pageSize', 'maxPages'],
     },
     'src.pipedrive': {
         'kind': 'source',

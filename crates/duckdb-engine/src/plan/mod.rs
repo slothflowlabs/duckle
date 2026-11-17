@@ -695,6 +695,7 @@ pub enum RuntimeSpec {
     ChromaSink(ChromaSinkSpec),
     PulsarSource(PulsarSourceSpec),
     PulsarSink(PulsarSinkSpec),
+    PineconeSource(PineconeSourceSpec),
     SharePointSink(SharePointSinkSpec),
     AttachParquetSource(AttachParquetSourceSpec),
     /// materialize = "duckdb"/"duckdbfile": persist the stage into a DuckDB file.
@@ -2315,6 +2316,7 @@ fn build_stage(
     let mut chroma_sink: Option<ChromaSinkSpec> = None;
     let mut pulsar_source: Option<PulsarSourceSpec> = None;
     let mut pulsar_sink: Option<PulsarSinkSpec> = None;
+    let mut pinecone_source: Option<PineconeSourceSpec> = None;
     let mut weaviate_source: Option<WeaviateSourceSpec> = None;
     let mut milvus_source: Option<MilvusSourceSpec> = None;
     let mut format_source: Option<FormatFileSourceSpec> = None;
@@ -5852,6 +5854,33 @@ fn build_stage(
             track_position: props.get("trackOffset").and_then(JsonValue::as_bool).unwrap_or(false),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.pinecone" {
+        let host = string_prop(&props, "indexHost")
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                EngineError::Config(format!(
+                    "{}: indexHost required (e.g. 'idx-abc123.svc.us-east1-gcp.pinecone.io')",
+                    component_id
+                ))
+            })?;
+        let count = |key: &str| props.get(key).and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(100);
+        pinecone_source = Some(PineconeSourceSpec {
+            node_id: node.id.clone(),
+            // A host as the console shows one is https; an address with its
+            // scheme is taken as it is, so a local index can be read.
+            index_url: if host.starts_with("http://") || host.starts_with("https://") { host } else { format!("https://{host}") },
+            api_key: string_prop(&props, "apiKey")
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| EngineError::Config(format!("{}: apiKey required", component_id)))?,
+            namespace: string_prop(&props, "namespace").map(|s| s.trim().to_string()).unwrap_or_default(),
+            prefix: string_prop(&props, "prefix").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            // Pinecone lists at most 100 ids a page.
+            page_size: count("pageSize").min(100),
+            max_pages: count("maxPages"),
+            with_vector: props.get("withVector").and_then(JsonValue::as_bool).unwrap_or(false),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.chroma" {
         // The filter is Chroma's own `where`: a JSON object, checked here.
         let filter = match string_prop(&props, "filter").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
@@ -8002,6 +8031,7 @@ fn build_stage(
         .or_else(|| chroma_sink.map(RuntimeSpec::ChromaSink))
         .or_else(|| pulsar_source.map(RuntimeSpec::PulsarSource))
         .or_else(|| pulsar_sink.map(RuntimeSpec::PulsarSink))
+        .or_else(|| pinecone_source.map(RuntimeSpec::PineconeSource))
         .or_else(|| weaviate_source.map(RuntimeSpec::WeaviateSource))
         .or_else(|| milvus_source.map(RuntimeSpec::MilvusSource))
         .or_else(|| format_source.map(RuntimeSpec::FormatSource))

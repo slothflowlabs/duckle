@@ -9474,6 +9474,41 @@ function synthVectorSink(comp: ComponentDef): ComponentManifest {
 }
 
 function synthVectorSource(comp: ComponentDef): ComponentManifest {
+    // src.pinecone: keys mirror PineconeSourceSpec's parse in plan/mod.rs.
+    if (comp.id === 'src.pinecone') {
+        return base(comp, [
+            {
+                label: 'Pinecone',
+                fields: [
+                    {
+                        key: 'indexHost',
+                        label: 'Index host',
+                        kind: 'text',
+                        required: true,
+                        placeholder: 'idx-abc123.svc.us-east1-gcp.pinecone.io',
+                        description: 'The address the console shows for the index. A full http:// address reads a local one.',
+                    },
+                    { key: 'apiKey', label: 'API key', kind: 'text', required: true, secret: true, placeholder: '••••••••' },
+                    { key: 'namespace', label: 'Namespace', kind: 'text', description: 'Leave empty for the default namespace.' },
+                ],
+            },
+            {
+                label: 'Read',
+                fields: [
+                    { key: 'prefix', label: 'Id prefix', kind: 'text', placeholder: 'doc#', description: 'Only the records whose ids start with this.' },
+                    { key: 'withVector', label: 'Include vectors', kind: 'bool', defaultValue: false, description: 'Adds each record\'s values as a vector column.' },
+                    { key: 'pageSize', label: 'Page size', kind: 'integer', defaultValue: 100, description: 'Ids listed a page; Pinecone lists at most 100.' },
+                    {
+                        key: 'maxPages',
+                        label: 'Max pages',
+                        kind: 'integer',
+                        defaultValue: 100,
+                        description: 'A namespace with more records than this many pages hold fails the run rather than reading part of it.',
+                    },
+                ],
+            },
+        ]);
+    }
     // src.chroma: keys mirror ChromaSourceSpec's parse in plan/mod.rs.
     if (comp.id === 'src.chroma') {
         return base(comp, [

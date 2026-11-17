@@ -12011,6 +12011,173 @@ fn kinesis_writes_and_reads_back_every_shard_of_a_live_stream() {
     );
 }
 
+/// src.pinecone sends its key and the API version it is written for on every
+/// call, asks for ids as they are (escaped in the query), and a metadata key
+/// named id does not take the record's place.
+#[test]
+fn src_pinecone_lists_then_fetches_with_its_key() {
+    let engine = engine_or_skip!();
+    let (endpoint, seen, handle) = scripted_endpoint(vec![
+        (200, "Content-Type: application/json", br#"{"vectors":[{"id":"a#1"}],"namespace":"ns"}"#.to_vec()),
+        (
+            200,
+            "Content-Type: application/json",
+            br#"{"vectors":{"a#1":{"id":"a#1","values":[0.5],"metadata":{"id":"spoof","n":1}}},"namespace":"ns"}"#.to_vec(),
+        ),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "one.jsonl");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("p", "src.pinecone", json!({
+                "indexHost": &endpoint, "apiKey": "pk-1", "namespace": "ns", "withVector": true,
+            })),
+            node("o", "snk.jsonl", json!({ "path": &out })),
+        ]),
+        json!([main_edge("e", "p", "o")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        duckdb_json(&format!("SELECT id, n, vector FROM read_json_auto('{}')", out)),
+        vec![json!({ "id": "a#1", "n": 1, "vector": [0.5] })]
+    );
+    let calls = seen.lock().unwrap().clone();
+    assert!(calls[0].0.starts_with("GET /vectors/list?namespace=ns&limit=100 "), "{}", calls[0].0);
+    assert!(calls[1].0.starts_with("GET /vectors/fetch?namespace=ns&ids=a%231 "), "{}", calls[1].0);
+    for (head, _) in &calls {
+        let head = head.to_ascii_lowercase();
+        assert!(head.contains("api-key: pk-1") && head.contains("x-pinecone-api-version: 2025-01"), "{head}");
+    }
+}
+
+/// Pinecone Local's control plane for the live tests: DUCKLE_PINECONE_URL
+/// (http://localhost:5080), or the test skips.
+fn pinecone_url() -> Option<String> {
+    match std::env::var("DUCKLE_PINECONE_URL") {
+        Ok(u) if !u.is_empty() => Some(u.trim_end_matches('/').to_string()),
+        _ => {
+            eprintln!("skipping: set DUCKLE_PINECONE_URL to run live Pinecone tests");
+            None
+        }
+    }
+}
+
+/// A serverless index of five two-number vectors in namespace ns1, ids doc#1 to
+/// doc#5, each with metadata; deleted when the test ends, passed or not.
+struct PineconeIndex {
+    control: String,
+    name: String,
+    host: String,
+}
+
+impl PineconeIndex {
+    fn new(control: &str) -> Self {
+        // Tests run side by side: the millisecond alone can name two the same.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let name = format!(
+            "duckle-{}-{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        let call = |method: &str, url: &str, body: Option<serde_json::Value>| -> serde_json::Value {
+            let req = ureq::request(method, url).set("Api-Key", "pclocal").set("X-Pinecone-API-Version", "2025-01");
+            let reply = match body {
+                Some(b) => req.send_json(b),
+                None => req.call(),
+            }
+            .unwrap_or_else(|e| panic!("{method} {url}: {e}"));
+            serde_json::from_str(&reply.into_string().unwrap_or_default()).unwrap_or_default()
+        };
+        call(
+            "POST",
+            &format!("{control}/indexes"),
+            Some(json!({
+                "name": name, "dimension": 2, "metric": "cosine",
+                "spec": { "serverless": { "cloud": "aws", "region": "us-east-1" } },
+            })),
+        );
+        let mut host = String::new();
+        for _ in 0..40 {
+            let d = call("GET", &format!("{control}/indexes/{name}"), None);
+            if d["status"]["ready"] == true {
+                host = d["host"].as_str().unwrap_or_default().to_string();
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        let host = if host.starts_with("http") { host } else { format!("http://{host}") };
+        let vectors: Vec<serde_json::Value> = (1..=5)
+            .map(|i| json!({ "id": format!("doc#{i}"), "values": [0.1 * i as f64, 0.2], "metadata": { "n": i, "tag": if i % 2 == 0 { "even" } else { "odd" } } }))
+            .collect();
+        call("POST", &format!("{host}/vectors/upsert"), Some(json!({ "vectors": vectors, "namespace": "ns1" })));
+        PineconeIndex { control: control.to_string(), name, host }
+    }
+}
+
+impl Drop for PineconeIndex {
+    fn drop(&mut self) {
+        let _ = ureq::delete(&format!("{}/indexes/{}", self.control, self.name)).set("Api-Key", "pclocal").call();
+    }
+}
+
+/// src.pinecone reads every record of the namespace, a page of ids at a time,
+/// with its metadata, its vector when asked for, and only the ids a prefix
+/// names when one is given. Against Pinecone Local: set DUCKLE_PINECONE_URL.
+#[test]
+fn src_pinecone_reads_every_record_of_a_namespace() {
+    let engine = engine_or_skip!();
+    let Some(control) = pinecone_url() else { return };
+    let index = PineconeIndex::new(&control);
+    let tmp = tempfile::tempdir().unwrap();
+    let read = |extra: serde_json::Value, file: &str| -> Vec<serde_json::Value> {
+        let mut props = json!({ "indexHost": &index.host, "apiKey": "pclocal", "namespace": "ns1", "pageSize": 2 });
+        props.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let out = out_path(tmp.path(), file);
+        let r = engine.execute_pipeline(&doc(
+            json!([node("p", "src.pinecone", props), node("o", "snk.jsonl", json!({ "path": &out }))]),
+            json!([main_edge("e", "p", "o")]),
+        ));
+        assert_eq!(r.status, "ok", "read failed: {:?}", r.error);
+        duckdb_json(&format!("SELECT * FROM read_json_auto('{}') ORDER BY id", out))
+    };
+    let all = read(json!({ "withVector": true }), "all.jsonl");
+    assert_eq!(all.len(), 5, "five records, over three pages of two");
+    assert_eq!((&all[0]["id"], &all[0]["n"], &all[0]["tag"]), (&json!("doc#1"), &json!(1), &json!("odd")));
+    let v: Vec<f64> = all[1]["vector"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+    assert!((v[0] - 0.2).abs() < 1e-6 && (v[1] - 0.2).abs() < 1e-6, "{v:?}");
+    let three = read(json!({ "prefix": "doc#3" }), "three.jsonl");
+    assert_eq!(three.iter().map(|r| r["id"].as_str().unwrap()).collect::<Vec<_>>(), ["doc#3"]);
+    assert!(three[0].get("vector").is_none(), "no vector unless asked for");
+}
+
+/// A page cap that stops the read before the namespace's end fails the run;
+/// one the namespace fits exactly does not.
+#[test]
+fn src_pinecone_fails_when_max_pages_stops_it_short() {
+    let engine = engine_or_skip!();
+    let Some(control) = pinecone_url() else { return };
+    let index = PineconeIndex::new(&control);
+    let tmp = tempfile::tempdir().unwrap();
+    let run = |page_size: u64, max_pages: u64| {
+        engine.execute_pipeline(&doc(
+            json!([
+                node("p", "src.pinecone", json!({
+                    "indexHost": &index.host, "apiKey": "pclocal", "namespace": "ns1", "pageSize": page_size, "maxPages": max_pages,
+                })),
+                node("o", "snk.jsonl", json!({ "path": out_path(tmp.path(), &format!("p{page_size}x{max_pages}.jsonl")) })),
+            ]),
+            json!([main_edge("e", "p", "o")]),
+        ))
+    };
+    let short = run(2, 2);
+    assert_eq!(short.status, "error", "four of five read");
+    let e = short.error.unwrap_or_default();
+    assert!(e.contains("more remain"), "{e}");
+    let exact = run(5, 1);
+    assert_eq!(exact.status, "ok", "five records fit one page of five: {:?}", exact.error);
+}
+
 /// A Pulsar service for the live tests: DUCKLE_PULSAR_URL, the broker's HTTP
 /// address (http://localhost:8080), or the test skips.
 fn pulsar_url() -> Option<String> {

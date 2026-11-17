@@ -247,7 +247,7 @@ export const PALETTE: Category[] = [
                 label: 'Vector / AI Databases',
                 components: [
                     src('pgvector', 'pgvector (Postgres)', 'available', 'Read embeddings + metadata via DuckDB postgres ATTACH (server must have CREATE EXTENSION vector)'),
-                    src('pinecone', 'Pinecone', 'preview', 'Fetch or similarity-search vectors (Pinecone has no list-all-vectors endpoint; the proper shape is a query node, on the roadmap)'),
+                    src('pinecone', 'Pinecone', 'available', 'Read every record of a serverless index\'s namespace: list its ids a page at a time (only those with a prefix, if one is named), then fetch them, each row {id, ...metadata[, vector]}. A namespace longer than Max pages fails the run rather than reading part of it.'),
                     src('qdrant', 'Qdrant', 'available', 'Scroll all points in a Qdrant collection via /collections/{id}/points/scroll. Cursor pagination on `result.next_page_offset`; emits {id, ...payload[, vector]} rows. apiKey via api-key header.'),
                     src('weaviate', 'Weaviate', 'available', 'List Weaviate objects via GET /v1/objects?class=&after=. Cursor pagination on the last object\'s id; emits {id, ...properties[, vector]} rows. apiKey via Bearer.'),
                     src('chroma', 'Chroma', 'available', 'Read a Chroma collection page by page over its HTTP API (v2), on your own server or Chroma Cloud: emits {id, document, ...metadata[, vector]}, with an optional metadata filter. A collection longer than Max pages fails the run rather than reading part of it.'),

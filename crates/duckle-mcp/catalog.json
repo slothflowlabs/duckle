@@ -17716,8 +17716,8 @@
       "id": "src.pinecone",
       "label": "Pinecone",
       "kind": "source",
-      "availability": "preview",
-      "summary": "Fetch or similarity-search vectors (Pinecone has no list-all-vectors endpoint; the proper shape is a query node, on the roadmap)",
+      "availability": "available",
+      "summary": "Read every record of a serverless index's namespace: list its ids a page at a time (only those with a prefix, if one is named), then fetch them, each row {id, ...metadata[, vector]}. A namespace longer than Max pages fails the run rather than reading part of it.",
       "category": "Sources",
       "group": "Vector / AI Databases",
       "ports": {
@@ -17734,79 +17734,66 @@
         "id": "src.pinecone",
         "kind": "source",
         "label": "Pinecone",
-        "description": "Fetch or similarity-search vectors (Pinecone has no list-all-vectors endpoint; the proper shape is a query node, on the roadmap)",
+        "description": "Read every record of a serverless index's namespace: list its ids a page at a time (only those with a prefix, if one is named), then fetch them, each row {id, ...metadata[, vector]}. A namespace longer than Max pages fails the run rather than reading part of it.",
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Vector store",
+            "label": "Pinecone",
             "fields": [
               {
-                "key": "endpoint",
-                "label": "Endpoint / host",
-                "kind": "text"
+                "key": "indexHost",
+                "label": "Index host",
+                "kind": "text",
+                "required": true,
+                "placeholder": "idx-abc123.svc.us-east1-gcp.pinecone.io",
+                "description": "The address the console shows for the index. A full http:// address reads a local one."
               },
               {
                 "key": "apiKey",
                 "label": "API key",
                 "kind": "text",
-                "placeholder": "••••••••",
-                "secret": true
+                "required": true,
+                "secret": true,
+                "placeholder": "••••••••"
               },
               {
-                "key": "collection",
-                "label": "Collection / index",
+                "key": "namespace",
+                "label": "Namespace",
                 "kind": "text",
-                "required": true
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "accepts": [
-                  "pinecone"
-                ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Leave empty for the default namespace."
               }
             ]
           },
           {
-            "label": "Query",
+            "label": "Read",
             "fields": [
               {
-                "key": "queryMode",
-                "label": "Mode",
-                "kind": "select",
-                "defaultValue": "fetch",
-                "options": [
-                  {
-                    "label": "Fetch all",
-                    "value": "fetch"
-                  },
-                  {
-                    "label": "Similarity search",
-                    "value": "search"
-                  }
-                ]
+                "key": "prefix",
+                "label": "Id prefix",
+                "kind": "text",
+                "placeholder": "doc#",
+                "description": "Only the records whose ids start with this."
               },
               {
-                "key": "queryText",
-                "label": "Query text",
-                "kind": "textarea",
-                "rows": 2,
-                "description": "For similarity search."
+                "key": "withVector",
+                "label": "Include vectors",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Adds each record's values as a vector column."
               },
               {
-                "key": "topK",
-                "label": "Top K",
+                "key": "pageSize",
+                "label": "Page size",
                 "kind": "integer",
-                "defaultValue": 10
+                "defaultValue": 100,
+                "description": "Ids listed a page; Pinecone lists at most 100."
               },
               {
-                "key": "filter",
-                "label": "Metadata filter (JSON)",
-                "kind": "textarea",
-                "rows": 3,
-                "placeholder": "{\"source\": \"docs\"}"
+                "key": "maxPages",
+                "label": "Max pages",
+                "kind": "integer",
+                "defaultValue": 100,
+                "description": "A namespace with more records than this many pages hold fails the run rather than reading part of it."
               }
             ]
           }

@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 427 components, 418 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 213 connectors (131 sources / 82 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 427 components, 419 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 214 connectors (132 sources / 82 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -166,7 +166,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.parquet` Parquet: Read columnar Parquet files
 - `src.pdf` PDF Pages: One row per PAGE of a PDF: document_id, page_number, text, has_text_layer, width, height and the document metadata. Point it at a file or a folder. Reads the text layer a document already carries, so filings, accounts and invoices become a table you can filter, join and hand to a Python or AI stage. No OCR: a scanned page comes back with has_text_layer false, which is exactly what lets you route those pages to whatever OCR you already run. document_id is the same value src.artifact puts in uri, so the two join
 - `src.pgvector` pgvector (Postgres): Read embeddings + metadata via DuckDB postgres ATTACH (server must have CREATE EXTENSION vector)
-- `src.pinecone` Pinecone [preview]: Fetch or similarity-search vectors (Pinecone has no list-all-vectors endpoint; the proper shape is a query node, on the roadmap)
+- `src.pinecone` Pinecone: Read every record of a serverless index's namespace: list its ids a page at a time (only those with a prefix, if one is named), then fetch them, each row {id, ...metadata[, vector]}. A namespace longer than Max pages fails the run rather than reading part of it
 - `src.pipedrive` Pipedrive: Pipedrive REST. URL ?api_token=... or Bearer auth. Cursor pagination on `additional_data.pagination.next_start` (start parameter). responsePath /data
 - `src.pixeltable` Pixeltable: Read a Pixeltable table (#223), the multimodal AI data store. Exchanges through Parquet: Pixeltable exports the table (or a filtered/limited subset) and Duckle ingests it with read_parquet, so no rows cross one at a time. Supports versioned reads via table:N. Needs a Python with pixeltable installed; the desktop app provisions one on first use
 - `src.postgres` PostgreSQL: Read from PostgreSQL via the DuckDB postgres extension

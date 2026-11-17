@@ -133,7 +133,7 @@
 <span class="eyebrow">Reference</span>
 <h1>Component reference</h1>
 <!-- BEGIN GENERATED summary (website/scripts/build-llms.mjs writes this from the component catalog; edit it there) -->
-<p class="lead">Duckle ships 427 components across six kinds - 135 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 84 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 25 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 418 are available today; the 1 in preview and the 8 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
+<p class="lead">Duckle ships 427 components across six kinds - 135 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 84 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 25 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 419 are available today; the 0 in preview and the 8 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
 
 <div class="grid cols-3">
   <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span><h3>135 sources</h3><p>Files, lakehouse, databases, warehouses, object storage, streaming, SaaS APIs, NoSQL, vector DBs and more, all under <code>src.*</code>.</p></div>
@@ -329,7 +329,7 @@
   <thead><tr><th>Component</th><th>What it does</th></tr></thead>
   <tbody>
     <tr><td>pgvector (Postgres)<br><code>src.pgvector</code></td><td>Read embeddings + metadata via DuckDB postgres ATTACH (server must have CREATE EXTENSION vector)</td></tr>
-    <tr><td>Pinecone <span class="chip">Preview</span><br><code>src.pinecone</code></td><td>Fetch or similarity-search vectors (Pinecone has no list-all-vectors endpoint; the proper shape is a query node, on the roadmap)</td></tr>
+    <tr><td>Pinecone<br><code>src.pinecone</code></td><td>Read every record of a serverless index's namespace: list its ids a page at a time (only those with a prefix, if one is named), then fetch them, each row {id, ...metadata[, vector]}. A namespace longer than Max pages fails the run rather than reading part of it</td></tr>
     <tr><td>Qdrant<br><code>src.qdrant</code></td><td>Scroll all points in a Qdrant collection via /collections/{id}/points/scroll. Cursor pagination on <code>result.next_page_offset</code>; emits {id, ...payload[, vector]} rows. apiKey via api-key header</td></tr>
     <tr><td>Weaviate<br><code>src.weaviate</code></td><td>List Weaviate objects via GET /v1/objects?class=&amp;after=. Cursor pagination on the last object's id; emits {id, ...properties[, vector]} rows. apiKey via Bearer</td></tr>
     <tr><td>Chroma<br><code>src.chroma</code></td><td>Read a Chroma collection page by page over its HTTP API (v2), on your own server or Chroma Cloud: emits {id, document, ...metadata[, vector]}, with an optional metadata filter. A collection longer than Max pages fails the run rather than reading part of it</td></tr>

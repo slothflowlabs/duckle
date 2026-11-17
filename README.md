@@ -10,7 +10,7 @@
 
 https://github.com/user-attachments/assets/8bfac3fa-3f91-4b43-b5d8-a526716c8ef1
 
-<a href="https://duckle.org/"><img src="website/assets/img/website-hero.gif" alt="Duckle connecting 213 sources and destinations - databases, warehouses, SaaS apps and the DuckDB ecosystem - all running locally on DuckDB" width="600"/></a>
+<a href="https://duckle.org/"><img src="website/assets/img/website-hero.gif" alt="Duckle connecting 214 sources and destinations - databases, warehouses, SaaS apps and the DuckDB ecosystem - all running locally on DuckDB" width="600"/></a>
 
 <p><sub><i>Duckle is an independent open-source project by SlothFlowLabs. It builds on the DuckDB engine but is not part of, affiliated with, or endorsed by DuckDB Labs or MotherDuck.</i></sub></p>
 
@@ -136,7 +136,7 @@ In short: a free, open-source, single-engine alternative to hosted, per-row-pric
 Three things set it apart:
 
 1. **An AI assistant that ships in the box.** Describe the pipeline you want in English; Duckie writes the JSON and drops it onto the canvas. The model runs wherever Duckle does - no API key, no telemetry, no vendor round-trip. Point it at your own OpenAI-compatible endpoint instead if you would rather it did not run in-process.
-2. **418 components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
+2. **419 components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
 3. **A self-contained binary you can audit.** 73 to 110 MB depending on your platform. Engines install on first launch. Workspaces are plain files in a folder you choose. Diff them, branch them, ship them.
 
 <div align="center">
@@ -154,7 +154,7 @@ Three things set it apart:
 | **Single-file binary, no bundled DB** | 73 to 110 MB depending on platform (it embeds the headless runner + MCP server). DuckDB downloads on first launch with a guided step. AI engine is opt-in. |
 | **Native speed** | Execution runs through DuckDB: vectorized, columnar, local. A clean-and-export job that crawls in a spreadsheet finishes in milliseconds. |
 | **Git-friendly by design** | Pipelines, connections, contexts, and routines persist as plain files in a folder you pick. Diff them, branch them, review them. |
-| **418 components ready today** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
+| **419 components ready today** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
 | **Honest about scope** | Single-machine and embedded by design. Built to make local and small-team data work fast, not to replace a distributed warehouse. |
 | **60 UI languages** | Topbar, palette, chat assistant, properties panel, and common dialogs ship localized. English, Spanish, Chinese (Simplified + Traditional), Hindi, Arabic, Portuguese (Brazil), Bengali, Russian, Japanese, Punjabi, German, Korean, French, Vietnamese, Telugu, Marathi, Turkish, Tamil, Urdu, Persian, Polish, Italian, Ukrainian, Indonesian, Thai, Dutch, Hebrew, Swedish, Greek, Czech, Hungarian, Romanian, Filipino, Malay, Norwegian, Danish, Finnish, Catalan, Bulgarian, Slovak, Croatian, Serbian, Slovenian, Lithuanian, Latvian, Estonian, Khmer, Burmese, Sinhala, Nepali, Swahili, Afrikaans, Welsh, Irish, Icelandic, Albanian, Azerbaijani, Mongolian, Kazakh. RTL (Arabic, Hebrew, Persian, Urdu) supported. Switch languages from the topbar globe. |
 | **Open source** | Dual-licensed MIT OR Apache-2.0. Yours to use, fork, and extend. |
@@ -3653,7 +3653,7 @@ Duckle is in **public beta**. The visual designer, the DuckDB execution engine, 
 
 The component palette ships **427 components** so the roadmap is visible in the product itself:
 
-- **418 available** runs on the DuckDB engine today
+- **419 available** runs on the DuckDB engine today
 - **3 preview** is configurable in the designer (drag, wire, set properties); execution is being wired engine-by-engine
 - **11 planned** is reserved in the palette but not yet executable - see [`docs/roadmap.md`](docs/roadmap.md)
 
@@ -3665,7 +3665,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 
 ### Sources
 
-**131 sources available today.**
+**132 sources available today.**
 
 | Group | Connectors | Status |
 |---|---|---|
@@ -3689,8 +3689,8 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | **APIs (protocols)** | OData v4 (follows `@odata.nextLink`), SOAP / generic XML APIs (XML response parsing with namespace local-name match) | Available |
 | **Health data (DHIS2)** | `src.dhis2` reads the DHIS2 Web API: aggregate `dataValueSets`, paged metadata lists, tracker exports, and `analytics/dataValueSet.json`. `snk.dhis2` imports back: chunked requests, `importStrategy` (CREATE_AND_UPDATE is DHIS2's upsert), `dryRun`, and real import-summary parsing, so conflicts and a non-zero `ignored` count fail the run instead of passing as a green HTTP 200. Auth via personal access token or HTTP Basic. Raw `/api/analytics` (columnar `headers[]` + `rows[][]`) is not supported | Available |
 | **NoSQL and search** | **Neo4j** (Cypher over the HTTP Query API - self-hosted or Aura, no Bolt driver; optional `$parameters`), MongoDB (official driver), Cassandra / ScyllaDB (CQL), Elasticsearch / OpenSearch (from+size + search_after), **Manticore Search** (HTTP JSON `/search`; `table` + limit/offset, and a window past the default 1000 best-ranked matches raises `max_matches` to suit), Redis (SCAN + GET), CouchDB (`_all_docs`), DynamoDB (HTTP + SigV4 - no AWS SDK; auto-unwraps typed attributes) | Available |
-| **Vector / AI databases** | pgvector (postgres ATTACH), Qdrant (`/points/scroll`), Weaviate (`/v1/objects`), Milvus (`/v1/vector/query`), Chroma (HTTP API v2 `/get` by page, on your own server or Chroma Cloud; a collection longer than its pages fails the run rather than reading part of it) | Available |
-| **Vector / AI databases** | Pinecone (no list-all-vectors API), LanceDB | Preview |
+| **Vector / AI databases** | pgvector (postgres ATTACH), Qdrant (`/points/scroll`), Weaviate (`/v1/objects`), Milvus (`/v1/vector/query`), Chroma (HTTP API v2 `/get` by page, on your own server or Chroma Cloud; a collection longer than its pages fails the run rather than reading part of it), Pinecone (a serverless index's namespace: `/vectors/list` a page of ids at a time, then `/vectors/fetch`) | Available |
+| **Vector / AI databases** | LanceDB | Preview |
 | **File transfer** | FTP / FTPS (pure-Rust `suppaftp`) and SFTP (SSH, pure-Rust `russh` + `russh-sftp` on the ring backend; password or private-key auth) - one File Transfer component, pick the protocol. Glob filter, base64 content per file. **Host keys are verified**: pin a SHA256 fingerprint to accept only that key, or leave it empty and the first key seen for a host is recorded in `<workspace>/.duckle/known_hosts`, after which a different key is refused. A host that presents an OpenSSH certificate is accepted only when it certifies the key you pinned. `DUCKLE_SFTP_HOST_KEY_POLICY=accept-any` opts out for a host whose key changes per connection | Available |
 | **Mailbox** | IMAP (`mail-parser`) over Duckle's own TLS, so it trusts what the HTTP connectors trust, `DUCKLE_CA_CERT` included. TLS from the start on port 993, STARTTLS on any other, and a server that offers no STARTTLS is refused before the password is sent. Basic auth today, OAuth (gmail / o365) on the roadmap | Available |
 | **Webhook listener** | Binds `127.0.0.1:port`, collects N inbound HTTP requests with a timeout, parses JSON-object / JSON-array bodies into rows | Available |
@@ -4537,7 +4537,7 @@ Yes, free + open source. Dual-licensed **MIT OR Apache-2.0**. You can use it com
 <details>
 <summary><b>Is Duckle an open-source alternative to Fivetran or Airbyte?</b></summary>
 
-It covers similar ground - moving data across 213 sources and destinations - but locally, with nothing to host and no per-row, per-connector, or per-seat billing. Pipelines are built visually or from plain English and compile to readable DuckDB SQL that runs wherever you deploy it: a laptop, a server, CI or a container. The trade-off is scope: Duckle does not split one query across a cluster, so for warehouse-scale replication you push the work down into the source system or point the output at the system that scales.
+It covers similar ground - moving data across 214 sources and destinations - but locally, with nothing to host and no per-row, per-connector, or per-seat billing. Pipelines are built visually or from plain English and compile to readable DuckDB SQL that runs wherever you deploy it: a laptop, a server, CI or a container. The trade-off is scope: Duckle does not split one query across a cluster, so for warehouse-scale replication you push the work down into the source system or point the output at the system that scales.
 
 </details>
 

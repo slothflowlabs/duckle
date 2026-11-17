@@ -1370,6 +1370,39 @@ pub struct PulsarSinkSpec {
     pub key_column: Option<String>,
 }
 
+/// src.pinecone: every record of a serverless index's namespace, read by listing
+/// its ids a page at a time and fetching each page's records. Pinecone has no
+/// call that reads an index whole.
+#[derive(Clone)]
+pub struct PineconeSourceSpec {
+    pub node_id: String,
+    /// The index's own address (https://idx-abc.svc....pinecone.io), or a local
+    /// one's (http://localhost:5081).
+    pub index_url: String,
+    pub api_key: String,
+    pub namespace: String,
+    pub prefix: Option<String>,
+    pub page_size: u64,
+    pub max_pages: u64,
+    pub with_vector: bool,
+}
+
+/// By hand, so a log or an error that prints a plan never prints the key.
+impl std::fmt::Debug for PineconeSourceSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PineconeSourceSpec")
+            .field("node_id", &self.node_id)
+            .field("index_url", &self.index_url)
+            .field("api_key", &"***")
+            .field("namespace", &self.namespace)
+            .field("prefix", &self.prefix)
+            .field("page_size", &self.page_size)
+            .field("max_pages", &self.max_pages)
+            .field("with_vector", &self.with_vector)
+            .finish()
+    }
+}
+
 /// src.webhook: bind 127.0.0.1:port, accept up to `max_requests`
 /// inbound HTTP requests with a global `timeout_ms` deadline, parse
 /// each request body as JSON (or fall back to a {body, method, path,

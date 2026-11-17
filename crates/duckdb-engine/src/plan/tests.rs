@@ -7158,6 +7158,62 @@ mod kinesis_source {
     }
 }
 
+/// src.pinecone: where the index is and how its records are read, worked out
+/// before the run.
+mod pinecone_source {
+    use super::*;
+
+    fn spec(props: serde_json::Value) -> Result<crate::plan::PineconeSourceSpec, crate::EngineError> {
+        let doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                {"id":"p","position":{"x":0,"y":0},"data":{"label":"P","componentId":"src.pinecone","properties": props}},
+                {"id":"o","position":{"x":0,"y":0},"data":{"label":"out","componentId":"snk.csv","properties":{"path":"/tmp/o.csv"}}}
+            ],
+            "edges": [{"id":"e","source":"p","target":"o","data":{"connectionType":"main"}}]
+        }))
+        .unwrap();
+        Ok(compile(&doc)?
+            .stages
+            .iter()
+            .find_map(|s| match s.runtime.as_ref() {
+                Some(crate::plan::RuntimeSpec::PineconeSource(p)) => Some(p.clone()),
+                _ => None,
+            })
+            .expect("a Pinecone read"))
+    }
+
+    /// A host as the console shows one is https; an address with its scheme is
+    /// taken as it is, so a local index can be read.
+    #[test]
+    fn the_index_host_is_an_address() {
+        let url = |host: &str| spec(serde_json::json!({ "indexHost": host, "apiKey": "k" })).map(|s| s.index_url);
+        assert_eq!(url("idx-abc.svc.aped-1.pinecone.io").unwrap(), "https://idx-abc.svc.aped-1.pinecone.io");
+        assert_eq!(url("http://localhost:5081/").unwrap(), "http://localhost:5081");
+        assert!(url("").unwrap_err().to_string().contains("indexHost"));
+    }
+
+    #[test]
+    fn a_key_is_required_and_never_prints() {
+        let e = spec(serde_json::json!({ "indexHost": "h" })).unwrap_err().to_string();
+        assert!(e.contains("apiKey"), "{e}");
+        let s = spec(serde_json::json!({ "indexHost": "h", "apiKey": "pk-secret" })).unwrap();
+        assert!(!format!("{s:?}").contains("pk-secret"));
+    }
+
+    /// Pinecone lists at most 100 ids a page; the default namespace is the empty
+    /// one, and vectors come only when asked for.
+    #[test]
+    fn a_page_is_at_most_what_pinecone_lists() {
+        let s = spec(serde_json::json!({ "indexHost": "h", "apiKey": "k" })).unwrap();
+        assert_eq!((s.page_size, s.max_pages, s.namespace.as_str(), s.prefix.as_deref(), s.with_vector), (100, 100, "", None, false));
+        let s = spec(serde_json::json!({
+            "indexHost": "h", "apiKey": "k", "pageSize": 500, "maxPages": 3, "namespace": "ns1", "prefix": "doc#", "withVector": true,
+        }))
+        .unwrap();
+        assert_eq!((s.page_size, s.max_pages, s.namespace.as_str(), s.prefix.as_deref(), s.with_vector), (100, 3, "ns1", Some("doc#"), true));
+    }
+}
+
 /// src.pulsar and snk.pulsar: where the topic lives and how a read starts,
 /// worked out before the run.
 mod pulsar {

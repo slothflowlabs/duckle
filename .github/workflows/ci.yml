@@ -517,9 +517,10 @@ jobs:
           DUCKLE_PULSAR_URL: http://localhost:8080
         run: cargo test -p duckle-duckdb-engine --test execution -- pulsar --test-threads 1
 
-  # Live Chroma tests: src.chroma and snk.chroma against a Chroma server, pinned
-  # by digest to the image they were written against (it reports 1.0.0).
-  chroma-integration:
+  # Live vector-store tests: src.chroma and snk.chroma against a Chroma server,
+  # pinned by digest to the image they were written against (it reports 1.0.0),
+  # and src.pinecone against Pinecone Local.
+  vector-integration:
     runs-on: ubuntu-24.04
     services:
       chroma:
@@ -544,6 +545,16 @@ jobs:
         env:
           DUCKLE_CHROMA_URL: http://localhost:8000
         run: cargo test -p duckle-duckdb-engine --test execution -- chroma
+      - name: Start Pinecone Local
+        run: |
+          set -e
+          docker run -d --name pinecone -e PORT=5080 -e PINECONE_HOST=localhost -p 5080-5090:5080-5090 ghcr.io/pinecone-io/pinecone-local:v0.7.0
+          for i in $(seq 1 30); do curl -sf http://localhost:5080/indexes > /dev/null && break; sleep 2; done
+          curl -sf http://localhost:5080/indexes
+      - name: Run Pinecone tests
+        env:
+          DUCKLE_PINECONE_URL: http://localhost:5080
+        run: cargo test -p duckle-duckdb-engine --test execution -- pinecone
 
   # Live MySQL integration tests (also covers MariaDB, same wire).
   # SharePoint Server has no container, so tests/sharepoint.rs runs against
