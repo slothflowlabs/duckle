@@ -139,9 +139,12 @@ fn port_of(c: &Value, side: &str, ty: &str) -> bool {
 }
 
 /// Credential-shaped property names, matched case-insensitively on a substring
-/// so `sslKeyPassword` counts as much as `password`.
+/// so `sslKeyPassword` counts as much as `password`. A connection string is
+/// one too: the engine masks it as a secret (util.rs), and an Event Hubs or
+/// Redis string carries the key or the password.
 const CREDENTIAL_HINTS: &[&str] = &[
     "password", "secret", "token", "apikey", "accesskey", "accountkey", "privatekey", "credentials",
+    "connectionstring",
 ];
 
 pub fn derive(c: &Value) -> Capabilities {
@@ -376,6 +379,13 @@ mod tests {
             "manifest": { "sections": [ { "fields": [ { "key": "sslKeyPassword" } ] } ] }
         });
         assert!(derive(&c).credentials);
+        // The engine masks a connection string as a secret (util.rs), so the
+        // registry has to count it as one: an Event Hubs string carries the key.
+        let cs = serde_json::json!({
+            "id": "x.w", "kind": "source", "label": "W", "ports": {},
+            "manifest": { "sections": [ { "fields": [ { "key": "connectionString" } ] } ] }
+        });
+        assert!(derive(&cs).credentials, "a connection string is a credential");
         let c2 = serde_json::json!({
             "id": "x.z", "kind": "transform", "label": "Z", "ports": {},
             "manifest": { "sections": [ { "fields": [ { "key": "columns" } ] } ] }

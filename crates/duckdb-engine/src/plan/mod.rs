@@ -253,6 +253,63 @@ fn kafka_security(props: &JsonValue) -> (bool, Option<KafkaSasl>) {
     (tls, sasl)
 }
 
+/// src.eventhubs: an Event Hubs namespace speaks Kafka on port 9093, over TLS,
+/// signed in with SASL PLAIN as `$ConnectionString` and the connection string
+/// itself as the password. So the string the Azure portal hands out is all the
+/// node needs: the namespace from its Endpoint, the hub from its EntityPath or
+/// from the node. Returns the brokers, the topic, TLS and the credential.
+fn eventhubs_endpoint(
+    props: &JsonValue,
+) -> Result<(String, String, bool, Option<KafkaSasl>), EngineError> {
+    let conn = string_prop(props, "connectionString")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| EngineError::Config("src.eventhubs: a connection string is required".into()))?;
+    // `key=value` pairs, split on the first `=`, keys in any case.
+    let field = |name: &str| {
+        conn.split(';').find_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            let v = v.trim();
+            (k.trim().eq_ignore_ascii_case(name) && !v.is_empty()).then(|| v.to_string())
+        })
+    };
+    let namespace = field("Endpoint")
+        .and_then(|e| {
+            let host = e.strip_prefix("sb://").unwrap_or(&e).split('/').next().unwrap_or_default().trim();
+            (!host.is_empty()).then(|| host.to_string())
+        })
+        .ok_or_else(|| {
+            EngineError::Config(
+                "src.eventhubs: the connection string has no Endpoint=sb://<namespace>.servicebus.windows.net/. \
+                 Copy it from Shared access policies in the Azure portal."
+                    .into(),
+            )
+        })?;
+    let named = string_prop(props, "eventHub").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    // A key issued for one hub is refused by every other, so naming another is
+    // a mistake to say now rather than an authentication failure at run time.
+    let topic = match (field("EntityPath"), named) {
+        (Some(entity), Some(named)) if !entity.eq_ignore_ascii_case(&named) => {
+            return Err(EngineError::Config(format!(
+                "src.eventhubs: the connection string was issued for the event hub '{entity}', and the \
+                 node names '{named}'. A key for one hub cannot read another: clear Event Hub, or use \
+                 a key for '{named}' or for the namespace."
+            )))
+        }
+        (Some(entity), _) => entity,
+        (None, Some(named)) => named,
+        (None, None) => {
+            return Err(EngineError::Config(
+                "src.eventhubs: name the Event Hub to read, or use a connection string that ends in \
+                 EntityPath=<event hub>."
+                    .into(),
+            ))
+        }
+    };
+    let sasl = KafkaSasl { mechanism: "PLAIN".into(), username: "$ConnectionString".into(), password: conn };
+    Ok((format!("{namespace}:9093"), topic, true, Some(sasl)))
+}
+
 pub(crate) fn run_var_relation(name: &str) -> String {
     format!("duckle_var__{name}")
 }
@@ -4820,18 +4877,28 @@ fn build_stage(
             max_messages: props.get("maxMessages").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(100),
         });
         (String::new(), StageKind::View, None)
-    } else if matches!(component_id, "src.kafka" | "src.redpanda") {
+    } else if matches!(component_id, "src.kafka" | "src.redpanda" | "src.eventhubs") {
         // Kafka batch-consume from a single partition. start_offset
         // negative = read from earliest available; positive = read
         // from that offset. max_records caps the batch (defaults to
         // 1000 - this is a batch ETL connector, not a streaming pump).
-        let bootstrap = string_prop(&props, "brokers")
-            .or_else(|| string_prop(&props, "bootstrapServers"))
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| EngineError::Config(format!("{}: brokers required", component_id)))?;
-        let topic = string_prop(&props, "topic")
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| EngineError::Config(format!("{}: topic required", component_id)))?;
+        //
+        // src.eventhubs is the same read over a namespace's Kafka endpoint,
+        // where the connection string is the brokers, the topic and the
+        // credential in one.
+        let (bootstrap, topic, tls, sasl) = if component_id == "src.eventhubs" {
+            eventhubs_endpoint(&props)?
+        } else {
+            let bootstrap = string_prop(&props, "brokers")
+                .or_else(|| string_prop(&props, "bootstrapServers"))
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| EngineError::Config(format!("{}: brokers required", component_id)))?;
+            let topic = string_prop(&props, "topic")
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| EngineError::Config(format!("{}: topic required", component_id)))?;
+            let (tls, sasl) = kafka_security(&props);
+            (bootstrap, topic, tls, sasl)
+        };
         // Avro decoding needs somewhere to fetch the schema from. Saying the
         // messages are Avro and giving nowhere to look it up cannot work, so it
         // fails here rather than handing back UTF-8 mangled bytes at run time.
@@ -4845,8 +4912,8 @@ fn build_stage(
         }
         kafka_source = Some(KafkaSourceSpec {
             schema_registry_url: kafka_registry,
-            tls: kafka_security(&props).0,
-            sasl: kafka_security(&props).1,
+            tls,
+            sasl,
             // Off by default: turning it on changes where a run starts reading,
             // which is not a decision to make on someone's behalf.
             track_offset: props

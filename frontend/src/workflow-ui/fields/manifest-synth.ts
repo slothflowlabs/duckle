@@ -4954,7 +4954,78 @@ function synthStorageSink(comp: ComponentDef): ComponentManifest {
     );
 }
 
+// Where a Kafka-protocol read starts. Shared by src.kafka / src.redpanda and
+// src.eventhubs, which is the same read signed in another way.
+const kafkaStartFields = (): Field[] => [
+    {
+        key: 'offset',
+        // Default earliest: this is a batch ETL connector (capped by
+        // maxRecords), so a fresh run should read the available
+        // backlog, not start at the tip and see ~nothing. This also
+        // matches the engine's absent-offset default, so an untouched
+        // node's displayed default and its actual behavior agree.
+        label: 'Initial offset',
+        kind: 'select',
+        defaultValue: 'earliest',
+        options: [
+            { label: 'Latest', value: 'latest' },
+            { label: 'Earliest', value: 'earliest' },
+        ],
+    },
+    {
+        key: 'trackOffset',
+        label: 'Resume where the last run stopped',
+        kind: 'bool',
+        defaultValue: false,
+        description: 'Remember the offset reached and carry on from it next run, so a scheduled read becomes a continuous one. Without it, Earliest re-reads the whole backlog every run and Latest skips everything that arrived between runs. The position is saved only when the whole run succeeds, so a failure after the read re-delivers those records rather than losing them.',
+    },
+];
+
 function synthStreamingSource(comp: ComponentDef): ComponentManifest {
+    // Event Hubs speaks Kafka on its namespace's port 9093 and signs in with the
+    // connection string itself, so the broker and security blocks below are one
+    // secret here. The engine maps it onto the Kafka read (plan/mod.rs). No
+    // message format either: it only decides Avro, against a Confluent Schema
+    // Registry, and JSON and Plain text read the same.
+    if (comp.id === 'src.eventhubs') {
+        return base(comp, [
+            {
+                label: 'Event Hub',
+                fields: [
+                    {
+                        key: 'connectionString',
+                        label: 'Connection string',
+                        kind: 'text',
+                        required: true,
+                        placeholder: 'Endpoint=sb://<namespace>.servicebus.windows.net/;SharedAccessKeyName=...;SharedAccessKey=...',
+                        description: 'From the Azure portal: Shared access policies on the namespace or the event hub, a policy with Listen. Use ${ENV:NAME} rather than pasting the key into the pipeline.',
+                    },
+                    {
+                        key: 'eventHub',
+                        label: 'Event Hub',
+                        kind: 'text',
+                        placeholder: 'orders',
+                        description: 'The event hub to read. Leave it empty when the connection string ends in EntityPath=..., which names it already; a string issued for one hub cannot read another.',
+                    },
+                    {
+                        key: 'partitionId',
+                        label: 'Partition',
+                        kind: 'integer',
+                        defaultValue: 0,
+                        description: 'Which partition to read. One partition per node; point several nodes at a hub with several partitions and union them.',
+                    },
+                    ...kafkaStartFields(),
+                    {
+                        key: 'maxRecords',
+                        label: 'Max messages',
+                        kind: 'integer',
+                        defaultValue: 1000,
+                        description: 'The most messages one run will take. This is a batch connector, not a streaming pump.',
+                    },
+                ],
+            },
+        ]);
+    }
     // src.websocket is a WebSocket client, not a Kafka-family broker consumer,
     // so it needs its own url / subscribe / maxMessages form rather than the
     // brokers + topic + SASL fields below (#192). Keys mirror the engine's
@@ -5016,28 +5087,7 @@ function synthStreamingSource(comp: ComponentDef): ComponentManifest {
                     placeholder: 'broker1:9092,broker2:9092',
                 },
                 { key: 'topic', label: 'Topic', kind: 'text', required: true },
-                {
-                    key: 'offset',
-                    // Default earliest: this is a batch ETL connector (capped by
-                    // maxRecords), so a fresh run should read the available
-                    // backlog, not start at the tip and see ~nothing. This also
-                    // matches the engine's absent-offset default, so an untouched
-                    // node's displayed default and its actual behavior agree.
-                    label: 'Initial offset',
-                    kind: 'select',
-                    defaultValue: 'earliest',
-                    options: [
-                        { label: 'Latest', value: 'latest' },
-                        { label: 'Earliest', value: 'earliest' },
-                    ],
-                },
-                {
-                    key: 'trackOffset',
-                    label: 'Resume where the last run stopped',
-                    kind: 'bool',
-                    defaultValue: false,
-                    description: 'Remember the offset reached and carry on from it next run, so a scheduled read becomes a continuous one. Without it, Earliest re-reads the whole backlog every run and Latest skips everything that arrived between runs. The position is saved only when the whole run succeeds, so a failure after the read re-delivers those records rather than losing them.',
-                },
+                ...kafkaStartFields(),
             ],
         },
         {

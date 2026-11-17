@@ -6,10 +6,10 @@ reel; this is the full ledger.
 
 The palette currently carries **426 components**, broken down:
 
-- **409 available** - executes on the DuckDB engine today
+- **410 available** - executes on the DuckDB engine today
 - **3 preview** - configurable in the designer (drag, wire, set
   properties); execution is being wired engine-by-engine
-- **14 planned** - reserved in the palette so the roadmap is visible,
+- **13 planned** - reserved in the palette so the roadmap is visible,
   not yet executable
 
 If you drop a planned or preview tile and try to run, the executor
@@ -26,11 +26,12 @@ it's a preview component.` rather than silently doing nothing.
 |---|---|
 | `src.pulsar` / `snk.pulsar` | The `pulsar` Rust crate compiles its protobuf definitions with `prost-build` which requires `protoc` to be installed at build time. That breaks the self-contained build. Options: vendor protoc via `protoc-bin-vendored`; hand-roll the subset of Pulsar protobuf ops we need; wait for an alt crate. **Deferred until a build approach lands.** Pulsar has no REST data plane to fall back on. |
 | `snk.kinesis` | Kinesis PutRecord/PutRecords via HTTP+SigV4 - same path as src.kinesis (the SigV4 helper is in place); just needs the publish flow wired |
-| `src.eventhubs` | Azure AMQP via `azure_sdk_eventhubs` |
 
 `src.kafka`, `snk.kafka`, `src.redpanda`, `snk.redpanda` shipped via
 the pure-Rust `rskafka` driver (no C dep, builds cleanly on every
-CI runner). `src.nats`, `snk.nats` shipped via `async-nats`.
+CI runner). `src.eventhubs` shipped on the same read, over an Event
+Hubs namespace's Kafka endpoint and signed in with its connection
+string, so it needs no AMQP client. `src.nats`, `snk.nats` shipped via `async-nats`.
 `src.pubsub`, `snk.pubsub` shipped via direct REST calls
 (sidestepping the gRPC build requirement of the official Google
 client). `src.rabbit`, `snk.rabbit` shipped via the pure-Rust

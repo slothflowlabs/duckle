@@ -11188,8 +11188,8 @@
       "id": "src.eventhubs",
       "label": "Azure Event Hubs",
       "kind": "source",
-      "availability": "planned",
-      "summary": "",
+      "availability": "available",
+      "summary": "Read an event hub through its namespace's Kafka endpoint, signed in with the connection string from the Azure portal (Shared access policies, a policy with Listen). Batch-consumes up to Max messages from one partition, like src.kafka, and emits {offset, key, value, timestamp_ms} rows. Needs the Standard tier or higher: Basic has no Kafka endpoint.",
       "category": "Sources",
       "group": "Streaming",
       "ports": {
@@ -11206,24 +11206,34 @@
         "id": "src.eventhubs",
         "kind": "source",
         "label": "Azure Event Hubs",
-        "description": "Reads data from Azure Event Hubs.",
+        "description": "Read an event hub through its namespace's Kafka endpoint, signed in with the connection string from the Azure portal (Shared access policies, a policy with Listen). Batch-consumes up to Max messages from one partition, like src.kafka, and emits {offset, key, value, timestamp_ms} rows. Needs the Standard tier or higher: Basic has no Kafka endpoint.",
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Broker",
+            "label": "Event Hub",
             "fields": [
               {
-                "key": "brokers",
-                "label": "Bootstrap servers",
+                "key": "connectionString",
+                "label": "Connection string",
                 "kind": "text",
                 "required": true,
-                "placeholder": "broker1:9092,broker2:9092"
+                "placeholder": "Endpoint=sb://<namespace>.servicebus.windows.net/;SharedAccessKeyName=...;SharedAccessKey=...",
+                "description": "From the Azure portal: Shared access policies on the namespace or the event hub, a policy with Listen. Use ${ENV:NAME} rather than pasting the key into the pipeline.",
+                "secret": true
               },
               {
-                "key": "topic",
-                "label": "Topic",
+                "key": "eventHub",
+                "label": "Event Hub",
                 "kind": "text",
-                "required": true
+                "placeholder": "orders",
+                "description": "The event hub to read. Leave it empty when the connection string ends in EntityPath=..., which names it already; a string issued for one hub cannot read another."
+              },
+              {
+                "key": "partitionId",
+                "label": "Partition",
+                "kind": "integer",
+                "defaultValue": 0,
+                "description": "Which partition to read. One partition per node; point several nodes at a hub with several partitions and union them."
               },
               {
                 "key": "offset",
@@ -11247,107 +11257,13 @@
                 "kind": "bool",
                 "defaultValue": false,
                 "description": "Remember the offset reached and carry on from it next run, so a scheduled read becomes a continuous one. Without it, Earliest re-reads the whole backlog every run and Latest skips everything that arrived between runs. The position is saved only when the whole run succeeds, so a failure after the read re-delivers those records rather than losing them."
-              }
-            ]
-          },
-          {
-            "label": "Security",
-            "fields": [
-              {
-                "key": "security",
-                "label": "Security protocol",
-                "kind": "select",
-                "defaultValue": "plaintext",
-                "options": [
-                  {
-                    "label": "PLAINTEXT",
-                    "value": "plaintext"
-                  },
-                  {
-                    "label": "SSL",
-                    "value": "ssl"
-                  },
-                  {
-                    "label": "SASL_SSL",
-                    "value": "sasl_ssl"
-                  },
-                  {
-                    "label": "SASL_PLAINTEXT",
-                    "value": "sasl_plaintext"
-                  }
-                ]
               },
               {
-                "key": "saslMechanism",
-                "label": "SASL mechanism",
-                "kind": "select",
-                "defaultValue": "PLAIN",
-                "options": [
-                  {
-                    "label": "PLAIN",
-                    "value": "PLAIN"
-                  },
-                  {
-                    "label": "SCRAM-SHA-256",
-                    "value": "SCRAM-SHA-256"
-                  },
-                  {
-                    "label": "SCRAM-SHA-512",
-                    "value": "SCRAM-SHA-512"
-                  }
-                ],
-                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
-              },
-              {
-                "key": "saslUsername",
-                "label": "SASL username",
-                "kind": "text"
-              },
-              {
-                "key": "saslPassword",
-                "label": "SASL password",
-                "kind": "text",
-                "placeholder": "••••••••",
-                "secret": true
-              }
-            ]
-          },
-          {
-            "label": "Format",
-            "fields": [
-              {
-                "key": "format",
-                "label": "Message format",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "Avro (Confluent Schema Registry)",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "Plain text",
-                    "value": "text"
-                  }
-                ],
-                "description": "Avro decodes Confluent-framed messages against the registry below. JSON and Plain text both hand the message back as text for SQL to parse. Protobuf is not offered because it is not implemented - it would need the .proto descriptors, and picking it would have produced mangled text rather than an error."
-              },
-              {
-                "key": "schemaRegistryUrl",
-                "label": "Schema Registry URL",
-                "kind": "text",
-                "placeholder": "https://schema-registry.internal:8081",
-                "description": "Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.",
-                "visibleWhen": [
-                  {
-                    "key": "format",
-                    "equals": "avro"
-                  }
-                ]
+                "key": "maxRecords",
+                "label": "Max messages",
+                "kind": "integer",
+                "defaultValue": 1000,
+                "description": "The most messages one run will take. This is a batch connector, not a streaming pump."
               }
             ]
           }

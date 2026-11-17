@@ -288,6 +288,7 @@ pub fn advances_saved_state(component_id: &str) -> bool {
             // topic/partition resume offsets
             | "src.kafka"
             | "src.redpanda"
+            | "src.eventhubs"
             // position in the spooled directory
             | "src.spool"
             // open window carried between runs
@@ -323,7 +324,7 @@ fn state_write_is_armed(component_id: &str, props: &serde_json::Value) -> bool {
     match component_id {
         // plan/mod.rs: `trackOffset`, OFF by default - turning it on changes
         // where a run starts reading, which is not decided on anyone's behalf.
-        "src.kafka" | "src.redpanda" => flag("trackOffset", false),
+        "src.kafka" | "src.redpanda" | "src.eventhubs" => flag("trackOffset", false),
         // plan/mod.rs: `trackOffset`, ON by default.
         "src.spool" => flag("trackOffset", true),
         // plan/mod.rs: `trackState`, ON by default. The only component that
@@ -1348,6 +1349,14 @@ mod tests {
                 "src.redpanda",
                 serde_json::json!({ "brokers": "b:9092", "topic": "t", "trackOffset": true }),
             ),
+            // The same Kafka read and the same offset write, signed in another way.
+            (
+                "src.eventhubs",
+                serde_json::json!({
+                    "connectionString": "Endpoint=sb://n.servicebus.windows.net/;SharedAccessKeyName=l;SharedAccessKey=k;EntityPath=h",
+                    "trackOffset": true,
+                }),
+            ),
             ("src.spool", serde_json::json!({ "uri": "sftp://h/d" })),
             (
                 "src.rest",
@@ -1427,6 +1436,16 @@ mod tests {
                 })
             ),
             "trackOffset is what arms the write, and it was armed"
+        );
+        // src.eventhubs is the same read behind the same switch.
+        assert!(
+            !refused(
+                "src.eventhubs",
+                serde_json::json!({
+                    "connectionString": "Endpoint=sb://n.servicebus.windows.net/;SharedAccessKeyName=l;SharedAccessKey=k;EntityPath=h"
+                })
+            ),
+            "an Event Hubs source that does not track offsets advances nothing"
         );
 
         // The REST family writes a mark only when there is a cursor to advance.

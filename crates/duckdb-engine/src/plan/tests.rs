@@ -6956,6 +6956,92 @@ mod graphql_source {
     }
 }
 
+/// src.eventhubs reads an Event Hub over its namespace's Kafka endpoint, so all
+/// it needs is the connection string the Azure portal hands out: the namespace,
+/// the credential and often the hub are all in it.
+#[cfg(test)]
+mod eventhubs_source {
+    use super::*;
+
+    /// A key issued for one hub: EntityPath names it. A SharedAccessKey is
+    /// base64, so it can carry `+`, `/` and `=` padding.
+    const HUB_KEY: &str = "Endpoint=sb://acme-prod.servicebus.windows.net/;SharedAccessKeyName=listen;SharedAccessKey=k3y+/AbC=;EntityPath=orders";
+    /// A key for the whole namespace, which names no hub.
+    const NAMESPACE_KEY: &str = "Endpoint=sb://acme-prod.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=n4m3=";
+
+    fn spec(props: serde_json::Value) -> Result<crate::plan::KafkaSourceSpec, crate::EngineError> {
+        let doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                {"id":"e","position":{"x":0,"y":0},
+                 "data":{"label":"EH","componentId":"src.eventhubs","properties": props}},
+                {"id":"k","position":{"x":0,"y":0},
+                 "data":{"label":"out","componentId":"snk.csv","properties":{"path":"/tmp/o.csv"}}}
+            ],
+            "edges":[{"id":"x","source":"e","target":"k","data":{"connectionType":"main"}}]
+        }))
+        .unwrap();
+        let plan = compile(&doc)?;
+        Ok(plan
+            .stages
+            .iter()
+            .find_map(|s| match s.runtime.as_ref() {
+                Some(crate::plan::RuntimeSpec::KafkaSource(k)) => Some(k.clone()),
+                _ => None,
+            })
+            .expect("an Event Hubs read is a Kafka read"))
+    }
+
+    #[test]
+    fn the_connection_string_is_the_whole_kafka_configuration() {
+        let k = spec(serde_json::json!({
+            "connectionString": HUB_KEY, "offset": "latest", "partitionId": 3, "maxRecords": 50,
+        }))
+        .unwrap();
+        assert_eq!(k.bootstrap_servers, "acme-prod.servicebus.windows.net:9093");
+        assert_eq!(k.topic, "orders", "the hub the key was issued for");
+        assert!(k.tls, "the Kafka endpoint takes TLS only");
+        let sasl = k.sasl.expect("signed in with the string");
+        assert_eq!(sasl.mechanism, "PLAIN");
+        assert_eq!(sasl.username, "$ConnectionString");
+        assert_eq!(sasl.password, HUB_KEY, "the whole string, key padding included");
+        assert_eq!((k.partition_id, k.start_offset, k.max_records), (3, -2, 50));
+    }
+
+    #[test]
+    fn a_namespace_key_reads_the_hub_the_node_names() {
+        let k = spec(serde_json::json!({ "connectionString": NAMESPACE_KEY, "eventHub": "clicks" })).unwrap();
+        assert_eq!(k.topic, "clicks");
+        assert_eq!(k.bootstrap_servers, "acme-prod.servicebus.windows.net:9093");
+    }
+
+    /// A key issued for one hub is refused by any other, so naming another is
+    /// a mistake to point out now rather than an authentication failure later.
+    #[test]
+    fn a_hub_the_key_was_not_issued_for_is_refused() {
+        let e = spec(serde_json::json!({ "connectionString": HUB_KEY, "eventHub": "clicks" }))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("orders") && e.contains("clicks"), "{e}");
+        // Event Hubs names are not case-sensitive, so this one is the same hub.
+        let same = spec(serde_json::json!({ "connectionString": HUB_KEY, "eventHub": "ORDERS" })).unwrap();
+        assert_eq!(same.topic, "orders");
+    }
+
+    #[test]
+    fn what_cannot_connect_is_refused_before_the_run() {
+        let no_hub = spec(serde_json::json!({ "connectionString": NAMESPACE_KEY })).unwrap_err().to_string();
+        assert!(no_hub.contains("Event Hub"), "{no_hub}");
+        let no_endpoint = spec(serde_json::json!({
+            "connectionString": "SharedAccessKeyName=a;SharedAccessKey=b", "eventHub": "x",
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(no_endpoint.contains("Endpoint"), "{no_endpoint}");
+        let nothing = spec(serde_json::json!({ "eventHub": "x" })).unwrap_err().to_string();
+        assert!(nothing.contains("connection string"), "{nothing}");
+    }
+}
+
 /// The join family declares a `reject` output port and nothing could fill it.
 ///
 /// build_reject_sql is a per-component match and the joins were simply not in

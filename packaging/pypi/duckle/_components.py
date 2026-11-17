@@ -865,6 +865,11 @@ COMPONENTS = {
         'summary': 'Fetch the N most recent messages from an IMAP mailbox. TLS via rustls (default port 993). Basic auth (user/password). Each message becomes a row {uid, from, to, subject, date, body_text}. OAuth (gmail / o365) is on the roadmap.',
         'params': ['host', 'port', 'user', 'password', 'mailbox', 'maxMessages'],
     },
+    'src.eventhubs': {
+        'kind': 'source',
+        'summary': "Read an event hub through its namespace's Kafka endpoint, signed in with the connection string from the Azure portal (Shared access policies, a policy with Listen). Batch-consumes up to Max messages from one partition, like src.kafka, and emits {offset, key, value, timestamp_ms} rows. Needs the S...",
+        'params': ['connectionString', 'eventHub', 'partitionId', 'offset', 'trackOffset', 'maxRecords'],
+    },
     'src.excel': {
         'kind': 'source',
         'summary': 'Read .xlsx via the DuckDB excel extension',
