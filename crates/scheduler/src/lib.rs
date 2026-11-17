@@ -979,6 +979,12 @@ impl Scheduler {
                     adjustment: None,
                 };
                 let queued = occurrences::entry(id, &at, None, Decision::Queued { reason }, None, &decided_at);
+                // No longer idle from before the entry is written. A tick that
+                // sees it waiting while it is still marked idle passes it over,
+                // and a newer occurrence takes the run it was waiting for. Cleared
+                // again below, for a tick that read the ledger empty and marked
+                // it idle while the entry was being written.
+                self.inner.lock().expect("scheduler poisoned").idle.remove(id);
                 // In the ledger rather than in memory, so it outlives the app.
                 if let Err(e) = occurrences::record(&ws, &queued) {
                     warn!("Schedule {}: the occurrence left waiting was not recorded: {}", id, e);
