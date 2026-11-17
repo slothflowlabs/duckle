@@ -6,7 +6,7 @@ reel; this is the full ledger.
 
 The palette currently carries **427 components**, broken down:
 
-- **414 available** - executes on the DuckDB engine today
+- **416 available** - executes on the DuckDB engine today
 - **3 preview** - configurable in the designer (drag, wire, set
   properties); execution is being wired engine-by-engine
 - **11 planned** - reserved in the palette so the roadmap is visible,
@@ -46,10 +46,9 @@ separate engine workstream; lands alongside the next broker driver.
 | Component | Notes |
 |---|---|
 | `src.pinecone` | Pinecone has no "scan all vectors" API by design; reads happen via query (similarity search). The right shape is a query node, not a generic read source |
-| `src.chroma` / `snk.chroma` | Chroma's API is in flux; pin to a stable version first |
 | `src.lancedb` / `snk.lancedb` | LanceDB Rust SDK; new dep |
 
-`src.qdrant`, `src.weaviate`, and `src.milvus` shipped - each is a
+`src.qdrant`, `src.weaviate`, `src.milvus` and `src.chroma` shipped - each is a
 vendor-specific paginated HTTP scan implemented directly against the
 public REST API (no SDK). See the Capabilities table in the README.
 Corresponding **sinks** are all available too.
@@ -163,7 +162,7 @@ The 15 preview components are:
   designer-side configurable, engine-side waiting on the vendor-specific
   scan-endpoint work (see vector-DB section above). All four have
   working **sinks** today.
-- **`src.chroma`, `snk.chroma`, `src.lancedb`, `snk.lancedb`** -
+- **`src.lancedb`, `snk.lancedb`** -
   waiting on a vendor SDK pin or a stable HTTP API.
 - **`xf.ai.embed`, `xf.ai.llm`, `xf.ai.chunk`, `xf.ai.classify`,
   `xf.ai.pii`, `xf.ai.dedupe`** - waiting on the model-API credential

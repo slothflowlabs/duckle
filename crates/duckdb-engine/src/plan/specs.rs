@@ -1277,6 +1277,55 @@ impl std::fmt::Debug for ExcelOnlineSourceSpec {
     }
 }
 
+/// Where a Chroma collection lives: a server of its own or Chroma Cloud, its
+/// tenant and database, the collection's name, and the API key Cloud takes.
+#[derive(Clone)]
+pub struct ChromaTarget {
+    pub endpoint: String,
+    pub tenant: String,
+    pub database: String,
+    pub collection: String,
+    pub api_key: Option<String>,
+}
+
+/// By hand, so a log or an error that prints a plan never prints the key.
+impl std::fmt::Debug for ChromaTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChromaTarget")
+            .field("endpoint", &self.endpoint)
+            .field("tenant", &self.tenant)
+            .field("database", &self.database)
+            .field("collection", &self.collection)
+            .field("api_key", &self.api_key.as_ref().map(|_| "***"))
+            .finish()
+    }
+}
+
+/// src.chroma: a collection's records, read page by page, each with its id,
+/// document and metadata, and its embedding when asked for.
+#[derive(Debug, Clone)]
+pub struct ChromaSourceSpec {
+    pub node_id: String,
+    pub target: ChromaTarget,
+    pub page_size: u64,
+    pub max_pages: u64,
+    pub with_vector: bool,
+    /// A `where` filter on the metadata, as Chroma takes it.
+    pub filter: Option<serde_json::Value>,
+}
+
+/// snk.chroma: the upstream rows upserted into a collection, made when it is
+/// not there yet. Chroma takes no record without its embedding.
+#[derive(Debug, Clone)]
+pub struct ChromaSinkSpec {
+    pub from_view: String,
+    pub target: ChromaTarget,
+    pub id_column: String,
+    pub vector_column: String,
+    pub document_column: Option<String>,
+    pub batch_size: usize,
+}
+
 /// src.webhook: bind 127.0.0.1:port, accept up to `max_requests`
 /// inbound HTTP requests with a global `timeout_ms` deadline, parse
 /// each request body as JSON (or fall back to a {body, method, path,

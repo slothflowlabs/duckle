@@ -398,6 +398,19 @@ fn service_account_key(props: &JsonValue, component: &str) -> Result<Option<Stri
 }
 
 /// The Sheets API's base URL a node names, or Google's.
+/// Where a Chroma node's collection lives: a local server, and Chroma's own
+/// tenant and database, unless the node names others.
+fn chroma_target(props: &JsonValue, component: &str) -> Result<ChromaTarget, EngineError> {
+    let text = |key: &str| string_prop(props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    Ok(ChromaTarget {
+        endpoint: text("endpoint").unwrap_or_else(|| "http://localhost:8000".into()).trim_end_matches('/').to_string(),
+        tenant: text("tenant").unwrap_or_else(|| "default_tenant".into()),
+        database: text("database").unwrap_or_else(|| "default_database".into()),
+        collection: text("collection").ok_or_else(|| EngineError::Config(format!("{component}: collection required")))?,
+        api_key: string_prop(props, "apiKey").filter(|s| !s.is_empty()),
+    })
+}
+
 fn sheets_endpoint(props: &JsonValue) -> String {
     string_prop(props, "endpoint")
         .map(|s| s.trim().trim_end_matches('/').to_string())
@@ -636,6 +649,8 @@ pub enum RuntimeSpec {
     AccessSink(AccessSinkSpec),
     SharePointSource(SharePointSourceSpec),
     ExcelOnlineSource(ExcelOnlineSourceSpec),
+    ChromaSource(ChromaSourceSpec),
+    ChromaSink(ChromaSinkSpec),
     SharePointSink(SharePointSinkSpec),
     AttachParquetSource(AttachParquetSourceSpec),
     /// materialize = "duckdb"/"duckdbfile": persist the stage into a DuckDB file.
@@ -2252,6 +2267,8 @@ fn build_stage(
     let mut redis_sink: Option<RedisSinkSpec> = None;
     let mut redis_source: Option<RedisSourceSpec> = None;
     let mut qdrant_source: Option<QdrantSourceSpec> = None;
+    let mut chroma_source: Option<ChromaSourceSpec> = None;
+    let mut chroma_sink: Option<ChromaSinkSpec> = None;
     let mut weaviate_source: Option<WeaviateSourceSpec> = None;
     let mut milvus_source: Option<MilvusSourceSpec> = None;
     let mut format_source: Option<FormatFileSourceSpec> = None;
@@ -2654,6 +2671,19 @@ fn build_stage(
             body_extras: Vec::new(),
             bulk_action: None,
             text_template: None,
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.chroma" {
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let column = |key: &str| string_prop(&props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        chroma_sink = Some(ChromaSinkSpec {
+            from_view: from_view.to_string(),
+            target: chroma_target(&props, component_id)?,
+            id_column: column("idColumn").unwrap_or_else(|| "id".into()),
+            vector_column: column("vectorColumn").unwrap_or_else(|| "vector".into()),
+            document_column: column("documentColumn"),
+            // Held at run time to what the server says a call may carry.
+            batch_size: props.get("batchSize").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(100) as usize,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.weaviate" {
@@ -5756,6 +5786,29 @@ fn build_stage(
             with_vector: props.get("withVector").and_then(|v| v.as_bool()).unwrap_or(false),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.chroma" {
+        // The filter is Chroma's own `where`: a JSON object, checked here.
+        let filter = match string_prop(&props, "filter").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+            None => None,
+            Some(text) => match serde_json::from_str::<JsonValue>(&text) {
+                Ok(f) if f.is_object() => Some(f),
+                _ => {
+                    return Err(EngineError::Config(format!(
+                        "{}: the metadata filter is not a JSON object, such as {{\"category\": \"docs\"}}",
+                        component_id
+                    )))
+                }
+            },
+        };
+        chroma_source = Some(ChromaSourceSpec {
+            node_id: node.id.clone(),
+            target: chroma_target(&props, component_id)?,
+            page_size: props.get("pageSize").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(100),
+            max_pages: props.get("maxPages").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(100),
+            with_vector: props.get("withVector").and_then(JsonValue::as_bool).unwrap_or(false),
+            filter,
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.weaviate" {
         // Weaviate object list source. endpoint + class + optional apiKey.
         let endpoint = string_prop(&props, "endpoint")
@@ -7879,6 +7932,8 @@ fn build_stage(
         .or_else(|| redis_sink.map(RuntimeSpec::RedisSink))
         .or_else(|| redis_source.map(RuntimeSpec::RedisSource))
         .or_else(|| qdrant_source.map(RuntimeSpec::QdrantSource))
+        .or_else(|| chroma_source.map(RuntimeSpec::ChromaSource))
+        .or_else(|| chroma_sink.map(RuntimeSpec::ChromaSink))
         .or_else(|| weaviate_source.map(RuntimeSpec::WeaviateSource))
         .or_else(|| milvus_source.map(RuntimeSpec::MilvusSource))
         .or_else(|| format_source.map(RuntimeSpec::FormatSource))

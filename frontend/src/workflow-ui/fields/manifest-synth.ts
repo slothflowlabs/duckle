@@ -9101,6 +9101,49 @@ const distanceMetricField = (): Field => ({
 });
 
 function synthVectorSink(comp: ComponentDef): ComponentManifest {
+    // snk.chroma: keys mirror ChromaSinkSpec's parse in plan/mod.rs.
+    if (comp.id === 'snk.chroma') {
+        return base(comp, [
+        {
+            label: 'Chroma',
+            fields: [
+                {
+                    key: 'endpoint',
+                    label: 'Endpoint',
+                    kind: 'text',
+                    placeholder: 'http://localhost:8000',
+                    description: 'The Chroma server, or https://api.trychroma.com for Chroma Cloud. Leave empty for a local server.',
+                },
+                { key: 'collection', label: 'Collection', kind: 'text', required: true },
+                { key: 'tenant', label: 'Tenant', kind: 'text', placeholder: 'default_tenant' },
+                { key: 'database', label: 'Database', kind: 'text', placeholder: 'default_database' },
+                {
+                    key: 'apiKey',
+                    label: 'API key',
+                    kind: 'text',
+                    secret: true,
+                    placeholder: '••••••••',
+                    description: 'For Chroma Cloud. A server of your own takes none.',
+                },
+            ],
+        },
+            {
+                label: 'Records',
+                fields: [
+                    { key: 'idColumn', label: 'Id column', kind: 'column', defaultValue: 'id', description: 'Each record\'s id. A record with an id already there is replaced.' },
+                    {
+                        key: 'vectorColumn',
+                        label: 'Embedding column',
+                        kind: 'column',
+                        defaultValue: 'vector',
+                        description: 'A list of numbers. Chroma takes no record without its embedding.',
+                    },
+                    { key: 'documentColumn', label: 'Document column', kind: 'column', description: 'The text each record keeps, if any. Every other column becomes metadata.' },
+                    { key: 'batchSize', label: 'Batch size', kind: 'integer', defaultValue: 100, description: 'Records a call. Held to what the server takes.' },
+                ],
+            },
+        ], 'upstream');
+    }
     if (comp.id === 'snk.pinecone') {
         return base(comp, [
             {
@@ -9336,6 +9379,56 @@ function synthVectorSink(comp: ComponentDef): ComponentManifest {
 }
 
 function synthVectorSource(comp: ComponentDef): ComponentManifest {
+    // src.chroma: keys mirror ChromaSourceSpec's parse in plan/mod.rs.
+    if (comp.id === 'src.chroma') {
+        return base(comp, [
+        {
+            label: 'Chroma',
+            fields: [
+                {
+                    key: 'endpoint',
+                    label: 'Endpoint',
+                    kind: 'text',
+                    placeholder: 'http://localhost:8000',
+                    description: 'The Chroma server, or https://api.trychroma.com for Chroma Cloud. Leave empty for a local server.',
+                },
+                { key: 'collection', label: 'Collection', kind: 'text', required: true },
+                { key: 'tenant', label: 'Tenant', kind: 'text', placeholder: 'default_tenant' },
+                { key: 'database', label: 'Database', kind: 'text', placeholder: 'default_database' },
+                {
+                    key: 'apiKey',
+                    label: 'API key',
+                    kind: 'text',
+                    secret: true,
+                    placeholder: '••••••••',
+                    description: 'For Chroma Cloud. A server of your own takes none.',
+                },
+            ],
+        },
+            {
+                label: 'Read',
+                fields: [
+                    {
+                        key: 'filter',
+                        label: 'Metadata filter (JSON)',
+                        kind: 'textarea',
+                        rows: 3,
+                        placeholder: '{"category": "docs"}',
+                        description: "Chroma's own where filter on the metadata. Leave empty for every record.",
+                    },
+                    { key: 'withVector', label: 'Include embeddings', kind: 'bool', defaultValue: false, description: 'Adds each record\'s embedding as a vector column.' },
+                    { key: 'pageSize', label: 'Page size', kind: 'integer', defaultValue: 100 },
+                    {
+                        key: 'maxPages',
+                        label: 'Max pages',
+                        kind: 'integer',
+                        defaultValue: 100,
+                        description: 'A collection with more records than this many pages hold fails the run rather than reading part of it.',
+                    },
+                ],
+            },
+        ]);
+    }
     if (comp.id === 'src.pgvector') {
         // pgvector tables live inside a regular Postgres server, so the
         // same connection + table form as src.postgres applies. Vector

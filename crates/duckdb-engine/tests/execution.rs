@@ -12011,10 +12011,252 @@ fn kinesis_writes_and_reads_back_every_shard_of_a_live_stream() {
     );
 }
 
-/// A Microsoft endpoint on localhost (sign-in and Graph alike) that answers each
-/// request with the next of `answers`: a status, header lines (`{base}` stands
-/// for this server's address) and a body. Each request's head and body is kept.
-fn microsoft_endpoint(
+/// A Chroma server for the live tests: DUCKLE_CHROMA_URL, or the test skips.
+fn chroma_url() -> Option<String> {
+    match std::env::var("DUCKLE_CHROMA_URL") {
+        Ok(u) if !u.is_empty() => Some(u.trim_end_matches('/').to_string()),
+        _ => {
+            eprintln!("skipping: set DUCKLE_CHROMA_URL to run live Chroma tests");
+            None
+        }
+    }
+}
+
+/// A collection named for this run, deleted when the test ends, passed or not.
+struct ChromaCollection {
+    url: String,
+    name: String,
+}
+
+impl ChromaCollection {
+    fn new(url: &str, prefix: &str) -> Self {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        ChromaCollection { url: url.to_string(), name: format!("{prefix}-{}-{stamp}", std::process::id()) }
+    }
+
+    fn path(&self) -> String {
+        format!("{}/api/v2/tenants/default_tenant/databases/default_database/collections/{}", self.url, self.name)
+    }
+}
+
+impl Drop for ChromaCollection {
+    fn drop(&mut self) {
+        let _ = ureq::delete(&self.path()).call();
+    }
+}
+
+/// Five records: an id, a document (one has none), a two-number embedding, and
+/// two columns to be metadata.
+const CHROMA_ROWS: &str = "SELECT * FROM (VALUES \
+    ('a', 'alpha', [0.1, 0.2]::FLOAT[], 'x', 1), \
+    ('b', 'beta', [0.3, 0.4]::FLOAT[], 'y', 2), \
+    ('c', NULL, [0.5, 0.6]::FLOAT[], 'x', 3), \
+    ('d', 'delta', [0.7, 0.8]::FLOAT[], 'y', 4), \
+    ('e', 'epsilon', [0.9, 1.0]::FLOAT[], 'x', 5)) t(id, document, vector, category, score)";
+
+/// CHROMA_ROWS upserted into the collection by snk.chroma, two a call.
+fn chroma_fill(engine: &duckle_duckdb_engine::DuckdbEngine, url: &str, collection: &str) {
+    let put = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": CHROMA_ROWS })),
+            node("k", "snk.chroma", json!({
+                "endpoint": url, "collection": collection, "documentColumn": "document", "batchSize": 2,
+            })),
+        ]),
+        json!([main_edge("e", "s", "k")]),
+    ));
+    assert_eq!(put.status, "ok", "upsert failed: {:?}", put.error);
+}
+
+/// snk.chroma upserts rows into a collection it makes: ids, documents,
+/// embeddings, and the other columns as metadata. src.chroma reads them back page
+/// by page, and a metadata filter reads only the records it matches. Against a
+/// live Chroma: set DUCKLE_CHROMA_URL (http://localhost:8000) to run it.
+#[test]
+fn chroma_writes_and_reads_back_a_collection() {
+    let engine = engine_or_skip!();
+    let Some(url) = chroma_url() else { return };
+    let collection = ChromaCollection::new(&url, "duckle-roundtrip");
+    chroma_fill(&engine, &url, &collection.name);
+    let tmp = tempfile::tempdir().unwrap();
+    let read = |extra: serde_json::Value, file: &str| -> Vec<serde_json::Value> {
+        let mut props = json!({ "endpoint": &url, "collection": &collection.name, "pageSize": 2 });
+        props.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let out = out_path(tmp.path(), file);
+        let r = engine.execute_pipeline(&doc(
+            json!([node("c", "src.chroma", props), node("o", "snk.jsonl", json!({ "path": &out }))]),
+            json!([main_edge("e", "c", "o")]),
+        ));
+        assert_eq!(r.status, "ok", "read failed: {:?}", r.error);
+        duckdb_json(&format!("SELECT * FROM read_json_auto('{}') ORDER BY id", out))
+    };
+    let all = read(json!({ "withVector": true }), "all.jsonl");
+    assert_eq!(all.len(), 5, "five records, over three pages of two");
+    assert_eq!(
+        (&all[0]["id"], &all[0]["document"], &all[0]["category"], &all[0]["score"]),
+        (&json!("a"), &json!("alpha"), &json!("x"), &json!(1))
+    );
+    assert_eq!(all[2]["document"], serde_json::Value::Null, "a record with no document");
+    let v: Vec<f64> = all[0]["vector"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+    assert!(v.len() == 2 && (v[0] - 0.1).abs() < 1e-6 && (v[1] - 0.2).abs() < 1e-6, "{v:?}");
+    let xs = read(json!({ "filter": r#"{"category": "x"}"# }), "x.jsonl");
+    assert_eq!(xs.iter().map(|r| r["id"].as_str().unwrap()).collect::<Vec<_>>(), ["a", "c", "e"]);
+    assert!(xs[0].get("vector").is_none(), "no vector unless asked for: {:?}", xs[0]);
+}
+
+/// A page cap that stops the read before the collection's end fails the run,
+/// rather than reading part of it; a cap the collection fits exactly does not.
+#[test]
+fn src_chroma_fails_when_max_pages_stops_it_short() {
+    let engine = engine_or_skip!();
+    let Some(url) = chroma_url() else { return };
+    let collection = ChromaCollection::new(&url, "duckle-pagecap");
+    chroma_fill(&engine, &url, &collection.name);
+    let tmp = tempfile::tempdir().unwrap();
+    let run = |page_size: u64, max_pages: u64| {
+        engine.execute_pipeline(&doc(
+            json!([
+                node("c", "src.chroma", json!({
+                    "endpoint": &url, "collection": &collection.name, "pageSize": page_size, "maxPages": max_pages,
+                })),
+                node("o", "snk.jsonl", json!({ "path": out_path(tmp.path(), &format!("p{page_size}x{max_pages}.jsonl")) })),
+            ]),
+            json!([main_edge("e", "c", "o")]),
+        ))
+    };
+    let short = run(2, 2);
+    assert_eq!(short.status, "error", "four of five read");
+    let e = short.error.unwrap_or_default();
+    assert!(e.contains("more remain"), "{e}");
+    let exact = run(5, 1);
+    assert_eq!(exact.status, "ok", "five records fit one page of five: {:?}", exact.error);
+}
+
+/// A row without an embedding is refused before anything is sent: Chroma takes
+/// no record without one, and no collection is made for rows it cannot hold.
+#[test]
+fn snk_chroma_refuses_a_row_without_an_embedding() {
+    let engine = engine_or_skip!();
+    let Some(url) = chroma_url() else { return };
+    let collection = ChromaCollection::new(&url, "duckle-noembedding");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({
+                "sql": "SELECT * FROM (VALUES ('a', [0.1, 0.2]::FLOAT[]), ('b', NULL)) t(id, vector)",
+            })),
+            node("k", "snk.chroma", json!({ "endpoint": &url, "collection": &collection.name })),
+        ]),
+        json!([main_edge("e", "s", "k")]),
+    ));
+    assert_eq!(r.status, "error");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("row 2") && e.contains("vector"), "{e}");
+    assert!(
+        matches!(ureq::get(&collection.path()).call(), Err(ureq::Error::Status(404, _))),
+        "no collection is made"
+    );
+}
+
+/// Reading a collection that is not there says so, in Chroma's words.
+#[test]
+fn src_chroma_says_when_the_collection_is_not_there() {
+    let engine = engine_or_skip!();
+    let Some(url) = chroma_url() else { return };
+    let tmp = tempfile::tempdir().unwrap();
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("c", "src.chroma", json!({ "endpoint": &url, "collection": "duckle-nowhere" })),
+            node("o", "snk.jsonl", json!({ "path": out_path(tmp.path(), "none.jsonl") })),
+        ]),
+        json!([main_edge("e", "c", "o")]),
+    ));
+    assert_eq!(r.status, "error");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("does not exist"), "{e}");
+}
+
+/// src.chroma sends its API key as Chroma Cloud takes it, in x-chroma-token, on
+/// every call, under the tenant and database named; and a metadata key named
+/// like a record's own field does not take its place.
+#[test]
+fn src_chroma_signs_in_as_chroma_cloud_takes_it() {
+    let engine = engine_or_skip!();
+    let (endpoint, seen, handle) = scripted_endpoint(vec![
+        (200, "Content-Type: application/json", br#"{"id":"c-1","name":"docs"}"#.to_vec()),
+        (
+            200,
+            "Content-Type: application/json",
+            br#"{"ids":["a"],"documents":["alpha"],"metadatas":[{"id":"spoof","document":"spoof","topic":"t"}]}"#.to_vec(),
+        ),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "cloud.jsonl");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("c", "src.chroma", json!({
+                "endpoint": &endpoint, "collection": "docs", "tenant": "t1", "database": "prod", "apiKey": "ck-123",
+            })),
+            node("o", "snk.jsonl", json!({ "path": &out })),
+        ]),
+        json!([main_edge("e", "c", "o")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        duckdb_json(&format!("SELECT id, document, topic FROM read_json_auto('{}')", out)),
+        vec![json!({ "id": "a", "document": "alpha", "topic": "t" })]
+    );
+    let calls = seen.lock().unwrap().clone();
+    assert!(calls[0].0.starts_with("GET /api/v2/tenants/t1/databases/prod/collections/docs "), "{}", calls[0].0);
+    assert!(calls[1].0.starts_with("POST /api/v2/tenants/t1/databases/prod/collections/c-1/get "), "{}", calls[1].0);
+    for (head, _) in &calls {
+        assert!(head.to_ascii_lowercase().contains("x-chroma-token: ck-123"), "{head}");
+    }
+}
+
+/// snk.chroma holds each call to the smaller of its batch size and what the
+/// server takes; a null column is left out of a record's metadata, and a list is
+/// kept as its JSON text.
+#[test]
+fn snk_chroma_batches_to_the_server_and_shapes_the_metadata() {
+    let engine = engine_or_skip!();
+    let rows = "SELECT * FROM (VALUES ('a', [0.1]::FLOAT[], 'x', [1, 2]), ('b', [0.2]::FLOAT[], NULL, NULL), \
+                ('c', [0.3]::FLOAT[], 'z', NULL)) t(id, vector, tag, nums)";
+    type Answer = (u16, &'static str, Vec<u8>);
+    let made = || -> Answer { (200, "Content-Type: application/json", br#"{"id":"c-1","name":"docs"}"#.to_vec()) };
+    let limit = || -> Answer { (200, "Content-Type: application/json", br#"{"max_batch_size":2}"#.to_vec()) };
+    let taken = || -> Answer { (200, "Content-Type: application/json", b"{}".to_vec()) };
+    let upserts = |batch: u64, answers: Vec<Answer>| -> Vec<serde_json::Value> {
+        let (endpoint, seen, handle) = scripted_endpoint(answers);
+        let r = engine.execute_pipeline(&doc(
+            json!([
+                node("s", "code.sql", json!({ "sql": rows })),
+                node("k", "snk.chroma", json!({ "endpoint": &endpoint, "collection": "docs", "batchSize": batch })),
+            ]),
+            json!([main_edge("e", "s", "k")]),
+        ));
+        let _ = handle.join();
+        assert_eq!(r.status, "ok", "{:?}", r.error);
+        let calls = seen.lock().unwrap().clone();
+        calls
+            .iter()
+            .filter(|(head, _)| head.contains("/upsert "))
+            .map(|(_, body)| serde_json::from_str(body).unwrap())
+            .collect()
+    };
+    let held = upserts(10, vec![made(), limit(), taken(), taken()]);
+    assert_eq!(held.len(), 2, "a batch of 10 held to the server's 2");
+    let kept = upserts(1, vec![made(), limit(), taken(), taken(), taken()]);
+    assert_eq!(kept.len(), 3, "a batch of 1 kept");
+    assert_eq!(held[0]["ids"], json!(["a", "b"]));
+    assert_eq!(held[0]["metadatas"], json!([{ "tag": "x", "nums": "[1,2]" }, null]));
+}
+
+/// A server on localhost (Microsoft's sign-in and Graph, or Chroma) that answers
+/// each request with the next of `answers`: a status, header lines (`{base}`
+/// stands for this server's address) and a body. Each request's head and body
+/// is kept.
+fn scripted_endpoint(
     answers: Vec<(u16, &'static str, Vec<u8>)>,
 ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>, std::thread::JoinHandle<()>) {
     use std::io::{BufRead, Read, Write};
@@ -12107,7 +12349,7 @@ fn excel_workbook(dir: &std::path::Path) -> Vec<u8> {
 fn src_excel_online_reads_a_workbook_by_its_link() {
     let engine = engine_or_skip!();
     let tmp = tempfile::tempdir().unwrap();
-    let (endpoint, seen, handle) = microsoft_endpoint(vec![
+    let (endpoint, seen, handle) = scripted_endpoint(vec![
         (200, "Content-Type: application/json", GRAPH_TOKEN.as_bytes().to_vec()),
         (302, "Location: {base}/download/book.xlsx?tempauth=pre-signed", Vec::new()),
         (200, "Content-Type: application/octet-stream", excel_workbook(tmp.path())),
@@ -12151,7 +12393,7 @@ fn src_excel_online_reads_a_workbook_by_its_link() {
 fn src_excel_online_keeps_to_the_declared_columns() {
     let engine = engine_or_skip!();
     let tmp = tempfile::tempdir().unwrap();
-    let (endpoint, _seen, handle) = microsoft_endpoint(vec![
+    let (endpoint, _seen, handle) = scripted_endpoint(vec![
         (200, "Content-Type: application/json", GRAPH_TOKEN.as_bytes().to_vec()),
         (302, "Location: {base}/download/book.xlsx", Vec::new()),
         (200, "Content-Type: application/octet-stream", excel_workbook(tmp.path())),
@@ -12176,7 +12418,7 @@ fn src_excel_online_keeps_to_the_declared_columns() {
 #[test]
 fn src_excel_online_names_the_permission_the_app_lacks() {
     let engine = engine_or_skip!();
-    let (endpoint, _seen, handle) = microsoft_endpoint(vec![
+    let (endpoint, _seen, handle) = scripted_endpoint(vec![
         (200, "Content-Type: application/json", GRAPH_TOKEN.as_bytes().to_vec()),
         (403, "Content-Type: application/json", br#"{"error":{"code":"accessDenied","message":"Access denied"}}"#.to_vec()),
     ]);
@@ -12199,7 +12441,7 @@ fn src_excel_online_names_the_permission_the_app_lacks() {
 #[test]
 fn src_excel_online_says_why_the_sign_in_was_refused() {
     let engine = engine_or_skip!();
-    let (endpoint, _seen, handle) = microsoft_endpoint(vec![(
+    let (endpoint, _seen, handle) = scripted_endpoint(vec![(
         401,
         "Content-Type: application/json",
         br#"{"error":"invalid_client","error_description":"AADSTS7000215: Invalid client secret provided. Ensure the secret being sent in the request is the client secret value, not the client secret ID.\r\nTrace ID: 0ab1\r\nCorrelation ID: 9cd2\r\nTimestamp: 2026-11-17 12:00:00Z"}"#.to_vec(),

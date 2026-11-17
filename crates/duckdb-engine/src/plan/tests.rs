@@ -7158,6 +7158,121 @@ mod kinesis_source {
     }
 }
 
+/// src.chroma and snk.chroma: where the collection lives and what a row maps to,
+/// worked out before the run.
+mod chroma {
+    use super::*;
+
+    fn doc_of(nodes: serde_json::Value, edge: (&str, &str)) -> PipelineDoc {
+        serde_json::from_value(serde_json::json!({
+            "nodes": nodes,
+            "edges": [{"id":"e","source":edge.0,"target":edge.1,"data":{"connectionType":"main"}}]
+        }))
+        .unwrap()
+    }
+
+    fn source(props: serde_json::Value) -> Result<crate::plan::ChromaSourceSpec, crate::EngineError> {
+        let doc = doc_of(
+            serde_json::json!([
+                {"id":"c","position":{"x":0,"y":0},"data":{"label":"C","componentId":"src.chroma","properties": props}},
+                {"id":"o","position":{"x":0,"y":0},"data":{"label":"out","componentId":"snk.csv","properties":{"path":"/tmp/o.csv"}}}
+            ]),
+            ("c", "o"),
+        );
+        Ok(compile(&doc)?
+            .stages
+            .iter()
+            .find_map(|s| match s.runtime.as_ref() {
+                Some(crate::plan::RuntimeSpec::ChromaSource(c)) => Some(c.clone()),
+                _ => None,
+            })
+            .expect("a Chroma read"))
+    }
+
+    fn sink(props: serde_json::Value) -> Result<crate::plan::ChromaSinkSpec, crate::EngineError> {
+        let doc = doc_of(
+            serde_json::json!([
+                {"id":"s","position":{"x":0,"y":0},"data":{"label":"in","componentId":"src.csv","properties":{"path":"/tmp/i.csv"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"K","componentId":"snk.chroma","properties": props}}
+            ]),
+            ("s", "k"),
+        );
+        Ok(compile(&doc)?
+            .stages
+            .iter()
+            .find_map(|s| match s.runtime.as_ref() {
+                Some(crate::plan::RuntimeSpec::ChromaSink(k)) => Some(k.clone()),
+                _ => None,
+            })
+            .expect("a Chroma write"))
+    }
+
+    /// A local server, and Chroma's own tenant and database, unless the node
+    /// names others, as Chroma Cloud's would.
+    #[test]
+    fn a_local_server_and_chromas_own_tenant_and_database_unless_named() {
+        let local = source(serde_json::json!({ "collection": "docs" })).unwrap();
+        assert_eq!(
+            (local.target.endpoint.as_str(), local.target.tenant.as_str(), local.target.database.as_str()),
+            ("http://localhost:8000", "default_tenant", "default_database")
+        );
+        let cloud = source(serde_json::json!({
+            "collection": "docs", "endpoint": "https://api.trychroma.com/", "tenant": "t1", "database": "prod",
+        }))
+        .unwrap();
+        assert_eq!(
+            (cloud.target.endpoint.as_str(), cloud.target.tenant.as_str(), cloud.target.database.as_str()),
+            ("https://api.trychroma.com", "t1", "prod")
+        );
+    }
+
+    #[test]
+    fn a_collection_is_required_by_both() {
+        assert!(source(serde_json::json!({})).unwrap_err().to_string().contains("collection"));
+        assert!(sink(serde_json::json!({})).unwrap_err().to_string().contains("collection"));
+    }
+
+    /// A metadata filter is a JSON object, checked before the run.
+    #[test]
+    fn a_filter_is_a_json_object() {
+        let c = source(serde_json::json!({ "collection": "docs", "filter": r#"{"category": "x"}"# })).unwrap();
+        assert_eq!(c.filter, Some(serde_json::json!({ "category": "x" })));
+        for bad in ["{category", r#"["x"]"#] {
+            let e = source(serde_json::json!({ "collection": "docs", "filter": bad })).unwrap_err().to_string();
+            assert!(e.contains("filter"), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn the_source_reads_pages_without_vectors_unless_asked() {
+        let c = source(serde_json::json!({ "collection": "docs" })).unwrap();
+        assert_eq!((c.page_size, c.max_pages, c.with_vector), (100, 100, false));
+        let c = source(serde_json::json!({ "collection": "docs", "pageSize": 7, "maxPages": 3, "withVector": true })).unwrap();
+        assert_eq!((c.page_size, c.max_pages, c.with_vector), (7, 3, true));
+    }
+
+    #[test]
+    fn a_row_maps_by_its_id_vector_and_document_columns() {
+        let s = sink(serde_json::json!({ "collection": "docs" })).unwrap();
+        assert_eq!((s.id_column.as_str(), s.vector_column.as_str(), s.document_column.as_deref()), ("id", "vector", None));
+        let named = sink(serde_json::json!({
+            "collection": "docs", "idColumn": "doc_id", "vectorColumn": "embedding", "documentColumn": "text",
+        }))
+        .unwrap();
+        assert_eq!(
+            (named.id_column.as_str(), named.vector_column.as_str(), named.document_column.as_deref()),
+            ("doc_id", "embedding", Some("text"))
+        );
+    }
+
+    #[test]
+    fn the_api_key_never_prints() {
+        let c = source(serde_json::json!({ "collection": "docs", "apiKey": "ck-secret" })).unwrap();
+        assert!(!format!("{c:?}").contains("ck-secret"));
+        assert!(crate::util::is_secret_prop_key("apiKey"));
+    }
+}
+
 /// src.excel-online: what a node needs to reach a workbook, worked out before the
 /// run.
 mod excel_online_source {

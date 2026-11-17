@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 427 components, 414 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 209 connectors (129 sources / 80 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 427 components, 416 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 211 connectors (130 sources / 81 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -94,7 +94,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.bigquery` BigQuery: Read tables from BigQuery via the duckdb-bigquery community extension - uses standard GCP credential discovery
 - `src.cassandra` Cassandra: Read CQL via the scylla driver (works with both Cassandra and ScyllaDB)
 - `src.changed` Changed? (remote poll): Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForEach downstream. Emits uri / name / size_bytes (and size) / modified_at / etag / fingerprint / status. A first run either emits what is already there or records it as a baseline and emits only what arrives later. When nothing changed the node reports `unchanged` rather than a bare success, so a working poll and a broken one are told apart. Fingerprints are conservative: a missing or unreadable signal counts as CHANGED, because re-reading costs compute and skipping loses data. Position advances only when the run succeeds
-- `src.chroma` Chroma [preview]: Reads data from Chroma
+- `src.chroma` Chroma: Read a Chroma collection page by page over its HTTP API (v2), on your own server or Chroma Cloud: emits {id, document, ...metadata[, vector]}, with an optional metadata filter. A collection longer than Max pages fails the run rather than reading part of it
 - `src.clickhouse` ClickHouse: Read ClickHouse via the HTTP interface (POST SELECT ... FORMAT JSON). User/password auth via X-ClickHouse-User / X-ClickHouse-Key headers
 - `src.clickup` ClickUp: ClickUp REST. Bearer Personal API token (pk_... from Settings > Apps). Page pagination on `?page=N` (paginationType `page`, pageParam `page`). responsePath /tasks (or whatever resource). Base URL https://api.clickup.com/api/v2
 - `src.clipboard` Clipboard: Read the system clipboard via pure-Rust arboard. If the text parses as JSON-array-of-objects each element becomes a row; otherwise a single {text, length} row is emitted. Fails clearly on headless Linux (no display server) - desktop-only by design
@@ -227,7 +227,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.b2` Backblaze B2: Write via S3-compatible endpoint
 - `snk.bigquery` BigQuery: Write tables to BigQuery via the duckdb-bigquery community extension
 - `snk.cassandra` Cassandra: INSERT rows into a Cassandra table via the scylla CQL driver (one INSERT per row; CQL has no multi-row VALUES)
-- `snk.chroma` Chroma [preview]: Writes data to Chroma
+- `snk.chroma` Chroma: Upsert rows into a Chroma collection, made if it is not there: an id, an embedding (a list of numbers, which Chroma requires) and an optional document from the columns named, the other columns as metadata. Batches are held to what the server takes
 - `snk.clickhouse` ClickHouse: INSERT to ClickHouse via the HTTP interface (FORMAT JSONEachRow). Batched at 10k rows by default
 - `snk.cockroach` CockroachDB: Write to CockroachDB via the DuckDB postgres extension (Cockroach speaks the Postgres wire protocol)
 - `snk.csv` CSV: Write delimited text files

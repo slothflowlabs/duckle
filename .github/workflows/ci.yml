@@ -502,6 +502,34 @@ jobs:
           DUCKLE_KINESIS_ENDPOINT: http://localhost:4568
         run: cargo test -p duckle-duckdb-engine --test execution -- kinesis
 
+  # Live Chroma tests: src.chroma and snk.chroma against a Chroma server, pinned
+  # by digest to the image they were written against (it reports 1.0.0).
+  chroma-integration:
+    runs-on: ubuntu-24.04
+    services:
+      chroma:
+        image: chromadb/chroma@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6
+        ports: ['8000:8000']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install DuckDB CLI
+        run: |
+          set -e
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
+          mkdir -p "$RUNNER_TEMP/duckdb"
+          tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
+          echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
+      - name: Wait for Chroma
+        run: |
+          for i in $(seq 1 30); do curl -sf http://localhost:8000/api/v2/heartbeat > /dev/null && break; sleep 2; done
+          curl -sf http://localhost:8000/api/v2/heartbeat
+      - name: Run Chroma tests
+        env:
+          DUCKLE_CHROMA_URL: http://localhost:8000
+        run: cargo test -p duckle-duckdb-engine --test execution -- chroma
+
   # Live MySQL integration tests (also covers MariaDB, same wire).
   # SharePoint Server has no container, so tests/sharepoint.rs runs against
   # tests/sharepoint_mock.py: SharePoint's REST shapes behind a real NTLM

@@ -340,9 +340,8 @@ COMPONENTS = {
     },
     'snk.chroma': {
         'kind': 'sink',
-        'summary': '',
-        'params': ['endpoint', 'apiKey', 'collection', 'connectionRef', 'embeddingColumn', 'idColumn', 'dimension', 'metric', 'mode', 'batchSize', 'createIfMissing'],
-        'unverified': ['metadataColumns'],
+        'summary': 'Upsert rows into a Chroma collection, made if it is not there: an id, an embedding (a list of numbers, which Chroma requires) and an optional document from the columns named, the other columns as metadata. Batches are held to what the server takes.',
+        'params': ['endpoint', 'collection', 'tenant', 'database', 'apiKey', 'idColumn', 'vectorColumn', 'documentColumn', 'batchSize'],
     },
     'snk.clickhouse': {
         'kind': 'sink',
@@ -771,9 +770,8 @@ COMPONENTS = {
     },
     'src.chroma': {
         'kind': 'source',
-        'summary': '',
-        'params': ['endpoint', 'apiKey', 'collection', 'connectionRef', 'topK', 'filter'],
-        'unverified': ['queryMode', 'queryText'],
+        'summary': 'Read a Chroma collection page by page over its HTTP API (v2), on your own server or Chroma Cloud: emits {id, document, ...metadata[, vector]}, with an optional metadata filter. A collection longer than Max pages fails the run rather than reading part of it.',
+        'params': ['endpoint', 'collection', 'tenant', 'database', 'apiKey', 'filter', 'withVector', 'pageSize', 'maxPages'],
     },
     'src.clickhouse': {
         'kind': 'source',

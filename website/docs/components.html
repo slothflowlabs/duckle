@@ -133,7 +133,7 @@
 <span class="eyebrow">Reference</span>
 <h1>Component reference</h1>
 <!-- BEGIN GENERATED summary (website/scripts/build-llms.mjs writes this from the component catalog; edit it there) -->
-<p class="lead">Duckle ships 427 components across six kinds - 135 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 84 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 25 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 414 are available today; the 3 in preview and the 10 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
+<p class="lead">Duckle ships 427 components across six kinds - 135 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 84 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 25 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 416 are available today; the 1 in preview and the 10 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
 
 <div class="grid cols-3">
   <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span><h3>135 sources</h3><p>Files, lakehouse, databases, warehouses, object storage, streaming, SaaS APIs, NoSQL, vector DBs and more, all under <code>src.*</code>.</p></div>
@@ -332,7 +332,7 @@
     <tr><td>Pinecone <span class="chip">Preview</span><br><code>src.pinecone</code></td><td>Fetch or similarity-search vectors (Pinecone has no list-all-vectors endpoint; the proper shape is a query node, on the roadmap)</td></tr>
     <tr><td>Qdrant<br><code>src.qdrant</code></td><td>Scroll all points in a Qdrant collection via /collections/{id}/points/scroll. Cursor pagination on <code>result.next_page_offset</code>; emits {id, ...payload[, vector]} rows. apiKey via api-key header</td></tr>
     <tr><td>Weaviate<br><code>src.weaviate</code></td><td>List Weaviate objects via GET /v1/objects?class=&amp;after=. Cursor pagination on the last object's id; emits {id, ...properties[, vector]} rows. apiKey via Bearer</td></tr>
-    <tr><td>Chroma <span class="chip">Preview</span><br><code>src.chroma</code></td><td>Reads data from Chroma</td></tr>
+    <tr><td>Chroma<br><code>src.chroma</code></td><td>Read a Chroma collection page by page over its HTTP API (v2), on your own server or Chroma Cloud: emits {id, document, ...metadata[, vector]}, with an optional metadata filter. A collection longer than Max pages fails the run rather than reading part of it</td></tr>
     <tr><td>Milvus<br><code>src.milvus</code></td><td>Query Milvus via POST /v1/vector/query. Offset pagination on <code>offset</code> + <code>limit</code>; emits each <code>data[]</code> element as a row. Provide a filter expression (default <code>id &gt; 0</code>) and optional outputFields. apiKey via Bearer</td></tr>
     <tr><td>Pixeltable<br><code>src.pixeltable</code></td><td>Read a Pixeltable table (#223), the multimodal AI data store. Exchanges through Parquet: Pixeltable exports the table (or a filtered/limited subset) and Duckle ingests it with read_parquet, so no rows cross one at a time. Supports versioned reads via table:N. Needs a Python with pixeltable installed; the desktop app provisions one on first use</td></tr>
     <tr><td>LanceDB<br><code>src.lancedb</code></td><td>Read a Lance table (local dir, LanceDB Cloud db://, or s3:// / gs:// / az:// object store) via the bundled duckle-lance sidecar</td></tr>
@@ -909,7 +909,7 @@
     <tr><td>Pinecone<br><code>snk.pinecone</code></td><td>Upsert vectors to a Pinecone index via /vectors/upsert with Api-Key auth</td></tr>
     <tr><td>Qdrant<br><code>snk.qdrant</code></td><td>Upsert points to a Qdrant collection via PUT /collections/{name}/points</td></tr>
     <tr><td>Weaviate<br><code>snk.weaviate</code></td><td>Batch upsert objects to a Weaviate cluster via /v1/batch/objects with Bearer auth</td></tr>
-    <tr><td>Chroma <span class="chip">Preview</span><br><code>snk.chroma</code></td><td>Writes data to Chroma</td></tr>
+    <tr><td>Chroma<br><code>snk.chroma</code></td><td>Upsert rows into a Chroma collection, made if it is not there: an id, an embedding (a list of numbers, which Chroma requires) and an optional document from the columns named, the other columns as metadata. Batches are held to what the server takes</td></tr>
     <tr><td>Milvus<br><code>snk.milvus</code></td><td>Insert rows to a Milvus collection via /v1/vector/insert</td></tr>
     <tr><td>Pixeltable<br><code>snk.pixeltable</code></td><td>Write rows into a Pixeltable table (#223). Duckle COPYs the upstream rows to Parquet and Pixeltable inserts the file directly. Insert appends to an existing table; Create builds one from the incoming rows. Needs a Python with pixeltable installed; the desktop app provisions one on first use</td></tr>
     <tr><td>LanceDB<br><code>snk.lancedb</code></td><td>Write rows to a Lance table (create/overwrite or append) via the bundled duckle-lance sidecar</td></tr>
