@@ -11557,6 +11557,10 @@ fn snk_kinesis_puts_each_row_as_a_record_in_signed_batches() {
         let head = head.to_ascii_lowercase();
         assert!(head.contains("x-amz-target: kinesis_20131202.putrecords"), "{head}");
         assert!(
+            head.contains("content-type: application/x-amz-json-1.1"),
+            "the JSON version the Kinesis API documents: {head}"
+        );
+        assert!(
             head.contains("credential=akidexample/") && head.contains("/eu-west-1/kinesis/aws4_request"),
             "signed for the region's Kinesis: {head}"
         );
@@ -11679,6 +11683,332 @@ fn snk_kinesis_keeps_each_call_and_record_within_the_kinesis_limits() {
     let e = r.error.unwrap_or_default();
     assert!(e.contains("row 1") && e.contains("1 MiB"), "{e}");
     assert!(seen.lock().unwrap().is_empty());
+}
+
+/// GetRecords' answer: these rows as records, each Data the row as base64 JSON,
+/// and the next iterator, or none once the shard is closed.
+fn kinesis_records_answer(rows: &[serde_json::Value], next: Option<&str>) -> &'static str {
+    use base64::Engine as _;
+    let records: Vec<serde_json::Value> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            json!({
+                "Data": base64::engine::general_purpose::STANDARD.encode(row.to_string()),
+                "PartitionKey": format!("k{i}"),
+                "SequenceNumber": format!("{i}"),
+            })
+        })
+        .collect();
+    let mut answer = json!({ "Records": records, "MillisBehindLatest": 0 });
+    if let Some(next) = next {
+        answer["NextShardIterator"] = json!(next);
+    }
+    Box::leak(answer.to_string().into_boxed_str())
+}
+
+fn kinesis_source(endpoint: &str, extra: serde_json::Value) -> serde_json::Value {
+    let mut props = json!({
+        "region": "eu-west-1",
+        "streamName": "orders",
+        "accessKeyId": "AKIDEXAMPLE",
+        "secretAccessKey": "wJalrXUtnFEMI",
+        "endpoint": endpoint,
+    });
+    for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+        props[k] = v;
+    }
+    node("k", "src.kinesis", props)
+}
+
+/// Each call kinesis_endpoint kept: its X-Amz-Target, lower-cased, and its body.
+fn kinesis_calls(seen: &std::sync::Mutex<Vec<(String, serde_json::Value)>>) -> Vec<(String, serde_json::Value)> {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .map(|(head, body)| {
+            let head = head.to_ascii_lowercase();
+            let target = head.lines().find_map(|l| l.strip_prefix("x-amz-target:")).unwrap_or_default();
+            (target.trim().to_string(), body.clone())
+        })
+        .collect()
+}
+
+/// src.kinesis with allShards reads every shard of the stream. The shards come
+/// in two ListShards pages, the second asked for by its token alone, as Kinesis
+/// requires. Each shard gets its iterator before any is read, then a poll per
+/// open shard in turn until each closes. Every call speaks the JSON 1.1 the
+/// Kinesis API documents.
+#[test]
+fn src_kinesis_reads_every_shard_across_listing_pages() {
+    let engine = engine_or_skip!();
+    let (endpoint, seen, handle) = kinesis_endpoint(vec![
+        r#"{"Shards":[{"ShardId":"shard-0"},{"ShardId":"shard-1"}],"NextToken":"page-2"}"#,
+        r#"{"Shards":[{"ShardId":"shard-2"}]}"#,
+        r#"{"ShardIterator":"it-0"}"#,
+        r#"{"ShardIterator":"it-1"}"#,
+        r#"{"ShardIterator":"it-2"}"#,
+        kinesis_records_answer(&[json!({"id": 1}), json!({"id": 2})], Some("it-0b")),
+        kinesis_records_answer(&[json!({"id": 3})], None),
+        kinesis_records_answer(&[json!({"id": 4})], Some("it-2b")),
+        kinesis_records_answer(&[], None),
+        kinesis_records_answer(&[json!({"id": 5})], None),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "all.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            kinesis_source(&endpoint, json!({ "allShards": true })),
+            node("o", "snk.csv", json!({ "path": &out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "k", "o")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        duckdb_json(&format!("SELECT list(id ORDER BY id) AS ids FROM read_csv_auto('{}')", out))[0]["ids"],
+        json!([1, 2, 3, 4, 5])
+    );
+    let iterator = |shard: &str| {
+        (
+            "kinesis_20131202.getsharditerator".to_string(),
+            json!({ "StreamName": "orders", "ShardId": shard, "ShardIteratorType": "TRIM_HORIZON" }),
+        )
+    };
+    let records = |it: &str, limit: u64| {
+        ("kinesis_20131202.getrecords".to_string(), json!({ "ShardIterator": it, "Limit": limit }))
+    };
+    assert_eq!(
+        kinesis_calls(&seen),
+        vec![
+            ("kinesis_20131202.listshards".to_string(), json!({ "StreamName": "orders" })),
+            ("kinesis_20131202.listshards".to_string(), json!({ "NextToken": "page-2" })),
+            iterator("shard-0"),
+            iterator("shard-1"),
+            iterator("shard-2"),
+            records("it-0", 1000),
+            records("it-1", 998),
+            records("it-2", 997),
+            records("it-0b", 996),
+            records("it-2b", 996),
+        ]
+    );
+    for (head, _) in seen.lock().unwrap().iter() {
+        assert!(
+            head.to_ascii_lowercase().contains("content-type: application/x-amz-json-1.1"),
+            "the JSON version the Kinesis API documents: {head}"
+        );
+    }
+}
+
+/// Max records covers every shard together: each poll asks only for what is
+/// left, and once it is reached no further shard is polled.
+#[test]
+fn src_kinesis_reads_at_most_max_records_across_every_shard() {
+    let engine = engine_or_skip!();
+    let (endpoint, seen, handle) = kinesis_endpoint(vec![
+        r#"{"Shards":[{"ShardId":"shard-0"},{"ShardId":"shard-1"},{"ShardId":"shard-2"}]}"#,
+        r#"{"ShardIterator":"it-0"}"#,
+        r#"{"ShardIterator":"it-1"}"#,
+        r#"{"ShardIterator":"it-2"}"#,
+        kinesis_records_answer(&[json!({"id": 1}), json!({"id": 2})], Some("it-0b")),
+        kinesis_records_answer(&[json!({"id": 3}), json!({"id": 4})], Some("it-1b")),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "three.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            kinesis_source(&endpoint, json!({ "allShards": true, "maxRecords": 3 })),
+            node("o", "snk.csv", json!({ "path": &out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "k", "o")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        duckdb_json(&format!("SELECT list(id ORDER BY id) AS ids FROM read_csv_auto('{}')", out))[0]["ids"],
+        json!([1, 2, 3])
+    );
+    let polls: Vec<serde_json::Value> = kinesis_calls(&seen)
+        .into_iter()
+        .filter(|(target, _)| target == "kinesis_20131202.getrecords")
+        .map(|(_, body)| body)
+        .collect();
+    assert_eq!(
+        polls,
+        vec![json!({ "ShardIterator": "it-0", "Limit": 3 }), json!({ "ShardIterator": "it-1", "Limit": 1 })],
+        "the third shard is never polled"
+    );
+}
+
+/// Without allShards, src.kinesis reads the one shard at Shard index, as it
+/// always has, found on whichever ListShards page lists it.
+#[test]
+fn src_kinesis_reads_only_the_shard_at_its_index() {
+    let engine = engine_or_skip!();
+    let (endpoint, seen, handle) = kinesis_endpoint(vec![
+        r#"{"Shards":[{"ShardId":"shard-0"},{"ShardId":"shard-1"}],"NextToken":"page-2"}"#,
+        r#"{"Shards":[{"ShardId":"shard-2"}]}"#,
+        r#"{"ShardIterator":"it-2"}"#,
+        kinesis_records_answer(&[json!({"id": 9})], None),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "one.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            kinesis_source(&endpoint, json!({ "shardIndex": 2 })),
+            node("o", "snk.csv", json!({ "path": &out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "k", "o")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 1);
+    let shards: Vec<serde_json::Value> = kinesis_calls(&seen)
+        .into_iter()
+        .filter(|(target, _)| target == "kinesis_20131202.getsharditerator")
+        .map(|(_, body)| body["ShardId"].clone())
+        .collect();
+    assert_eq!(shards, vec![json!("shard-2")]);
+}
+
+/// The shard listing stops at an empty page, even one that hands back a token,
+/// so a server that always does cannot keep src.kinesis asking.
+#[test]
+fn src_kinesis_stops_listing_shards_at_an_empty_page() {
+    let engine = engine_or_skip!();
+    let (endpoint, seen, handle) = kinesis_endpoint(vec![
+        r#"{"Shards":[{"ShardId":"shard-0"}],"NextToken":"page-2"}"#,
+        r#"{"Shards":[],"NextToken":"page-3"}"#,
+        r#"{"ShardIterator":"it-0"}"#,
+        kinesis_records_answer(&[json!({"id": 1})], None),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "one.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            kinesis_source(&endpoint, json!({ "allShards": true })),
+            node("o", "snk.csv", json!({ "path": &out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "k", "o")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 1);
+    let listings = kinesis_calls(&seen).iter().filter(|(t, _)| t == "kinesis_20131202.listshards").count();
+    assert_eq!(listings, 2);
+}
+
+/// One call to a live Kinesis API, signed in name only: kinesis-mock checks that
+/// a signature and its date are there, not what they say.
+fn kinesis_mock_call(endpoint: &str, target: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+    ureq::post(&format!("{endpoint}/"))
+        .set("Content-Type", "application/x-amz-json-1.1")
+        .set("X-Amz-Target", &format!("Kinesis_20131202.{target}"))
+        .set("X-Amz-Date", "20260101T000000Z")
+        .set(
+            "Authorization",
+            "AWS4-HMAC-SHA256 Credential=a/20260101/us-east-1/kinesis/aws4_request, SignedHeaders=host;x-amz-date, Signature=0",
+        )
+        .send_string(&body.to_string())
+        .map(|r| serde_json::from_str(&r.into_string().unwrap_or_default()).unwrap_or_default())
+        .map_err(|e| format!("{target}: {e}"))
+}
+
+/// snk.kinesis and src.kinesis against a live Kinesis API: kinesis-mock, run in
+/// Docker. Set DUCKLE_KINESIS_ENDPOINT (http://localhost:4568) to run it. A
+/// stream of three shards is written row by row, keyed by id so the rows spread
+/// over the shards, then read back whole with allShards.
+#[test]
+fn kinesis_writes_and_reads_back_every_shard_of_a_live_stream() {
+    let engine = engine_or_skip!();
+    let endpoint = match std::env::var("DUCKLE_KINESIS_ENDPOINT") {
+        Ok(e) if !e.is_empty() => e.trim_end_matches('/').to_string(),
+        _ => {
+            eprintln!("skipping: set DUCKLE_KINESIS_ENDPOINT to run live Kinesis tests");
+            return;
+        }
+    };
+    // Named by pid and time: a server that outlives the run keeps its streams.
+    let stream = format!(
+        "duckle-shards-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    );
+    let call = |target: &str, body: serde_json::Value| -> serde_json::Value {
+        kinesis_mock_call(&endpoint, target, &body).unwrap_or_else(|e| panic!("{e}"))
+    };
+    // The stream goes when the test ends, passed or failed: kinesis-mock holds
+    // 50 shards an account, and a server kept between runs would fill up.
+    struct DropStream(String, String);
+    impl Drop for DropStream {
+        fn drop(&mut self) {
+            let _ = kinesis_mock_call(&self.0, "DeleteStream", &json!({ "StreamName": self.1 }));
+        }
+    }
+    call("CreateStream", json!({ "StreamName": &stream, "ShardCount": 3 }));
+    let _drop = DropStream(endpoint.clone(), stream.clone());
+    let active = (0..40).any(|_| {
+        let ready = call("DescribeStreamSummary", json!({ "StreamName": &stream }))["StreamDescriptionSummary"]
+            ["StreamStatus"]
+            == "ACTIVE";
+        if !ready {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        ready
+    });
+    assert!(active, "the stream never became active");
+
+    let tmp = tempfile::tempdir().unwrap();
+    let rows: String = (1..=12).map(|i| format!("{i},row{i}\n")).collect();
+    let csv = write_file(tmp.path(), "in.csv", &format!("id,name\n{rows}"));
+    let aws = |extra: serde_json::Value| {
+        let mut props = json!({
+            "region": "us-east-1", "accessKeyId": "a", "secretAccessKey": "b",
+            "endpoint": &endpoint, "streamName": &stream,
+        });
+        props.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        props
+    };
+    let put = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k", "snk.kinesis", aws(json!({ "partitionKeyColumn": "id" }))),
+        ]),
+        json!([main_edge("e", "s", "k")]),
+    ));
+    assert_eq!(put.status, "ok", "put failed: {:?}", put.error);
+
+    // The rows spread over the shards, so a read of one shard cannot pass this.
+    let listed = call("ListShards", json!({ "StreamName": &stream }));
+    let holding = listed["Shards"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| {
+            let it = call(
+                "GetShardIterator",
+                json!({ "StreamName": &stream, "ShardId": s["ShardId"], "ShardIteratorType": "TRIM_HORIZON" }),
+            );
+            let got = call("GetRecords", json!({ "ShardIterator": it["ShardIterator"], "Limit": 100 }));
+            got["Records"].as_array().is_some_and(|r| !r.is_empty())
+        })
+        .count();
+    assert!(holding >= 2, "the rows should spread over the shards; {holding} shard(s) hold them");
+
+    let out = out_path(tmp.path(), "back.csv");
+    let read = engine.execute_pipeline(&doc(
+        json!([
+            node("k", "src.kinesis", aws(json!({ "allShards": true, "maxRecords": 12 }))),
+            node("o", "snk.csv", json!({ "path": &out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "k", "o")]),
+    ));
+    assert_eq!(read.status, "ok", "read failed: {:?}", read.error);
+    assert_eq!(
+        duckdb_json(&format!("SELECT list(id ORDER BY id) AS ids FROM read_csv_auto('{}')", out))[0]["ids"],
+        json!((1..=12).collect::<Vec<i64>>())
+    );
 }
 
 /// A Google endpoint on localhost (token and Sheets API alike) that answers each

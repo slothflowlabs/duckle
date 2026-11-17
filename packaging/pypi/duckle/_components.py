@@ -1002,8 +1002,8 @@ COMPONENTS = {
     },
     'src.kinesis': {
         'kind': 'source',
-        'summary': 'Single-shard Kinesis read via direct HTTP + AWS SigV4 (no AWS SDK). Walks ListShards -> GetShardIterator -> GetRecords. Props: region, accessKeyId, secretAccessKey, sessionToken (optional STS), streamName, shardIndex (default 0), iteratorType (TRIM_HORIZON or LATEST), maxRecords. Records with JSO...',
-        'params': ['region', 'streamName', 'accessKeyId', 'secretAccessKey', 'sessionToken', 'shardIndex', 'iteratorType', 'maxRecords'],
+        'summary': 'Read one shard of a Kinesis stream, or every shard in turn, via direct HTTP + AWS SigV4 (no AWS SDK). Walks ListShards -> GetShardIterator -> GetRecords. Props: region, accessKeyId, secretAccessKey, sessionToken (optional STS), streamName, shardIndex (default 0), allShards, iteratorType (TRIM_HOR...',
+        'params': ['region', 'streamName', 'accessKeyId', 'secretAccessKey', 'sessionToken', 'allShards', 'shardIndex', 'iteratorType', 'maxRecords', 'endpoint'],
     },
     'src.lancedb': {
         'kind': 'source',

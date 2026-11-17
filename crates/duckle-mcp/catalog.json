@@ -11105,7 +11105,7 @@
       "label": "AWS Kinesis",
       "kind": "source",
       "availability": "available",
-      "summary": "Single-shard Kinesis read via direct HTTP + AWS SigV4 (no AWS SDK). Walks ListShards -> GetShardIterator -> GetRecords. Props: region, accessKeyId, secretAccessKey, sessionToken (optional STS), streamName, shardIndex (default 0), iteratorType (TRIM_HORIZON or LATEST), maxRecords. Records with JSON-object payloads unfold as rows; others land as {partition_key, sequence_number, data}. Multi-shard parallelism deferred.",
+      "summary": "Read one shard of a Kinesis stream, or every shard in turn, via direct HTTP + AWS SigV4 (no AWS SDK). Walks ListShards -> GetShardIterator -> GetRecords. Props: region, accessKeyId, secretAccessKey, sessionToken (optional STS), streamName, shardIndex (default 0), allShards, iteratorType (TRIM_HORIZON or LATEST), maxRecords (across every shard read), endpoint (a VPC endpoint or LocalStack). Records with JSON-object payloads unfold as rows; others land as {partition_key, sequence_number, data}.",
       "category": "Sources",
       "group": "Streaming",
       "ports": {
@@ -11122,7 +11122,7 @@
         "id": "src.kinesis",
         "kind": "source",
         "label": "AWS Kinesis",
-        "description": "Single-shard Kinesis read via direct HTTP + AWS SigV4 (no AWS SDK). Walks ListShards -> GetShardIterator -> GetRecords. Props: region, accessKeyId, secretAccessKey, sessionToken (optional STS), streamName, shardIndex (default 0), iteratorType (TRIM_HORIZON or LATEST), maxRecords. Records with JSON-object payloads unfold as rows; others land as {partition_key, sequence_number, data}. Multi-shard parallelism deferred.",
+        "description": "Read one shard of a Kinesis stream, or every shard in turn, via direct HTTP + AWS SigV4 (no AWS SDK). Walks ListShards -> GetShardIterator -> GetRecords. Props: region, accessKeyId, secretAccessKey, sessionToken (optional STS), streamName, shardIndex (default 0), allShards, iteratorType (TRIM_HORIZON or LATEST), maxRecords (across every shard read), endpoint (a VPC endpoint or LocalStack). Records with JSON-object payloads unfold as rows; others land as {partition_key, sequence_number, data}.",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -11168,10 +11168,24 @@
             "label": "Read",
             "fields": [
               {
+                "key": "allShards",
+                "label": "Read every shard",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Read all the shards the stream has, in turn. Max records covers them together."
+              },
+              {
                 "key": "shardIndex",
                 "label": "Shard index",
                 "kind": "integer",
-                "defaultValue": 0
+                "defaultValue": 0,
+                "visibleWhen": [
+                  {
+                    "key": "allShards",
+                    "equals": "false"
+                  }
+                ],
+                "description": "Which shard to read, counting from 0, when not reading every one."
               },
               {
                 "key": "iteratorType",
@@ -11194,6 +11208,13 @@
                 "label": "Max records",
                 "kind": "integer",
                 "defaultValue": 1000
+              },
+              {
+                "key": "endpoint",
+                "label": "Endpoint",
+                "kind": "text",
+                "placeholder": "https://kinesis.us-east-1.amazonaws.com",
+                "description": "Leave empty for the region's own endpoint. Set it for a VPC endpoint or LocalStack."
               }
             ]
           }

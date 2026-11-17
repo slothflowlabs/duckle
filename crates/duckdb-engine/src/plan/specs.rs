@@ -1227,8 +1227,14 @@ pub struct KinesisSourceSpec {
     pub session_token: Option<String>,
     pub stream_name: String,
     pub shard_index: usize,
+    /// Read every shard of the stream, in turn, rather than `shard_index`
+    /// alone. `max_records` then covers them together.
+    pub all_shards: bool,
     pub iterator_type: String,
     pub max_records: u64,
+    /// Where the calls go: empty for the region's own endpoint, else a VPC
+    /// endpoint or a local Kinesis, as snk.kinesis takes.
+    pub endpoint: String,
 }
 
 /// src.webhook: bind 127.0.0.1:port, accept up to `max_requests`

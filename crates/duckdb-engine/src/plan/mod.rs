@@ -5223,7 +5223,7 @@ fn build_stage(
         });
         (String::new(), StageKind::View, from)
     } else if component_id == "src.kinesis" {
-        // Single-shard Kinesis read. iteratorType in
+        // Kinesis read, of one shard or every shard. iteratorType in
         // {TRIM_HORIZON, LATEST, AT_TIMESTAMP, AT/AFTER_SEQUENCE_NUMBER};
         // we expose only the simple two-value choice for v1.
         let region = string_prop(&props, "region")
@@ -5249,6 +5249,9 @@ fn build_stage(
                 .get("shardIndex")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as usize,
+            // Off unless asked for, so a node saved before it reads the one
+            // shard it always read.
+            all_shards: props.get("allShards").and_then(JsonValue::as_bool).unwrap_or(false),
             iterator_type: string_prop(&props, "iteratorType")
                 .filter(|s| s == "TRIM_HORIZON" || s == "LATEST")
                 .unwrap_or_else(|| "TRIM_HORIZON".into()),
@@ -5257,6 +5260,9 @@ fn build_stage(
                 .and_then(|v| v.as_u64())
                 .filter(|n| *n > 0)
                 .unwrap_or(1000),
+            endpoint: string_prop(&props, "endpoint")
+                .map(|s| s.trim().trim_end_matches('/').to_string())
+                .unwrap_or_default(),
         });
         (String::new(), StageKind::View, None)
     } else if component_id == "src.dynamodb" {

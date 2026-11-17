@@ -2709,7 +2709,21 @@ function synthWrongFamilyForm(comp: ComponentDef): ComponentManifest | null {
             {
                 label: 'Read',
                 fields: [
-                    { key: 'shardIndex', label: 'Shard index', kind: 'integer', defaultValue: 0 },
+                    {
+                        key: 'allShards',
+                        label: 'Read every shard',
+                        kind: 'bool',
+                        defaultValue: false,
+                        description: 'Read all the shards the stream has, in turn. Max records covers them together.',
+                    },
+                    {
+                        key: 'shardIndex',
+                        label: 'Shard index',
+                        kind: 'integer',
+                        defaultValue: 0,
+                        visibleWhen: [{ key: 'allShards', equals: 'false' }],
+                        description: 'Which shard to read, counting from 0, when not reading every one.',
+                    },
                     {
                         key: 'iteratorType',
                         label: 'Start at',
@@ -2721,6 +2735,13 @@ function synthWrongFamilyForm(comp: ComponentDef): ComponentManifest | null {
                         ],
                     },
                     { key: 'maxRecords', label: 'Max records', kind: 'integer', defaultValue: 1000 },
+                    {
+                        key: 'endpoint',
+                        label: 'Endpoint',
+                        kind: 'text',
+                        placeholder: 'https://kinesis.us-east-1.amazonaws.com',
+                        description: "Leave empty for the region's own endpoint. Set it for a VPC endpoint or LocalStack.",
+                    },
                 ],
             },
         ]);

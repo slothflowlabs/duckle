@@ -11836,12 +11836,12 @@ impl DuckdbEngine {
         ))
     }
 
-    /// src.kinesis: single-shard read via direct HTTP + AWS SigV4
-    /// (reuses the helper shipped with src.dynamodb). 3-step protocol
-    /// per AWS Kinesis API:
-    ///   1. ListShards -> get shard IDs
-    ///   2. GetShardIterator -> get a starting iterator
-    ///   3. GetRecords loop -> consume up to max_records
+    /// src.kinesis: read one shard of a stream, or every shard, via direct
+    /// HTTP + AWS SigV4 (reuses the helper shipped with src.dynamodb).
+    /// 3-step protocol per AWS Kinesis API:
+    ///   1. ListShards -> the shard IDs, a page at a time
+    ///   2. GetShardIterator -> a starting iterator for each shard read
+    ///   3. GetRecords loop -> consume up to max_records across them
     /// Each record's Data field is base64-encoded; if the decoded
     /// payload is a JSON object the object is the row, otherwise we
     /// fall back to {partition_key, sequence_number, data}.
@@ -11853,8 +11853,7 @@ impl DuckdbEngine {
         use base64::engine::general_purpose::STANDARD as B64;
         use base64::Engine as _;
         self.check_cancelled()?;
-        let host = format!("kinesis.{}.amazonaws.com", spec.region);
-        let endpoint = format!("https://{}/", host);
+        let (endpoint, host) = kinesis_url_and_host(&spec.region, &spec.endpoint)?;
         // Helper: sign + post a Kinesis JSON request, return parsed response.
         let call = |target: &str, body: &serde_json::Value| -> Result<JsonValue, EngineError> {
             let body_str = body.to_string();
@@ -11878,7 +11877,7 @@ impl DuckdbEngine {
             );
             let mut req = crate::tls::http_agent().post(&endpoint)
                 .set("Host", &host)
-                .set("Content-Type", "application/x-amz-json-1.0")
+                .set("Content-Type", aws_json_content_type("kinesis"))
                 .set("X-Amz-Date", &datetime)
                 .set("X-Amz-Target", target)
                 .set("Authorization", &signed.authorization);
@@ -11899,132 +11898,174 @@ impl DuckdbEngine {
                 Err(e) => Err(EngineError::Query(format!("kinesis transport: {}", e))),
             }
         };
-        // 1. ListShards
-        let shards_resp = call(
+        // 1. ListShards, a page at a time: a page lists at most 1000 shards. A
+        // later page is asked for by its token alone; Kinesis refuses a
+        // StreamName beside it.
+        let mut shards: Vec<String> = Vec::new();
+        let mut page = call(
             "Kinesis_20131202.ListShards",
             &serde_json::json!({"StreamName": spec.stream_name}),
         )?;
-        let shards = shards_resp
-            .get("Shards")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-        let shard_id = shards
-            .get(spec.shard_index)
-            .and_then(|s| s.get("ShardId"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
+        loop {
+            let listed: Vec<String> = page
+                .get("Shards")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|s| s.get("ShardId").and_then(|v| v.as_str()).map(String::from))
+                .collect();
+            let token = page
+                .get("NextToken")
+                .and_then(|v| v.as_str())
+                .filter(|t| !t.is_empty())
+                .map(String::from);
+            // An empty page ends the walk as well, so a server that hands back
+            // a token with every page cannot keep this asking.
+            let empty = listed.is_empty();
+            shards.extend(listed);
+            match token {
+                Some(token) if !empty => {
+                    page = call(
+                        "Kinesis_20131202.ListShards",
+                        &serde_json::json!({"NextToken": token}),
+                    )?;
+                }
+                _ => break,
+            }
+        }
+        // Which shards this read takes: the one at shard_index, or every one.
+        let read: Vec<String> = if spec.all_shards {
+            shards
+        } else {
+            let one = shards.get(spec.shard_index).cloned().ok_or_else(|| {
                 EngineError::Query(format!(
                     "kinesis: no shard at index {} (got {} shards)",
                     spec.shard_index,
                     shards.len()
                 ))
             })?;
-        // 2. GetShardIterator
-        let iter_resp = call(
-            "Kinesis_20131202.GetShardIterator",
-            &serde_json::json!({
-                "StreamName": spec.stream_name,
-                "ShardId": shard_id,
-                "ShardIteratorType": spec.iterator_type,
-            }),
-        )?;
-        let mut shard_iter = iter_resp
-            .get("ShardIterator")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| EngineError::Query("kinesis: no ShardIterator returned".into()))?
-            .to_string();
-        // 3. GetRecords loop.
+            vec![one]
+        };
+        let which = if spec.all_shards {
+            format!("{} ({} shards)", spec.stream_name, read.len())
+        } else {
+            format!("{}/shard[{}]", spec.stream_name, spec.shard_index)
+        };
+        // 2. GetShardIterator for each, before any is read, so a LATEST start
+        // is the moment the read began on every shard, not whenever the read
+        // reached that shard.
+        let mut open: Vec<String> = Vec::with_capacity(read.len());
+        for shard_id in &read {
+            let iter_resp = call(
+                "Kinesis_20131202.GetShardIterator",
+                &serde_json::json!({
+                    "StreamName": spec.stream_name,
+                    "ShardId": shard_id,
+                    "ShardIteratorType": spec.iterator_type,
+                }),
+            )?;
+            open.push(
+                iter_resp
+                    .get("ShardIterator")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| EngineError::Query("kinesis: no ShardIterator returned".into()))?
+                    .to_string(),
+            );
+        }
+        // 3. GetRecords loop. A round polls each open shard once, in turn, so
+        // the shards share the 100-poll budget and the waits between polls,
+        // and none is read only after the others are done.
         let mut out: Vec<JsonValue> = Vec::new();
         let mut polls = 0;
         let mut last_got = 0usize;
-        let mut shard_closed = false;
-        while (out.len() as u64) < spec.max_records && polls < 100 {
-            self.check_cancelled()?;
-            let remaining = (spec.max_records - out.len() as u64).min(10000);
-            let rec_resp = call(
-                "Kinesis_20131202.GetRecords",
-                &serde_json::json!({
-                    "ShardIterator": shard_iter,
-                    "Limit": remaining,
-                }),
-            )?;
-            let records = rec_resp
-                .get("Records")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            let got = records.len();
-            for r in records {
+        while (out.len() as u64) < spec.max_records && polls < 100 && !open.is_empty() {
+            let mut got = 0usize;
+            let mut still_open: Vec<String> = Vec::with_capacity(open.len());
+            for shard_iter in open {
                 if (out.len() as u64) >= spec.max_records {
                     break;
                 }
-                let data_b64 = r.get("Data").and_then(|v| v.as_str()).unwrap_or("");
-                let partition_key = r
-                    .get("PartitionKey")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let sequence_number = r
-                    .get("SequenceNumber")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let decoded = B64.decode(data_b64).unwrap_or_default();
-                let decoded_str = String::from_utf8_lossy(&decoded).into_owned();
-                // If JSON object, that IS the row; otherwise fallback row.
-                match serde_json::from_str::<JsonValue>(&decoded_str) {
-                    Ok(JsonValue::Object(o)) => out.push(JsonValue::Object(o)),
-                    _ => {
-                        let mut row = serde_json::Map::new();
-                        row.insert("partition_key".into(), JsonValue::String(partition_key));
-                        row.insert(
-                            "sequence_number".into(),
-                            JsonValue::String(sequence_number),
-                        );
-                        row.insert("data".into(), JsonValue::String(decoded_str));
-                        out.push(JsonValue::Object(row));
+                self.check_cancelled()?;
+                let remaining = (spec.max_records - out.len() as u64).min(10000);
+                let rec_resp = call(
+                    "Kinesis_20131202.GetRecords",
+                    &serde_json::json!({
+                        "ShardIterator": shard_iter,
+                        "Limit": remaining,
+                    }),
+                )?;
+                let records = rec_resp
+                    .get("Records")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                got += records.len();
+                for r in records {
+                    if (out.len() as u64) >= spec.max_records {
+                        break;
+                    }
+                    let data_b64 = r.get("Data").and_then(|v| v.as_str()).unwrap_or("");
+                    let partition_key = r
+                        .get("PartitionKey")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let sequence_number = r
+                        .get("SequenceNumber")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let decoded = B64.decode(data_b64).unwrap_or_default();
+                    let decoded_str = String::from_utf8_lossy(&decoded).into_owned();
+                    // If JSON object, that IS the row; otherwise fallback row.
+                    match serde_json::from_str::<JsonValue>(&decoded_str) {
+                        Ok(JsonValue::Object(o)) => out.push(JsonValue::Object(o)),
+                        _ => {
+                            let mut row = serde_json::Map::new();
+                            row.insert("partition_key".into(), JsonValue::String(partition_key));
+                            row.insert(
+                                "sequence_number".into(),
+                                JsonValue::String(sequence_number),
+                            );
+                            row.insert("data".into(), JsonValue::String(decoded_str));
+                            out.push(JsonValue::Object(row));
+                        }
                     }
                 }
-            }
-            polls += 1;
-            last_got = got;
-            // Advance the iterator. A null NextShardIterator means the
-            // shard is closed (true end of data); follow it otherwise.
-            match rec_resp.get("NextShardIterator").and_then(|v| v.as_str()) {
-                Some(next) => shard_iter = next.to_string(),
-                None => {
-                    shard_closed = true;
-                    break;
+                // Advance the iterator. A null NextShardIterator means the
+                // shard is closed (true end of data); follow it otherwise.
+                if let Some(next) = rec_resp.get("NextShardIterator").and_then(|v| v.as_str()) {
+                    still_open.push(next.to_string());
                 }
             }
+            open = still_open;
+            polls += 1;
+            last_got = got;
             // An empty poll does NOT mean end-of-shard: Kinesis returns
             // empty record pages while NextShardIterator keeps advancing
             // (a fresh iterator warming up, or a sparse region) with more
             // data still ahead. Don't break - sleep briefly to avoid a tight
-            // loop and keep following the iterator until we hit the poll
-            // budget or the shard actually closes.
-            if got == 0 {
+            // loop and keep following the iterators until we hit the poll
+            // budget or every shard actually closes.
+            if got == 0 && !open.is_empty() {
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
         }
         // Fail loud (like the DynamoDB source) if the 100-poll safety cap
         // cut us off while records were still actively flowing, instead of
         // silently reporting a truncated read as success.
-        if polls >= 100 && !shard_closed && last_got > 0 && (out.len() as u64) < spec.max_records {
+        if polls >= 100 && !open.is_empty() && last_got > 0 && (out.len() as u64) < spec.max_records {
             return Err(EngineError::Query(format!(
-                "kinesis: reached the 100-poll safety cap after {} record(s) from {}/shard[{}] \
-                 with data still flowing; raise maxRecords or read the shard in smaller passes",
+                "kinesis: reached the 100-poll safety cap after {} record(s) from {} with data still flowing; raise maxRecords or read the shard in smaller passes",
                 out.len(),
-                spec.stream_name,
-                spec.shard_index
+                which
             )));
         }
         let count = out.len();
         materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &out)?;
         Ok(format!(
-            "kinesis: read {} record(s) from {}/shard[{}] -> {}",
-            count, spec.stream_name, spec.shard_index, spec.node_id
+            "kinesis: read {} record(s) from {} -> {}",
+            count, which, spec.node_id
         ))
     }
 
@@ -12084,19 +12125,7 @@ impl DuckdbEngine {
         if records.is_empty() {
             return Ok(format!("kinesis: 0 rows to put into {}", spec.stream_name));
         }
-        let (url, host) = if spec.endpoint.is_empty() {
-            let host = format!("kinesis.{}.amazonaws.com", spec.region);
-            (format!("https://{host}/"), host)
-        } else {
-            let parsed = url::Url::parse(&spec.endpoint)
-                .map_err(|e| EngineError::Config(format!("kinesis: endpoint {}: {}", spec.endpoint, e)))?;
-            let host = parsed.host_str().unwrap_or_default().to_string();
-            let host = match parsed.port() {
-                Some(p) => format!("{host}:{p}"),
-                None => host,
-            };
-            (format!("{}/", spec.endpoint), host)
-        };
+        let (url, host) = kinesis_url_and_host(&spec.region, &spec.endpoint)?;
         let target = "Kinesis_20131202.PutRecords";
         let put = |batch: &[&(String, String, usize)]| -> Result<JsonValue, EngineError> {
             let body = serde_json::json!({
@@ -12125,11 +12154,11 @@ impl DuckdbEngine {
                 &spec.secret_access_key,
                 spec.session_token.as_deref(),
             );
-            // The content type src.kinesis sends, which is the one aws_sigv4_sign signs.
+            // The content type aws_sigv4_sign signed for Kinesis.
             let mut req = crate::tls::http_agent()
                 .post(&url)
                 .set("Host", &host)
-                .set("Content-Type", "application/x-amz-json-1.0")
+                .set("Content-Type", aws_json_content_type("kinesis"))
                 .set("X-Amz-Date", &datetime)
                 .set("X-Amz-Target", target)
                 .set("Authorization", &signed.authorization);

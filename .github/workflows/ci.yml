@@ -453,9 +453,10 @@ jobs:
         run: cargo test -p duckle-duckdb-engine --test iceberg_rest
 
   # Live streaming tests: the Kafka sources and sink against a Redpanda broker,
-  # the Kafka protocol Event Hubs speaks too. Started with docker run, because a
-  # service container cannot be given Redpanda's start command. One test thread:
-  # the resume tests each point DUCKLE_WORKSPACE at a folder of their own.
+  # the Kafka protocol Event Hubs speaks too, and the Kinesis source and sink
+  # against kinesis-mock. Started with docker run, because a service container
+  # cannot be given Redpanda's start command. One test thread for Kafka: the
+  # resume tests each point DUCKLE_WORKSPACE at a folder of their own.
   streaming-integration:
     runs-on: ubuntu-24.04
     steps:
@@ -486,6 +487,20 @@ jobs:
         env:
           DUCKLE_KAFKA_BROKERS: localhost:19092
         run: cargo test -p duckle-duckdb-engine --test execution -- kafka --test-threads 1
+      - name: Start kinesis-mock
+        run: |
+          set -e
+          for i in 1 2 3; do
+            docker pull ghcr.io/etspaceman/kinesis-mock:0.6.2 && break
+            echo "docker pull attempt $i failed; retrying in 5s"; sleep 5
+          done
+          docker run -d --name kinesis -p 4568:4568 ghcr.io/etspaceman/kinesis-mock:0.6.2
+          for i in $(seq 1 30); do curl -sf http://localhost:4568/healthcheck > /dev/null && break; sleep 2; done
+          curl -sf http://localhost:4568/healthcheck > /dev/null
+      - name: Run Kinesis tests
+        env:
+          DUCKLE_KINESIS_ENDPOINT: http://localhost:4568
+        run: cargo test -p duckle-duckdb-engine --test execution -- kinesis
 
   # Live MySQL integration tests (also covers MariaDB, same wire).
   # SharePoint Server has no container, so tests/sharepoint.rs runs against

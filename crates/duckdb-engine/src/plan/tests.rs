@@ -7107,6 +7107,57 @@ mod kinesis_sink {
     }
 }
 
+/// src.kinesis: one shard or every shard, and where its calls go.
+mod kinesis_source {
+    use super::*;
+
+    fn spec(extra: serde_json::Value) -> crate::plan::KinesisSourceSpec {
+        let mut props = serde_json::json!({
+            "region": "us-east-1", "streamName": "s", "accessKeyId": "a", "secretAccessKey": "b",
+        });
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            props[k] = v;
+        }
+        let doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                {"id":"k","position":{"x":0,"y":0},
+                 "data":{"label":"K","componentId":"src.kinesis","properties": props}},
+                {"id":"o","position":{"x":0,"y":0},
+                 "data":{"label":"out","componentId":"snk.csv","properties":{"path":"/tmp/o.csv"}}}
+            ],
+            "edges":[{"id":"x","source":"k","target":"o","data":{"connectionType":"main"}}]
+        }))
+        .unwrap();
+        compile(&doc)
+            .unwrap()
+            .stages
+            .iter()
+            .find_map(|s| match s.runtime.as_ref() {
+                Some(crate::plan::RuntimeSpec::KinesisSource(k)) => Some(k.clone()),
+                _ => None,
+            })
+            .expect("a Kinesis read")
+    }
+
+    /// Reading every shard is a switch, off unless turned on, so a node saved
+    /// before it reads the one shard it always read.
+    #[test]
+    fn every_shard_is_read_only_when_asked() {
+        assert!(!spec(serde_json::json!({})).all_shards);
+        assert!(spec(serde_json::json!({ "allShards": true })).all_shards);
+    }
+
+    /// A VPC endpoint or a local Kinesis, taken as snk.kinesis takes it.
+    #[test]
+    fn an_endpoint_is_taken_without_a_trailing_slash() {
+        assert_eq!(spec(serde_json::json!({})).endpoint, "");
+        assert_eq!(
+            spec(serde_json::json!({ "endpoint": " http://localhost:4568/ " })).endpoint,
+            "http://localhost:4568"
+        );
+    }
+}
+
 /// src.gsheets: what a node needs to reach a sheet, worked out before the run.
 #[cfg(test)]
 mod gsheets_source {

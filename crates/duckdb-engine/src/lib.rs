@@ -9152,6 +9152,36 @@ mod tests {
         assert!((pi - 3.14159).abs() < 1e-6);
     }
 
+    /// A Kinesis call is sent as JSON 1.1, and the signature must cover that
+    /// content type, or AWS refuses the call; kinesis-mock and the test stubs do
+    /// not check signatures, so nothing else would notice. The expected value was
+    /// worked out apart from this code, by SigV4 as AWS documents it, written
+    /// separately and first checked against AWS's own get-vanilla test vector.
+    #[test]
+    fn a_kinesis_call_is_signed_for_the_json_version_it_sends() {
+        let signed = aws_sigv4_sign(
+            "POST",
+            "/",
+            "",
+            "kinesis.us-east-1.amazonaws.com",
+            "20261117T120000Z",
+            "20261117",
+            "kinesis",
+            "us-east-1",
+            "Kinesis_20131202.ListShards",
+            r#"{"StreamName":"orders"}"#,
+            "AKIDEXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            None,
+        );
+        assert_eq!(
+            signed.authorization,
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261117/us-east-1/kinesis/aws4_request, \
+             SignedHeaders=content-type;host;x-amz-date;x-amz-target, \
+             Signature=16f20d48ca231dab3049baf1dd1377586d6d7108043e24170339a586eb850bf7"
+        );
+    }
+
     #[test]
     fn aws_sigv4_sign_matches_known_canonical_example() {
         // Use the AWS documentation's well-known SigV4 test vector to

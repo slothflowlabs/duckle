@@ -1287,6 +1287,33 @@ pub(crate) struct SigV4Signed {
 /// 3. Derive signing key (HMAC chain: date, region, service, "aws4_request")
 /// 4. Sign string-to-sign with derived key
 /// 5. Build authorization header
+/// The content type of an AWS JSON-protocol call. Each service documents its own
+/// JSON version, and the signature covers the one sent: Kinesis 1.1, which is
+/// all kinesis-mock will take, and DynamoDB 1.0.
+pub(crate) fn aws_json_content_type(service: &str) -> &'static str {
+    match service {
+        "kinesis" => "application/x-amz-json-1.1",
+        _ => "application/x-amz-json-1.0",
+    }
+}
+
+/// Where a Kinesis call goes, and the host it is signed for: the region's own
+/// endpoint, or the one a node names (a VPC endpoint, or a local Kinesis).
+pub(crate) fn kinesis_url_and_host(region: &str, endpoint: &str) -> Result<(String, String), EngineError> {
+    if endpoint.is_empty() {
+        let host = format!("kinesis.{region}.amazonaws.com");
+        return Ok((format!("https://{host}/"), host));
+    }
+    let parsed =
+        url::Url::parse(endpoint).map_err(|e| EngineError::Config(format!("kinesis: endpoint {endpoint}: {e}")))?;
+    let host = parsed.host_str().unwrap_or_default().to_string();
+    let host = match parsed.port() {
+        Some(p) => format!("{host}:{p}"),
+        None => host,
+    };
+    Ok((format!("{endpoint}/"), host))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn aws_sigv4_sign(
     method: &str,
@@ -1317,7 +1344,7 @@ pub(crate) fn aws_sigv4_sign(
     let sha256_hex = |s: &str| -> String { hex(&Sha256::digest(s.as_bytes())) };
     // 1. Canonical request. Headers must be sorted lexically.
     let mut canonical_headers: Vec<(String, String)> = vec![
-        ("content-type".into(), "application/x-amz-json-1.0".into()),
+        ("content-type".into(), aws_json_content_type(service).into()),
         ("host".into(), host.to_string()),
         ("x-amz-date".into(), amz_date.to_string()),
         ("x-amz-target".into(), amz_target.to_string()),
