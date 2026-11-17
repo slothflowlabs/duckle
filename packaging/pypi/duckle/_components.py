@@ -459,6 +459,11 @@ COMPONENTS = {
         'summary': 'Produce one Kafka record per upstream row via the pure-Rust `rskafka` driver. Record key = optional keyColumn value; record value = JSON-stringified row. Records go to a single partition (partitionId, default 0); pipelined batching (default 500 records per produce call). Every write is acknowledg...',
         'params': ['brokers', 'topic', 'format', 'keyColumn', 'partitionId', 'batchSize'],
     },
+    'snk.kinesis': {
+        'kind': 'sink',
+        'summary': 'Put each upstream row into a Kinesis data stream as one record, its data the row as JSON, with PutRecords over direct HTTP + AWS SigV4 (no AWS SDK). Up to 500 records and 5 MiB a call; the records Kinesis refuses (a shard over its write limit) are sent again, and any still refused fail the run. P...',
+        'params': ['region', 'streamName', 'accessKeyId', 'secretAccessKey', 'sessionToken', 'partitionKeyColumn', 'batchSize', 'endpoint'],
+    },
     'snk.lancedb': {
         'kind': 'sink',
         'summary': 'Write rows to a Lance table (create/overwrite or append) via the bundled duckle-lance sidecar.',

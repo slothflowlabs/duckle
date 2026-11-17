@@ -7042,6 +7042,62 @@ mod eventhubs_source {
     }
 }
 
+/// snk.kinesis: what reaches PutRecords is held to what Kinesis takes.
+#[cfg(test)]
+mod kinesis_sink {
+    use super::*;
+
+    fn spec(props: serde_json::Value) -> Result<crate::plan::KinesisSinkSpec, crate::EngineError> {
+        let doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                {"id":"s","position":{"x":0,"y":0},
+                 "data":{"label":"in","componentId":"src.csv","properties":{"path":"/tmp/i.csv"}}},
+                {"id":"k","position":{"x":0,"y":0},
+                 "data":{"label":"K","componentId":"snk.kinesis","properties": props}}
+            ],
+            "edges":[{"id":"x","source":"s","target":"k","data":{"connectionType":"main"}}]
+        }))
+        .unwrap();
+        let plan = compile(&doc)?;
+        Ok(plan
+            .stages
+            .iter()
+            .find_map(|s| match s.runtime.as_ref() {
+                Some(crate::plan::RuntimeSpec::KinesisSink(k)) => Some(k.clone()),
+                _ => None,
+            })
+            .expect("a Kinesis write"))
+    }
+
+    fn props(extra: serde_json::Value) -> serde_json::Value {
+        let mut p = serde_json::json!({
+            "region": "us-east-1", "streamName": "s", "accessKeyId": "a", "secretAccessKey": "b",
+        });
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            p[k] = v;
+        }
+        p
+    }
+
+    /// PutRecords takes 500 records a call, so a larger Batch size is held to it.
+    #[test]
+    fn a_batch_is_never_more_than_kinesis_takes_in_one_call() {
+        assert_eq!(spec(props(serde_json::json!({}))).unwrap().batch_size, 500);
+        assert_eq!(spec(props(serde_json::json!({ "batchSize": 1000 }))).unwrap().batch_size, 500);
+        assert_eq!(spec(props(serde_json::json!({ "batchSize": 50 }))).unwrap().batch_size, 50);
+    }
+
+    #[test]
+    fn what_cannot_be_signed_or_addressed_is_refused_before_the_run() {
+        for missing in ["region", "streamName", "accessKeyId", "secretAccessKey"] {
+            let mut p = props(serde_json::json!({}));
+            p.as_object_mut().unwrap().remove(missing);
+            let e = spec(p).unwrap_err().to_string();
+            assert!(e.contains(missing), "{missing}: {e}");
+        }
+    }
+}
+
 /// The join family declares a `reject` output port and nothing could fill it.
 ///
 /// build_reject_sql is a per-component match and the joins were simply not in

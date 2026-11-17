@@ -538,6 +538,7 @@ pub enum RuntimeSpec {
     FormatSource(FormatFileSourceSpec),
     FormatSink(FormatFileSinkSpec),
     KafkaSink(KafkaSinkSpec),
+    KinesisSink(KinesisSinkSpec),
     KafkaSource(KafkaSourceSpec),
     AvroSource(AvroSourceSpec),
     QvdSource(QvdSourceSpec),
@@ -2143,6 +2144,7 @@ fn build_stage(
     let mut format_source: Option<FormatFileSourceSpec> = None;
     let mut format_sink: Option<FormatFileSinkSpec> = None;
     let mut kafka_sink: Option<KafkaSinkSpec> = None;
+    let mut kinesis_sink: Option<KinesisSinkSpec> = None;
     let mut kafka_source: Option<KafkaSourceSpec> = None;
     let mut avro_source: Option<AvroSourceSpec> = None;
     let mut qvd_source: Option<QvdSourceSpec> = None;
@@ -3662,6 +3664,38 @@ fn build_stage(
                 .and_then(|v| v.as_u64())
                 .filter(|n| *n > 0)
                 .unwrap_or(500) as usize,
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.kinesis" {
+        // Kinesis PutRecords, signed as src.kinesis reads. Must come before the
+        // starts_with("snk.") catch-all below.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let required = |key: &str| {
+            string_prop(&props, key)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| EngineError::Config(format!("{}: {} required", component_id, key)))
+        };
+        kinesis_sink = Some(KinesisSinkSpec {
+            from_view: from_view.to_string(),
+            region: required("region")?,
+            access_key_id: required("accessKeyId")?,
+            secret_access_key: required("secretAccessKey")?,
+            session_token: string_prop(&props, "sessionToken").filter(|s| !s.trim().is_empty()),
+            stream_name: required("streamName")?,
+            partition_key_column: string_prop(&props, "partitionKeyColumn")
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default(),
+            endpoint: string_prop(&props, "endpoint")
+                .map(|s| s.trim().trim_end_matches('/').to_string())
+                .unwrap_or_default(),
+            // What one PutRecords call takes.
+            batch_size: props
+                .get("batchSize")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(500)
+                .min(500) as usize,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if matches!(component_id, "snk.yaml" | "snk.toml") {
@@ -7687,6 +7721,7 @@ fn build_stage(
         .or_else(|| websocket_sink.map(RuntimeSpec::WebSocketSink))
         .or_else(|| wsserver_sink.map(RuntimeSpec::WsServerSink))
         .or_else(|| kafka_sink.map(RuntimeSpec::KafkaSink))
+        .or_else(|| kinesis_sink.map(RuntimeSpec::KinesisSink))
         .or_else(|| kafka_source.map(RuntimeSpec::KafkaSource))
         .or_else(|| avro_source.map(RuntimeSpec::AvroSource))
         .or_else(|| qvd_source.map(RuntimeSpec::QvdSource))

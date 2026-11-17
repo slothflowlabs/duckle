@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 426 components, 410 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 205 connectors (127 sources / 78 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 426 components, 411 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 206 connectors (127 sources / 79 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -252,7 +252,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.json` JSON: Writes data to JSON
 - `snk.jsonl` JSONL / NDJSON: Writes data to JSONL / NDJSON
 - `snk.kafka` Apache Kafka: Produce one Kafka record per upstream row via the pure-Rust `rskafka` driver. Record key = optional keyColumn value; record value = JSON-stringified row. Records go to a single partition (partitionId, default 0); pipelined batching (default 500 records per produce call). Every write is acknowledged by the full in-sync replica set (acks=all) - the driver does not offer a weaker setting
-- `snk.kinesis` AWS Kinesis [planned]: Writes data to AWS Kinesis
+- `snk.kinesis` AWS Kinesis: Put each upstream row into a Kinesis data stream as one record, its data the row as JSON, with PutRecords over direct HTTP + AWS SigV4 (no AWS SDK). Up to 500 records and 5 MiB a call; the records Kinesis refuses (a shard over its write limit) are sent again, and any still refused fail the run. Partition key from a column, or spread by position. Record order is not kept
 - `snk.lancedb` LanceDB: Write rows to a Lance table (create/overwrite or append) via the bundled duckle-lance sidecar
 - `snk.manticore` Manticore Search: Index rows into a Manticore table via the HTTP JSON /bulk API (port 9308). NDJSON, one line per row, with the document nested inside the action ({"insert":{"table":"t","doc":{...}}}) - not Elasticsearch's action/doc pair. Insert or replace (upsert by id), batched at 1000 rows. A batch Manticore rejects comes back as HTTP 200 with errors:true, and fails the run rather than reporting a write that did not happen
 - `snk.mariadb` MariaDB: Write to MariaDB via the DuckDB mysql extension (MariaDB speaks the MySQL wire protocol)

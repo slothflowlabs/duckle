@@ -12028,6 +12028,177 @@ impl DuckdbEngine {
         ))
     }
 
+    /// snk.kinesis: put each upstream row into the stream as one record, its data
+    /// the row as JSON, with PutRecords: at most `batch_size` records and 5 MiB a
+    /// call. Kinesis can take part of a call and refuse the rest (a shard over
+    /// its write limit), so the refused records are sent again after a wait that
+    /// doubles, up to four times, and any still refused fail the run in
+    /// Kinesis's own words rather than counting as delivered.
+    pub(crate) fn run_kinesis_sink(&self, db: &Path, spec: &KinesisSinkSpec) -> Result<String, EngineError> {
+        use base64::engine::general_purpose::STANDARD as B64;
+        use base64::Engine as _;
+        const CALL_BYTES: usize = 5 * 1024 * 1024;
+        const RECORD_BYTES: usize = 1024 * 1024;
+        const RETRIES: u32 = 4;
+        let select = format!("SELECT * FROM {}", plan::quote_ident(&spec.from_view));
+        let rows = self.run_rows(Some(db), &select)?;
+        // Every record is built and held to what Kinesis takes before the first
+        // call, so a row that cannot be put fails the run with nothing sent.
+        // Each is (partition key, data in base64, size Kinesis counts).
+        let mut records: Vec<(String, String, usize)> = Vec::with_capacity(rows.len());
+        for (i, row) in rows.iter().enumerate() {
+            let key = if spec.partition_key_column.is_empty() {
+                i.to_string()
+            } else {
+                match row.get(&spec.partition_key_column) {
+                    Some(JsonValue::String(s)) if !s.is_empty() => s.clone(),
+                    Some(v) if !v.is_null() && !v.is_string() => v.to_string(),
+                    _ => {
+                        return Err(EngineError::Query(format!(
+                            "kinesis: row {} has no value in the partition key column '{}', and Kinesis \
+                             needs one for every record",
+                            i + 1,
+                            spec.partition_key_column
+                        )))
+                    }
+                }
+            };
+            if key.chars().count() > 256 {
+                return Err(EngineError::Query(format!(
+                    "kinesis: row {} has a partition key of {} characters, and Kinesis takes at most 256",
+                    i + 1,
+                    key.chars().count()
+                )));
+            }
+            let data = row.to_string();
+            let size = data.len() + key.len();
+            if size > RECORD_BYTES {
+                return Err(EngineError::Query(format!(
+                    "kinesis: row {} is {} bytes as a record, over the 1 MiB Kinesis takes in one",
+                    i + 1,
+                    size
+                )));
+            }
+            records.push((key, B64.encode(data.as_bytes()), size));
+        }
+        if records.is_empty() {
+            return Ok(format!("kinesis: 0 rows to put into {}", spec.stream_name));
+        }
+        let (url, host) = if spec.endpoint.is_empty() {
+            let host = format!("kinesis.{}.amazonaws.com", spec.region);
+            (format!("https://{host}/"), host)
+        } else {
+            let parsed = url::Url::parse(&spec.endpoint)
+                .map_err(|e| EngineError::Config(format!("kinesis: endpoint {}: {}", spec.endpoint, e)))?;
+            let host = parsed.host_str().unwrap_or_default().to_string();
+            let host = match parsed.port() {
+                Some(p) => format!("{host}:{p}"),
+                None => host,
+            };
+            (format!("{}/", spec.endpoint), host)
+        };
+        let target = "Kinesis_20131202.PutRecords";
+        let put = |batch: &[&(String, String, usize)]| -> Result<JsonValue, EngineError> {
+            let body = serde_json::json!({
+                "StreamName": spec.stream_name,
+                "Records": batch
+                    .iter()
+                    .map(|(key, data, _)| serde_json::json!({ "Data": data, "PartitionKey": key }))
+                    .collect::<Vec<_>>(),
+            })
+            .to_string();
+            let now = chrono::Utc::now();
+            let datetime = now.format("%Y%m%dT%H%M%SZ").to_string();
+            let date = now.format("%Y%m%d").to_string();
+            let signed = aws_sigv4_sign(
+                "POST",
+                "/",
+                "",
+                &host,
+                &datetime,
+                &date,
+                "kinesis",
+                &spec.region,
+                target,
+                &body,
+                &spec.access_key_id,
+                &spec.secret_access_key,
+                spec.session_token.as_deref(),
+            );
+            // The content type src.kinesis sends, which is the one aws_sigv4_sign signs.
+            let mut req = crate::tls::http_agent()
+                .post(&url)
+                .set("Host", &host)
+                .set("Content-Type", "application/x-amz-json-1.0")
+                .set("X-Amz-Date", &datetime)
+                .set("X-Amz-Target", target)
+                .set("Authorization", &signed.authorization);
+            if let Some(tok) = &spec.session_token {
+                req = req.set("X-Amz-Security-Token", tok);
+            }
+            match req.send_string(&body) {
+                Ok(r) => r.into_json().map_err(|e| EngineError::Query(format!("kinesis parse: {}", e))),
+                Err(ureq::Error::Status(code, r)) => Err(EngineError::Query(format!(
+                    "kinesis HTTP {} {}: {}",
+                    code,
+                    target,
+                    r.into_string().unwrap_or_default()
+                ))),
+                Err(e) => Err(EngineError::Query(format!("kinesis transport: {}", e))),
+            }
+        };
+        let mut start = 0;
+        while start < records.len() {
+            self.check_cancelled()?;
+            // As many as Batch size allows and 5 MiB holds. One record always
+            // fits, since none is over 1 MiB.
+            let (mut end, mut bytes) = (start, 0);
+            while end < records.len() && end - start < spec.batch_size && bytes + records[end].2 <= CALL_BYTES {
+                bytes += records[end].2;
+                end += 1;
+            }
+            let mut pending: Vec<&(String, String, usize)> = records[start..end].iter().collect();
+            let mut attempt = 0;
+            loop {
+                let answer = put(&pending)?;
+                let failed = answer.get("FailedRecordCount").and_then(|v| v.as_u64()).unwrap_or(0);
+                if failed == 0 {
+                    break;
+                }
+                // Kinesis answers record by record, in the order they were sent.
+                let outcomes = answer.get("Records").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let refused: Vec<(&(String, String, usize), String)> = pending
+                    .iter()
+                    .zip(outcomes.iter())
+                    .filter_map(|(r, o)| {
+                        let code = o.get("ErrorCode").and_then(|c| c.as_str())?;
+                        let message = o.get("ErrorMessage").and_then(|m| m.as_str()).unwrap_or_default();
+                        Some((*r, format!("{code}: {message}")))
+                    })
+                    .collect();
+                if refused.is_empty() || attempt >= RETRIES {
+                    let why = refused.first().map(|(_, e)| e.clone()).unwrap_or_else(|| {
+                        "Kinesis named no record and no error".to_string()
+                    });
+                    return Err(EngineError::Query(format!(
+                        "kinesis: {} record{} refused by {} after {} attempt{}: {}",
+                        failed,
+                        if failed == 1 { " was" } else { "s were" },
+                        spec.stream_name,
+                        attempt + 1,
+                        if attempt == 0 { "" } else { "s" },
+                        why
+                    )));
+                }
+                pending = refused.into_iter().map(|(r, _)| r).collect();
+                self.ai_sleep_cancellable(100u64 << attempt)?;
+                attempt += 1;
+            }
+            start = end;
+        }
+        Ok(format!("kinesis: put {} record(s) into {}", records.len(), spec.stream_name))
+    }
+
     /// src.dynamodb: scan a DynamoDB table via direct HTTP + AWS
     /// SigV4 signing. Pure-Rust dependency (avoids the 300-service
     /// aws-sdk-rust tree). DynamoDB's typed-attribute response shape

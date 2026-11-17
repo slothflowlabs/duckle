@@ -40676,8 +40676,8 @@
       "id": "snk.kinesis",
       "label": "AWS Kinesis",
       "kind": "sink",
-      "availability": "planned",
-      "summary": "",
+      "availability": "available",
+      "summary": "Put each upstream row into a Kinesis data stream as one record, its data the row as JSON, with PutRecords over direct HTTP + AWS SigV4 (no AWS SDK). Up to 500 records and 5 MiB a call; the records Kinesis refuses (a shard over its write limit) are sent again, and any still refused fail the run. Partition key from a column, or spread by position. Record order is not kept.",
       "category": "Sinks",
       "group": "Streaming",
       "ports": {
@@ -40694,53 +40694,70 @@
         "id": "snk.kinesis",
         "kind": "sink",
         "label": "AWS Kinesis",
-        "description": "Writes data to AWS Kinesis.",
+        "description": "Put each upstream row into a Kinesis data stream as one record, its data the row as JSON, with PutRecords over direct HTTP + AWS SigV4 (no AWS SDK). Up to 500 records and 5 MiB a call; the records Kinesis refuses (a shard over its write limit) are sent again, and any still refused fail the run. Partition key from a column, or spread by position. Record order is not kept.",
         "schemaSource": "upstream",
         "sections": [
           {
-            "label": "Broker",
+            "label": "Kinesis stream",
             "fields": [
               {
-                "key": "brokers",
-                "label": "Bootstrap servers",
+                "key": "region",
+                "label": "Region",
+                "kind": "text",
+                "required": true,
+                "placeholder": "us-east-1"
+              },
+              {
+                "key": "streamName",
+                "label": "Stream",
                 "kind": "text",
                 "required": true
               },
               {
-                "key": "topic",
-                "label": "Topic",
+                "key": "accessKeyId",
+                "label": "Access key ID",
                 "kind": "text",
                 "required": true
+              },
+              {
+                "key": "secretAccessKey",
+                "label": "Secret access key",
+                "kind": "text",
+                "required": true,
+                "secret": true,
+                "placeholder": "••••••••"
+              },
+              {
+                "key": "sessionToken",
+                "label": "Session token",
+                "kind": "text",
+                "secret": true,
+                "description": "Only for temporary STS credentials."
               }
             ]
           },
           {
-            "label": "Format",
+            "label": "Records",
             "fields": [
               {
-                "key": "format",
-                "label": "Message format",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "Avro",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "Protobuf",
-                    "value": "protobuf"
-                  }
-                ]
+                "key": "partitionKeyColumn",
+                "label": "Partition key column",
+                "kind": "column",
+                "description": "The column whose value is each record's partition key, which picks its shard. Left empty, records spread over the shards by their position. A row with no value in it fails the run before anything is sent. Record order is not kept."
               },
               {
-                "key": "keyColumn",
-                "label": "Message key column",
-                "kind": "column"
+                "key": "batchSize",
+                "label": "Records per call",
+                "kind": "integer",
+                "defaultValue": 500,
+                "description": "At most 500, which is what one PutRecords call takes. A call is also kept under 5 MiB, and a row over 1 MiB as a record fails the run before anything is sent."
+              },
+              {
+                "key": "endpoint",
+                "label": "Endpoint",
+                "kind": "text",
+                "placeholder": "https://kinesis.us-east-1.amazonaws.com",
+                "description": "Leave empty for the region's own endpoint. Set it for a VPC endpoint or LocalStack."
               }
             ]
           }

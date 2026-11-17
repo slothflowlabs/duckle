@@ -11450,6 +11450,237 @@ fn src_graphql_passes_a_numeric_cursor_back_as_a_number() {
     assert_eq!(sent[1]["variables"], json!({"offset": 2}));
 }
 
+/// A Kinesis endpoint on localhost that answers each PutRecords call with the
+/// next of `answers`, and keeps each call's headers and JSON body. The body is
+/// read whole by its Content-Length, since one call can run to megabytes.
+fn kinesis_endpoint(
+    answers: Vec<&'static str>,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>>, std::thread::JoinHandle<()>) {
+    use std::io::{BufRead, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let keep = seen.clone();
+    let handle = std::thread::spawn(move || {
+        let n = answers.len();
+        for (stream, answer) in incoming_bounded(&listener, n).zip(answers) {
+            let Ok(stream) = stream else { break };
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).ok();
+            let mut reader = std::io::BufReader::new(stream);
+            let (mut head, mut len) = (String::new(), 0usize);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap_or(0);
+                }
+                head.push_str(&line);
+            }
+            let mut body = vec![0u8; len];
+            let _ = reader.read_exact(&mut body);
+            keep.lock().unwrap().push((head, serde_json::from_slice(&body).unwrap_or_default()));
+            let mut stream = reader.into_inner();
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/x-amz-json-1.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                answer.len(),
+                answer
+            );
+            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+    (url, seen, handle)
+}
+
+/// Each record of a PutRecords body: its partition key, and its Data decoded
+/// back from base64 and read as JSON.
+fn kinesis_records(body: &serde_json::Value) -> Vec<(String, serde_json::Value)> {
+    use base64::Engine as _;
+    body["Records"]
+        .as_array()
+        .map(|rs| {
+            rs.iter()
+                .map(|r| {
+                    let data = base64::engine::general_purpose::STANDARD
+                        .decode(r["Data"].as_str().unwrap_or_default())
+                        .unwrap_or_default();
+                    (
+                        r["PartitionKey"].as_str().unwrap_or_default().to_string(),
+                        serde_json::from_slice(&data).unwrap_or_default(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+const KINESIS_ALL_TAKEN: &str = r#"{"FailedRecordCount":0,"Records":[]}"#;
+
+fn kinesis_sink(endpoint: &str, extra: serde_json::Value) -> serde_json::Value {
+    let mut props = json!({
+        "region": "eu-west-1",
+        "streamName": "orders",
+        "accessKeyId": "AKIDEXAMPLE",
+        "secretAccessKey": "wJalrXUtnFEMI",
+        "endpoint": endpoint,
+    });
+    for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+        props[k] = v;
+    }
+    node("k", "snk.kinesis", props)
+}
+
+/// snk.kinesis sends each upstream row as one record, its Data the row as JSON,
+/// in PutRecords calls of at most Batch size, each signed for the stream's
+/// region. The partition key is the value of the column named for it.
+#[test]
+fn snk_kinesis_puts_each_row_as_a_record_in_signed_batches() {
+    let engine = engine_or_skip!();
+    let (endpoint, seen, handle) = kinesis_endpoint(vec![KINESIS_ALL_TAKEN, KINESIS_ALL_TAKEN]);
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n7,alice\n8,bob\n9,carol\n");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            kinesis_sink(&endpoint, json!({ "partitionKeyColumn": "id", "batchSize": 2 })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let calls = seen.lock().unwrap().clone();
+    assert_eq!(calls.len(), 2, "three rows in batches of two");
+    for (head, body) in &calls {
+        let head = head.to_ascii_lowercase();
+        assert!(head.contains("x-amz-target: kinesis_20131202.putrecords"), "{head}");
+        assert!(
+            head.contains("credential=akidexample/") && head.contains("/eu-west-1/kinesis/aws4_request"),
+            "signed for the region's Kinesis: {head}"
+        );
+        assert_eq!(body["StreamName"], "orders");
+    }
+    let sent: Vec<(String, serde_json::Value)> = calls.iter().flat_map(|(_, b)| kinesis_records(b)).collect();
+    assert_eq!(sent.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), ["7", "8", "9"]);
+    assert_eq!(sent[1].1, json!({"id": 8, "name": "bob"}));
+}
+
+/// Kinesis can take part of a call and refuse the rest, a shard over its write
+/// limit say. Only the refused records are sent again. With no key column, each
+/// record's key is its position, which spreads the records over the shards.
+#[test]
+fn snk_kinesis_sends_again_only_the_records_kinesis_refused() {
+    let engine = engine_or_skip!();
+    let (endpoint, seen, handle) = kinesis_endpoint(vec![
+        r#"{"FailedRecordCount":1,"Records":[{"SequenceNumber":"1","ShardId":"shardId-000000000000"},{"ErrorCode":"ProvisionedThroughputExceededException","ErrorMessage":"Rate exceeded for shard shardId-000000000000"}]}"#,
+        KINESIS_ALL_TAKEN,
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,alice\n2,bob\n");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            kinesis_sink(&endpoint, json!({})),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let calls = seen.lock().unwrap().clone();
+    assert_eq!(calls.len(), 2);
+    let first = kinesis_records(&calls[0].1);
+    assert_eq!(first.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), ["0", "1"]);
+    let again = kinesis_records(&calls[1].1);
+    assert_eq!(again, vec![("1".to_string(), json!({"id": 2, "name": "bob"}))], "only the refused one, as it was");
+}
+
+/// A record Kinesis keeps refusing fails the node after the last retry, in
+/// Kinesis's own words, rather than counting as delivered.
+#[test]
+fn snk_kinesis_fails_with_what_kinesis_said_when_it_keeps_refusing() {
+    let engine = engine_or_skip!();
+    let refused = r#"{"FailedRecordCount":1,"Records":[{"ErrorCode":"InternalFailure","ErrorMessage":"Internal service failure."}]}"#;
+    let (endpoint, seen, handle) = kinesis_endpoint(vec![refused; 5]);
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,alice\n");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            kinesis_sink(&endpoint, json!({})),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "error", "a record that never went in was not delivered");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("InternalFailure") && e.contains("1 record"), "{e}");
+    assert_eq!(seen.lock().unwrap().len(), 5, "sent once and retried four times");
+}
+
+/// A record needs a partition key, so a row whose key column is empty fails the
+/// node before anything is sent, naming the row and the column.
+#[test]
+fn snk_kinesis_refuses_a_row_without_a_partition_key_before_sending() {
+    let engine = engine_or_skip!();
+    let (endpoint, seen, handle) = kinesis_endpoint(vec![]);
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,alice\n,bob\n");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            kinesis_sink(&endpoint, json!({ "partitionKeyColumn": "id" })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "error");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("row 2") && e.contains("'id'"), "{e}");
+    assert!(seen.lock().unwrap().is_empty(), "nothing was sent");
+}
+
+/// PutRecords takes at most 5 MiB a call and 1 MiB a record. A batch is split
+/// before a call would pass 5 MiB, and a row too big to be one record fails the
+/// node, naming it, before anything is sent.
+#[test]
+fn snk_kinesis_keeps_each_call_and_record_within_the_kinesis_limits() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let big = "x".repeat(900_000);
+    let rows: String = (1..=6).map(|i| format!("{i},{big}\n")).collect();
+    let csv = write_file(tmp.path(), "big.csv", &format!("id,blob\n{rows}"));
+    let (endpoint, seen, handle) = kinesis_endpoint(vec![KINESIS_ALL_TAKEN, KINESIS_ALL_TAKEN]);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            kinesis_sink(&endpoint, json!({})),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let calls = seen.lock().unwrap().clone();
+    assert_eq!(calls.len(), 2, "5.4 MB of rows is over one call's 5 MiB");
+    assert_eq!(calls.iter().map(|(_, b)| kinesis_records(b).len()).sum::<usize>(), 6);
+
+    let huge = write_file(tmp.path(), "huge.csv", &format!("id,blob\n1,{}\n", "y".repeat(1_100_000)));
+    let (endpoint, seen, handle) = kinesis_endpoint(vec![]);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": huge, "hasHeader": true })),
+            kinesis_sink(&endpoint, json!({})),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "error", "a record over 1 MiB cannot be put");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("row 1") && e.contains("1 MiB"), "{e}");
+    assert!(seen.lock().unwrap().is_empty());
+}
+
 /// An API that says another page exists and gives no cursor for it fails the
 /// node and names the path, rather than stopping as if the data had ended.
 #[test]

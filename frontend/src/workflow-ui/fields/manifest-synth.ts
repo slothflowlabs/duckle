@@ -5203,6 +5203,52 @@ function synthStreamingSink(comp: ComponentDef): ComponentManifest {
             'upstream',
         );
     }
+    // snk.kinesis puts each row as one record with PutRecords, signed with SigV4
+    // as src.kinesis reads. Keys mirror the engine's KinesisSinkSpec parse in
+    // plan/mod.rs.
+    if (comp.id === 'snk.kinesis') {
+        return base(
+            comp,
+            [
+                {
+                    label: 'Kinesis stream',
+                    fields: [
+                        { key: 'region', label: 'Region', kind: 'text', required: true, placeholder: 'us-east-1' },
+                        { key: 'streamName', label: 'Stream', kind: 'text', required: true },
+                        { key: 'accessKeyId', label: 'Access key ID', kind: 'text', required: true },
+                        { key: 'secretAccessKey', label: 'Secret access key', kind: 'text', required: true, secret: true, placeholder: '••••••••' },
+                        { key: 'sessionToken', label: 'Session token', kind: 'text', secret: true, description: 'Only for temporary STS credentials.' },
+                    ],
+                },
+                {
+                    label: 'Records',
+                    fields: [
+                        {
+                            key: 'partitionKeyColumn',
+                            label: 'Partition key column',
+                            kind: 'column',
+                            description: "The column whose value is each record's partition key, which picks its shard. Left empty, records spread over the shards by their position. A row with no value in it fails the run before anything is sent. Record order is not kept.",
+                        },
+                        {
+                            key: 'batchSize',
+                            label: 'Records per call',
+                            kind: 'integer',
+                            defaultValue: 500,
+                            description: 'At most 500, which is what one PutRecords call takes. A call is also kept under 5 MiB, and a row over 1 MiB as a record fails the run before anything is sent.',
+                        },
+                        {
+                            key: 'endpoint',
+                            label: 'Endpoint',
+                            kind: 'text',
+                            placeholder: 'https://kinesis.us-east-1.amazonaws.com',
+                            description: "Leave empty for the region's own endpoint. Set it for a VPC endpoint or LocalStack.",
+                        },
+                    ],
+                },
+            ],
+            'upstream',
+        );
+    }
     // snk.wsserver is a WebSocket SERVER (#292): consumers connect to it, and the
     // follow loop keeps it listening between passes. Keys mirror the engine's
     // WsServerSinkSpec parse in plan/mod.rs.

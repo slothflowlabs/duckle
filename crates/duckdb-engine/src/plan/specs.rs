@@ -499,6 +499,27 @@ pub struct KafkaSinkSpec {
     pub batch_size: usize,
 }
 
+/// snk.kinesis: put each upstream row into a Kinesis data stream as one record,
+/// its data the row as JSON, with PutRecords over HTTP + SigV4 (src.kinesis's
+/// signing). The records a call has refused are sent again; any still refused
+/// fail the run.
+#[derive(Debug, Clone)]
+pub struct KinesisSinkSpec {
+    pub from_view: String,
+    pub region: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: Option<String>,
+    pub stream_name: String,
+    /// The column whose value is each record's partition key. Empty spreads the
+    /// records over the shards by their position.
+    pub partition_key_column: String,
+    /// Where PutRecords goes. Empty is the region's own endpoint.
+    pub endpoint: String,
+    /// Records per call: at most 500, what one PutRecords call takes.
+    pub batch_size: usize,
+}
+
 /// src.kafka / src.redpanda: batch-consume up to `max_records`
 /// messages from a single partition starting at `start_offset`
 /// (negative = read from earliest). Emits {offset, key, value, timestamp_ms}
