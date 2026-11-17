@@ -1603,8 +1603,8 @@ function withCloudReadOptions(id: string, m: ComponentManifest): ComponentManife
 // The GraphQL sources are drawn by synthApiSource, which is the REST form, and
 // their arm in plan/mod.rs hardcodes the REST paging styles and the fan-out:
 // concurrency 1, checkpoint false, on_parent_error "fail", url_template /
-// parent_key_column None, max_requests 0. So every control below was drawn and
-// read by nothing.
+// parent_key_column None, max_requests 0, and reads every answer as JSON. So
+// every control below was drawn and read by nothing.
 //
 // Filtered here rather than in the synthesizer because these keys share a
 // `fields:` array with the incremental cursor, which GraphQL DOES use - slicing
@@ -1613,7 +1613,7 @@ const GRAPHQL_DEAD_KEYS = new Set([
     'paginationType', 'pageParam', 'pageSize', 'startPage', 'maxPages',
     'cursorParam', 'cursorNextPath', 'offsetParam', 'totalCountPath', 'hasMorePath',
     'urlTemplate', 'parentKeyColumn', 'maxRequests', 'concurrency',
-    'checkpoint', 'onParentError', 'nextUrlPath',
+    'checkpoint', 'onParentError', 'nextUrlPath', 'responseFormat',
 ]);
 
 // A GraphQL API pages its own way: the cursor a response gives goes into a query

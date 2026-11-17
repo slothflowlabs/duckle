@@ -12167,27 +12167,6 @@
             "label": "Response",
             "fields": [
               {
-                "key": "responseFormat",
-                "label": "Response format",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "XML",
-                    "value": "xml"
-                  },
-                  {
-                    "label": "Server-sent events",
-                    "value": "sse"
-                  }
-                ],
-                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
-              },
-              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -56004,27 +55983,6 @@
             "label": "Response",
             "fields": [
               {
-                "key": "responseFormat",
-                "label": "Response format",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "XML",
-                    "value": "xml"
-                  },
-                  {
-                    "label": "Server-sent events",
-                    "value": "sse"
-                  }
-                ],
-                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
-              },
-              {
                 "key": "responsePath",
                 "label": "Records JSON pointer",
                 "kind": "text",
@@ -57775,27 +57733,6 @@
           {
             "label": "Response",
             "fields": [
-              {
-                "key": "responseFormat",
-                "label": "Response format",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "XML",
-                    "value": "xml"
-                  },
-                  {
-                    "label": "Server-sent events",
-                    "value": "sse"
-                  }
-                ],
-                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
-              },
               {
                 "key": "responsePath",
                 "label": "Records JSON pointer",

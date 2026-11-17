@@ -1059,13 +1059,16 @@ mod tests {
         // named there counts as declared - so leaving the field in put
         // `paginationType` back on these components even though the field
         // itself had been filtered out.
-        const DEAD: [&str; 6] = [
+        // `responseFormat` too: the arm reads every answer as JSON, so a choice of
+        // XML or server-sent events changed nothing.
+        const DEAD: [&str; 7] = [
             "paginationType",
             "concurrency",
             "checkpoint",
             "urlTemplate",
             "maxRequests",
             "nextUrlPath",
+            "responseFormat",
         ];
         const PAGING: [&str; 4] = ["cursorNextPath", "hasMorePath", "cursorVariable", "maxPages"];
         for id in ["src.graphql", "src.linear", "src.monday"] {
