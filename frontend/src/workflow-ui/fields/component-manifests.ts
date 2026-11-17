@@ -1601,10 +1601,10 @@ function withCloudReadOptions(id: string, m: ComponentManifest): ComponentManife
 }
 
 // The GraphQL sources are drawn by synthApiSource, which is the REST form, and
-// their arm in plan/mod.rs hardcodes everything to do with paging and fan-out:
-// pagination none, max_pages 1, concurrency 1, checkpoint false,
-// on_parent_error "fail", url_template / parent_key_column None, max_requests 0.
-// So every control below was drawn and read by nothing.
+// their arm in plan/mod.rs hardcodes the REST paging styles and the fan-out:
+// concurrency 1, checkpoint false, on_parent_error "fail", url_template /
+// parent_key_column None, max_requests 0. So every control below was drawn and
+// read by nothing.
 //
 // Filtered here rather than in the synthesizer because these keys share a
 // `fields:` array with the incremental cursor, which GraphQL DOES use - slicing
@@ -1616,12 +1616,53 @@ const GRAPHQL_DEAD_KEYS = new Set([
     'checkpoint', 'onParentError', 'nextUrlPath',
 ]);
 
-function withoutGraphqlPaging(id: string, m: ComponentManifest): ComponentManifest {
+// A GraphQL API pages its own way: the cursor a response gives goes into a query
+// variable for the next request. Three of the keys are REST ones read the GraphQL
+// way, so they are filtered out of the REST controls above and drawn again here
+// with what they mean for a query.
+const graphqlPagingFields = (): FormSection['fields'] => [
+    {
+        key: 'cursorNextPath',
+        label: 'Next cursor path',
+        kind: 'text',
+        placeholder: '/data/issues/pageInfo/endCursor',
+        description:
+            'Where a response gives the cursor for the next page, as a JSON pointer or a dotted path. Set it to read a paged connection to the end; left empty, one request is made. Paging stops when the cursor is missing, null or empty.',
+    },
+    {
+        key: 'hasMorePath',
+        label: 'Has-next-page flag path',
+        kind: 'text',
+        placeholder: '/data/issues/pageInfo/hasNextPage',
+        description:
+            'Optional. Where a response says whether another page exists, such as pageInfo.hasNextPage. When set, it decides, and anything but true or false fails the node and names the path.',
+    },
+    {
+        key: 'cursorVariable',
+        label: 'Cursor variable',
+        kind: 'text',
+        defaultValue: 'after',
+        placeholder: 'after',
+        description:
+            'The query variable the cursor is sent in for the next page, such as $after in issues(first: 50, after: $after). The query has to declare it.',
+    },
+    {
+        key: 'maxPages',
+        label: 'Max pages',
+        kind: 'integer',
+        defaultValue: 100,
+        description:
+            'A cap on the requests one run makes. Reaching it with pages left fails the node rather than returning part of the connection.',
+    },
+];
+
+function withGraphqlPaging(id: string, m: ComponentManifest): ComponentManifest {
     if (id !== 'src.graphql' && id !== 'src.linear' && id !== 'src.monday') return m;
     return {
         ...m,
         sections: m.sections
             .map(sec => ({ ...sec, fields: sec.fields.filter(f => !GRAPHQL_DEAD_KEYS.has(f.key)) }))
+            .map(sec => (sec.label === 'Pagination' ? { ...sec, fields: [...graphqlPagingFields(), ...sec.fields] } : sec))
             .filter(sec => sec.fields.length > 0),
     };
 }
@@ -1642,7 +1683,7 @@ function withoutGraphqlPaging(id: string, m: ComponentManifest): ComponentManife
 // Manifests that carry no ports are left alone rather than guessed at.
 //
 // Filtered out of the BUILT manifest rather than cut from the synthesizer's
-// shared `fields:` array, which is what withoutGraphqlPaging does and for the
+// shared `fields:` array, which is what withGraphqlPaging does and for the
 // same reason: those arrays are shared with the REST sources that DO fan out,
 // and slicing one by hand has twice removed the wrong half.
 // `urlTemplate`, `parentKeyColumn` and `onParentError` exist only to fan out
@@ -1754,7 +1795,7 @@ export function getManifest(componentId: string | undefined): ComponentManifest 
     const m = built
         ? withMaskedCredentials(
               withoutFanOut(
-                  withoutGraphqlPaging(
+                  withGraphqlPaging(
                       componentId,
                       withCloudReadOptions(componentId, withDeadLetter(componentId, built)),
                   ),

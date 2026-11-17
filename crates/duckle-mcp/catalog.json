@@ -12291,6 +12291,35 @@
             "label": "Pagination",
             "fields": [
               {
+                "key": "cursorNextPath",
+                "label": "Next cursor path",
+                "kind": "text",
+                "placeholder": "/data/issues/pageInfo/endCursor",
+                "description": "Where a response gives the cursor for the next page, as a JSON pointer or a dotted path. Set it to read a paged connection to the end; left empty, one request is made. Paging stops when the cursor is missing, null or empty."
+              },
+              {
+                "key": "hasMorePath",
+                "label": "Has-next-page flag path",
+                "kind": "text",
+                "placeholder": "/data/issues/pageInfo/hasNextPage",
+                "description": "Optional. Where a response says whether another page exists, such as pageInfo.hasNextPage. When set, it decides, and anything but true or false fails the node and names the path."
+              },
+              {
+                "key": "cursorVariable",
+                "label": "Cursor variable",
+                "kind": "text",
+                "defaultValue": "after",
+                "placeholder": "after",
+                "description": "The query variable the cursor is sent in for the next page, such as $after in issues(first: 50, after: $after). The query has to declare it."
+              },
+              {
+                "key": "maxPages",
+                "label": "Max pages",
+                "kind": "integer",
+                "defaultValue": 100,
+                "description": "A cap on the requests one run makes. Reaching it with pages left fails the node rather than returning part of the connection."
+              },
+              {
                 "key": "incrementalField",
                 "label": "Incremental field",
                 "kind": "text",
@@ -56082,6 +56111,35 @@
             "label": "Pagination",
             "fields": [
               {
+                "key": "cursorNextPath",
+                "label": "Next cursor path",
+                "kind": "text",
+                "placeholder": "/data/issues/pageInfo/endCursor",
+                "description": "Where a response gives the cursor for the next page, as a JSON pointer or a dotted path. Set it to read a paged connection to the end; left empty, one request is made. Paging stops when the cursor is missing, null or empty."
+              },
+              {
+                "key": "hasMorePath",
+                "label": "Has-next-page flag path",
+                "kind": "text",
+                "placeholder": "/data/issues/pageInfo/hasNextPage",
+                "description": "Optional. Where a response says whether another page exists, such as pageInfo.hasNextPage. When set, it decides, and anything but true or false fails the node and names the path."
+              },
+              {
+                "key": "cursorVariable",
+                "label": "Cursor variable",
+                "kind": "text",
+                "defaultValue": "after",
+                "placeholder": "after",
+                "description": "The query variable the cursor is sent in for the next page, such as $after in issues(first: 50, after: $after). The query has to declare it."
+              },
+              {
+                "key": "maxPages",
+                "label": "Max pages",
+                "kind": "integer",
+                "defaultValue": 100,
+                "description": "A cap on the requests one run makes. Reaching it with pages left fails the node rather than returning part of the connection."
+              },
+              {
                 "key": "incrementalField",
                 "label": "Incremental field",
                 "kind": "text",
@@ -58131,6 +58189,35 @@
           {
             "label": "Pagination",
             "fields": [
+              {
+                "key": "cursorNextPath",
+                "label": "Next cursor path",
+                "kind": "text",
+                "placeholder": "/data/issues/pageInfo/endCursor",
+                "description": "Where a response gives the cursor for the next page, as a JSON pointer or a dotted path. Set it to read a paged connection to the end; left empty, one request is made. Paging stops when the cursor is missing, null or empty."
+              },
+              {
+                "key": "hasMorePath",
+                "label": "Has-next-page flag path",
+                "kind": "text",
+                "placeholder": "/data/issues/pageInfo/hasNextPage",
+                "description": "Optional. Where a response says whether another page exists, such as pageInfo.hasNextPage. When set, it decides, and anything but true or false fails the node and names the path."
+              },
+              {
+                "key": "cursorVariable",
+                "label": "Cursor variable",
+                "kind": "text",
+                "defaultValue": "after",
+                "placeholder": "after",
+                "description": "The query variable the cursor is sent in for the next page, such as $after in issues(first: 50, after: $after). The query has to declare it."
+              },
+              {
+                "key": "maxPages",
+                "label": "Max pages",
+                "kind": "integer",
+                "defaultValue": 100,
+                "description": "A cap on the requests one run makes. Reaching it with pages left fails the node rather than returning part of the connection."
+              },
               {
                 "key": "incrementalField",
                 "label": "Incremental field",

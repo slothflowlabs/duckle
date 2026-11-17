@@ -11304,6 +11304,211 @@ fn src_linear_alias_routes_through_graphql_path() {
     );
 }
 
+/// A GraphQL endpoint that answers each request with the next of `pages`, and
+/// keeps what each request sent.
+fn graphql_pages(
+    pages: Vec<&'static str>,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("http://127.0.0.1:{}/graphql", listener.local_addr().unwrap().port());
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let keep = seen.clone();
+    let handle = std::thread::spawn(move || {
+        let n = pages.len();
+        for (stream, body) in incoming_bounded(&listener, n).zip(pages) {
+            let Ok(mut stream) = stream else { break };
+            stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            for _ in 0..16 {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+            }
+            keep.lock().unwrap().push(String::from_utf8_lossy(&buf).to_string());
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+    (url, seen, handle)
+}
+
+/// The JSON body of a request `graphql_pages` kept.
+fn request_json(raw: &str) -> serde_json::Value {
+    serde_json::from_str(raw.split("\r\n\r\n").nth(1).unwrap_or_default()).unwrap_or_default()
+}
+
+/// A GraphQL connection is read page by page. The next page's cursor goes into
+/// the query's variable, `after` unless another is named, the variables already
+/// given stay, and the API's hasNextPage decides when to stop. The source used to
+/// fetch the first page and say nothing about the rest.
+#[test]
+fn src_graphql_follows_the_cursor_into_its_variable_page_by_page() {
+    let engine = engine_or_skip!();
+    let (url, seen, handle) = graphql_pages(vec![
+        r#"{"data":{"issues":{"nodes":[{"id":1},{"id":2}],"pageInfo":{"hasNextPage":true,"endCursor":"c2"}}}}"#,
+        r#"{"data":{"issues":{"nodes":[{"id":3}],"pageInfo":{"hasNextPage":false,"endCursor":"c3"}}}}"#,
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "issues.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("g", "src.graphql", json!({
+                "url": url,
+                "query": "query Q($first: Int, $after: String) { issues(first: $first, after: $after) { nodes { id } pageInfo { hasNextPage endCursor } } }",
+                "variables": "{\"first\": 2}",
+                "responsePath": "/data/issues/nodes",
+                "cursorNextPath": "/data/issues/pageInfo/endCursor",
+                "hasMorePath": "/data/issues/pageInfo/hasNextPage",
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "g", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3, "both pages' rows");
+    let sent: Vec<serde_json::Value> = seen.lock().unwrap().iter().map(|r| request_json(r)).collect();
+    assert_eq!(sent.len(), 2, "a request per page, and none after hasNextPage said false");
+    assert_eq!(sent[0]["variables"], json!({"first": 2}), "the first page asks with no cursor");
+    assert_eq!(sent[1]["variables"], json!({"first": 2, "after": "c2"}), "the next carries the cursor");
+    assert_eq!(sent[0]["query"], sent[1]["query"], "the same query each time");
+}
+
+/// With no flag named, a missing, null or empty cursor ends it: Monday's
+/// items_page hands back `cursor: null` on its last page. The variable is named
+/// the way the query spells it, and a dotted path reads as the response path does.
+#[test]
+fn src_graphql_stops_when_the_cursor_runs_out() {
+    let engine = engine_or_skip!();
+    let (url, seen, handle) = graphql_pages(vec![
+        r#"{"data":{"boards":[{"items_page":{"cursor":"m2","items":[{"id":"a"}]}}]}}"#,
+        r#"{"data":{"boards":[{"items_page":{"cursor":null,"items":[{"id":"b"},{"id":"c"}]}}]}}"#,
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "items.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("m", "src.monday", json!({
+                "url": url,
+                "query": "query ($cursor: String) { boards(ids: 1) { items_page(limit: 1, cursor: $cursor) { cursor items { id } } } }",
+                "responsePath": "/data/boards/0/items_page/items",
+                "cursorNextPath": "data.boards.0.items_page.cursor",
+                "cursorVariable": "$cursor",
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "m", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3);
+    let sent: Vec<serde_json::Value> = seen.lock().unwrap().iter().map(|r| request_json(r)).collect();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[1]["variables"], json!({"cursor": "m2"}));
+}
+
+/// A cursor the API gives as a number goes back as a number: a query that
+/// declares `$offset: Int` refuses the string "2".
+#[test]
+fn src_graphql_passes_a_numeric_cursor_back_as_a_number() {
+    let engine = engine_or_skip!();
+    let (url, seen, handle) = graphql_pages(vec![
+        r#"{"data":{"rows":[{"id":1}],"next":2}}"#,
+        r#"{"data":{"rows":[{"id":2}],"next":null}}"#,
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "rows.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("g", "src.graphql", json!({
+                "url": url,
+                "query": "query ($offset: Int) { rows(offset: $offset) { id } next }",
+                "responsePath": "/data/rows",
+                "cursorNextPath": "/data/next",
+                "cursorVariable": "offset",
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "g", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let sent: Vec<serde_json::Value> = seen.lock().unwrap().iter().map(|r| request_json(r)).collect();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[1]["variables"], json!({"offset": 2}));
+}
+
+/// An API that says another page exists and gives no cursor for it fails the
+/// node and names the path, rather than stopping as if the data had ended.
+#[test]
+fn src_graphql_fails_when_the_api_says_more_but_gives_no_cursor() {
+    let engine = engine_or_skip!();
+    let (url, _seen, handle) = graphql_pages(vec![
+        r#"{"data":{"items":{"nodes":[{"id":1}],"pageInfo":{"hasNextPage":true}}}}"#,
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "items.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("g", "src.graphql", json!({
+                "url": url,
+                "query": "query ($after: String) { items(after: $after) { nodes { id } pageInfo { hasNextPage endCursor } } }",
+                "responsePath": "/data/items/nodes",
+                "cursorNextPath": "/data/items/pageInfo/endCursor",
+                "hasMorePath": "/data/items/pageInfo/hasNextPage",
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "g", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "error", "a page it was told exists was never fetched");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("/data/items/pageInfo/endCursor"), "names the path: {e}");
+}
+
+/// Max pages caps the walk, and reaching it with pages left fails the node
+/// rather than returning part of the connection as if it were all of it.
+#[test]
+fn src_graphql_fails_at_max_pages_with_pages_left() {
+    let engine = engine_or_skip!();
+    let (url, seen, handle) = graphql_pages(vec![
+        r#"{"data":{"items":{"nodes":[{"id":1}],"pageInfo":{"hasNextPage":true,"endCursor":"n2"}}}}"#,
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "items.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("g", "src.graphql", json!({
+                "url": url,
+                "query": "query ($after: String) { items(after: $after) { nodes { id } pageInfo { hasNextPage endCursor } } }",
+                "responsePath": "/data/items/nodes",
+                "cursorNextPath": "/data/items/pageInfo/endCursor",
+                "hasMorePath": "/data/items/pageInfo/hasNextPage",
+                "maxPages": 1,
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "g", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "error", "a capped walk is not the whole connection");
+    assert!(r.error.unwrap_or_default().contains("maxPages=1"));
+    assert_eq!(seen.lock().unwrap().len(), 1, "no request past the cap");
+}
+
 #[test]
 fn snk_cockroach_routes_through_postgres_attach_path() {
     // CockroachDB is wire-compatible with Postgres - the engine handles

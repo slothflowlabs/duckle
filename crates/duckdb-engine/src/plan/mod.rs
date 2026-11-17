@@ -6315,6 +6315,30 @@ fn build_stage(
             .map(|s| json_pointer_path(&s, true))
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "/data".into());
+        // A paged connection is read to the end once the response's cursor is
+        // named: it goes into a query variable for the next request. Without
+        // it, the single request this always was. Paths read as the response
+        // path does, and a `$` on the variable is the query's own spelling.
+        let pointer = |key: &str| {
+            string_prop(&props, key)
+                .map(|s| json_pointer_path(&s, true))
+                .filter(|s| !s.is_empty())
+        };
+        let (pagination, max_pages) = match pointer("cursorNextPath") {
+            Some(cursor_path) => (
+                RestPagination::GraphqlCursor {
+                    cursor_path,
+                    has_next_path: pointer("hasMorePath"),
+                    variable: string_prop(&props, "cursorVariable")
+                        .map(|v| v.trim().to_string())
+                        .map(|v| v.strip_prefix('$').map(str::to_string).unwrap_or(v))
+                        .filter(|v| !v.is_empty())
+                        .unwrap_or_else(|| "after".into()),
+                },
+                props.get("maxPages").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(100),
+            ),
+            None => (RestPagination::None, 1),
+        };
         rest_source = Some(RestSourceSpec {
             raw_auth: artifact_auth_from_props(&props),
             // This is the fixed-endpoint form (a vendor alias), which never
@@ -6354,8 +6378,8 @@ fn build_stage(
             body: Some(serde_json::to_string(&body).unwrap_or_else(|_| "{}".into())),
             response_path,
             response_format: RestResponseFormat::Json,
-            pagination: RestPagination::None,
-            max_pages: 1,
+            pagination,
+            max_pages,
             oauth: None,
             from_view: None,
             url_template: None,

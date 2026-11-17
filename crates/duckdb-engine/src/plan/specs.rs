@@ -1919,6 +1919,11 @@ pub enum RestPagination {
     /// OData / Microsoft Graph style: `@odata.nextLink` is already a
     /// complete URL including all query params for the next page.
     NextUrl { next_path: String },
+    /// GraphQL: the cursor at `cursor_path` goes into the request's
+    /// `variables` as `variable` for the next page, the URL unchanged. With
+    /// `has_next_path` (pageInfo.hasNextPage), the true or false there decides;
+    /// without it, a missing, null or empty cursor ends the walk.
+    GraphqlCursor { cursor_path: String, has_next_path: Option<String>, variable: String },
 }
 
 /// Response body parser for src.rest.

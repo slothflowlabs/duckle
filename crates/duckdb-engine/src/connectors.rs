@@ -16699,6 +16699,8 @@ impl DuckdbEngine {
                 Some(t) => render_url_template(t, parent)?,
                 None => spec.url.clone(),
             };
+            // A GraphQL page is asked for in the body, so it changes per page too.
+            let mut body = spec.body.clone();
             let mut truncated = false;
             // Mutable state for offset / page strategies; cursor uses
             // per-response extraction inside the loop. Reset per parent row:
@@ -16732,7 +16734,7 @@ impl DuckdbEngine {
                     }
                     req
                 };
-                let mut resp_result = self.http_send(&session, &url, &make, spec.body.as_deref())?;
+                let mut resp_result = self.http_send(&session, &url, &make, body.as_deref())?;
                 // What answered, for the messages below: the request as made, or
                 // the GET a 303 pointed to.
                 let (mut answered_method, mut answered_url) = (spec.method.as_str(), url.clone());
@@ -17095,6 +17097,31 @@ impl DuckdbEngine {
                                 true
                             }
                             None => false,
+                        }
+                    }
+                    RestPagination::GraphqlCursor { cursor_path, has_next_path, variable } => {
+                        // The API's own word decides where it gives one, as for #399.
+                        let more = match has_next_path {
+                            Some(p) => Some(more_pages(&response, p)?),
+                            None => None,
+                        };
+                        // A string or a number: what the API hands out is what it takes back.
+                        let cursor = response
+                            .pointer(cursor_path)
+                            .filter(|v| v.is_number() || v.as_str().is_some_and(|s| !s.is_empty()))
+                            .cloned();
+                        match (more, cursor) {
+                            (Some(false), _) | (None, None) => false,
+                            (_, Some(next)) => {
+                                body = Some(graphql_with_cursor(body.as_deref(), variable, next));
+                                true
+                            }
+                            (Some(true), None) => {
+                                return Err(EngineError::Query(format!(
+                                    "graphql: the response says another page exists, but there is no \
+                                     cursor at {cursor_path}. Check the path against a response."
+                                )))
+                            }
                         }
                     }
                 };
@@ -20589,6 +20616,21 @@ fn more_pages(response: &JsonValue, path: &str) -> Result<bool, EngineError> {
             found.map_or("missing".to_string(), |v| v.to_string())
         ))),
     }
+}
+
+/// A GraphQL request body with `variable` set to the next page's cursor, and the
+/// query and every other variable as they were.
+fn graphql_with_cursor(body: Option<&str>, variable: &str, cursor: JsonValue) -> String {
+    let mut doc: JsonValue = body.and_then(|b| serde_json::from_str(b).ok()).unwrap_or_default();
+    if !doc.is_object() {
+        doc = JsonValue::Object(Default::default());
+    }
+    let vars = &mut doc["variables"];
+    if !vars.is_object() {
+        *vars = JsonValue::Object(Default::default());
+    }
+    vars[variable] = cursor;
+    doc.to_string()
 }
 
 /// #398: where a 3xx answer points, made absolute against the URL that was

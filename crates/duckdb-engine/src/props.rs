@@ -1041,44 +1041,49 @@ mod tests {
     }
 
     /// The GraphQL sources are drawn by the REST form, and their arm hardcodes
-    /// everything about paging and fan-out: pagination none, max_pages 1,
-    /// concurrency 1, checkpoint false, on_parent_error "fail", url_template
-    /// and parent_key_column None, max_requests 0. Every one of those controls
-    /// was drawn and read by nothing.
+    /// the REST paging styles and the fan-out: concurrency 1, checkpoint false,
+    /// on_parent_error "fail", url_template and parent_key_column None,
+    /// max_requests 0. Every one of those controls was drawn and read by nothing.
+    ///
+    /// They page their own way: the cursor a response gives goes into a query
+    /// variable for the next request, until the API's flag or the cursor says
+    /// stop, under Max pages. Those keys have to be offered, and only to them.
     ///
     /// What they DO read has to survive the filtering - the incremental cursor
     /// sits in the same section as the paging fields, and slicing that array
     /// by hand removed the wrong half twice before this was done by filtering
     /// the built manifest instead.
     #[test]
-    fn the_graphql_sources_do_not_offer_paging_their_arm_hardcodes() {
+    fn the_graphql_sources_offer_their_own_paging_and_not_the_rest_styles() {
         // `nextUrlPath` names paginationType in its visibleWhen, and a key
         // named there counts as declared - so leaving the field in put
         // `paginationType` back on these components even though the field
         // itself had been filtered out.
-        const DEAD: [&str; 7] = [
+        const DEAD: [&str; 6] = [
             "paginationType",
-            "maxPages",
             "concurrency",
             "checkpoint",
             "urlTemplate",
             "maxRequests",
             "nextUrlPath",
         ];
+        const PAGING: [&str; 4] = ["cursorNextPath", "hasMorePath", "cursorVariable", "maxPages"];
         for id in ["src.graphql", "src.linear", "src.monday"] {
             let keys = declared().get(id).unwrap_or_else(|| panic!("{id} is not in the catalog"));
             for k in DEAD {
                 assert!(!keys.contains(k), "{id} still offers {k}, which its arm hardcodes");
             }
-            for k in ["query", "variables", "incrementalField", "responsePath"] {
-                assert!(keys.contains(k), "{id} reads {k} and the filtering removed it");
+            for k in ["query", "variables", "incrementalField", "responsePath"].into_iter().chain(PAGING) {
+                assert!(keys.contains(k), "{id} reads {k} and its form does not offer it");
             }
         }
-        // src.rest shares the synthesizer and must keep all of it.
+        // src.rest shares the synthesizer and must keep all of it, but not the
+        // variable a GraphQL cursor goes into, which its arm never reads.
         let rest = declared().get("src.rest").expect("src.rest");
-        for k in DEAD {
+        for k in DEAD.into_iter().chain(["maxPages", "cursorNextPath", "hasMorePath"]) {
             assert!(rest.contains(k), "src.rest lost {k}, which it genuinely reads");
         }
+        assert!(!rest.contains("cursorVariable"), "src.rest offers cursorVariable, which its arm never reads");
     }
 
     #[test]
