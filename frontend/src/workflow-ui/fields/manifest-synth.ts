@@ -10442,6 +10442,64 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
             },
         ]);
     }
+    // src.gsheets sits in a saas.* group, which draws the REST form, and reads
+    // none of it. Keys mirror GSheetsSourceSpec's parse in plan/mod.rs.
+    if (comp.id === 'src.gsheets') {
+        return base(comp, [
+            {
+                label: 'Spreadsheet',
+                fields: [
+                    {
+                        key: 'spreadsheet',
+                        label: 'Spreadsheet',
+                        kind: 'text',
+                        required: true,
+                        placeholder: 'https://docs.google.com/spreadsheets/d/1AbC.../edit',
+                        description: "The link from the browser's address bar, or the id in it.",
+                    },
+                    {
+                        key: 'range',
+                        label: 'Range',
+                        kind: 'text',
+                        placeholder: 'Orders!A1:F',
+                        description: 'A sheet, a sheet and its cells, or a named range, in A1 notation. Left empty, the first sheet.',
+                    },
+                    {
+                        key: 'hasHeader',
+                        label: 'First row names the columns',
+                        kind: 'bool',
+                        defaultValue: true,
+                        description: 'Off, the columns are column1, column2, ... A row Sheets cut short is filled out with nulls, and an empty cell is null.',
+                    },
+                ],
+            },
+            {
+                label: 'Sign in',
+                fields: [
+                    {
+                        key: 'serviceAccountKey',
+                        label: 'Service account key (JSON)',
+                        kind: 'text',
+                        placeholder: '${ENV:GOOGLE_SHEETS_KEY}',
+                        description: "The key file Google Cloud gives a service account. Share the sheet with the account's email (client_email in the file) as a viewer. Use ${ENV:NAME} rather than pasting the key into the pipeline.",
+                    },
+                    {
+                        key: 'apiKey',
+                        label: 'API key',
+                        kind: 'text',
+                        description: 'For a sheet anyone with the link can view. It is sent as a header, never in a URL. Not used when a service account key is set.',
+                    },
+                    {
+                        key: 'endpoint',
+                        label: 'API endpoint',
+                        kind: 'text',
+                        placeholder: 'https://sheets.googleapis.com',
+                        description: 'Leave empty for Google. Set it for a Private Service Connect endpoint.',
+                    },
+                ],
+            },
+        ]);
+    }
     if (groupId === 'src.warehouses') return synthWarehouseSource(comp);
     if (groupId === 'src.storage') return synthStorageSource(comp);
     if (groupId === 'src.streaming') return synthStreamingSource(comp);

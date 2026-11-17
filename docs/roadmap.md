@@ -6,10 +6,10 @@ reel; this is the full ledger.
 
 The palette currently carries **426 components**, broken down:
 
-- **411 available** - executes on the DuckDB engine today
+- **412 available** - executes on the DuckDB engine today
 - **3 preview** - configurable in the designer (drag, wire, set
   properties); execution is being wired engine-by-engine
-- **12 planned** - reserved in the palette so the roadmap is visible,
+- **11 planned** - reserved in the palette so the roadmap is visible,
   not yet executable
 
 If you drop a planned or preview tile and try to run, the executor
@@ -58,8 +58,11 @@ Corresponding **sinks** are all available too.
 
 | Component | Notes |
 |---|---|
-| `src.gsheets` | Needs full OAuth 2.0 flow + Google Workspace SDK |
 | `src.excel-online` | Microsoft Graph API + OAuth |
+
+`src.gsheets` shipped without a Google SDK: a service account's key signs a
+JWT (RS256) that is traded for a token on each run, or an API key reads a
+sheet anyone with the link can view.
 
 The simple-auth SaaS REST tiles (GitHub, GitLab, Notion, Airtable, Stripe,
 HubSpot, Jira, etc.) ship today through the generic `src.rest` path.

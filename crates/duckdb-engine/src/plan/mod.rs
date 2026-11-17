@@ -310,6 +310,71 @@ fn eventhubs_endpoint(
     Ok((format!("{namespace}:9093"), topic, true, Some(sasl)))
 }
 
+/// src.gsheets: what a node needs to reach a sheet. The spreadsheet can be the
+/// link the browser shows; the sign-in is a service account's key file or an API
+/// key. Neither key is ever repeated in an error.
+fn gsheets_spec(props: &JsonValue, node_id: &str) -> Result<GSheetsSourceSpec, EngineError> {
+    let spreadsheet = string_prop(props, "spreadsheet")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| EngineError::Config("src.gsheets: name the spreadsheet, by its link or its id".into()))?;
+    // https://docs.google.com/spreadsheets/d/<id>/edit#gid=0
+    let spreadsheet_id = match spreadsheet.split_once("/d/") {
+        Some((_, rest)) => rest.split(['/', '?', '#']).next().unwrap_or_default().to_string(),
+        None => spreadsheet,
+    };
+    // A key file pasted as text, or written into the pipeline as an object.
+    let key = match props.get("serviceAccountKey") {
+        Some(JsonValue::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        Some(v @ JsonValue::Object(_)) => Some(v.to_string()),
+        _ => None,
+    };
+    let auth = match key {
+        Some(key) => {
+            // Checked now when it can be: a `${ENV:...}` is only filled in at run time.
+            if !key.contains("${") {
+                google_service_account(&key).map_err(|e| EngineError::Config(format!("src.gsheets: {e}")))?;
+            }
+            GSheetsAuth::ServiceAccount(key)
+        }
+        None => match string_prop(props, "apiKey").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+            Some(k) => GSheetsAuth::ApiKey(k),
+            None => {
+                return Err(EngineError::Config(
+                    "src.gsheets: sign in with a service account key, or with an API key for a sheet \
+                     anyone with the link can view"
+                        .into(),
+                ))
+            }
+        },
+    };
+    Ok(GSheetsSourceSpec {
+        node_id: node_id.to_string(),
+        spreadsheet_id,
+        range: string_prop(props, "range").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        has_header: props.get("hasHeader").and_then(JsonValue::as_bool).unwrap_or(true),
+        auth,
+        endpoint: string_prop(props, "endpoint")
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "https://sheets.googleapis.com".into()),
+    })
+}
+
+/// A Google service account key file, as Google Cloud hands it out: its account
+/// email, its private key (PEM) and the endpoint that trades a signed JWT for a
+/// token, Google's own unless the file names another. The messages never quote
+/// the file, since it holds the private key.
+pub(crate) fn google_service_account(raw: &str) -> Result<(String, String, String), String> {
+    let key: JsonValue = serde_json::from_str(raw)
+        .map_err(|_| "the service account key is not the JSON key file Google Cloud gives a service account".to_string())?;
+    let field = |name: &str| key.get(name).and_then(JsonValue::as_str).map(str::to_string).filter(|s| !s.is_empty());
+    let email = field("client_email").ok_or("the service account key has no client_email")?;
+    let private_key = field("private_key").ok_or("the service account key has no private_key")?;
+    let token_uri = field("token_uri").unwrap_or_else(|| "https://oauth2.googleapis.com/token".into());
+    Ok((email, private_key, token_uri))
+}
+
 pub(crate) fn run_var_relation(name: &str) -> String {
     format!("duckle_var__{name}")
 }
@@ -539,6 +604,7 @@ pub enum RuntimeSpec {
     FormatSink(FormatFileSinkSpec),
     KafkaSink(KafkaSinkSpec),
     KinesisSink(KinesisSinkSpec),
+    GSheetsSource(GSheetsSourceSpec),
     KafkaSource(KafkaSourceSpec),
     AvroSource(AvroSourceSpec),
     QvdSource(QvdSourceSpec),
@@ -2145,6 +2211,7 @@ fn build_stage(
     let mut format_sink: Option<FormatFileSinkSpec> = None;
     let mut kafka_sink: Option<KafkaSinkSpec> = None;
     let mut kinesis_sink: Option<KinesisSinkSpec> = None;
+    let mut gsheets_source: Option<GSheetsSourceSpec> = None;
     let mut kafka_source: Option<KafkaSourceSpec> = None;
     let mut avro_source: Option<AvroSourceSpec> = None;
     let mut qvd_source: Option<QvdSourceSpec> = None;
@@ -4975,6 +5042,10 @@ fn build_stage(
             max_records: props.get("maxRecords").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(1000),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.gsheets" {
+        // A range of a Google Sheet through the Sheets API.
+        gsheets_source = Some(gsheets_spec(&props, &node.id)?);
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.rabbit" {
         // RabbitMQ batch consumer. queue must exist (declared by the
         // producer or the broker admin). Pulls up to max_messages or
@@ -7722,6 +7793,7 @@ fn build_stage(
         .or_else(|| wsserver_sink.map(RuntimeSpec::WsServerSink))
         .or_else(|| kafka_sink.map(RuntimeSpec::KafkaSink))
         .or_else(|| kinesis_sink.map(RuntimeSpec::KinesisSink))
+        .or_else(|| gsheets_source.map(RuntimeSpec::GSheetsSource))
         .or_else(|| kafka_source.map(RuntimeSpec::KafkaSource))
         .or_else(|| avro_source.map(RuntimeSpec::AvroSource))
         .or_else(|| qvd_source.map(RuntimeSpec::QvdSource))

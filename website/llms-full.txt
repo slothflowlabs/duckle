@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 426 components, 411 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 206 connectors (127 sources / 79 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 426 components, 412 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 207 connectors (128 sources / 79 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -130,7 +130,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.gizmosql` GizmoSQL: Query a GizmoSQL (Arrow Flight SQL) server via a clean-room pure-Rust Flight SQL client - no ADBC driver or JDBC needed. Basic-auth handshake then streams Arrow back for fast loads; TLS optional
 - `src.graphql` GraphQL: POST a GraphQL query to an endpoint and walk the response data path. Rides snk.rest/src.rest infrastructure; auth via Bearer / API-Key
 - `src.grpc` gRPC [planned]: Reads data from gRPC
-- `src.gsheets` Google Sheets [planned]: Reads data from Google Sheets
+- `src.gsheets` Google Sheets: Read a range of a Google Sheet as rows through the Sheets API: values as they are (numbers, true/false), not as formatted. The first row names the columns. Sign in with a service account key, with the sheet shared with its email, or with an API key for a sheet anyone with the link can view
 - `src.html` HTML: Rows out of an HTML page, by CSS selector. Point it at a local file or an http(s) URL, give a row selector, and either name a column per sub-selector (with an optional attribute, so a link href or a data- value is readable) or leave the columns empty and let a table become a table: the th cells name the columns and each tr is a row. Parsed with a tolerant HTML parser, so the unclosed tags and unquoted attributes that real pages carry - and that the strict XML reader rejects outright - are fine
 - `src.http` HTTP: Read CSV / Parquet / JSON from any HTTP(S) URL via httpfs
 - `src.hubspot` HubSpot: HubSpot REST. Bearer auth via a Private App access token. Cursor pagination on `paging.next.after` (cursorNextPath /paging/next/after, cursorParam `after`). responsePath /results

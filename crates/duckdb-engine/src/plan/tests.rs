@@ -7098,6 +7098,98 @@ mod kinesis_sink {
     }
 }
 
+/// src.gsheets: what a node needs to reach a sheet, worked out before the run.
+#[cfg(test)]
+mod gsheets_source {
+    use super::*;
+    use crate::plan::GSheetsAuth;
+
+    fn spec(props: serde_json::Value) -> Result<crate::plan::GSheetsSourceSpec, crate::EngineError> {
+        let doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                {"id":"g","position":{"x":0,"y":0},
+                 "data":{"label":"Sheet","componentId":"src.gsheets","properties": props}},
+                {"id":"k","position":{"x":0,"y":0},
+                 "data":{"label":"out","componentId":"snk.csv","properties":{"path":"/tmp/o.csv"}}}
+            ],
+            "edges":[{"id":"x","source":"g","target":"k","data":{"connectionType":"main"}}]
+        }))
+        .unwrap();
+        let plan = compile(&doc)?;
+        Ok(plan
+            .stages
+            .iter()
+            .find_map(|s| match s.runtime.as_ref() {
+                Some(crate::plan::RuntimeSpec::GSheetsSource(g)) => Some(g.clone()),
+                _ => None,
+            })
+            .expect("a Sheets read"))
+    }
+
+    /// The spreadsheet can be named by the link the browser shows, or by its id.
+    #[test]
+    fn a_spreadsheet_is_named_by_its_link_or_its_id() {
+        let link = spec(serde_json::json!({
+            "spreadsheet": "https://docs.google.com/spreadsheets/d/1AbC_x-9/edit#gid=0", "apiKey": "k",
+        }))
+        .unwrap();
+        assert_eq!(link.spreadsheet_id, "1AbC_x-9");
+        let id = spec(serde_json::json!({ "spreadsheet": " 1AbC_x-9 ", "apiKey": "k" })).unwrap();
+        assert_eq!(id.spreadsheet_id, "1AbC_x-9");
+    }
+
+    /// A key file names its own token endpoint; one that does not gets Google's.
+    #[test]
+    fn a_service_account_key_without_a_token_uri_uses_googles() {
+        let key = serde_json::json!({
+            "client_email": "a@b.iam.gserviceaccount.com",
+            "private_key": "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n",
+        })
+        .to_string();
+        let s = spec(serde_json::json!({ "spreadsheet": "1x", "serviceAccountKey": key })).unwrap();
+        assert!(matches!(s.auth, GSheetsAuth::ServiceAccount(_)), "{:?}", s.auth);
+        let (email, _, token_uri) = crate::plan::google_service_account(&key).unwrap();
+        assert_eq!(email, "a@b.iam.gserviceaccount.com");
+        assert_eq!(token_uri, "https://oauth2.googleapis.com/token");
+    }
+
+    /// Both key fields are credentials by the engine's own rules, so they are
+    /// masked, kept out of logs and refused by deploy like any other.
+    #[test]
+    fn the_key_fields_are_secrets_by_the_engines_rules() {
+        assert!(crate::util::is_secret_prop_key("serviceAccountKey"));
+        assert!(crate::util::is_secret_prop_key("apiKey"));
+    }
+
+    /// A key kept in the environment is only there at run time, so planning
+    /// does not try to read it.
+    #[test]
+    fn a_key_from_the_environment_is_read_when_the_run_has_it() {
+        let s = spec(serde_json::json!({ "spreadsheet": "1x", "serviceAccountKey": "${ENV:DUCKLE_TEST_SHEETS_KEY_UNSET}" }));
+        assert!(s.is_ok(), "{:?}", s.err());
+    }
+
+    /// What cannot reach a sheet is refused before the run, and a key file is
+    /// never repeated back in the message.
+    #[test]
+    fn what_cannot_reach_a_sheet_is_refused_before_the_run() {
+        let none = spec(serde_json::json!({ "spreadsheet": "1x" })).unwrap_err().to_string();
+        assert!(none.contains("service account") && none.contains("API key"), "{none}");
+        let no_book = spec(serde_json::json!({ "apiKey": "k" })).unwrap_err().to_string();
+        assert!(no_book.contains("spreadsheet"), "{no_book}");
+        let secret = "-----BEGIN PRIVATE KEY-----\nSECRETBYTES\n-----END PRIVATE KEY-----\n";
+        let no_email = serde_json::json!({ "private_key": secret }).to_string();
+        let e = spec(serde_json::json!({ "spreadsheet": "1x", "serviceAccountKey": no_email }))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("client_email") && !e.contains("SECRETBYTES"), "{e}");
+        let garbage = spec(serde_json::json!({ "spreadsheet": "1x", "serviceAccountKey": "{not json SECRETBYTES" }))
+            .unwrap_err()
+            .to_string();
+        assert!(garbage.contains("service account") && !garbage.contains("SECRETBYTES"), "{garbage}");
+    }
+}
+
 /// The join family declares a `reject` output port and nothing could fill it.
 ///
 /// build_reject_sql is a per-component match and the joins were simply not in

@@ -499,6 +499,41 @@ pub struct KafkaSinkSpec {
     pub batch_size: usize,
 }
 
+/// src.gsheets: read a range of a Google Sheet through the Sheets API.
+#[derive(Debug, Clone)]
+pub struct GSheetsSourceSpec {
+    pub node_id: String,
+    pub spreadsheet_id: String,
+    /// A1 notation. None reads the first sheet.
+    pub range: Option<String>,
+    /// The first row names the columns.
+    pub has_header: bool,
+    pub auth: GSheetsAuth,
+    /// The API's base URL: `https://sheets.googleapis.com` unless set.
+    pub endpoint: String,
+}
+
+/// Who reads the sheet.
+#[derive(Clone)]
+pub enum GSheetsAuth {
+    /// A service account's key file, as given. It is read at run time, since a
+    /// `${ENV:...}` in it is only filled in by then; a token is minted per run
+    /// from a JWT its private key signs.
+    ServiceAccount(String),
+    /// An API key, for a sheet anyone with the link can view.
+    ApiKey(String),
+}
+
+/// Written by hand so a plan printed for a person never carries a key.
+impl std::fmt::Debug for GSheetsAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GSheetsAuth::ServiceAccount(_) => f.write_str("ServiceAccount(***)"),
+            GSheetsAuth::ApiKey(_) => f.write_str("ApiKey(***)"),
+        }
+    }
+}
+
 /// snk.kinesis: put each upstream row into a Kinesis data stream as one record,
 /// its data the row as JSON, with PutRecords over HTTP + SigV4 (src.kinesis's
 /// signing). The records a call has refused are sent again; any still refused

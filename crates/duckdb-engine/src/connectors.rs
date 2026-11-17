@@ -12199,6 +12199,100 @@ impl DuckdbEngine {
         Ok(format!("kinesis: put {} record(s) into {}", records.len(), spec.stream_name))
     }
 
+    /// src.gsheets: read a range of a Google Sheet through the Sheets API, values
+    /// as they are (numbers and true/false, not their display text; dates as
+    /// their formatted text), or the first sheet when no range is named. A
+    /// sheet with a header and no rows reads as an empty table with its columns.
+    pub(crate) fn run_gsheets_source(&self, db: &Path, spec: &GSheetsSourceSpec) -> Result<String, EngineError> {
+        self.check_cancelled()?;
+        let agent = crate::tls::http_agent();
+        // A service account trades a JWT its key signs for a token, once a run.
+        // An API key goes in a header, so it is in no URL an error could print.
+        let (bearer, api_key, account) = match &spec.auth {
+            GSheetsAuth::ServiceAccount(raw) => {
+                let (email, private_key, token_uri) =
+                    plan::google_service_account(raw).map_err(|e| EngineError::Config(format!("gsheets: {e}")))?;
+                let token = google_access_token(&agent, &email, &private_key, &token_uri, SHEETS_READ_ONLY)?;
+                (Some(token), None, Some(email))
+            }
+            GSheetsAuth::ApiKey(key) => (None, Some(key.clone()), None),
+        };
+        let get = |path_and_query: &str| -> Result<JsonValue, EngineError> {
+            let mut req = agent.get(&format!("{}{}", spec.endpoint, path_and_query));
+            if let Some(token) = &bearer {
+                req = req.set("Authorization", &format!("Bearer {token}"));
+            }
+            if let Some(key) = &api_key {
+                req = req.set("X-goog-api-key", key);
+            }
+            match req.call() {
+                Ok(r) => r
+                    .into_json()
+                    .map_err(|e| EngineError::Query(format!("gsheets: Google's answer is not JSON: {e}"))),
+                Err(ureq::Error::Status(code, r)) => {
+                    let body: JsonValue = r.into_json().unwrap_or_default();
+                    let said = body.pointer("/error/message").and_then(JsonValue::as_str).unwrap_or("no reason given");
+                    let hint = match (code, &account) {
+                        (403, Some(email)) => format!(
+                            " Share the sheet with {email} as a viewer, and check that the Google Sheets API \
+                             is on for the key's project."
+                        ),
+                        (403, None) => " An API key reads only a sheet anyone with the link can view, and only \
+                                        with the Google Sheets API on for its project."
+                            .to_string(),
+                        (404, _) => format!(" Check the spreadsheet id {}.", spec.spreadsheet_id),
+                        _ => String::new(),
+                    };
+                    Err(EngineError::Query(format!("gsheets: Google answered HTTP {code}: {said}.{hint}")))
+                }
+                Err(e) => Err(EngineError::Query(format!("gsheets: transport: {e}"))),
+            }
+        };
+        let id = urlencode_simple(&spec.spreadsheet_id);
+        let range = match &spec.range {
+            Some(range) => range.clone(),
+            None => {
+                let meta = get(&format!("/v4/spreadsheets/{id}?fields=sheets.properties.title"))?;
+                let title = meta
+                    .pointer("/sheets/0/properties/title")
+                    .and_then(JsonValue::as_str)
+                    .ok_or_else(|| {
+                        EngineError::Query(format!("gsheets: spreadsheet {} has no sheet to read", spec.spreadsheet_id))
+                    })?;
+                // A sheet name quoted as A1 notation quotes it, so a space or a `!` in it stays part of the name.
+                format!("'{}'", title.replace('\'', "''"))
+            }
+        };
+        self.check_cancelled()?;
+        let answer = get(&format!(
+            "/v4/spreadsheets/{id}/values/{}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE\
+             &dateTimeRenderOption=FORMATTED_STRING",
+            urlencode_simple(&range)
+        ))?;
+        let grid = answer.get("values").and_then(JsonValue::as_array).cloned().unwrap_or_default();
+        let (names, rows) = gsheets_rows(&grid, spec.has_header);
+        let columns: Vec<duckle_metadata::Column> = names
+            .iter()
+            .map(|name| duckle_metadata::Column {
+                tags: Vec::new(),
+                name: name.clone(),
+                data_type: duckle_metadata::DataType::String,
+                nullable: true,
+                primary_key: None,
+                format: None,
+            })
+            .collect();
+        let empty_schema = (!columns.is_empty()).then_some(columns.as_slice());
+        materialize_jsonobjects_as_table_typed(&self.bin, db, &spec.node_id, &rows, empty_schema)?;
+        Ok(format!(
+            "gsheets: read {} row(s) from {} {} -> {}",
+            rows.len(),
+            spec.spreadsheet_id,
+            range,
+            spec.node_id
+        ))
+    }
+
     /// src.dynamodb: scan a DynamoDB table via direct HTTP + AWS
     /// SigV4 signing. Pure-Rust dependency (avoids the 300-service
     /// aws-sdk-rust tree). DynamoDB's typed-attribute response shape
@@ -20787,6 +20881,97 @@ fn more_pages(response: &JsonValue, path: &str) -> Result<bool, EngineError> {
             found.map_or("missing".to_string(), |v| v.to_string())
         ))),
     }
+}
+
+/// What src.gsheets asks Google for: reading spreadsheets, nothing more.
+const SHEETS_READ_ONLY: &str = "https://www.googleapis.com/auth/spreadsheets.readonly";
+
+/// A Google OAuth access token for a service account: a JWT its private key
+/// signs (RS256), for `scope`, traded at its token endpoint.
+fn google_access_token(
+    agent: &ureq::Agent,
+    email: &str,
+    private_key: &str,
+    token_uri: &str,
+    scope: &str,
+) -> Result<String, EngineError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let claims = serde_json::json!({ "iss": email, "scope": scope, "aud": token_uri, "iat": now, "exp": now + 3600 });
+    let key = jsonwebtoken::EncodingKey::from_rsa_pem(private_key.as_bytes()).map_err(|_| {
+        EngineError::Config("gsheets: the service account key's private_key is not an RSA key in PEM form".into())
+    })?;
+    let jwt = jsonwebtoken::encode(&jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256), &claims, &key)
+        .map_err(|e| EngineError::Config(format!("gsheets: could not sign as {email}: {e}")))?;
+    let grant = [("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"), ("assertion", jwt.as_str())];
+    match agent.post(token_uri).send_form(&grant) {
+        Ok(r) => {
+            let body: JsonValue = r
+                .into_json()
+                .map_err(|e| EngineError::Query(format!("gsheets: Google's token answer is not JSON: {e}")))?;
+            body.get("access_token")
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| EngineError::Query("gsheets: Google's token answer carries no access_token".into()))
+        }
+        Err(ureq::Error::Status(code, r)) => {
+            let body: JsonValue = r.into_json().unwrap_or_default();
+            let said = body
+                .get("error_description")
+                .or_else(|| body.get("error"))
+                .and_then(JsonValue::as_str)
+                .unwrap_or("no reason given");
+            Err(EngineError::Query(format!("gsheets: Google would not sign in {email} (HTTP {code}): {said}")))
+        }
+        Err(e) => Err(EngineError::Query(format!("gsheets: could not reach {token_uri}: {e}"))),
+    }
+}
+
+/// A Sheets range as column names and rows. Sheets drops a row's trailing empty
+/// cells and gives an empty cell inside a row as "", so a short row is filled
+/// out with nulls and "" is null. The names come from the first row unless there
+/// is no header; an empty one is columnN and a repeated one gets _2, _3, ...
+fn gsheets_rows(grid: &[JsonValue], has_header: bool) -> (Vec<String>, Vec<JsonValue>) {
+    let cells = |r: &JsonValue| r.as_array().cloned().unwrap_or_default();
+    let (header, data) = match grid.split_first() {
+        Some((first, rest)) if has_header => (cells(first), rest),
+        _ => (Vec::new(), grid),
+    };
+    let width = data.iter().map(|r| cells(r).len()).chain([header.len()]).max().unwrap_or(0);
+    let mut names: Vec<String> = Vec::with_capacity(width);
+    for i in 0..width {
+        let given = match header.get(i) {
+            Some(JsonValue::String(s)) => s.trim().to_string(),
+            Some(JsonValue::Null) | None => String::new(),
+            Some(other) => other.to_string(),
+        };
+        let base = if given.is_empty() { format!("column{}", i + 1) } else { given };
+        let (mut name, mut n) = (base.clone(), 2);
+        while names.contains(&name) {
+            name = format!("{base}_{n}");
+            n += 1;
+        }
+        names.push(name);
+    }
+    let rows = data
+        .iter()
+        .map(|r| {
+            let row = cells(r);
+            let mut object = serde_json::Map::new();
+            for (i, name) in names.iter().enumerate() {
+                let value = match row.get(i) {
+                    None => JsonValue::Null,
+                    Some(JsonValue::String(s)) if s.is_empty() => JsonValue::Null,
+                    Some(v) => v.clone(),
+                };
+                object.insert(name.clone(), value);
+            }
+            JsonValue::Object(object)
+        })
+        .collect();
+    (names, rows)
 }
 
 /// A GraphQL request body with `variable` set to the next page's cursor, and the

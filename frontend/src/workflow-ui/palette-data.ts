@@ -869,7 +869,7 @@ export const PALETTE: Category[] = [
                     src('clickup', 'ClickUp', 'available', 'ClickUp REST. Bearer Personal API token (pk_... from Settings > Apps). Page pagination on `?page=N` (paginationType `page`, pageParam `page`). responsePath /tasks (or whatever resource). Base URL https://api.clickup.com/api/v2.'),
                     src('sharepoint', 'SharePoint Server', 'available', 'SharePoint Server on premises (2016 / 2019 / Subscription Edition) over REST, signed in with Windows authentication (NTLM). A list reads as rows, every page followed; a document library file reads by its format (CSV, TSV, Parquet, JSON, Excel).'),
                     src('monday', 'Monday.com', 'available', 'Monday.com GraphQL. Rides src.graphql; auth via Bearer token in Authorization header. POST a GraphQL query as `body`; responsePath /data.<query_name>. Base URL https://api.monday.com/v2.'),
-                    src('gsheets', 'Google Sheets', 'planned'),
+                    src('gsheets', 'Google Sheets', 'available', 'Read a range of a Google Sheet as rows through the Sheets API: values as they are (numbers, true/false), not as formatted. The first row names the columns. Sign in with a service account key, with the sheet shared with its email, or with an API key for a sheet anyone with the link can view.'),
                     src('excel-online', 'Microsoft Excel Online', 'planned'),
                 ],
             },

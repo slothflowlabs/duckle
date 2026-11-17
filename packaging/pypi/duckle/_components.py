@@ -935,6 +935,11 @@ COMPONENTS = {
         'summary': 'POST a GraphQL query to an endpoint and walk the response data path. Rides snk.rest/src.rest infrastructure; auth via Bearer / API-Key.',
         'params': ['url', 'query', 'variables', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responseFormat', 'responsePath', 'jsonPath', 'cursorNextPath', 'hasMorePath', 'cursorVariable', 'maxPages', 'incrementalField', 'incrementalInitial', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs', 'httpRequestsPerSecond', 'httpKeepCookies'],
     },
+    'src.gsheets': {
+        'kind': 'source',
+        'summary': 'Read a range of a Google Sheet as rows through the Sheets API: values as they are (numbers, true/false), not as formatted. The first row names the columns. Sign in with a service account key, with the sheet shared with its email, or with an API key for a sheet anyone with the link can view.',
+        'params': ['spreadsheet', 'range', 'hasHeader', 'serviceAccountKey', 'apiKey', 'endpoint'],
+    },
     'src.html': {
         'kind': 'source',
         'summary': 'Rows out of an HTML page, by CSS selector. Point it at a local file or an http(s) URL, give a row selector, and either name a column per sub-selector (with an optional attribute, so a link href or a data- value is readable) or leave the columns empty and let a table become a table: the th cells n...',

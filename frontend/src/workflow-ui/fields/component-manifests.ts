@@ -1748,6 +1748,8 @@ const CREDENTIAL_KEYS = new Set([
     'secretKey',
     'secretAccessKey',
     'accountKey',
+    // A Google service account's key file, private key and all.
+    'serviceAccountKey',
     'clientSecret',
     'privateKey',
     'connectionString',

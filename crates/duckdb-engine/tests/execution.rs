@@ -11681,6 +11681,284 @@ fn snk_kinesis_keeps_each_call_and_record_within_the_kinesis_limits() {
     assert!(seen.lock().unwrap().is_empty());
 }
 
+/// A Google endpoint on localhost (token and Sheets API alike) that answers each
+/// request with the next of `answers`, a status and a JSON body, and keeps each
+/// request's head and body.
+fn google_endpoint(
+    answers: Vec<(u16, &'static str)>,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>, std::thread::JoinHandle<()>) {
+    use std::io::{BufRead, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let keep = seen.clone();
+    let handle = std::thread::spawn(move || {
+        let n = answers.len();
+        for (stream, (status, answer)) in incoming_bounded(&listener, n).zip(answers) {
+            let Ok(stream) = stream else { break };
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).ok();
+            let mut reader = std::io::BufReader::new(stream);
+            let (mut head, mut len) = (String::new(), 0usize);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap_or(0);
+                }
+                head.push_str(&line);
+            }
+            let mut body = vec![0u8; len];
+            let _ = reader.read_exact(&mut body);
+            keep.lock().unwrap().push((head, String::from_utf8_lossy(&body).to_string()));
+            let mut stream = reader.into_inner();
+            let reply = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                answer.len()
+            );
+            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+    });
+    (url, seen, handle)
+}
+
+/// A throwaway RSA key, made once per test run and never written anywhere, as
+/// (private key PEM, public key PEM).
+fn throwaway_rsa_key() -> &'static (String, String) {
+    static KEY: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| {
+        use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 1024).expect("a test key");
+        let private = key.to_pkcs8_pem(LineEnding::LF).expect("pem").to_string();
+        let public = key.to_public_key().to_public_key_pem(LineEnding::LF).expect("pem");
+        (private, public)
+    })
+}
+
+const SHEETS_READER: &str = "reader@duckle-test.iam.gserviceaccount.com";
+
+/// A service account key file as Google hands it out, its token_uri at `base`.
+fn service_account_key(base: &str) -> String {
+    json!({
+        "type": "service_account",
+        "client_email": SHEETS_READER,
+        "private_key": throwaway_rsa_key().0,
+        "token_uri": format!("{base}/token"),
+    })
+    .to_string()
+}
+
+const GOOGLE_TOKEN: &str = r#"{"access_token":"ya29.test-token","expires_in":3599,"token_type":"Bearer"}"#;
+
+/// src.gsheets reads a range as a service account: a JWT signed with the key's
+/// private key is traded at its token_uri for a token, and the range is read
+/// with it, values as they are rather than as formatted. The first row names the
+/// columns, a row Sheets cut short is filled out with nulls, and an empty cell
+/// is null. The spreadsheet can be named by the link the browser shows.
+#[test]
+fn src_gsheets_reads_a_range_as_a_service_account() {
+    let engine = engine_or_skip!();
+    let (base, seen, handle) = google_endpoint(vec![
+        (200, GOOGLE_TOKEN),
+        (200, r#"{"range":"Orders!A1:C4","majorDimension":"ROWS","values":[["id","customer","total"],[1,"alice",9.5],[2,"bob"],[3,"",12]]}"#),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "orders.jsonl");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("g", "src.gsheets", json!({
+                "spreadsheet": "https://docs.google.com/spreadsheets/d/1AbC_x-9/edit#gid=0",
+                "range": "Orders!A1:C4",
+                "serviceAccountKey": service_account_key(&base),
+                "endpoint": base,
+            })),
+            node("k", "snk.jsonl", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "g", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        duckdb_json(&format!("SELECT * FROM read_json_auto('{}') ORDER BY id", out)),
+        vec![
+            json!({"id": 1, "customer": "alice", "total": 9.5}),
+            json!({"id": 2, "customer": "bob", "total": null}),
+            json!({"id": 3, "customer": null, "total": 12.0}),
+        ]
+    );
+    let calls = seen.lock().unwrap().clone();
+    assert_eq!(calls.len(), 2);
+    // The token request: a JWT this key signed, for this account, asking to read Sheets.
+    assert!(calls[0].0.starts_with("POST /token "), "{}", calls[0].0);
+    let assertion = url::form_urlencoded::parse(calls[0].1.as_bytes())
+        .find(|(k, _)| k == "assertion")
+        .map(|(_, v)| v.to_string())
+        .expect("a signed assertion");
+    assert!(calls[0].1.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer"));
+    let mut check = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256);
+    check.set_audience(&[format!("{base}/token")]);
+    check.set_issuer(&[SHEETS_READER]);
+    let claims = jsonwebtoken::decode::<serde_json::Value>(
+        &assertion,
+        &jsonwebtoken::DecodingKey::from_rsa_pem(throwaway_rsa_key().1.as_bytes()).unwrap(),
+        &check,
+    )
+    .expect("signed by the service account's key, for its token_uri")
+    .claims;
+    assert_eq!(claims["scope"], "https://www.googleapis.com/auth/spreadsheets.readonly");
+    // The read: this sheet, this range, the values themselves, with the token.
+    let read = &calls[1].0;
+    assert!(
+        read.starts_with("GET /v4/spreadsheets/1AbC_x-9/values/Orders%21A1%3AC4?"),
+        "{read}"
+    );
+    assert!(read.contains("valueRenderOption=UNFORMATTED_VALUE"), "{read}");
+    assert!(read.to_ascii_lowercase().contains("authorization: bearer ya29.test-token"), "{read}");
+}
+
+/// A public sheet reads with an API key, sent as a header so the key is in no
+/// URL an error could print. Without a header row the columns are column1, ...
+#[test]
+fn src_gsheets_reads_a_public_sheet_with_an_api_key() {
+    let engine = engine_or_skip!();
+    let (base, seen, handle) = google_endpoint(vec![(
+        200,
+        r#"{"range":"Sheet1!A1:B2","majorDimension":"ROWS","values":[["a",1],["b",2]]}"#,
+    )]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "public.jsonl");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("g", "src.gsheets", json!({
+                "spreadsheet": "1PubliC",
+                "range": "Sheet1!A1:B2",
+                "apiKey": "AIzaTestKey",
+                "hasHeader": false,
+                "endpoint": base,
+            })),
+            node("k", "snk.jsonl", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "g", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        duckdb_json(&format!("SELECT * FROM read_json_auto('{}') ORDER BY column1", out)),
+        vec![json!({"column1": "a", "column2": 1}), json!({"column1": "b", "column2": 2})]
+    );
+    let calls = seen.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1, "no token to mint");
+    let head = calls[0].0.to_ascii_lowercase();
+    assert!(head.contains("x-goog-api-key: aizatestkey"), "{head}");
+    assert!(!head.contains("key=aizatestkey") && !head.contains("authorization:"), "{head}");
+}
+
+/// With no range named, the first sheet is read, whatever it is called.
+#[test]
+fn src_gsheets_reads_the_first_sheet_when_no_range_is_named() {
+    let engine = engine_or_skip!();
+    let (base, seen, handle) = google_endpoint(vec![
+        (200, r#"{"sheets":[{"properties":{"title":"Q3 Orders"}},{"properties":{"title":"Notes"}}]}"#),
+        (200, r#"{"range":"'Q3 Orders'!A1:A2","majorDimension":"ROWS","values":[["id"],[7]]}"#),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "first.jsonl");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("g", "src.gsheets", json!({ "spreadsheet": "1Book", "apiKey": "k", "endpoint": base })),
+            node("k", "snk.jsonl", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "g", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(duckdb_json(&format!("SELECT * FROM read_json_auto('{}')", out)), vec![json!({"id": 7})]);
+    let calls = seen.lock().unwrap().clone();
+    // Quoted as A1 notation quotes a sheet name, so the space stays part of it.
+    assert!(calls[1].0.starts_with("GET /v4/spreadsheets/1Book/values/%27Q3%20Orders%27?"), "{}", calls[1].0);
+}
+
+/// Every column gets a name, once: an empty header cell is columnN, and a
+/// repeated one gets _2.
+#[test]
+fn src_gsheets_names_every_column_once() {
+    let engine = engine_or_skip!();
+    let (base, _seen, handle) = google_endpoint(vec![(
+        200,
+        r#"{"range":"Sheet1!A1:C2","majorDimension":"ROWS","values":[["id","","id"],[1,2,3]]}"#,
+    )]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "names.jsonl");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("g", "src.gsheets", json!({ "spreadsheet": "1Names", "range": "Sheet1", "apiKey": "k", "endpoint": base })),
+            node("k", "snk.jsonl", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "g", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        duckdb_json(&format!("SELECT * FROM read_json_auto('{}')", out)),
+        vec![json!({"id": 1, "column2": 2, "id_2": 3})]
+    );
+}
+
+/// A sheet with a header and no rows yet reads as an empty table with its
+/// columns, not as an error.
+#[test]
+fn src_gsheets_reads_a_header_only_sheet_as_an_empty_table() {
+    let engine = engine_or_skip!();
+    let (base, _seen, handle) = google_endpoint(vec![(
+        200,
+        r#"{"range":"Sheet1!A1:B1","majorDimension":"ROWS","values":[["id","name"]]}"#,
+    )]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "empty.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("g", "src.gsheets", json!({ "spreadsheet": "1Empty", "range": "Sheet1", "apiKey": "k", "endpoint": base })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "g", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let written = std::fs::read_to_string(&out).unwrap_or_default();
+    assert_eq!(written.lines().next(), Some("id,name"), "{written}");
+}
+
+/// Google's refusal comes back in its own words, and a service account's names
+/// the account the sheet has to be shared with.
+#[test]
+fn src_gsheets_names_the_account_to_share_with_when_google_refuses() {
+    let engine = engine_or_skip!();
+    let (base, _seen, handle) = google_endpoint(vec![
+        (200, GOOGLE_TOKEN),
+        (403, r#"{"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}}"#),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "denied.jsonl");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("g", "src.gsheets", json!({
+                "spreadsheet": "1Private", "range": "A1:B2",
+                "serviceAccountKey": service_account_key(&base), "endpoint": base,
+            })),
+            node("k", "snk.jsonl", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "g", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "error");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains(SHEETS_READER) && e.contains("The caller does not have permission"), "{e}");
+    assert!(!e.contains("BEGIN PRIVATE KEY"), "the key never reaches a message");
+}
+
 /// An API that says another page exists and gives no cursor for it fails the
 /// node and names the path, rather than stopping as if the data had ended.
 #[test]
