@@ -1326,6 +1326,50 @@ pub struct ChromaSinkSpec {
     pub batch_size: usize,
 }
 
+/// Where a Pulsar topic lives, for Pulsar's WebSocket API, which the broker
+/// serves on its HTTP port: that address as ws:// or wss://, the topic as the
+/// API's paths name it, and a token when the cluster takes one.
+#[derive(Clone)]
+pub struct PulsarTarget {
+    pub ws_url: String,
+    /// persistent/tenant/namespace/topic (or non-persistent/...).
+    pub topic_path: String,
+    pub token: Option<String>,
+}
+
+/// By hand, so a log or an error that prints a plan never prints the token.
+impl std::fmt::Debug for PulsarTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PulsarTarget")
+            .field("ws_url", &self.ws_url)
+            .field("topic_path", &self.topic_path)
+            .field("token", &self.token.as_ref().map(|_| "***"))
+            .finish()
+    }
+}
+
+/// src.pulsar: a topic read through the WebSocket reader, from its oldest
+/// message or its newest, up to Max messages or until it goes quiet. With
+/// Resume on, the next run starts after the last message this one read.
+#[derive(Debug, Clone)]
+pub struct PulsarSourceSpec {
+    pub node_id: String,
+    pub target: PulsarTarget,
+    pub earliest: bool,
+    pub max_messages: u64,
+    pub idle_ms: u64,
+    pub track_position: bool,
+}
+
+/// snk.pulsar: each upstream row produced as one message, the row as JSON,
+/// keyed by a column when one is named.
+#[derive(Debug, Clone)]
+pub struct PulsarSinkSpec {
+    pub from_view: String,
+    pub target: PulsarTarget,
+    pub key_column: Option<String>,
+}
+
 /// src.webhook: bind 127.0.0.1:port, accept up to `max_requests`
 /// inbound HTTP requests with a global `timeout_ms` deadline, parse
 /// each request body as JSON (or fall back to a {body, method, path,

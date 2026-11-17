@@ -5022,6 +5022,58 @@ const kafkaPartitionFields = (of: string): Field[] => [
 ];
 
 function synthStreamingSource(comp: ComponentDef): ComponentManifest {
+    // src.pulsar reads over Pulsar's WebSocket API, with neither brokers nor
+    // partitions to name. Keys mirror PulsarSourceSpec's parse in plan/mod.rs.
+    if (comp.id === 'src.pulsar') {
+        return base(comp, [
+            {
+                label: 'Pulsar',
+                fields: [
+                    {
+                        key: 'serviceUrl',
+                        label: 'Service URL',
+                        kind: 'text',
+                        required: true,
+                        placeholder: 'http://localhost:8080',
+                        description: "The broker's HTTP address. Pulsar serves its WebSocket API there, so no client library is needed.",
+                    },
+                    {
+                        key: 'topic',
+                        label: 'Topic',
+                        kind: 'text',
+                        required: true,
+                        placeholder: 'persistent://public/default/orders',
+                        description: "A name alone is public/default's. One topic, or one partition of a partitioned topic (orders-partition-0).",
+                    },
+                    { key: 'token', label: 'Token', kind: 'text', secret: true, placeholder: '••••••••', description: 'For a cluster with token authentication.' },
+                ],
+            },
+            {
+                label: 'Read',
+                fields: [
+                    {
+                        key: 'offset',
+                        label: 'Start from',
+                        kind: 'select',
+                        defaultValue: 'earliest',
+                        options: [
+                            { label: 'The oldest message', value: 'earliest' },
+                            { label: 'The newest message', value: 'latest' },
+                        ],
+                    },
+                    {
+                        key: 'trackOffset',
+                        label: 'Resume where the last run stopped',
+                        kind: 'bool',
+                        defaultValue: false,
+                        description: 'Remember the last message read and start after it next run, once the run succeeds. A first run from the newest keeps its place even when it reads nothing.',
+                    },
+                    { key: 'maxRecords', label: 'Max messages', kind: 'integer', defaultValue: 1000 },
+                    { key: 'timeoutMs', label: 'Idle timeout (ms)', kind: 'integer', defaultValue: 5000, description: 'The read stops after this long with no message.' },
+                ],
+            },
+        ]);
+    }
     // Event Hubs speaks Kafka on its namespace's port 9093 and signs in with the
     // connection string itself, so the broker and security blocks below are one
     // secret here. The engine maps it onto the Kafka read (plan/mod.rs). No
@@ -5200,6 +5252,49 @@ function synthStreamingSource(comp: ComponentDef): ComponentManifest {
 }
 
 function synthStreamingSink(comp: ComponentDef): ComponentManifest {
+    // snk.pulsar produces over Pulsar's WebSocket API. Keys mirror
+    // PulsarSinkSpec's parse in plan/mod.rs.
+    if (comp.id === 'snk.pulsar') {
+        return base(
+            comp,
+            [
+            {
+                    label: 'Pulsar',
+                    fields: [
+                        {
+                            key: 'serviceUrl',
+                            label: 'Service URL',
+                            kind: 'text',
+                            required: true,
+                            placeholder: 'http://localhost:8080',
+                            description: "The broker's HTTP address. Pulsar serves its WebSocket API there, so no client library is needed.",
+                        },
+                        {
+                            key: 'topic',
+                            label: 'Topic',
+                            kind: 'text',
+                            required: true,
+                            placeholder: 'persistent://public/default/orders',
+                            description: "A name alone is public/default's. One topic, or one partition of a partitioned topic (orders-partition-0).",
+                        },
+                        { key: 'token', label: 'Token', kind: 'text', secret: true, placeholder: '••••••••', description: 'For a cluster with token authentication.' },
+                    ],
+                },
+                {
+                    label: 'Messages',
+                    fields: [
+                        {
+                            key: 'keyColumn',
+                            label: 'Key column',
+                            kind: 'column',
+                            description: 'Each message keyed by this column. Leave empty for no key. Every message is the row as JSON.',
+                        },
+                    ],
+                },
+            ],
+            'upstream',
+        );
+    }
     // snk.websocket is a WebSocket client sink (#192): connect, send each row
     // as a text frame, close. It has no brokers/topic/acks, so give it its own
     // form. Keys mirror the engine's WebSocketSinkSpec parse in plan/mod.rs.

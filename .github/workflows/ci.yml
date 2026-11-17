@@ -453,8 +453,9 @@ jobs:
         run: cargo test -p duckle-duckdb-engine --test iceberg_rest
 
   # Live streaming tests: the Kafka sources and sink against a Redpanda broker,
-  # the Kafka protocol Event Hubs speaks too, and the Kinesis source and sink
-  # against kinesis-mock. Started with docker run, because a service container
+  # the Kafka protocol Event Hubs speaks too, the Kinesis source and sink
+  # against kinesis-mock, and the Pulsar source and sink against Pulsar
+  # standalone, over its WebSocket API. Started with docker run, because a service container
   # cannot be given Redpanda's start command. One test thread for Kafka: the
   # resume tests each point DUCKLE_WORKSPACE at a folder of their own.
   streaming-integration:
@@ -501,6 +502,20 @@ jobs:
         env:
           DUCKLE_KINESIS_ENDPOINT: http://localhost:4568
         run: cargo test -p duckle-duckdb-engine --test execution -- kinesis
+      - name: Start Pulsar standalone
+        run: |
+          set -e
+          for i in 1 2 3; do
+            docker pull apachepulsar/pulsar:5.0.1 && break
+            echo "docker pull attempt $i failed; retrying in 5s"; sleep 5
+          done
+          docker run -d --name pulsar -p 8080:8080 apachepulsar/pulsar:5.0.1 bin/pulsar standalone
+          for i in $(seq 1 60); do curl -sf http://localhost:8080/admin/v2/brokers/health > /dev/null && break; sleep 3; done
+          curl -sf http://localhost:8080/admin/v2/brokers/health
+      - name: Run Pulsar tests
+        env:
+          DUCKLE_PULSAR_URL: http://localhost:8080
+        run: cargo test -p duckle-duckdb-engine --test execution -- pulsar --test-threads 1
 
   # Live Chroma tests: src.chroma and snk.chroma against a Chroma server, pinned
   # by digest to the image they were written against (it reports 1.0.0).

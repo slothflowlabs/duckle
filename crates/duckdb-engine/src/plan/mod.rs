@@ -398,6 +398,48 @@ fn service_account_key(props: &JsonValue, component: &str) -> Result<Option<Stri
 }
 
 /// The Sheets API's base URL a node names, or Google's.
+/// Where a Pulsar node's topic lives, for Pulsar's WebSocket API. The broker
+/// serves that API on its HTTP port, so its http(s) address is taken as ws(s).
+/// A topic named in full (persistent://tenant/namespace/topic) is taken as it
+/// is; a bare name is public/default's, as Pulsar's own clients take it.
+fn pulsar_target(props: &JsonValue, component: &str) -> Result<PulsarTarget, EngineError> {
+    let text = |key: &str| string_prop(props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let service = text("serviceUrl").ok_or_else(|| EngineError::Config(format!("{component}: serviceUrl required")))?;
+    let service = service.trim_end_matches('/');
+    let ws_url = match service.split_once("://") {
+        Some(("http" | "ws", rest)) => format!("ws://{rest}"),
+        Some(("https" | "wss", rest)) => format!("wss://{rest}"),
+        _ => {
+            return Err(EngineError::Config(format!(
+                "{component}: serviceUrl {service} is not an http(s):// or ws(s):// address; \
+                 Pulsar serves its WebSocket API on the broker's HTTP port, 8080 by default"
+            )))
+        }
+    };
+    let topic = text("topic").ok_or_else(|| EngineError::Config(format!("{component}: topic required")))?;
+    let (domain, rest) = match topic.split_once("://") {
+        Some((d @ ("persistent" | "non-persistent"), rest)) => (d, rest),
+        Some(_) => {
+            return Err(EngineError::Config(format!(
+                "{component}: topic {topic} is neither persistent:// nor non-persistent://"
+            )))
+        }
+        None => ("persistent", topic.as_str()),
+    };
+    let topic_path = match rest.split('/').collect::<Vec<_>>().as_slice() {
+        [name] if !name.is_empty() => format!("{domain}/public/default/{name}"),
+        [tenant, namespace, name] if ![tenant, namespace, name].iter().any(|p| p.is_empty()) => {
+            format!("{domain}/{tenant}/{namespace}/{name}")
+        }
+        _ => {
+            return Err(EngineError::Config(format!(
+                "{component}: topic {topic} is neither a name nor tenant/namespace/topic"
+            )))
+        }
+    };
+    Ok(PulsarTarget { ws_url, topic_path, token: string_prop(props, "token").filter(|s| !s.is_empty()) })
+}
+
 /// Where a Chroma node's collection lives: a local server, and Chroma's own
 /// tenant and database, unless the node names others.
 fn chroma_target(props: &JsonValue, component: &str) -> Result<ChromaTarget, EngineError> {
@@ -651,6 +693,8 @@ pub enum RuntimeSpec {
     ExcelOnlineSource(ExcelOnlineSourceSpec),
     ChromaSource(ChromaSourceSpec),
     ChromaSink(ChromaSinkSpec),
+    PulsarSource(PulsarSourceSpec),
+    PulsarSink(PulsarSinkSpec),
     SharePointSink(SharePointSinkSpec),
     AttachParquetSource(AttachParquetSourceSpec),
     /// materialize = "duckdb"/"duckdbfile": persist the stage into a DuckDB file.
@@ -2269,6 +2313,8 @@ fn build_stage(
     let mut qdrant_source: Option<QdrantSourceSpec> = None;
     let mut chroma_source: Option<ChromaSourceSpec> = None;
     let mut chroma_sink: Option<ChromaSinkSpec> = None;
+    let mut pulsar_source: Option<PulsarSourceSpec> = None;
+    let mut pulsar_sink: Option<PulsarSinkSpec> = None;
     let mut weaviate_source: Option<WeaviateSourceSpec> = None;
     let mut milvus_source: Option<MilvusSourceSpec> = None;
     let mut format_source: Option<FormatFileSourceSpec> = None;
@@ -3781,6 +3827,14 @@ fn build_stage(
             topic,
             access_token,
             batch_size: props.get("batchSize").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(100) as usize,
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.pulsar" {
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        pulsar_sink = Some(PulsarSinkSpec {
+            from_view: from_view.to_string(),
+            target: pulsar_target(&props, component_id)?,
+            key_column: string_prop(&props, "keyColumn").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if matches!(component_id, "snk.kafka" | "snk.redpanda") {
@@ -5784,6 +5838,18 @@ fn build_stage(
             page_size: props.get("pageSize").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(100),
             max_pages: props.get("maxPages").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(100),
             with_vector: props.get("withVector").and_then(|v| v.as_bool()).unwrap_or(false),
+        });
+        (String::new(), StageKind::View, None)
+    } else if component_id == "src.pulsar" {
+        let count = |key: &str, default: u64| props.get(key).and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(default);
+        pulsar_source = Some(PulsarSourceSpec {
+            node_id: node.id.clone(),
+            target: pulsar_target(&props, component_id)?,
+            // The oldest message unless `latest` is chosen, as the Kafka reads start.
+            earliest: string_prop(&props, "offset").as_deref() != Some("latest"),
+            max_messages: count("maxRecords", 1000),
+            idle_ms: count("timeoutMs", 5000),
+            track_position: props.get("trackOffset").and_then(JsonValue::as_bool).unwrap_or(false),
         });
         (String::new(), StageKind::View, None)
     } else if component_id == "src.chroma" {
@@ -7934,6 +8000,8 @@ fn build_stage(
         .or_else(|| qdrant_source.map(RuntimeSpec::QdrantSource))
         .or_else(|| chroma_source.map(RuntimeSpec::ChromaSource))
         .or_else(|| chroma_sink.map(RuntimeSpec::ChromaSink))
+        .or_else(|| pulsar_source.map(RuntimeSpec::PulsarSource))
+        .or_else(|| pulsar_sink.map(RuntimeSpec::PulsarSink))
         .or_else(|| weaviate_source.map(RuntimeSpec::WeaviateSource))
         .or_else(|| milvus_source.map(RuntimeSpec::MilvusSource))
         .or_else(|| format_source.map(RuntimeSpec::FormatSource))

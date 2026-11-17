@@ -12011,6 +12011,243 @@ fn kinesis_writes_and_reads_back_every_shard_of_a_live_stream() {
     );
 }
 
+/// A Pulsar service for the live tests: DUCKLE_PULSAR_URL, the broker's HTTP
+/// address (http://localhost:8080), or the test skips.
+fn pulsar_url() -> Option<String> {
+    match std::env::var("DUCKLE_PULSAR_URL") {
+        Ok(u) if !u.is_empty() => Some(u.trim_end_matches('/').to_string()),
+        _ => {
+            eprintln!("skipping: set DUCKLE_PULSAR_URL to run live Pulsar tests");
+            None
+        }
+    }
+}
+
+/// A topic for this run alone: Windows hands a finished process's id to a new
+/// one, and a broker kept between runs keeps its topics.
+fn pulsar_topic(prefix: &str) -> String {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    format!("{prefix}-{}-{stamp}", std::process::id())
+}
+
+/// snk.pulsar produces rows as messages keyed by a column; src.pulsar reads them
+/// from the oldest, and with Resume on, a second run reads only what came after
+/// the first. Against a live Pulsar: set DUCKLE_PULSAR_URL to run it.
+#[test]
+fn pulsar_produces_and_resumes_where_the_last_run_stopped() {
+    let engine = engine_or_skip!();
+    let Some(url) = pulsar_url() else { return };
+    let topic = pulsar_topic("duckle-resume");
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", ws.to_string_lossy().to_string());
+    let produce = |sql: &str| {
+        let r = engine.execute_pipeline(&doc(
+            json!([
+                node("s", "code.sql", json!({ "sql": sql })),
+                node("k", "snk.pulsar", json!({ "serviceUrl": &url, "topic": &topic, "keyColumn": "id" })),
+            ]),
+            json!([main_edge("e", "s", "k")]),
+        ));
+        assert_eq!(r.status, "ok", "produce failed: {:?}", r.error);
+    };
+    let consume = |file: &str| -> Vec<serde_json::Value> {
+        let out = out_path(tmp.path(), file);
+        let r = engine.execute_pipeline_named(
+            &doc(
+                json!([
+                    node("p", "src.pulsar", json!({
+                        "serviceUrl": &url, "topic": &topic, "trackOffset": true, "timeoutMs": 1500,
+                    })),
+                    node("o", "snk.jsonl", json!({ "path": &out })),
+                ]),
+                json!([main_edge("e", "p", "o")]),
+            ),
+            "pulsar_resume_demo",
+        );
+        assert_eq!(r.status, "ok", "consume failed: {:?}", r.error);
+        duckdb_json(&format!(
+            "SELECT key, json_extract_string(value, '$.name') AS name FROM read_json_auto('{}') ORDER BY key",
+            out
+        ))
+    };
+    produce("SELECT * FROM (VALUES (1, 'a'), (2, 'b'), (3, 'c')) t(id, name)");
+    assert_eq!(
+        consume("first.jsonl"),
+        vec![json!({ "key": "1", "name": "a" }), json!({ "key": "2", "name": "b" }), json!({ "key": "3", "name": "c" })]
+    );
+    produce("SELECT * FROM (VALUES (4, 'd'), (5, 'e')) t(id, name)");
+    assert_eq!(
+        consume("second.jsonl"),
+        vec![json!({ "key": "4", "name": "d" }), json!({ "key": "5", "name": "e" })],
+        "only what came after the first run"
+    );
+    let state: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(ws.join("state").join("pulsar_resume_demo").join("p.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(state["topic"], json!(format!("persistent/public/default/{topic}")));
+    assert!(state["message_id"].as_str().is_some_and(|m| !m.is_empty()), "{state}");
+}
+
+/// With Resume on, a first read from the newest message that finds nothing still
+/// keeps its place: what is produced before the next run is read by it, and what
+/// was there before the first run is not.
+#[test]
+fn src_pulsar_latest_with_resume_keeps_its_place_from_the_first_run() {
+    let engine = engine_or_skip!();
+    let Some(url) = pulsar_url() else { return };
+    let topic = pulsar_topic("duckle-latest");
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", ws.to_string_lossy().to_string());
+    let produce = |sql: &str| {
+        let r = engine.execute_pipeline(&doc(
+            json!([
+                node("s", "code.sql", json!({ "sql": sql })),
+                node("k", "snk.pulsar", json!({ "serviceUrl": &url, "topic": &topic })),
+            ]),
+            json!([main_edge("e", "s", "k")]),
+        ));
+        assert_eq!(r.status, "ok", "produce failed: {:?}", r.error);
+    };
+    let consume = |file: &str| -> Vec<String> {
+        let out = out_path(tmp.path(), file);
+        let r = engine.execute_pipeline_named(
+            &doc(
+                json!([
+                    node("p", "src.pulsar", json!({
+                        "serviceUrl": &url, "topic": &topic, "offset": "latest", "trackOffset": true, "timeoutMs": 1500,
+                    })),
+                    node("o", "snk.csv", json!({ "path": &out, "hasHeader": true })),
+                ]),
+                json!([main_edge("e", "p", "o")]),
+            ),
+            "pulsar_latest_demo",
+        );
+        assert_eq!(r.status, "ok", "consume failed: {:?}", r.error);
+        duckdb_json(&format!(
+            "SELECT json_extract_string(value, '$.name') AS name FROM read_csv_auto('{}', all_varchar = true) ORDER BY name",
+            out
+        ))
+        .iter()
+        .map(|r| r["name"].as_str().unwrap_or_default().to_string())
+        .collect()
+    };
+    produce("SELECT 'old' AS name");
+    assert!(consume("pin.csv").is_empty(), "nothing new yet");
+    produce("SELECT * FROM (VALUES ('new1'), ('new2')) t(name)");
+    assert_eq!(consume("next.csv"), ["new1", "new2"], "what came after the first run, and only that");
+}
+
+/// The same on a topic nothing has been produced to yet, which Pulsar does not
+/// know until a reader or producer makes it: the first read keeps its place at
+/// the start, so the next reads whatever came in between.
+#[test]
+fn src_pulsar_latest_with_resume_on_a_new_topic_reads_what_comes_next() {
+    let engine = engine_or_skip!();
+    let Some(url) = pulsar_url() else { return };
+    let topic = pulsar_topic("duckle-new");
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", ws.to_string_lossy().to_string());
+    let consume = |file: &str| -> i64 {
+        let out = out_path(tmp.path(), file);
+        let r = engine.execute_pipeline_named(
+            &doc(
+                json!([
+                    node("p", "src.pulsar", json!({
+                        "serviceUrl": &url, "topic": &topic, "offset": "latest", "trackOffset": true, "timeoutMs": 1500,
+                    })),
+                    node("o", "snk.csv", json!({ "path": &out, "hasHeader": true })),
+                ]),
+                json!([main_edge("e", "p", "o")]),
+            ),
+            "pulsar_new_topic_demo",
+        );
+        assert_eq!(r.status, "ok", "consume failed: {:?}", r.error);
+        count(&format!("read_csv_auto('{}')", out))
+    };
+    assert_eq!(consume("first.csv"), 0);
+    let put = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": "SELECT * FROM (VALUES (1), (2)) t(id)" })),
+            node("k", "snk.pulsar", json!({ "serviceUrl": &url, "topic": &topic })),
+        ]),
+        json!([main_edge("e", "s", "k")]),
+    ));
+    assert_eq!(put.status, "ok", "produce failed: {:?}", put.error);
+    assert_eq!(consume("second.csv"), 2, "what came after the first run");
+}
+
+/// The reader hands over at most its queue, 1000 messages, until those are
+/// acknowledged, so a read of more acknowledges as it goes rather than stopping
+/// short at the queue's size. The sink sends them in windows of 500.
+#[test]
+fn src_pulsar_reads_past_the_readers_queue() {
+    let engine = engine_or_skip!();
+    let Some(url) = pulsar_url() else { return };
+    let topic = pulsar_topic("duckle-queue");
+    let put = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": "SELECT range AS id FROM range(1050)" })),
+            node("k", "snk.pulsar", json!({ "serviceUrl": &url, "topic": &topic })),
+        ]),
+        json!([main_edge("e", "s", "k")]),
+    ));
+    assert_eq!(put.status, "ok", "produce failed: {:?}", put.error);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "all.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("p", "src.pulsar", json!({ "serviceUrl": &url, "topic": &topic, "maxRecords": 5000, "timeoutMs": 2000 })),
+            node("o", "snk.csv", json!({ "path": &out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "p", "o")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 1050);
+}
+
+/// A key column the rows do not have is refused before anything is sent.
+#[test]
+fn snk_pulsar_refuses_a_key_column_the_rows_lack() {
+    let engine = engine_or_skip!();
+    let Some(url) = pulsar_url() else { return };
+    let topic = pulsar_topic("duckle-nokey");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": "SELECT 1 AS id" })),
+            node("k", "snk.pulsar", json!({ "serviceUrl": &url, "topic": &topic, "keyColumn": "nope" })),
+        ]),
+        json!([main_edge("e", "s", "k")]),
+    ));
+    assert_eq!(r.status, "error");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("nope"), "{e}");
+}
+
+/// A topic Pulsar will not serve says so: the refused handshake, and where.
+#[test]
+fn src_pulsar_says_why_a_topic_cannot_be_read() {
+    let engine = engine_or_skip!();
+    let Some(url) = pulsar_url() else { return };
+    let tmp = tempfile::tempdir().unwrap();
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("p", "src.pulsar", json!({ "serviceUrl": &url, "topic": "nosuchtenant/default/x", "timeoutMs": 500 })),
+            node("o", "snk.csv", json!({ "path": out_path(tmp.path(), "none.csv"), "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "p", "o")]),
+    ));
+    assert_eq!(r.status, "error");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("nosuchtenant"), "{e}");
+}
+
 /// A Chroma server for the live tests: DUCKLE_CHROMA_URL, or the test skips.
 fn chroma_url() -> Option<String> {
     match std::env::var("DUCKLE_CHROMA_URL") {

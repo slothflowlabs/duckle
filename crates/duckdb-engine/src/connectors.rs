@@ -21956,7 +21956,7 @@ fn inherited_incremental_state(
     Some(state)
 }
 
-fn incremental_state_path(pipeline_name: Option<&str>, node_id: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn incremental_state_path(pipeline_name: Option<&str>, node_id: &str) -> Option<std::path::PathBuf> {
     let ws = std::env::var("DUCKLE_WORKSPACE").ok().filter(|s| !s.is_empty())?;
     let folder = sanitize_path_segment(pipeline_name.unwrap_or(UNNAMED_RUN_FOLDER));
     let file = format!("{}.json", sanitize_path_segment(node_id));
@@ -24607,7 +24607,7 @@ mod salesforce_bulk_tests {
 /// Build a WebSocket handshake request (#192) from a URL plus optional extra
 /// headers (e.g. Authorization). ws:// and wss:// are both handled; wss uses the
 /// bundled webpki roots via tokio-tungstenite's rustls feature.
-fn websocket_request(
+pub(crate) fn websocket_request(
     url: &str,
     headers: &[(String, String)],
 ) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, String> {

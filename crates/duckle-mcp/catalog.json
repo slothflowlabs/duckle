@@ -10577,8 +10577,8 @@
       "id": "src.pulsar",
       "label": "Apache Pulsar",
       "kind": "source",
-      "availability": "planned",
-      "summary": "",
+      "availability": "available",
+      "summary": "Read a Pulsar topic over Pulsar's WebSocket API, which the broker serves on its HTTP port, so no client library: from the oldest message or the newest, up to Max messages or until it goes quiet, each row {message_id, key, value, publish_time, properties}. Resume keeps the place between runs.",
       "category": "Sources",
       "group": "Streaming",
       "ports": {
@@ -10595,38 +10595,54 @@
         "id": "src.pulsar",
         "kind": "source",
         "label": "Apache Pulsar",
-        "description": "Reads data from Apache Pulsar.",
+        "description": "Read a Pulsar topic over Pulsar's WebSocket API, which the broker serves on its HTTP port, so no client library: from the oldest message or the newest, up to Max messages or until it goes quiet, each row {message_id, key, value, publish_time, properties}. Resume keeps the place between runs.",
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Broker",
+            "label": "Pulsar",
             "fields": [
               {
-                "key": "brokers",
-                "label": "Bootstrap servers",
+                "key": "serviceUrl",
+                "label": "Service URL",
                 "kind": "text",
                 "required": true,
-                "placeholder": "broker1:9092,broker2:9092"
+                "placeholder": "http://localhost:8080",
+                "description": "The broker's HTTP address. Pulsar serves its WebSocket API there, so no client library is needed."
               },
               {
                 "key": "topic",
                 "label": "Topic",
                 "kind": "text",
-                "required": true
+                "required": true,
+                "placeholder": "persistent://public/default/orders",
+                "description": "A name alone is public/default's. One topic, or one partition of a partitioned topic (orders-partition-0)."
               },
               {
+                "key": "token",
+                "label": "Token",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "••••••••",
+                "description": "For a cluster with token authentication."
+              }
+            ]
+          },
+          {
+            "label": "Read",
+            "fields": [
+              {
                 "key": "offset",
-                "label": "Initial offset",
+                "label": "Start from",
                 "kind": "select",
                 "defaultValue": "earliest",
                 "options": [
                   {
-                    "label": "Latest",
-                    "value": "latest"
+                    "label": "The oldest message",
+                    "value": "earliest"
                   },
                   {
-                    "label": "Earliest",
-                    "value": "earliest"
+                    "label": "The newest message",
+                    "value": "latest"
                   }
                 ]
               },
@@ -10635,108 +10651,20 @@
                 "label": "Resume where the last run stopped",
                 "kind": "bool",
                 "defaultValue": false,
-                "description": "Remember the offset reached and carry on from it next run, so a scheduled read becomes a continuous one. Without it, Earliest re-reads the whole backlog every run and Latest skips everything that arrived between runs. The position is saved only when the whole run succeeds, so a failure after the read re-delivers those records rather than losing them."
-              }
-            ]
-          },
-          {
-            "label": "Security",
-            "fields": [
-              {
-                "key": "security",
-                "label": "Security protocol",
-                "kind": "select",
-                "defaultValue": "plaintext",
-                "options": [
-                  {
-                    "label": "PLAINTEXT",
-                    "value": "plaintext"
-                  },
-                  {
-                    "label": "SSL",
-                    "value": "ssl"
-                  },
-                  {
-                    "label": "SASL_SSL",
-                    "value": "sasl_ssl"
-                  },
-                  {
-                    "label": "SASL_PLAINTEXT",
-                    "value": "sasl_plaintext"
-                  }
-                ]
+                "description": "Remember the last message read and start after it next run, once the run succeeds. A first run from the newest keeps its place even when it reads nothing."
               },
               {
-                "key": "saslMechanism",
-                "label": "SASL mechanism",
-                "kind": "select",
-                "defaultValue": "PLAIN",
-                "options": [
-                  {
-                    "label": "PLAIN",
-                    "value": "PLAIN"
-                  },
-                  {
-                    "label": "SCRAM-SHA-256",
-                    "value": "SCRAM-SHA-256"
-                  },
-                  {
-                    "label": "SCRAM-SHA-512",
-                    "value": "SCRAM-SHA-512"
-                  }
-                ],
-                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
+                "key": "maxRecords",
+                "label": "Max messages",
+                "kind": "integer",
+                "defaultValue": 1000
               },
               {
-                "key": "saslUsername",
-                "label": "SASL username",
-                "kind": "text"
-              },
-              {
-                "key": "saslPassword",
-                "label": "SASL password",
-                "kind": "text",
-                "placeholder": "••••••••",
-                "secret": true
-              }
-            ]
-          },
-          {
-            "label": "Format",
-            "fields": [
-              {
-                "key": "format",
-                "label": "Message format",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "Avro (Confluent Schema Registry)",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "Plain text",
-                    "value": "text"
-                  }
-                ],
-                "description": "Avro decodes Confluent-framed messages against the registry below. JSON and Plain text both hand the message back as text for SQL to parse. Protobuf is not offered because it is not implemented - it would need the .proto descriptors, and picking it would have produced mangled text rather than an error."
-              },
-              {
-                "key": "schemaRegistryUrl",
-                "label": "Schema Registry URL",
-                "kind": "text",
-                "placeholder": "https://schema-registry.internal:8081",
-                "description": "Required when the format is Avro. The schema id carried by each message is looked up here, once per id per run. Credentials can be embedded in the URL.",
-                "visibleWhen": [
-                  {
-                    "key": "format",
-                    "equals": "avro"
-                  }
-                ]
+                "key": "timeoutMs",
+                "label": "Idle timeout (ms)",
+                "kind": "integer",
+                "defaultValue": 5000,
+                "description": "The read stops after this long with no message."
               }
             ]
           }
@@ -40527,8 +40455,8 @@
       "id": "snk.pulsar",
       "label": "Apache Pulsar",
       "kind": "sink",
-      "availability": "planned",
-      "summary": "",
+      "availability": "available",
+      "summary": "Produce each row as one message over Pulsar's WebSocket API, the row as JSON, keyed by a column when one is named; the run succeeds once every message is acknowledged.",
       "category": "Sinks",
       "group": "Streaming",
       "ports": {
@@ -40545,53 +40473,46 @@
         "id": "snk.pulsar",
         "kind": "sink",
         "label": "Apache Pulsar",
-        "description": "Writes data to Apache Pulsar.",
+        "description": "Produce each row as one message over Pulsar's WebSocket API, the row as JSON, keyed by a column when one is named; the run succeeds once every message is acknowledged.",
         "schemaSource": "upstream",
         "sections": [
           {
-            "label": "Broker",
+            "label": "Pulsar",
             "fields": [
               {
-                "key": "brokers",
-                "label": "Bootstrap servers",
+                "key": "serviceUrl",
+                "label": "Service URL",
                 "kind": "text",
-                "required": true
+                "required": true,
+                "placeholder": "http://localhost:8080",
+                "description": "The broker's HTTP address. Pulsar serves its WebSocket API there, so no client library is needed."
               },
               {
                 "key": "topic",
                 "label": "Topic",
                 "kind": "text",
-                "required": true
+                "required": true,
+                "placeholder": "persistent://public/default/orders",
+                "description": "A name alone is public/default's. One topic, or one partition of a partitioned topic (orders-partition-0)."
+              },
+              {
+                "key": "token",
+                "label": "Token",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "••••••••",
+                "description": "For a cluster with token authentication."
               }
             ]
           },
           {
-            "label": "Format",
+            "label": "Messages",
             "fields": [
               {
-                "key": "format",
-                "label": "Message format",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "Avro",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "Protobuf",
-                    "value": "protobuf"
-                  }
-                ]
-              },
-              {
                 "key": "keyColumn",
-                "label": "Message key column",
-                "kind": "column"
+                "label": "Key column",
+                "kind": "column",
+                "description": "Each message keyed by this column. Leave empty for no key. Every message is the row as JSON."
               }
             ]
           }

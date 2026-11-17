@@ -563,6 +563,11 @@ COMPONENTS = {
         'summary': 'Publish messages via the Pub/Sub REST API (POST /v1/projects/{p}/topics/{t}:publish). Each upstream row -> one base64-encoded message. Auth via OAuth2 Bearer access token. Batched at 100 messages per request (Pub/Sub max).',
         'params': ['project', 'topic', 'accessToken', 'batchSize'],
     },
+    'snk.pulsar': {
+        'kind': 'sink',
+        'summary': "Produce each row as one message over Pulsar's WebSocket API, the row as JSON, keyed by a column when one is named; the run succeeds once every message is acknowledged.",
+        'params': ['serviceUrl', 'topic', 'token', 'keyColumn'],
+    },
     'snk.qdrant': {
         'kind': 'sink',
         'summary': 'Upsert points to a Qdrant collection via PUT /collections/{name}/points',
@@ -1143,6 +1148,11 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'Pull messages via the Pub/Sub REST API (POST /v1/projects/{p}/subscriptions/{s}:pull) - sidesteps the gRPC build dependency. Auto-acks the batch. Auth via a pre-fetched OAuth2 Bearer access token (mint with `gcloud auth print-access-token`). Emits {message_id, publish_time, data} rows.',
         'params': ['project', 'subscription', 'accessToken', 'maxMessages'],
+    },
+    'src.pulsar': {
+        'kind': 'source',
+        'summary': "Read a Pulsar topic over Pulsar's WebSocket API, which the broker serves on its HTTP port, so no client library: from the oldest message or the newest, up to Max messages or until it goes quiet, each row {message_id, key, value, publish_time, properties}. Resume keeps the place between runs.",
+        'params': ['serviceUrl', 'topic', 'token', 'offset', 'trackOffset', 'maxRecords', 'timeoutMs'],
     },
     'src.qdrant': {
         'kind': 'source',

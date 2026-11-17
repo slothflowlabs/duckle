@@ -289,6 +289,8 @@ pub fn advances_saved_state(component_id: &str) -> bool {
             | "src.kafka"
             | "src.redpanda"
             | "src.eventhubs"
+            // the message a topic's next read starts after
+            | "src.pulsar"
             // position in the spooled directory
             | "src.spool"
             // open window carried between runs
@@ -324,7 +326,7 @@ fn state_write_is_armed(component_id: &str, props: &serde_json::Value) -> bool {
     match component_id {
         // plan/mod.rs: `trackOffset`, OFF by default - turning it on changes
         // where a run starts reading, which is not decided on anyone's behalf.
-        "src.kafka" | "src.redpanda" | "src.eventhubs" => flag("trackOffset", false),
+        "src.kafka" | "src.redpanda" | "src.eventhubs" | "src.pulsar" => flag("trackOffset", false),
         // plan/mod.rs: `trackOffset`, ON by default.
         "src.spool" => flag("trackOffset", true),
         // plan/mod.rs: `trackState`, ON by default. The only component that
@@ -1357,6 +1359,10 @@ mod tests {
                     "trackOffset": true,
                 }),
             ),
+            (
+                "src.pulsar",
+                serde_json::json!({ "serviceUrl": "http://p:8080", "topic": "t", "trackOffset": true }),
+            ),
             ("src.spool", serde_json::json!({ "uri": "sftp://h/d" })),
             (
                 "src.rest",
@@ -1446,6 +1452,10 @@ mod tests {
                 })
             ),
             "an Event Hubs source that does not track offsets advances nothing"
+        );
+        assert!(
+            !refused("src.pulsar", serde_json::json!({ "serviceUrl": "http://p:8080", "topic": "t" })),
+            "a Pulsar source that does not resume advances nothing"
         );
 
         // The REST family writes a mark only when there is a cursor to advance.

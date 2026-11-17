@@ -10,6 +10,7 @@
 //! | `snapshot`    | `src.ducklake.changes` | `{ snapshot_id }`                        |
 //! | `kafka`       | `src.kafka`            | `{ topic, partition, next_offset }`      |
 //! |               | (every partition)      | `{ topic, partitions }`                  |
+//! | `pulsar`      | `src.pulsar`           | `{ topic, message_id }`                  |
 //! | `spool`       | `src.spool`            | `{ path, next_offset }`                  |
 //! | `tumble`      | `xf.tumble`            | `{ buffer, watermark, emitted_through }` |
 //! | `pg_lsn`      | `src.postgres.cdc`     | `{ slot, lsn }`                          |
@@ -57,6 +58,8 @@ pub fn kind_of(v: &Value) -> &'static str {
         "tumble"
     } else if v.get("topic").is_some() && (v.get("next_offset").is_some() || v.get("partitions").is_some()) {
         "kafka"
+    } else if v.get("topic").is_some() && v.get("message_id").is_some() {
+        "pulsar"
     } else if v.get("next_offset").is_some() {
         "spool"
     } else if v.get("lsn").is_some() && v.get("slot").is_some() {
@@ -140,6 +143,7 @@ pub fn list(workspace: &Path, pipeline: &str) -> Vec<WatermarkEntry> {
                 as_str(v.get("partition")),
                 as_str(v.get("next_offset"))
             ),
+            "pulsar" => format!("{} after {}", as_str(v.get("topic")), as_str(v.get("message_id"))),
             "spool" => format!("byte {}", as_str(v.get("next_offset"))),
             "tumble" => format!("watermark {}", as_str(v.get("watermark"))),
             "pg_lsn" => format!("slot {} @ {}", as_str(v.get("slot")), as_str(v.get("lsn"))),
@@ -662,6 +666,18 @@ mod shape_tests {
         assert_eq!((got[0].kind.as_str(), got[0].editable), ("kafka", false));
         assert_eq!(got[0].value, "orders[0] @ 991, [1] @ 17");
         assert!(set_incremental(d.path(), "p", "kaf", "5", None).is_err());
+    }
+
+    /// A Pulsar read keeps the message it starts after next run: listed as such,
+    /// and never hand-set, since no value typed in means a place in the topic.
+    #[test]
+    fn a_pulsar_resume_point_is_listed_and_never_hand_set() {
+        let d = ws();
+        write(d.path(), "p", "pul", r#"{"topic":"persistent/public/default/orders","message_id":"CAsQAjAA"}"#);
+        let got = list(d.path(), "p");
+        assert_eq!((got[0].kind.as_str(), got[0].editable), ("pulsar", false));
+        assert_eq!(got[0].value, "persistent/public/default/orders after CAsQAjAA");
+        assert!(set_incremental(d.path(), "p", "pul", "5", None).is_err());
     }
 
     /// Same kind is a normal edit, and a node with no state yet takes any -

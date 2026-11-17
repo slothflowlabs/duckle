@@ -7158,6 +7158,110 @@ mod kinesis_source {
     }
 }
 
+/// src.pulsar and snk.pulsar: where the topic lives and how a read starts,
+/// worked out before the run.
+mod pulsar {
+    use super::*;
+
+    fn doc_of(nodes: serde_json::Value, edge: (&str, &str)) -> PipelineDoc {
+        serde_json::from_value(serde_json::json!({
+            "nodes": nodes,
+            "edges": [{"id":"e","source":edge.0,"target":edge.1,"data":{"connectionType":"main"}}]
+        }))
+        .unwrap()
+    }
+
+    fn source(props: serde_json::Value) -> Result<crate::plan::PulsarSourceSpec, crate::EngineError> {
+        let doc = doc_of(
+            serde_json::json!([
+                {"id":"p","position":{"x":0,"y":0},"data":{"label":"P","componentId":"src.pulsar","properties": props}},
+                {"id":"o","position":{"x":0,"y":0},"data":{"label":"out","componentId":"snk.csv","properties":{"path":"/tmp/o.csv"}}}
+            ]),
+            ("p", "o"),
+        );
+        Ok(compile(&doc)?
+            .stages
+            .iter()
+            .find_map(|s| match s.runtime.as_ref() {
+                Some(crate::plan::RuntimeSpec::PulsarSource(p)) => Some(p.clone()),
+                _ => None,
+            })
+            .expect("a Pulsar read"))
+    }
+
+    fn sink(props: serde_json::Value) -> Result<crate::plan::PulsarSinkSpec, crate::EngineError> {
+        let doc = doc_of(
+            serde_json::json!([
+                {"id":"s","position":{"x":0,"y":0},"data":{"label":"in","componentId":"src.csv","properties":{"path":"/tmp/i.csv"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"K","componentId":"snk.pulsar","properties": props}}
+            ]),
+            ("s", "k"),
+        );
+        Ok(compile(&doc)?
+            .stages
+            .iter()
+            .find_map(|s| match s.runtime.as_ref() {
+                Some(crate::plan::RuntimeSpec::PulsarSink(k)) => Some(k.clone()),
+                _ => None,
+            })
+            .expect("a Pulsar write"))
+    }
+
+    /// A bare name is public/default's, as Pulsar's own clients take it; a topic
+    /// named in full is taken as it is.
+    #[test]
+    fn a_topic_is_read_as_pulsar_names_it() {
+        let path = |topic: &str| {
+            source(serde_json::json!({ "serviceUrl": "http://p:8080", "topic": topic })).map(|s| s.target.topic_path)
+        };
+        for (topic, want) in [
+            ("orders", "persistent/public/default/orders"),
+            ("acme/sales/orders", "persistent/acme/sales/orders"),
+            ("persistent://acme/sales/orders", "persistent/acme/sales/orders"),
+            ("non-persistent://acme/sales/ticks", "non-persistent/acme/sales/ticks"),
+        ] {
+            assert_eq!(path(topic).unwrap(), want, "{topic}");
+        }
+        for bad in ["kafka://acme/sales/orders", "acme/orders", "acme//orders"] {
+            assert!(path(bad).unwrap_err().to_string().contains("topic"), "{bad}");
+        }
+    }
+
+    /// The WebSocket API is served on the broker's HTTP port: an http(s) address
+    /// becomes ws(s), and anything else is refused.
+    #[test]
+    fn the_service_url_becomes_the_websocket_address() {
+        let ws = |url: &str| source(serde_json::json!({ "serviceUrl": url, "topic": "t" })).map(|s| s.target.ws_url);
+        assert_eq!(ws("http://p:8080/").unwrap(), "ws://p:8080");
+        assert_eq!(ws("https://p.example:8443").unwrap(), "wss://p.example:8443");
+        assert_eq!(ws("ws://p:8080").unwrap(), "ws://p:8080");
+        assert!(ws("pulsar://p:6650").unwrap_err().to_string().contains("serviceUrl"));
+    }
+
+    #[test]
+    fn a_read_starts_at_the_oldest_and_resumes_only_when_asked() {
+        let s = source(serde_json::json!({ "serviceUrl": "http://p:8080", "topic": "t" })).unwrap();
+        assert_eq!((s.earliest, s.track_position, s.max_messages, s.idle_ms), (true, false, 1000, 5000));
+        let s = source(serde_json::json!({
+            "serviceUrl": "http://p:8080", "topic": "t", "offset": "latest", "trackOffset": true,
+            "maxRecords": 50, "timeoutMs": 800,
+        }))
+        .unwrap();
+        assert_eq!((s.earliest, s.track_position, s.max_messages, s.idle_ms), (false, true, 50, 800));
+    }
+
+    #[test]
+    fn the_token_never_prints() {
+        let s = sink(serde_json::json!({
+            "serviceUrl": "http://p:8080", "topic": "t", "token": "eyJ-secret", "keyColumn": "id",
+        }))
+        .unwrap();
+        assert!(!format!("{s:?}").contains("eyJ-secret"));
+        assert_eq!(s.key_column.as_deref(), Some("id"));
+        assert!(crate::util::is_secret_prop_key("token"));
+    }
+}
+
 /// src.chroma and snk.chroma: where the collection lives and what a row maps to,
 /// worked out before the run.
 mod chroma {

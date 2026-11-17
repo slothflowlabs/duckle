@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 427 components, 416 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 211 connectors (130 sources / 81 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 427 components, 418 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 213 connectors (131 sources / 82 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -172,7 +172,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.postgres` PostgreSQL: Read from PostgreSQL via the DuckDB postgres extension
 - `src.postgres.cdc` PostgreSQL CDC: Log-based change data capture: every insert, update and delete from a table, in commit order, read from a replication slot through the built-in pgoutput plugin. No JVM, no Kafka, nothing to install on the server. The position is saved only when the run succeeds, so a failed run re-delivers instead of losing changes
 - `src.pubsub` GCP Pub/Sub: Pull messages via the Pub/Sub REST API (POST /v1/projects/{p}/subscriptions/{s}:pull) - sidesteps the gRPC build dependency. Auto-acks the batch. Auth via a pre-fetched OAuth2 Bearer access token (mint with `gcloud auth print-access-token`). Emits {message_id, publish_time, data} rows
-- `src.pulsar` Apache Pulsar [planned]: Reads data from Apache Pulsar
+- `src.pulsar` Apache Pulsar: Read a Pulsar topic over Pulsar's WebSocket API, which the broker serves on its HTTP port, so no client library: from the oldest message or the newest, up to Max messages or until it goes quiet, each row {message_id, key, value, publish_time, properties}. Resume keeps the place between runs
 - `src.qdrant` Qdrant: Scroll all points in a Qdrant collection via /collections/{id}/points/scroll. Cursor pagination on `result.next_page_offset`; emits {id, ...payload[, vector]} rows. apiKey via api-key header
 - `src.quack` DuckDB Quack: Read tables from a remote DuckDB instance over the Quack protocol (HTTP on port 9494). Server runs quack_serve(...); client ATTACHes the quack: URL with a token-based SECRET
 - `src.quickbooks` QuickBooks: QuickBooks Online REST. Bearer OAuth token; users assemble the query URL (Intuit's API requires SQL-like queries). responsePath /QueryResponse
@@ -274,7 +274,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.pixeltable` Pixeltable: Write rows into a Pixeltable table (#223). Duckle COPYs the upstream rows to Parquet and Pixeltable inserts the file directly. Insert appends to an existing table; Create builds one from the incoming rows. Needs a Python with pixeltable installed; the desktop app provisions one on first use
 - `snk.postgres` PostgreSQL: Write to PostgreSQL via the DuckDB postgres extension
 - `snk.pubsub` GCP Pub/Sub: Publish messages via the Pub/Sub REST API (POST /v1/projects/{p}/topics/{t}:publish). Each upstream row -> one base64-encoded message. Auth via OAuth2 Bearer access token. Batched at 100 messages per request (Pub/Sub max)
-- `snk.pulsar` Apache Pulsar [planned]: Writes data to Apache Pulsar
+- `snk.pulsar` Apache Pulsar: Produce each row as one message over Pulsar's WebSocket API, the row as JSON, keyed by a column when one is named; the run succeeds once every message is acknowledged
 - `snk.qdrant` Qdrant: Upsert points to a Qdrant collection via PUT /collections/{name}/points
 - `snk.quack` DuckDB Quack: Write a table to a remote DuckDB instance over the Quack protocol (HTTP on port 9494). Supports append / overwrite / truncate / upsert modes via the standard relational sink path
 - `snk.qvd` Qlik QVD: Write rows as a Qlik QVD file (.qvd) via a clean-room pure-Rust encoder (no Qlik runtime). Builds the per-column symbol tables + bit-stuffed index; values are typed per cell (int / double / string), nulls preserved. Round-trips with the QVD source and loads in QlikView / Qlik Sense

@@ -6,7 +6,7 @@ reel; this is the full ledger.
 
 The palette currently carries **427 components**, broken down:
 
-- **416 available** - executes on the DuckDB engine today
+- **418 available** - executes on the DuckDB engine today
 - **3 preview** - configurable in the designer (drag, wire, set
   properties); execution is being wired engine-by-engine
 - **11 planned** - reserved in the palette so the roadmap is visible,
@@ -22,10 +22,6 @@ it's a preview component.` rather than silently doing nothing.
 
 ### Streaming connectors (broker drivers)
 
-| Component | Notes |
-|---|---|
-| `src.pulsar` / `snk.pulsar` | The `pulsar` Rust crate compiles its protobuf definitions with `prost-build` which requires `protoc` to be installed at build time. That breaks the self-contained build. Options: vendor protoc via `protoc-bin-vendored`; hand-roll the subset of Pulsar protobuf ops we need; wait for an alt crate. **Deferred until a build approach lands.** Pulsar has no REST data plane to fall back on. |
-
 `src.kafka`, `snk.kafka`, `src.redpanda`, `snk.redpanda` shipped via
 the pure-Rust `rskafka` driver (no C dep, builds cleanly on every
 CI runner). `src.eventhubs` shipped on the same read, over an Event
@@ -36,7 +32,8 @@ shard refuses sent again. `src.nats`, `snk.nats` shipped via `async-nats`.
 `src.pubsub`, `snk.pubsub` shipped via direct REST calls
 (sidestepping the gRPC build requirement of the official Google
 client). `src.rabbit`, `snk.rabbit` shipped via the pure-Rust
-`lapin` AMQP 0.9.1 driver. Current semantics across all of them
+`lapin` AMQP 0.9.1 driver. `src.pulsar`, `snk.pulsar` shipped over Pulsar's
+WebSocket API, which needs no `protoc`. Current semantics across all of them
 are **batch**: produce/consume up to N records per stage run. A
 true streaming mode (continuous run with checkpoint commits) is a
 separate engine workstream; lands alongside the next broker driver.
