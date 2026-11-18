@@ -254,9 +254,10 @@ pub fn load(workspace: Option<&Path>) -> Result<Policy, EngineError> {
 /// How many places in the engine write durable state.
 ///
 /// Recorded so `no_component_writes_state_without_the_policy_knowing` can tell
-/// when a ninth appears. The number is a fact about connectors.rs, not a limit.
+/// when another appears. The number is a fact about the engine's source files,
+/// not a limit.
 #[cfg(test)]
-const STATE_WRITE_SITES: usize = 9;
+const STATE_WRITE_SITES: usize = 11;
 
 /// Every component that advances saved state when it runs.
 ///
@@ -268,7 +269,7 @@ const STATE_WRITE_SITES: usize = 9;
 /// what its name describes is worse than an absent one, because an operator
 /// reads it as covered.
 ///
-/// Each entry corresponds to a `PendingWrite::state(` call in connectors.rs;
+/// Each entry corresponds to a `PendingWrite::state(` call in the engine's source;
 /// a test compares the counts so a ninth cannot be added silently.
 pub fn advances_saved_state(component_id: &str) -> bool {
     matches!(
@@ -283,6 +284,8 @@ pub fn advances_saved_state(component_id: &str) -> bool {
             | "xf.ducklake.cdc"
             // replication slot position (LSN) delivered by a successful run
             | "src.postgres.cdc"
+            // the LSN a capture instance's change table was read through
+            | "src.sqlserver.cdc"
             // uri -> fingerprint map of what has been seen
             | "src.changed"
             // topic/partition resume offsets
@@ -1527,21 +1530,44 @@ mod tests {
         );
     }
 
+    /// A change feed's saved position is state like any other: a workspace that
+    /// forbids state mutation must refuse both CDC sources, which save theirs
+    /// on every successful run.
+    #[test]
+    fn both_change_feeds_advance_saved_state() {
+        for id in ["src.postgres.cdc", "src.sqlserver.cdc"] {
+            assert!(advances_saved_state(id), "{id} saves its position and the policy does not know");
+            assert!(state_write_is_armed(id, &serde_json::json!({})), "{id} saves it unconditionally");
+        }
+    }
+
     /// And the drift guard, because the list above is a list.
     ///
     /// Every component that advances state does it through one
-    /// `PendingWrite::state(` call in connectors.rs. If a ninth appears while
-    /// the policy still knows eight, the new one is uncovered and silent -
-    /// which is exactly how six of the eight came to be uncovered. The needle
-    /// is built from pieces so it cannot match itself.
+    /// `PendingWrite::state(` call in the engine's source. If another appears
+    /// while the policy does not know it, the new one is uncovered and silent -
+    /// which is exactly how six of the eight came to be uncovered. Every source
+    /// file is read, not only connectors.rs: Pulsar's write and SQL Server CDC's
+    /// live in modules of their own, which a guard over one file never saw. The
+    /// needle is built from pieces so it cannot match itself.
     #[test]
     fn no_component_writes_state_without_the_policy_knowing() {
-        let src = include_str!("connectors.rs");
         let needle = format!("PendingWrite::{}(", "state");
-        let sites = src.matches(needle.as_str()).count();
+        let mut sites = 0;
+        let mut dirs = vec![std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") && !path.ends_with("policy.rs") {
+                    sites += std::fs::read_to_string(&path).unwrap().matches(needle.as_str()).count();
+                }
+            }
+        }
         assert_eq!(
             sites, STATE_WRITE_SITES,
-            "connectors.rs now has {sites} durable-state writes and the policy was written \
+            "the engine now has {sites} durable-state writes and the policy was written \
              against {STATE_WRITE_SITES}. Map the new one to its component id and add it to \
              `advances_saved_state`, or `allow_state_mutation: false` silently stops covering it."
         );

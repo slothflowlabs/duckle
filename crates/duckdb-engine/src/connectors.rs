@@ -23088,7 +23088,7 @@ fn resolve_subpipeline_in(reference: &str, root: &std::path::Path) -> String {
 /// is one, where `async_nats` times out the whole handshake at 5s per address by
 /// default (async-nats-0.50.0 `options.rs:104`, armed at `connector.rs:408`), so
 /// a wrapper here would be dead code.
-const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+pub(crate) const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Run a blocking call on a worker thread and stop waiting for it after
 /// `budget`, reporting `timed_out` instead.
@@ -23287,7 +23287,7 @@ fn ftp_connect_bounded(
 /// The TCP connect is inside the same budget on purpose: left on its own it is
 /// bounded only by the OS SYN retries, which is about 21s on Windows and over two
 /// minutes on Linux, so the platform would decide what "connecting" costs.
-async fn tds_connect(
+pub(crate) async fn tds_connect(
     mut config: tiberius::Config,
     budget: std::time::Duration,
 ) -> Result<tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>, String> {

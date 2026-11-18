@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 430,
+  "componentCount": 431,
   "components": [
     {
       "id": "src.csv",
@@ -5953,6 +5953,123 @@
                 "kind": "expression",
                 "rows": 4,
                 "placeholder": "SELECT * FROM ..."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.sqlserver.cdc",
+      "label": "SQL Server CDC",
+      "kind": "source",
+      "availability": "available",
+      "summary": "Change data capture from SQL Server: every insert, update and delete its CDC recorded for a table, in commit order, read from the change table between where the last run stopped and the newest change. The position is saved only when the run succeeds, so a failed run reads the same changes again; changes cleaned up before a run read them fail it rather than be skipped. Needs CDC on for the table (sp_cdc_enable_db, sp_cdc_enable_table); no JVM, no Kafka.",
+      "category": "Sources",
+      "group": "Databases",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.sqlserver.cdc",
+        "kind": "source",
+        "label": "SQL Server CDC",
+        "description": "Change data capture from SQL Server: every insert, update and delete its CDC recorded for a table, in commit order, read from the change table between where the last run stopped and the newest change. The position is saved only when the run succeeds, so a failed run reads the same changes again; changes cleaned up before a run read them fail it rather than be skipped. Needs CDC on for the table (sp_cdc_enable_db, sp_cdc_enable_table); no JVM, no Kafka.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "SQL Server connection",
+            "fields": [
+              {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "sqlserver"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
+                "key": "host",
+                "label": "Host",
+                "kind": "text",
+                "required": true,
+                "placeholder": "mssql.example.com"
+              },
+              {
+                "key": "port",
+                "label": "Port",
+                "kind": "integer",
+                "defaultValue": 1433
+              },
+              {
+                "key": "user",
+                "label": "User",
+                "kind": "text",
+                "required": true
+              },
+              {
+                "key": "password",
+                "label": "Password",
+                "kind": "text",
+                "placeholder": "••••••••",
+                "secret": true
+              },
+              {
+                "key": "database",
+                "label": "Database",
+                "kind": "text",
+                "required": true
+              },
+              {
+                "key": "trustCert",
+                "label": "Trust TLS cert (dev / self-signed)",
+                "kind": "bool",
+                "defaultValue": false
+              },
+              {
+                "key": "encrypt",
+                "label": "Encrypt connection",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "On by default. Uncheck for legacy servers (SQL Server 2014 and older) that only speak old TLS and fail the handshake; the connection then runs unencrypted."
+              }
+            ]
+          },
+          {
+            "label": "Change feed",
+            "fields": [
+              {
+                "key": "table",
+                "label": "Table",
+                "kind": "text",
+                "required": true,
+                "placeholder": "dbo.orders",
+                "description": "The table to read, as schema.table (dbo when no schema is given), with change data capture on for it: EXEC sys.sp_cdc_enable_db, then EXEC sys.sp_cdc_enable_table. Each change arrives as one row: _op (insert / update / delete), _lsn, _seq and _commit_ts (in the time zone of the server), then the row, typed as the table declares it. A delete carries the values the row had."
+              },
+              {
+                "key": "batchSize",
+                "label": "Changes per run",
+                "kind": "integer",
+                "defaultValue": 100000,
+                "description": "Reading stops at the end of the transaction that reaches this, so a transaction is never split across runs. The rest arrive on the next run."
               }
             ]
           }

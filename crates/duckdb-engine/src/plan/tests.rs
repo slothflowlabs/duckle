@@ -8612,3 +8612,65 @@ mod trino {
         assert!(!printed.contains("t0ken"), "{printed}");
     }
 }
+
+mod sqlserver_cdc {
+    use super::*;
+    use crate::plan::{RuntimeSpec, SqlServerCdcSpec};
+
+    fn read(extra: serde_json::Value) -> Result<SqlServerCdcSpec, crate::EngineError> {
+        let mut props = serde_json::json!({
+            "host": "db.example.com", "user": "reader", "password": "s3cret", "database": "shop", "table": "dbo.orders"
+        });
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            props[k] = v;
+        }
+        let doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                {"id": "c", "position": {"x": 0, "y": 0}, "data": {"label": "c", "componentId": "src.sqlserver.cdc", "properties": props}},
+                {"id": "o", "position": {"x": 0, "y": 0}, "data": {"label": "o", "componentId": "snk.csv", "properties": {"path": "/tmp/o.csv"}}}
+            ],
+            "edges": [{"id": "e", "source": "c", "target": "o", "data": {"connectionType": "main"}}]
+        }))
+        .unwrap();
+        Ok(compile(&doc)?
+            .stages
+            .into_iter()
+            .find_map(|s| match s.runtime {
+                Some(RuntimeSpec::SqlServerCdc(c)) => Some(c),
+                _ => None,
+            })
+            .expect("a CDC read"))
+    }
+
+    #[test]
+    fn the_table_is_schema_dot_name_and_dbo_by_default() {
+        let spec = read(serde_json::json!({})).unwrap();
+        assert_eq!((spec.schema.as_str(), spec.table.as_str()), ("dbo", "orders"));
+        let spec = read(serde_json::json!({ "table": "[sales].[order lines]" })).unwrap();
+        assert_eq!((spec.schema.as_str(), spec.table.as_str()), ("sales", "order lines"));
+        let spec = read(serde_json::json!({ "table": "orders" })).unwrap();
+        assert_eq!((spec.schema.as_str(), spec.table.as_str()), ("dbo", "orders"));
+        for key in ["table", "host", "user", "database"] {
+            let err = read(serde_json::json!({ key: "" })).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_batch_and_a_port_are_whole_numbers_in_range() {
+        let spec = read(serde_json::json!({})).unwrap();
+        assert_eq!((spec.port, spec.batch_size), (1433, 100_000));
+        let spec = read(serde_json::json!({ "port": "14330", "batchSize": 50 })).unwrap();
+        assert_eq!((spec.port, spec.batch_size), (14330, 50));
+        for (key, value) in [("port", serde_json::json!(70_000)), ("batchSize", serde_json::json!(0)), ("port", serde_json::json!("x"))] {
+            let err = read(serde_json::json!({ key: value })).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}={value}: {err}");
+        }
+    }
+
+    #[test]
+    fn no_password_prints() {
+        let printed = format!("{:?}", read(serde_json::json!({})).unwrap());
+        assert!(!printed.contains("s3cret"), "{printed}");
+    }
+}

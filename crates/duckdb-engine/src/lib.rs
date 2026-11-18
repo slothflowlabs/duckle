@@ -105,6 +105,7 @@ mod grpc;
 mod orc;
 mod sqs;
 mod trino;
+mod sqlserver_cdc;
 pub use connectors::remote_fingerprint;
 mod run_log;
 mod util;
@@ -2910,6 +2911,9 @@ impl DuckdbEngine {
                     }
                     Some(RuntimeSpec::SqsSink(spec)) => self.run_sqs_sink(&db_path, spec),
                     Some(RuntimeSpec::TrinoSource(spec)) => self.run_trino_source(&db_path, spec),
+                    Some(RuntimeSpec::SqlServerCdc(spec)) => {
+                        self.run_sqlserver_cdc(&db_path, spec, pipeline_name, &mut pending_writes)
+                    }
                     Some(RuntimeSpec::GizmoSqlSource(spec)) => {
                         self.run_gizmosql_source(&db_path, spec)
                     }

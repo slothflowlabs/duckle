@@ -2266,6 +2266,21 @@ function synthPostgresCdc(comp: ComponentDef): ComponentManifest {
     ]);
 }
 
+function synthSqlServerCdc(comp: ComponentDef): ComponentManifest {
+    const ms = synthDbSource({ ...comp, id: 'src.sqlserver' });
+    const connection = ms.sections.filter(s => s.label === 'SQL Server connection');
+    return base(comp, [
+        ...connection,
+        {
+            label: 'Change feed',
+            fields: [
+                { key: 'table', label: 'Table', kind: 'text', required: true, placeholder: 'dbo.orders', description: 'The table to read, as schema.table (dbo when no schema is given), with change data capture on for it: EXEC sys.sp_cdc_enable_db, then EXEC sys.sp_cdc_enable_table. Each change arrives as one row: _op (insert / update / delete), _lsn, _seq and _commit_ts (in the time zone of the server), then the row, typed as the table declares it. A delete carries the values the row had.' },
+                { key: 'batchSize', label: 'Changes per run', kind: 'integer', defaultValue: 100000, description: 'Reading stops at the end of the transaction that reaches this, so a transaction is never split across runs. The rest arrive on the next run.' },
+            ],
+        },
+    ]);
+}
+
 /**
  * src.iceberg / snk.iceberg: a table directory, or a table in a REST catalog
  * (Polaris, Lakekeeper, Nessie, Gravitino and the Iceberg REST fixture). The
@@ -10818,6 +10833,7 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
     // Sits in the databases group, whose generic synth would give it a query
     // form; routed by id ahead of the group checks.
     if (comp.id === 'src.postgres.cdc') return synthPostgresCdc(comp);
+    if (comp.id === 'src.sqlserver.cdc') return synthSqlServerCdc(comp);
     if (comp.id === 'src.generate') return synthGenerator(comp);
     if (comp.id === 'qa.assert') return synthAssert(comp);
     if (comp.id === 'src.model') return synthModelSource(comp);

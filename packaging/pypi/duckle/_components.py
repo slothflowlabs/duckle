@@ -1313,6 +1313,11 @@ COMPONENTS = {
         'summary': 'Read SQL Server via the native TDS protocol (tiberius, pure Rust). SQL auth (user/password); trust_cert option for self-signed dev servers.',
         'params': ['connectionRef', 'host', 'port', 'user', 'password', 'database', 'trustCert', 'encrypt', 'schema', 'tableName', 'query'],
     },
+    'src.sqlserver.cdc': {
+        'kind': 'source',
+        'summary': 'Change data capture from SQL Server: every insert, update and delete its CDC recorded for a table, in commit order, read from the change table between where the last run stopped and the newest change. The position is saved only when the run succeeds, so a failed run reads the same changes again; ...',
+        'params': ['connectionRef', 'host', 'port', 'user', 'password', 'database', 'trustCert', 'encrypt', 'table', 'batchSize'],
+    },
     'src.sqs': {
         'kind': 'source',
         'summary': 'Receive messages from an Amazon SQS queue, ten a call, over direct HTTP + AWS SigV4 (no AWS SDK). Each message is a row: its id, body, send time, receive count, FIFO group and attributes. Messages stay hidden while the run works and are deleted only once the whole run succeeds, so a failed run le...',

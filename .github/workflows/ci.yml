@@ -719,6 +719,9 @@ jobs:
         run: |
           cargo test -p duckle-duckdb-engine --test execution -- sqlserver_
           cargo test -p duckle-duckdb-engine --test sqlserver_types
+          # Change data capture, on databases the tests make. They run the log
+          # scan themselves, so the service needs no SQL Server Agent.
+          cargo test -p duckle-duckdb-engine --test sqlserver_cdc
 
   # Live MinIO integration tests (covers all S3-compatible: MinIO, R2, B2).
   # MinIO needs `server /data` as the container command; GitHub Actions

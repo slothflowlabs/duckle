@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 430 components, 425 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 220 connectors (136 sources / 84 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 431 components, 426 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 221 connectors (137 sources / 84 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -81,7 +81,7 @@ Every component, by id. `src.*` reads, `snk.*` writes, `xf.*` transforms,
 `qa.*` checks, `ctl.*` controls flow, `code.*` runs your own code. Entries
 marked [planned] or [preview] are not usable yet.
 
-### Sources (read) (137)
+### Sources (read) (138)
 
 - `src.access` Microsoft Access: Read an Access database (.accdb / .mdb): a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver, Linux and macOS through mdbtools. Text, currency, yes/no and dates keep their types
 - `src.adbc` ADBC (Arrow): Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options
@@ -201,6 +201,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.spool` Spool (tail NDJSON): Tail an append-only NDJSON file from where the last SUCCESSFUL run stopped, by byte offset. Pairs with `duckle-runner listen`, which keeps a webhook listener up and appends here - so nothing is lost between pipeline runs, unlike src.webhook which only collects while a run is executing. A failed run leaves the position alone, so those records are re-read rather than dropped
 - `src.sqlite` SQLite: Read SQLite tables
 - `src.sqlserver` SQL Server: Read SQL Server via the native TDS protocol (tiberius, pure Rust). SQL auth (user/password); trust_cert option for self-signed dev servers
+- `src.sqlserver.cdc` SQL Server CDC: Change data capture from SQL Server: every insert, update and delete its CDC recorded for a table, in commit order, read from the change table between where the last run stopped and the newest change. The position is saved only when the run succeeds, so a failed run reads the same changes again; changes cleaned up before a run read them fail it rather than be skipped. Needs CDC on for the table (sp_cdc_enable_db, sp_cdc_enable_table); no JVM, no Kafka
 - `src.sqs` AWS SQS: Receive messages from an Amazon SQS queue, ten a call, over direct HTTP + AWS SigV4 (no AWS SDK). Each message is a row: its id, body, send time, receive count, FIFO group and attributes. Messages stay hidden while the run works and are deleted only once the whole run succeeds, so a failed run leaves them to be delivered again
 - `src.stripe` Stripe: Stripe REST. Bearer auth with the Secret Key (sk_live_... / sk_test_...). Cursor pagination on `data[-1].id` via `starting_after`. responsePath /data
 - `src.synapse` Azure Synapse: Azure Synapse rides the SQL Server TDS wire - same connection form as src.sqlserver

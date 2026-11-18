@@ -1,7 +1,7 @@
 //! Backfill support: inspect, set, and clear the persisted state that a node
 //! advances only on a fully successful run.
 //!
-//! State lives at `<workspace>/state/<pipeline>/<node_id>.json`, and SIX
+//! State lives at `<workspace>/state/<pipeline>/<node_id>.json`, and EIGHT
 //! different node kinds write there, each with its own shape:
 //!
 //! | kind          | written by             | shape                                    |
@@ -14,6 +14,7 @@
 //! | `spool`       | `src.spool`            | `{ path, next_offset }`                  |
 //! | `tumble`      | `xf.tumble`            | `{ buffer, watermark, emitted_through }` |
 //! | `pg_lsn`      | `src.postgres.cdc`     | `{ slot, lsn }`                          |
+//! | `mssql_lsn`   | `src.sqlserver.cdc`    | `{ lsn, captureInstance }`               |
 //!
 //! Editing this lets an operator replay from an earlier point ("backfill from
 //! date X", "re-read from snapshot N") or clear it to force a full reload,
@@ -66,6 +67,10 @@ pub fn kind_of(v: &Value) -> &'static str {
         // Listed, never hand-editable: PostgreSQL will not move a slot back,
         // and moving one forward by hand skips changes nobody received.
         "pg_lsn"
+    } else if v.get("lsn").is_some() && v.get("captureInstance").is_some() {
+        // Listed, never hand-editable: an LSN set by hand skips or repeats
+        // changes, and one older than CDC keeps fails the next run.
+        "mssql_lsn"
     } else if v.get("snapshot_id").is_some() {
         "snapshot"
     } else if v.get("value").is_some() {
@@ -147,6 +152,7 @@ pub fn list(workspace: &Path, pipeline: &str) -> Vec<WatermarkEntry> {
             "spool" => format!("byte {}", as_str(v.get("next_offset"))),
             "tumble" => format!("watermark {}", as_str(v.get("watermark"))),
             "pg_lsn" => format!("slot {} @ {}", as_str(v.get("slot")), as_str(v.get("lsn"))),
+            "mssql_lsn" => format!("{} @ {}", as_str(v.get("captureInstance")), as_str(v.get("lsn"))),
             _ => text.trim().chars().take(120).collect(),
         };
         out.push(WatermarkEntry {
@@ -590,6 +596,7 @@ mod shape_tests {
         write(d.path(), "p", "kaf", r#"{"topic":"orders","partition":0,"next_offset":991}"#);
         write(d.path(), "p", "spl", r#"{"path":"/spool/a.ndjson","next_offset":4096}"#);
         write(d.path(), "p", "pgc", r#"{"slot":"duckle_orders","lsn":"0/15260B8"}"#);
+        write(d.path(), "p", "mss", r#"{"lsn":"0x0000002A000001A80003","captureInstance":"dbo_orders"}"#);
         write(
             d.path(),
             "p",
@@ -608,6 +615,7 @@ mod shape_tests {
                 ("cdc", "snapshot"),
                 ("inc", "incremental"),
                 ("kaf", "kafka"),
+                ("mss", "mssql_lsn"),
                 ("pgc", "pg_lsn"),
                 ("spl", "spool"),
                 ("tum", "tumble"),
@@ -622,6 +630,8 @@ mod shape_tests {
         assert!(kaf.value.contains("orders") && kaf.value.contains("991"), "{}", kaf.value);
         let pgc = got.iter().find(|e| e.node_id == "pgc").unwrap();
         assert!(pgc.value.contains("duckle_orders") && pgc.value.contains("0/15260B8"), "{}", pgc.value);
+        let mss = got.iter().find(|e| e.node_id == "mss").unwrap();
+        assert!(mss.value.contains("dbo_orders") && mss.value.contains("0x0000002A000001A80003"), "{}", mss.value);
     }
 
     /// THE data-loss guard. `{value,type}` written over a tumbling window's

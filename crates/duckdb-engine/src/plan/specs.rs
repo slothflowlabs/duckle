@@ -1025,6 +1025,42 @@ impl std::fmt::Debug for TrinoAuth {
     }
 }
 
+/// src.sqlserver.cdc: the inserts, updates and deletes SQL Server's change data
+/// capture recorded for one table, from where the last successful run stopped.
+#[derive(Clone)]
+pub struct SqlServerCdcSpec {
+    pub node_id: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub password: String,
+    pub database: String,
+    pub trust_cert: bool,
+    pub encrypt: bool,
+    pub schema: String,
+    pub table: String,
+    /// Changes a run reads, rounded up to the end of a transaction.
+    pub batch_size: u64,
+}
+
+impl std::fmt::Debug for SqlServerCdcSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqlServerCdcSpec")
+            .field("node_id", &self.node_id)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("user", &self.user)
+            .field("password", &"***")
+            .field("database", &self.database)
+            .field("trust_cert", &self.trust_cert)
+            .field("encrypt", &self.encrypt)
+            .field("schema", &self.schema)
+            .field("table", &self.table)
+            .field("batch_size", &self.batch_size)
+            .finish()
+    }
+}
+
 /// src.trino: run a query on a Trino, Starburst or Presto coordinator through
 /// the client REST protocol, following each page to the end.
 #[derive(Debug, Clone)]

@@ -10,7 +10,7 @@
 
 https://github.com/user-attachments/assets/8bfac3fa-3f91-4b43-b5d8-a526716c8ef1
 
-<a href="https://duckle.org/"><img src="website/assets/img/website-hero.gif" alt="Duckle connecting 220 sources and destinations - databases, warehouses, SaaS apps and the DuckDB ecosystem - all running locally on DuckDB" width="600"/></a>
+<a href="https://duckle.org/"><img src="website/assets/img/website-hero.gif" alt="Duckle connecting 221 sources and destinations - databases, warehouses, SaaS apps and the DuckDB ecosystem - all running locally on DuckDB" width="600"/></a>
 
 <p><sub><i>Duckle is an independent open-source project by SlothFlowLabs. It builds on the DuckDB engine but is not part of, affiliated with, or endorsed by DuckDB Labs or MotherDuck.</i></sub></p>
 
@@ -136,7 +136,7 @@ In short: a free, open-source, single-engine alternative to hosted, per-row-pric
 Three things set it apart:
 
 1. **An AI assistant that ships in the box.** Describe the pipeline you want in English; Duckie writes the JSON and drops it onto the canvas. The model runs wherever Duckle does - no API key, no telemetry, no vendor round-trip. Point it at your own OpenAI-compatible endpoint instead if you would rather it did not run in-process.
-2. **425 components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
+2. **426 components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
 3. **A self-contained binary you can audit.** 73 to 110 MB depending on your platform. Engines install on first launch. Workspaces are plain files in a folder you choose. Diff them, branch them, ship them.
 
 <div align="center">
@@ -154,7 +154,7 @@ Three things set it apart:
 | **Single-file binary, no bundled DB** | 73 to 110 MB depending on platform (it embeds the headless runner + MCP server). DuckDB downloads on first launch with a guided step. AI engine is opt-in. |
 | **Native speed** | Execution runs through DuckDB: vectorized, columnar, local. A clean-and-export job that crawls in a spreadsheet finishes in milliseconds. |
 | **Git-friendly by design** | Pipelines, connections, contexts, and routines persist as plain files in a folder you pick. Diff them, branch them, review them. |
-| **425 components ready today** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
+| **426 components ready today** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
 | **Honest about scope** | Single-machine and embedded by design. Built to make local and small-team data work fast, not to replace a distributed warehouse. |
 | **60 UI languages** | Topbar, palette, chat assistant, properties panel, and common dialogs ship localized. English, Spanish, Chinese (Simplified + Traditional), Hindi, Arabic, Portuguese (Brazil), Bengali, Russian, Japanese, Punjabi, German, Korean, French, Vietnamese, Telugu, Marathi, Turkish, Tamil, Urdu, Persian, Polish, Italian, Ukrainian, Indonesian, Thai, Dutch, Hebrew, Swedish, Greek, Czech, Hungarian, Romanian, Filipino, Malay, Norwegian, Danish, Finnish, Catalan, Bulgarian, Slovak, Croatian, Serbian, Slovenian, Lithuanian, Latvian, Estonian, Khmer, Burmese, Sinhala, Nepali, Swahili, Afrikaans, Welsh, Irish, Icelandic, Albanian, Azerbaijani, Mongolian, Kazakh. RTL (Arabic, Hebrew, Persian, Urdu) supported. Switch languages from the topbar globe. |
 | **Open source** | Dual-licensed MIT OR Apache-2.0. Yours to use, fork, and extend. |
@@ -1945,7 +1945,7 @@ than on every evaluation after the recovery.
 ### The connector matrix, generated (`capabilities`)
 
 A hand-maintained feature table drifts from the code the week after it is
-written, and a prose list of 430 components cannot answer "which sources do
+written, and a prose list of 431 components cannot answer "which sources do
 incremental?". So it is derived from the same manifests the editor renders forms
 from:
 
@@ -2178,6 +2178,33 @@ without one it stops with an error asking for `REPLICA IDENTITY FULL` on the
 table. Changes recorded before that setting still lack the value, so reload
 the table and recreate the slot in that case.
 
+### SQL Server change data capture (`src.sqlserver.cdc`)
+
+Every insert, update and delete SQL Server's change data capture recorded for
+one table, in commit order, read from the capture instance's change table
+between where the last successful run stopped and the newest change there is.
+No JVM, no Kafka, no Debezium: the node reads the change table over TDS, as
+Debezium does.
+
+Each change is one row: `_op` (`insert` / `update` / `delete`), `_lsn` and
+`_seq` (as hex), `_commit_ts` (in the time zone of the server), then the row
+itself, typed as the table declares it. An update is its new values; a delete
+carries the values the row had. A run with no new changes is a table of those
+columns with no rows.
+
+**Nothing is lost when a run fails.** The LSN read through is saved only when
+the whole run succeeds, so a run that fails hands the same changes to the next
+one. *Changes per run* caps a run, and a run always ends on a whole
+transaction, so one is never split across two.
+
+**What the server needs.** Change data capture on for the database and the
+table (`EXEC sys.sp_cdc_enable_db`, then `EXEC sys.sp_cdc_enable_table`), and
+SQL Server Agent running the capture job that fills the change tables. CDC
+keeps changes for three days by default; changes cleaned up before a run read
+them fail that run rather than be skipped, and the error says so. Load the
+table again, then clear the node's position with `duckle-runner backfill
+clear` or the Backfill panel to start from the oldest change kept.
+
 ### Backfill without the desktop app (`backfill`)
 
 Production deployments are headless, so replaying from an earlier point should
@@ -2201,11 +2228,12 @@ the pipeline, and a CDC feed delivered again what the editor had applied. The
 first editor run, or Backfill panel, after upgrading moves that state across,
 node by node where the file name has none of its own yet.
 
-**Six node kinds keep state in that folder, and only two resume from a value a
+**Eight node kinds keep state in that folder, and only two resume from a value a
 person can write down.** `xf.incremental` (a watermark) and
 `src.ducklake.changes` (a snapshot id) can be set; a `src.kafka` resume offset,
-a `src.spool` byte position, an `xf.tumble` buffer pointer and a
-`src.postgres.cdc` slot position are listed and can be cleared, but `set` on
+a `src.pulsar` message id, a `src.spool` byte position, an `xf.tumble` buffer
+pointer, a `src.postgres.cdc` slot position and a `src.sqlserver.cdc` LSN are
+listed and can be cleared, but `set` on
 them is **refused**. A replication slot cannot be moved back, and moving one
 forward by hand would skip changes nobody received. Writing `{value,type}` over a
 tumbling window's state would drop the pointer to the rows it is holding and
@@ -2981,7 +3009,7 @@ also holds where it is actually exercised:
 | rule | also enforced at |
 |---|---|
 | `network.allowedDomains` | every connection, every redirect hop, and DuckDB itself |
-| `state.allowMutation` | every component that advances saved state - incremental watermarks, DuckLake CDC snapshots, PostgreSQL CDC slot positions, Kafka offsets, the `src.changed` seen-map, spool and REST positions, tumble windows and stored baselines - so `duckle-runner backfill`, the API, MCP and the panel all meet the same refusal |
+| `state.allowMutation` | every component that advances saved state - incremental watermarks, DuckLake CDC snapshots, PostgreSQL CDC slot positions, SQL Server CDC positions, Kafka offsets, the `src.changed` seen-map, spool and REST positions, tumble windows and stored baselines - so `duckle-runner backfill`, the API, MCP and the panel all meet the same refusal |
 | `extensions.allowUnsigned` | the DuckDB launch, which can withhold `-unsigned` but never grant it |
 
 DuckDB is the reason that last one names two enforcers. Duckle's own HTTP
@@ -3651,9 +3679,9 @@ Duckle is in **public beta**. The visual designer, the DuckDB execution engine, 
 
 **Scope, stated plainly:** Duckle runs as a service on hardware you provision, and uses all of it. What it does not do is split one query across a cluster, so when a job outgrows the largest instance you want to pay for, push the work down into the source system or point the output at a warehouse, object store or lakehouse. It will not pretend to be a cluster.
 
-The component palette ships **430 components** so the roadmap is visible in the product itself:
+The component palette ships **431 components** so the roadmap is visible in the product itself:
 
-- **425 available** runs on the DuckDB engine today
+- **426 available** runs on the DuckDB engine today
 - **5 planned** is reserved in the palette but not yet executable - see [`docs/roadmap.md`](docs/roadmap.md)
 
 ---
@@ -3664,7 +3692,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 
 ### Sources
 
-**136 sources available today.**
+**137 sources available today.**
 
 | Group | Connectors | Status |
 |---|---|---|
@@ -3677,7 +3705,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | **Embedded databases** | SQLite (read tables), DuckDB (read tables or run a query) | Available |
 | **Microsoft Access** | `.accdb` / `.mdb`: a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver (Office, or the free Access Database Engine) with each column's own type and a database password if set; Linux and macOS read a table through mdbtools, which reads a zero-length text as NULL | Available |
 | **Network relational DBs** | PostgreSQL, MySQL, MariaDB, CockroachDB | Available (live CI for PG + MySQL) |
-| **Change data capture** | PostgreSQL log-based CDC (`src.postgres.cdc`): inserts, updates and deletes from a replication slot through the built-in `pgoutput` plugin, no JVM or Kafka; the position is saved only on a successful run, and the slot's WAL retention is reported on every run | Available |
+| **Change data capture** | PostgreSQL log-based CDC (`src.postgres.cdc`): inserts, updates and deletes from a replication slot through the built-in `pgoutput` plugin, no JVM or Kafka; the position is saved only on a successful run, and the slot's WAL retention is reported on every run; SQL Server CDC (`src.sqlserver.cdc`): the change table of a capture instance read over TDS, no JVM or Debezium, a run ending on a whole transaction, and changes cleaned up before a run read them failing it rather than skipped | Available |
 | **Network relational DBs** | SQL Server (TDS), Oracle (Instant Client at runtime), ClickHouse (HTTP API), **Apache Druid** (SQL API; columns typed from the SQL types Druid reports), **Trino / Starburst / Presto** (the client REST protocol, every page followed; columns typed from the types the coordinator reports, decimals, zoned timestamps, binary and UUIDs included; password or bearer-token sign-in), **IBM DB2** (IBM Data Server ODBC driver), **Turso / libSQL** (HTTP pipeline API - no driver install; `libsql://` URLs accepted) | Available |
 | **Network relational DBs** | generic JDBC | Planned |
 | **Object storage** | Amazon S3, Google Cloud Storage, Azure Blob, HTTP(S), MinIO, Cloudflare R2, Backblaze B2 | Available (live CI for MinIO) |
@@ -4536,7 +4564,7 @@ Yes, free + open source. Dual-licensed **MIT OR Apache-2.0**. You can use it com
 <details>
 <summary><b>Is Duckle an open-source alternative to Fivetran or Airbyte?</b></summary>
 
-It covers similar ground - moving data across 220 sources and destinations - but locally, with nothing to host and no per-row, per-connector, or per-seat billing. Pipelines are built visually or from plain English and compile to readable DuckDB SQL that runs wherever you deploy it: a laptop, a server, CI or a container. The trade-off is scope: Duckle does not split one query across a cluster, so for warehouse-scale replication you push the work down into the source system or point the output at the system that scales.
+It covers similar ground - moving data across 221 sources and destinations - but locally, with nothing to host and no per-row, per-connector, or per-seat billing. Pipelines are built visually or from plain English and compile to readable DuckDB SQL that runs wherever you deploy it: a laptop, a server, CI or a container. The trade-off is scope: Duckle does not split one query across a cluster, so for warehouse-scale replication you push the work down into the source system or point the output at the system that scales.
 
 </details>
 

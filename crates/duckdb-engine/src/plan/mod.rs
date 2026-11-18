@@ -820,6 +820,7 @@ pub enum RuntimeSpec {
     SqsSource(SqsSourceSpec),
     SqsSink(SqsSinkSpec),
     TrinoSource(TrinoSourceSpec),
+    SqlServerCdc(SqlServerCdcSpec),
     GizmoSqlSource(GizmoSqlSourceSpec),
     GizmoSqlSink(GizmoSqlSinkSpec),
     RabbitSink(RabbitSinkSpec),
@@ -2440,6 +2441,7 @@ fn build_stage(
     let mut sqs_source: Option<SqsSourceSpec> = None;
     let mut sqs_sink: Option<SqsSinkSpec> = None;
     let mut trino_source: Option<TrinoSourceSpec> = None;
+    let mut sqlserver_cdc: Option<SqlServerCdcSpec> = None;
     let mut gizmosql_source: Option<GizmoSqlSourceSpec> = None;
     let mut gizmosql_sink: Option<GizmoSqlSinkSpec> = None;
     let mut rabbit_sink: Option<RabbitSinkSpec> = None;
@@ -6001,6 +6003,39 @@ fn build_stage(
             flavor,
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.sqlserver.cdc" {
+        // Change data capture, read from the capture instance's change table
+        // between the saved position and the newest change.
+        let text = |key: &str| string_prop(&props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let required = |key: &str| text(key).ok_or_else(|| EngineError::Config(format!("{component_id}: {key} required")));
+        let unbracket = |s: &str| s.trim().trim_start_matches('[').trim_end_matches(']').to_string();
+        let named = required("table")?;
+        let (schema, table) = match named.split_once('.') {
+            Some((s, t)) => (unbracket(s), unbracket(t)),
+            None => ("dbo".to_string(), unbracket(&named)),
+        };
+        let port = whole_number(&props, "port", component_id)?.unwrap_or(1433);
+        if port == 0 || port > 65_535 {
+            return Err(EngineError::Config(format!("{component_id}: port {port} is not a TCP port")));
+        }
+        let batch_size = whole_number(&props, "batchSize", component_id)?.unwrap_or(100_000);
+        if batch_size == 0 {
+            return Err(EngineError::Config(format!("{component_id}: batchSize must be at least 1")));
+        }
+        sqlserver_cdc = Some(SqlServerCdcSpec {
+            node_id: node.id.clone(),
+            host: required("host")?,
+            port: port as u16,
+            user: required("user")?,
+            password: string_prop(&props, "password").unwrap_or_default(),
+            database: required("database")?,
+            trust_cert: props.get("trustCert").and_then(|v| v.as_bool()).unwrap_or(false),
+            encrypt: props.get("encrypt").and_then(|v| v.as_bool()).unwrap_or(true),
+            schema,
+            table,
+            batch_size,
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.gizmosql" {
         // GizmoSQL (Arrow Flight SQL) source via the clean-room crate::gizmosql
         // client. Result streams to Parquet + materializes like the ADBC source.
@@ -8324,6 +8359,7 @@ fn build_stage(
         .or_else(|| sqs_source.map(RuntimeSpec::SqsSource))
         .or_else(|| sqs_sink.map(RuntimeSpec::SqsSink))
         .or_else(|| trino_source.map(RuntimeSpec::TrinoSource))
+        .or_else(|| sqlserver_cdc.map(RuntimeSpec::SqlServerCdc))
         .or_else(|| rabbit_sink.map(RuntimeSpec::RabbitSink))
         .or_else(|| rabbit_source.map(RuntimeSpec::RabbitSource))
         .or_else(|| git_source.map(RuntimeSpec::GitSource))
