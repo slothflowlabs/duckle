@@ -49,9 +49,13 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      # npm audit keeps no ignore list of its own, so scripts/audit-gate.mjs reads
+      # its report: any high or critical advisory fails, except those skipped there,
+      # each pointing at a section of the same document. A skip ends by itself:
+      # once `npm audit fix` can fix the advisory without a major version, it fails.
       - name: Frontend dependency advisories
         working-directory: frontend
-        run: npm audit --audit-level=high
+        run: node scripts/audit-gate.mjs
 
   sbom:
     name: Software bill of materials

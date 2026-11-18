@@ -1,13 +1,15 @@
 # Dependency advisories
 
-Every known advisory affecting a crate in Duckle's dependency tree, what it can
-and cannot reach in this codebase, and what would let the entry be removed.
+Every known advisory affecting a crate or an npm package in Duckle's dependency
+tree, what it can and cannot reach in this codebase, and what would let the entry
+be removed.
 
 Scanning runs on every push and pull request (`supply-chain` job in
 `.github/workflows/ci.yml`) and on a weekly schedule, so an advisory published
 against an existing dependency is found without anyone re-running anything. A
 new advisory fails the build. The entries below are the only ones that do not,
-and each is listed in `.cargo/audit.toml` with a pointer here.
+and each is listed with a pointer here: a crate's in `.cargo/audit.toml`, an npm
+package's in `frontend/scripts/audit-gate.mjs`.
 
 **Review date: 2026-12-07.** The list is re-checked then whether or not anything
 has changed upstream, because "no fix yet" ages badly without a date on it.
@@ -121,6 +123,28 @@ when that does.
 `parquet`'s command-line tools read through `Decoder::new`, and the rest use the bulk API.
 
 **Remove when:** `zstd` 0.13.3 leaves the tree, as above.
+
+---
+
+## GHSA-fc5q-39xc-vjpf - `picomatch` 4.0.7, ReDoS through repeated extglobs
+
+**Is there a fix?** No. The advisory covers every release up to 4.0.7, which is the
+newest, and names no patched version. `vite` requires it, directly and through
+`tinyglobby` and `fdir`, and the newest `vite` (8.3.8) still requires `picomatch`
+^4.0.7. npm's only way round it is going back to `vite` 6.2.7, a major version
+down, which is not a fix.
+
+**Is it reachable?** Not from anything Duckle ships. `picomatch` turns glob patterns
+into regular expressions for `vite`, which builds the frontend and serves it in
+development. It is in neither built bundle, the desktop's or the web edition's, no
+frontend source imports it, and `frontend/vite.config.ts` has no extglob pattern.
+A pattern that slowed it down would slow a developer's build, nothing more.
+
+**Remove when:** `picomatch` publishes a fix. The skip ends by itself then:
+`frontend/scripts/audit-gate.mjs` fails again as soon as `npm audit fix` can fix
+the advisory without a major version, and running it, then dropping the skip, is
+the next step. The skip lives in that script because npm audit keeps no ignore
+list of its own.
 
 ---
 

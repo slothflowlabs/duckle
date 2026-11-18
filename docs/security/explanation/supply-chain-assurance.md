@@ -79,10 +79,12 @@ published against a dependency that is already shipping, months after the commit
 that introduced it - so a scanner wired only to pushes reports nothing until
 somebody happens to touch the tree, and reports it as though it were new.
 
-Advisories with no upstream fix are listed in `.cargo/audit.toml`, each pointing
-at a section of [Dependency advisories](../reference/dependency-advisories.md)
-recording its reachability and what would let the entry be removed. Every other
-advisory fails the build. The list carries a review date, because "no fix
+Advisories with no upstream fix are listed in `.cargo/audit.toml`, or for npm,
+which keeps no ignore list of its own, in `frontend/scripts/audit-gate.mjs`, each
+pointing at a section of [Dependency advisories](../reference/dependency-advisories.md)
+recording its reachability and what would let the entry be removed. An npm skip
+ends by itself once `npm audit fix` can fix the advisory. Every other advisory
+fails the build. The list carries a review date, because "no fix
 available yet" is a statement that ages.
 
 ---

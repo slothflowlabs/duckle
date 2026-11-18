@@ -21,6 +21,7 @@ import { annotationPatch } from '../src/catalog-annotate';
 import { CONNECTION_TYPES } from '../src/workflow-ui/editors/ConnectionEditorModal';
 import { gitActionRewritesFiles } from '../src/git-actions';
 import { validatePipeline } from '../src/validation';
+import { judge as judgeAudit } from './audit-gate.mjs';
 import { deriveNodeSubtitle } from '../src/node-subtitle';
 import { previewColumns, resolveOutputSchema, schemaAfterRun } from '../src/schema-resolve';
 import { placeTip } from '../src/tour-place';
@@ -2450,6 +2451,73 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         JSON.stringify(moved) ===
             JSON.stringify({ type: 'GeometryCollection', geometries: [{ type: 'Point', coordinates: [1, 2] }, { type: 'MultiPolygon', coordinates: [[[[1, 2], [2, 3]]]] }] }),
         JSON.stringify(moved),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The frontend's supply-chain gate (scripts/audit-gate.mjs): npm audit at high,
+// minus an advisory skipped while it has no fix. npm audit keeps no ignore list,
+// so the gate judges its JSON. The reports are npm's own (2026-11-18), cut to
+// what the gate reads: GHSA-fc5q-39xc-vjpf against picomatch <= 4.0.7, which has
+// no patched release, and four packages flagged only for depending on it.
+// ---------------------------------------------------------------------------
+{
+    type Vuln = { name: string; severity: string; via: unknown[]; fixAvailable: unknown };
+    const advisory = {
+        source: 1247710,
+        name: 'picomatch',
+        dependency: 'picomatch',
+        title: 'picomatch vulnerable to ReDoS through single-branch repeated extglobs',
+        url: 'https://github.com/advisories/GHSA-fc5q-39xc-vjpf',
+        severity: 'high',
+        range: '<=4.0.7',
+    };
+    const toVite627 = { name: 'vite', version: '6.2.7', isSemVerMajor: true };
+    const recorded = (): { auditReportVersion: number; vulnerabilities: Record<string, Vuln> } => ({
+        auditReportVersion: 2,
+        vulnerabilities: {
+            '@vitejs/plugin-react': {
+                name: '@vitejs/plugin-react',
+                severity: 'high',
+                via: ['vite'],
+                fixAvailable: { name: '@vitejs/plugin-react', version: '5.2.0', isSemVerMajor: true },
+            },
+            fdir: { name: 'fdir', severity: 'high', via: ['picomatch'], fixAvailable: true },
+            picomatch: { name: 'picomatch', severity: 'high', via: [advisory], fixAvailable: toVite627 },
+            tinyglobby: { name: 'tinyglobby', severity: 'high', via: ['fdir', 'picomatch'], fixAvailable: true },
+            vite: { name: 'vite', severity: 'high', via: ['picomatch', 'tinyglobby'], fixAvailable: toVite627 },
+        },
+    });
+    const failed = (report: unknown): string[] => judgeAudit(report).failures;
+    const other = { ...advisory, title: 'another advisory', url: 'https://github.com/advisories/GHSA-aaaa-bbbb-cccc' };
+
+    const today = recorded();
+    check('audit: the picomatch ReDoS is skipped while it has no fix', failed(today).length === 0, `failures: ${JSON.stringify(failed(today))}`);
+    const fixed = recorded();
+    fixed.vulnerabilities.picomatch.fixAvailable = true;
+    check('audit: the skip ends once npm audit fix can fix it', failed(fixed).length === 1, `failures: ${JSON.stringify(failed(fixed))}`);
+    const minor = recorded();
+    minor.vulnerabilities.picomatch.fixAvailable = { name: 'vite', version: '8.4.0', isSemVerMajor: false };
+    check(
+        'audit: ... or once a minor update of what pulls it in can',
+        failed(minor).length === 1,
+        `failures: ${JSON.stringify(failed(minor))}`,
+    );
+    const critical = recorded();
+    critical.vulnerabilities.vite.via.push({ ...other, severity: 'critical' });
+    check('audit: any other high or critical advisory still fails', failed(critical).length === 1, `failures: ${JSON.stringify(failed(critical))}`);
+    const moderate = recorded();
+    moderate.vulnerabilities.vite.via.push({ ...other, severity: 'moderate' });
+    check(
+        'audit: a moderate advisory fails nothing, as at --audit-level=high',
+        failed(moderate).length === 0,
+        `failures: ${JSON.stringify(failed(moderate))}`,
+    );
+    const noReport = [null, { error: { code: 'ENOLOCK', summary: 'This command requires an existing lockfile.' } }];
+    check(
+        'audit: no report fails the gate, never passes it',
+        noReport.every(r => failed(r).length === 1),
+        `failures: ${JSON.stringify(noReport.map(failed))}`,
     );
 }
 
