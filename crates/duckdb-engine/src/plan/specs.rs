@@ -945,6 +945,50 @@ pub enum OrcCompression {
     Lz4,
 }
 
+/// An Amazon SQS queue and the keys to sign for it (src.sqs and snk.sqs).
+#[derive(Clone)]
+pub struct SqsQueue {
+    pub queue_url: String,
+    pub region: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: Option<String>,
+}
+
+impl std::fmt::Debug for SqsQueue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqsQueue")
+            .field("queue_url", &self.queue_url)
+            .field("region", &self.region)
+            .field("access_key_id", &self.access_key_id)
+            .field("secret_access_key", &"***")
+            .field("session_token", &self.session_token.as_ref().map(|_| "***"))
+            .finish()
+    }
+}
+
+/// src.sqs: receive messages, at most `max_messages`, ten a call. They stay
+/// hidden for `visibility_timeout` seconds and are deleted once the run succeeds.
+#[derive(Debug, Clone)]
+pub struct SqsSourceSpec {
+    pub node_id: String,
+    pub queue: SqsQueue,
+    pub max_messages: usize,
+    pub wait_seconds: u32,
+    pub visibility_timeout: u32,
+}
+
+/// snk.sqs: each upstream row as one message: the row as JSON, or one column.
+#[derive(Debug, Clone)]
+pub struct SqsSinkSpec {
+    pub from_view: String,
+    pub queue: SqsQueue,
+    pub body_column: Option<String>,
+    /// For a FIFO queue, which needs one.
+    pub group_id_column: Option<String>,
+    pub deduplication_id_column: Option<String>,
+}
+
 /// src.gizmosql: read from a GizmoSQL (Arrow Flight SQL) server via the
 /// clean-room `crate::gizmosql` client. Result is streamed to Parquet and
 /// materialized with DuckDB read_parquet, like the ADBC source.

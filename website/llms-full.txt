@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 427 components, 422 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 217 connectors (134 sources / 83 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 429 components, 424 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 219 connectors (135 sources / 84 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -81,7 +81,7 @@ Every component, by id. `src.*` reads, `snk.*` writes, `xf.*` transforms,
 `qa.*` checks, `ctl.*` controls flow, `code.*` runs your own code. Entries
 marked [planned] or [preview] are not usable yet.
 
-### Sources (read) (135)
+### Sources (read) (136)
 
 - `src.access` Microsoft Access: Read an Access database (.accdb / .mdb): a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver, Linux and macOS through mdbtools. Text, currency, yes/no and dates keep their types
 - `src.adbc` ADBC (Arrow): Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options
@@ -201,6 +201,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.spool` Spool (tail NDJSON): Tail an append-only NDJSON file from where the last SUCCESSFUL run stopped, by byte offset. Pairs with `duckle-runner listen`, which keeps a webhook listener up and appends here - so nothing is lost between pipeline runs, unlike src.webhook which only collects while a run is executing. A failed run leaves the position alone, so those records are re-read rather than dropped
 - `src.sqlite` SQLite: Read SQLite tables
 - `src.sqlserver` SQL Server: Read SQL Server via the native TDS protocol (tiberius, pure Rust). SQL auth (user/password); trust_cert option for self-signed dev servers
+- `src.sqs` AWS SQS: Receive messages from an Amazon SQS queue, ten a call, over direct HTTP + AWS SigV4 (no AWS SDK). Each message is a row: its id, body, send time, receive count, FIFO group and attributes. Messages stay hidden while the run works and are deleted only once the whole run succeeds, so a failed run leaves them to be delivered again
 - `src.stripe` Stripe: Stripe REST. Bearer auth with the Secret Key (sk_live_... / sk_test_...). Cursor pagination on `data[-1].id` via `starting_after`. responsePath /data
 - `src.synapse` Azure Synapse: Azure Synapse rides the SQL Server TDS wire - same connection form as src.sqlserver
 - `src.telegram` Telegram Bot: Telegram Bot API. Token in URL path (https://api.telegram.org/bot{token}/getUpdates). Offset pagination via `?offset=N`. responsePath /result. No auth header needed - token is in the URL
@@ -219,7 +220,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.yaml` YAML: Read a YAML file as a table. Top-level YAML arrays become one row per element; non-array docs become a single row. Suits config-data ETL (Helm values, GitHub Actions matrices) not bulk logs
 - `src.zendesk` Zendesk: Zendesk Support REST. Basic auth (email/token + API token). Cursor pagination via `meta.after_cursor` + `page[after]` param. responsePath /tickets (or whatever resource)
 
-### Destinations (write) (84)
+### Destinations (write) (85)
 
 - `snk.access` Microsoft Access: Write a table into an Access database (.accdb / .mdb), creating the file and the table when missing. Append or overwrite in one transaction; an empty upstream leaves the table alone. Windows only, through the Microsoft Access ODBC driver
 - `snk.avro` Avro: Write rows as an Apache Avro container file via the pure-Rust `apache-avro` crate. Schema is inferred from the first row's column types (long / double / string / boolean) - or supply a JSON Avro schema via the schemaJson field to override. recordName names the inferred record (default `Row`)
@@ -293,6 +294,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.spatial` Geospatial (GeoJSON / GeoPackage / ...): Write geospatial files via the spatial extension
 - `snk.sqlite` SQLite: Write a table into a SQLite file
 - `snk.sqlserver` SQL Server: INSERT to SQL Server via TDS (multi-row VALUES batched at 1000 rows, the SQL Server cap)
+- `snk.sqs` AWS SQS: Send each upstream row to an Amazon SQS queue as one message, the row as JSON or one column as the body, ten to a SendMessageBatch call over direct HTTP + AWS SigV4 (no AWS SDK). Fills the message group and deduplication id of a FIFO queue from columns. What SQS fails on its side is sent again; a message it refuses fails the run, naming the row
 - `snk.synapse` Azure Synapse: Azure Synapse rides the SQL Server TDS wire - same connection form as snk.sqlserver
 - `snk.teradata` Teradata: Write to Teradata through its free ODBC driver. Install the Teradata ODBC driver, then connect with friendly fields, a DSN, or a full ODBC connection string. Append creates the table if missing then appends; Overwrite clears it first. No upsert
 - `snk.toml` TOML: Write the upstream rows as TOML. TOML disallows a top-level array so the engine wraps under a `rows` key: `[[rows]]` per row

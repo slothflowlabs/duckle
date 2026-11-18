@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 427,
+  "componentCount": 429,
   "components": [
     {
       "id": "src.csv",
@@ -11030,6 +11030,111 @@
                 "kind": "text",
                 "placeholder": "https://kinesis.us-east-1.amazonaws.com",
                 "description": "Leave empty for the region's own endpoint. Set it for a VPC endpoint or LocalStack."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.sqs",
+      "label": "AWS SQS",
+      "kind": "source",
+      "availability": "available",
+      "summary": "Receive messages from an Amazon SQS queue, ten a call, over direct HTTP + AWS SigV4 (no AWS SDK). Each message is a row: its id, body, send time, receive count, FIFO group and attributes. Messages stay hidden while the run works and are deleted only once the whole run succeeds, so a failed run leaves them to be delivered again.",
+      "category": "Sources",
+      "group": "Streaming",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.sqs",
+        "kind": "source",
+        "label": "AWS SQS",
+        "description": "Receive messages from an Amazon SQS queue, ten a call, over direct HTTP + AWS SigV4 (no AWS SDK). Each message is a row: its id, body, send time, receive count, FIFO group and attributes. Messages stay hidden while the run works and are deleted only once the whole run succeeds, so a failed run leaves them to be delivered again.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "SQS queue",
+            "fields": [
+              {
+                "key": "queueUrl",
+                "label": "Queue URL",
+                "kind": "text",
+                "required": true,
+                "placeholder": "https://sqs.us-east-1.amazonaws.com/123456789012/orders",
+                "description": "As the SQS console shows it. Calls go to the URL host, so a local SQS such as ElasticMQ or LocalStack works too."
+              },
+              {
+                "key": "region",
+                "label": "Region",
+                "kind": "text",
+                "placeholder": "us-east-1",
+                "description": "Read from the queue URL when it is an AWS one. Set it for any other host."
+              },
+              {
+                "key": "accessKeyId",
+                "label": "Access key ID",
+                "kind": "text",
+                "required": true
+              },
+              {
+                "key": "secretAccessKey",
+                "label": "Secret access key",
+                "kind": "text",
+                "required": true,
+                "secret": true,
+                "placeholder": "••••••••"
+              },
+              {
+                "key": "sessionToken",
+                "label": "Session token",
+                "kind": "text",
+                "secret": true,
+                "description": "Only for temporary STS credentials."
+              }
+            ]
+          },
+          {
+            "label": "Receive",
+            "fields": [
+              {
+                "key": "maxMessages",
+                "label": "Max messages",
+                "kind": "integer",
+                "defaultValue": 1000,
+                "description": "The most one run takes. It stops sooner when the queue has none to give."
+              },
+              {
+                "key": "waitSeconds",
+                "label": "Wait for messages (seconds)",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How long each receive waits for a message to arrive, 0 to 20. The run ends after one wait that brings nothing."
+              },
+              {
+                "key": "visibilityTimeout",
+                "label": "Hide while the run works (seconds)",
+                "kind": "integer",
+                "defaultValue": 600,
+                "description": "Received messages stay hidden from other readers this long, and are deleted once the whole run succeeds. A run that fails deletes nothing, so they come back after this time. Keep it longer than a run takes."
               }
             ]
           }
@@ -40436,6 +40541,108 @@
                 "kind": "integer",
                 "defaultValue": 100,
                 "description": "Pub/Sub accepts at most 1000 messages per publish."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
+      "id": "snk.sqs",
+      "label": "AWS SQS",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "Send each upstream row to an Amazon SQS queue as one message, the row as JSON or one column as the body, ten to a SendMessageBatch call over direct HTTP + AWS SigV4 (no AWS SDK). Fills the message group and deduplication id of a FIFO queue from columns. What SQS fails on its side is sent again; a message it refuses fails the run, naming the row.",
+      "category": "Sinks",
+      "group": "Streaming",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.sqs",
+        "kind": "sink",
+        "label": "AWS SQS",
+        "description": "Send each upstream row to an Amazon SQS queue as one message, the row as JSON or one column as the body, ten to a SendMessageBatch call over direct HTTP + AWS SigV4 (no AWS SDK). Fills the message group and deduplication id of a FIFO queue from columns. What SQS fails on its side is sent again; a message it refuses fails the run, naming the row.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "SQS queue",
+            "fields": [
+              {
+                "key": "queueUrl",
+                "label": "Queue URL",
+                "kind": "text",
+                "required": true,
+                "placeholder": "https://sqs.us-east-1.amazonaws.com/123456789012/orders",
+                "description": "As the SQS console shows it. Calls go to the URL host, so a local SQS such as ElasticMQ or LocalStack works too."
+              },
+              {
+                "key": "region",
+                "label": "Region",
+                "kind": "text",
+                "placeholder": "us-east-1",
+                "description": "Read from the queue URL when it is an AWS one. Set it for any other host."
+              },
+              {
+                "key": "accessKeyId",
+                "label": "Access key ID",
+                "kind": "text",
+                "required": true
+              },
+              {
+                "key": "secretAccessKey",
+                "label": "Secret access key",
+                "kind": "text",
+                "required": true,
+                "secret": true,
+                "placeholder": "••••••••"
+              },
+              {
+                "key": "sessionToken",
+                "label": "Session token",
+                "kind": "text",
+                "secret": true,
+                "description": "Only for temporary STS credentials."
+              }
+            ]
+          },
+          {
+            "label": "Messages",
+            "fields": [
+              {
+                "key": "bodyColumn",
+                "label": "Body column",
+                "kind": "column",
+                "description": "The column sent as each message body. Left empty, the whole row is sent as JSON."
+              },
+              {
+                "key": "groupIdColumn",
+                "label": "Message group column",
+                "kind": "column",
+                "description": "For a FIFO queue, whose URL ends in .fifo, and needed there: messages of one group are delivered in order."
+              },
+              {
+                "key": "deduplicationIdColumn",
+                "label": "Deduplication id column",
+                "kind": "column",
+                "description": "For a FIFO queue without content-based deduplication: a message whose id was sent in the last five minutes is dropped."
               }
             ]
           }

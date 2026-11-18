@@ -11407,7 +11407,7 @@ impl DuckdbEngine {
 
     /// #258: sleep, but notice a cancelled run instead of sitting out a rate
     /// limit for the full interval.
-    fn ai_sleep_cancellable(&self, ms: u64) -> Result<(), EngineError> {
+    pub(crate) fn ai_sleep_cancellable(&self, ms: u64) -> Result<(), EngineError> {
         let mut left = ms;
         while left > 0 {
             let slice = left.min(200);

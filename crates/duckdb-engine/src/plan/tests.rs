@@ -8456,3 +8456,90 @@ mod orc {
         assert!(err.contains("path"), "say what is missing: {err}");
     }
 }
+
+mod sqs {
+    use super::*;
+    use crate::plan::RuntimeSpec;
+
+    fn specs(component: &str, props: serde_json::Value) -> Result<Vec<RuntimeSpec>, crate::EngineError> {
+        let node = |id: &str, component: &str, props: serde_json::Value| {
+            serde_json::json!({"id": id, "position": {"x": 0, "y": 0}, "data": {"label": id, "componentId": component, "properties": props}})
+        };
+        let nodes = if component.starts_with("src.") {
+            [node("a", component, props), node("b", "snk.csv", serde_json::json!({ "path": "/tmp/b.csv" }))]
+        } else {
+            [node("a", "src.csv", serde_json::json!({ "path": "/tmp/a.csv" })), node("b", component, props)]
+        };
+        let doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": nodes,
+            "edges": [{"id": "e", "source": "a", "target": "b", "data": {"connectionType": "main"}}]
+        }))
+        .unwrap();
+        Ok(compile(&doc)?.stages.into_iter().filter_map(|s| s.runtime).collect())
+    }
+
+    fn props(queue_url: &str, extra: serde_json::Value) -> serde_json::Value {
+        let mut p = serde_json::json!({
+            "queueUrl": queue_url, "accessKeyId": "AKID", "secretAccessKey": "s3cret", "sessionToken": "t0ken"
+        });
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            p[k] = v;
+        }
+        p
+    }
+
+    fn source(queue_url: &str, extra: serde_json::Value) -> Result<crate::plan::SqsSourceSpec, crate::EngineError> {
+        Ok(specs("src.sqs", props(queue_url, extra))?
+            .into_iter()
+            .find_map(|s| match s {
+                RuntimeSpec::SqsSource(q) => Some(q),
+                _ => None,
+            })
+            .expect("an SQS read"))
+    }
+
+    const AWS: &str = "https://sqs.eu-west-1.amazonaws.com/123456789012/orders";
+
+    #[test]
+    fn the_region_is_read_from_an_aws_queue_url() {
+        assert_eq!(source(AWS, serde_json::json!({})).unwrap().queue.region, "eu-west-1");
+        assert_eq!(source(AWS, serde_json::json!({ "region": "us-east-2" })).unwrap().queue.region, "us-east-2");
+        let local = "http://localhost:9324/000000000000/orders";
+        let err = source(local, serde_json::json!({})).unwrap_err().to_string();
+        assert!(err.contains("Region"), "{err}");
+        assert_eq!(source(local, serde_json::json!({ "region": "elasticmq" })).unwrap().queue.region, "elasticmq");
+    }
+
+    #[test]
+    fn a_receive_takes_its_numbers_as_written_and_within_what_sqs_allows() {
+        let read = source(AWS, serde_json::json!({})).unwrap();
+        assert_eq!((read.max_messages, read.wait_seconds, read.visibility_timeout), (1000, 1, 600));
+        let read = source(AWS, serde_json::json!({ "maxMessages": "13", "waitSeconds": 0, "visibilityTimeout": " 90 " })).unwrap();
+        assert_eq!((read.max_messages, read.wait_seconds, read.visibility_timeout), (13, 0, 90));
+        for (key, value) in [
+            ("maxMessages", serde_json::json!(0)),
+            ("waitSeconds", serde_json::json!(21)),
+            ("visibilityTimeout", serde_json::json!(43_201)),
+            ("maxMessages", serde_json::json!("lots")),
+        ] {
+            let err = source(AWS, serde_json::json!({ key: value })).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}={value}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_fifo_queue_needs_a_message_group_column() {
+        let fifo = "https://sqs.eu-west-1.amazonaws.com/123456789012/orders.fifo";
+        let err = specs("snk.sqs", props(fifo, serde_json::json!({}))).unwrap_err().to_string();
+        assert!(err.contains("FIFO") && err.contains("group"), "{err}");
+        assert!(specs("snk.sqs", props(fifo, serde_json::json!({ "groupIdColumn": "customer" }))).is_ok());
+        assert!(specs("snk.sqs", props(AWS, serde_json::json!({}))).is_ok(), "a standard queue needs none");
+    }
+
+    #[test]
+    fn no_key_prints() {
+        let printed = format!("{:?}", source(AWS, serde_json::json!({})).unwrap());
+        assert!(!printed.contains("s3cret") && !printed.contains("t0ken"), "{printed}");
+        assert!(printed.contains("AKID"), "the key id is not a secret: {printed}");
+    }
+}

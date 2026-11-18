@@ -397,7 +397,46 @@ fn service_account_key(props: &JsonValue, component: &str) -> Result<Option<Stri
     Ok(key)
 }
 
-/// The Sheets API's base URL a node names, or Google's.
+/// Where an SQS queue is and how to sign for it. The region is read from an AWS
+/// queue URL (https://sqs.<region>.amazonaws.com/...) when the node names none.
+fn sqs_queue(props: &JsonValue, component: &str) -> Result<SqsQueue, EngineError> {
+    let text = |key: &str| string_prop(props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let required = |key: &str| text(key).ok_or_else(|| EngineError::Config(format!("{component}: {key} required")));
+    let queue_url = required("queueUrl")?;
+    let parsed = url::Url::parse(&queue_url)
+        .map_err(|e| EngineError::Config(format!("{component}: queueUrl {queue_url} is not a URL: {e}")))?;
+    let from_url = parsed
+        .host_str()
+        .and_then(|h| h.strip_prefix("sqs."))
+        .and_then(|h| h.split('.').next())
+        .filter(|r| !r.is_empty())
+        .map(str::to_string);
+    let region = text("region").or(from_url).ok_or_else(|| {
+        EngineError::Config(format!("{component}: set Region; it cannot be read from the queue URL {queue_url}"))
+    })?;
+    Ok(SqsQueue {
+        queue_url,
+        region,
+        access_key_id: required("accessKeyId")?,
+        secret_access_key: required("secretAccessKey")?,
+        session_token: text("sessionToken"),
+    })
+}
+
+/// A whole-number property, written as a number or as text; None when blank.
+/// Anything else is refused by name rather than read as the default.
+fn whole_number(props: &JsonValue, key: &str, component: &str) -> Result<Option<u64>, EngineError> {
+    match props.get(key) {
+        None | Some(JsonValue::Null) => Ok(None),
+        Some(JsonValue::String(s)) if s.trim().is_empty() => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+            .map(Some)
+            .ok_or_else(|| EngineError::Config(format!("{component}: {key} must be a whole number, not {v}"))),
+    }
+}
+
 /// How src.email signs in: a password, or OAuth2 (XOAUTH2), its token got at the
 /// provider's endpoint, Google's or Microsoft's, or one the node names.
 fn email_auth(props: &JsonValue, component: &str) -> Result<EmailAuth, EngineError> {
@@ -502,6 +541,7 @@ fn chroma_target(props: &JsonValue, component: &str) -> Result<ChromaTarget, Eng
     })
 }
 
+/// The Sheets API's base URL a node names, or Google's.
 fn sheets_endpoint(props: &JsonValue) -> String {
     string_prop(props, "endpoint")
         .map(|s| s.trim().trim_end_matches('/').to_string())
@@ -777,6 +817,8 @@ pub enum RuntimeSpec {
     QvdSink(QvdSinkSpec),
     OrcSource(OrcSourceSpec),
     OrcSink(OrcSinkSpec),
+    SqsSource(SqsSourceSpec),
+    SqsSink(SqsSinkSpec),
     GizmoSqlSource(GizmoSqlSourceSpec),
     GizmoSqlSink(GizmoSqlSinkSpec),
     RabbitSink(RabbitSinkSpec),
@@ -2394,6 +2436,8 @@ fn build_stage(
     let mut qvd_sink: Option<QvdSinkSpec> = None;
     let mut orc_source: Option<OrcSourceSpec> = None;
     let mut orc_sink: Option<OrcSinkSpec> = None;
+    let mut sqs_source: Option<SqsSourceSpec> = None;
+    let mut sqs_sink: Option<SqsSinkSpec> = None;
     let mut gizmosql_source: Option<GizmoSqlSourceSpec> = None;
     let mut gizmosql_sink: Option<GizmoSqlSinkSpec> = None;
     let mut rabbit_sink: Option<RabbitSinkSpec> = None;
@@ -3845,6 +3889,26 @@ fn build_stage(
             from_view: from_view.to_string(),
             path,
             compression,
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.sqs" {
+        // One message a row. A FIFO queue takes a message only with its group.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let queue = sqs_queue(&props, component_id)?;
+        let column = |key: &str| string_prop(&props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let group_id_column = column("groupIdColumn");
+        if queue.queue_url.trim_end_matches('/').ends_with(".fifo") && group_id_column.is_none() {
+            return Err(EngineError::Config(format!(
+                "{component_id}: {} is a FIFO queue, which needs a Message group column",
+                queue.queue_url
+            )));
+        }
+        sqs_sink = Some(SqsSinkSpec {
+            from_view: from_view.to_string(),
+            queue,
+            body_column: column("bodyColumn"),
+            group_id_column,
+            deduplication_id_column: column("deduplicationIdColumn"),
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.gizmosql" {
@@ -5866,6 +5930,34 @@ fn build_stage(
         orc_source = Some(OrcSourceSpec {
             node_id: node.id.clone(),
             path,
+        });
+        (String::new(), StageKind::View, None)
+    } else if component_id == "src.sqs" {
+        // Amazon SQS over its JSON protocol. What a run receives is deleted only
+        // once the whole run has succeeded.
+        let queue = sqs_queue(&props, component_id)?;
+        let max_messages = whole_number(&props, "maxMessages", component_id)?.unwrap_or(1000);
+        let wait_seconds = whole_number(&props, "waitSeconds", component_id)?.unwrap_or(1);
+        let visibility_timeout = whole_number(&props, "visibilityTimeout", component_id)?.unwrap_or(600);
+        if max_messages == 0 {
+            return Err(EngineError::Config(format!("{component_id}: maxMessages must be at least 1")));
+        }
+        if wait_seconds > 20 {
+            return Err(EngineError::Config(format!(
+                "{component_id}: waitSeconds is {wait_seconds}, and SQS waits at most 20"
+            )));
+        }
+        if visibility_timeout > 43_200 {
+            return Err(EngineError::Config(format!(
+                "{component_id}: visibilityTimeout is {visibility_timeout}, and SQS hides a message at most 43200 seconds (12 hours)"
+            )));
+        }
+        sqs_source = Some(SqsSourceSpec {
+            node_id: node.id.clone(),
+            queue,
+            max_messages: max_messages as usize,
+            wait_seconds: wait_seconds as u32,
+            visibility_timeout: visibility_timeout as u32,
         });
         (String::new(), StageKind::View, None)
     } else if component_id == "src.gizmosql" {
@@ -8188,6 +8280,8 @@ fn build_stage(
         .or_else(|| qvd_sink.map(RuntimeSpec::QvdSink))
         .or_else(|| orc_source.map(RuntimeSpec::OrcSource))
         .or_else(|| orc_sink.map(RuntimeSpec::OrcSink))
+        .or_else(|| sqs_source.map(RuntimeSpec::SqsSource))
+        .or_else(|| sqs_sink.map(RuntimeSpec::SqsSink))
         .or_else(|| rabbit_sink.map(RuntimeSpec::RabbitSink))
         .or_else(|| rabbit_source.map(RuntimeSpec::RabbitSource))
         .or_else(|| git_source.map(RuntimeSpec::GitSource))

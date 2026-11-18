@@ -2804,6 +2804,28 @@ function synthWrongFamilyForm(comp: ComponentDef): ComponentManifest | null {
             },
         ]);
     }
+    if (id === 'src.sqs') {
+        return base(comp, [
+            {
+                label: 'SQS queue',
+                fields: [
+                    { key: 'queueUrl', label: 'Queue URL', kind: 'text', required: true, placeholder: 'https://sqs.us-east-1.amazonaws.com/123456789012/orders', description: 'As the SQS console shows it. Calls go to the URL host, so a local SQS such as ElasticMQ or LocalStack works too.' },
+                    { key: 'region', label: 'Region', kind: 'text', placeholder: 'us-east-1', description: 'Read from the queue URL when it is an AWS one. Set it for any other host.' },
+                    { key: 'accessKeyId', label: 'Access key ID', kind: 'text', required: true },
+                    { key: 'secretAccessKey', label: 'Secret access key', kind: 'text', required: true, secret: true, placeholder: '••••••••' },
+                    { key: 'sessionToken', label: 'Session token', kind: 'text', secret: true, description: 'Only for temporary STS credentials.' },
+                ],
+            },
+            {
+                label: 'Receive',
+                fields: [
+                    { key: 'maxMessages', label: 'Max messages', kind: 'integer', defaultValue: 1000, description: 'The most one run takes. It stops sooner when the queue has none to give.' },
+                    { key: 'waitSeconds', label: 'Wait for messages (seconds)', kind: 'integer', defaultValue: 1, description: 'How long each receive waits for a message to arrive, 0 to 20. The run ends after one wait that brings nothing.' },
+                    { key: 'visibilityTimeout', label: 'Hide while the run works (seconds)', kind: 'integer', defaultValue: 600, description: 'Received messages stay hidden from other readers this long, and are deleted once the whole run succeeds. A run that fails deletes nothing, so they come back after this time. Keep it longer than a run takes.' },
+                ],
+            },
+        ]);
+    }
     if (id === 'src.dynamodb') {
         return base(comp, [
             {
@@ -5424,6 +5446,32 @@ function synthStreamingSink(comp: ComponentDef): ComponentManifest {
                             placeholder: 'https://kinesis.us-east-1.amazonaws.com',
                             description: "Leave empty for the region's own endpoint. Set it for a VPC endpoint or LocalStack.",
                         },
+                    ],
+                },
+            ],
+            'upstream',
+        );
+    }
+    if (comp.id === 'snk.sqs') {
+        return base(
+            comp,
+            [
+                {
+                    label: 'SQS queue',
+                    fields: [
+                        { key: 'queueUrl', label: 'Queue URL', kind: 'text', required: true, placeholder: 'https://sqs.us-east-1.amazonaws.com/123456789012/orders', description: 'As the SQS console shows it. Calls go to the URL host, so a local SQS such as ElasticMQ or LocalStack works too.' },
+                        { key: 'region', label: 'Region', kind: 'text', placeholder: 'us-east-1', description: 'Read from the queue URL when it is an AWS one. Set it for any other host.' },
+                        { key: 'accessKeyId', label: 'Access key ID', kind: 'text', required: true },
+                        { key: 'secretAccessKey', label: 'Secret access key', kind: 'text', required: true, secret: true, placeholder: '••••••••' },
+                        { key: 'sessionToken', label: 'Session token', kind: 'text', secret: true, description: 'Only for temporary STS credentials.' },
+                    ],
+                },
+                {
+                    label: 'Messages',
+                    fields: [
+                        { key: 'bodyColumn', label: 'Body column', kind: 'column', description: 'The column sent as each message body. Left empty, the whole row is sent as JSON.' },
+                        { key: 'groupIdColumn', label: 'Message group column', kind: 'column', description: 'For a FIFO queue, whose URL ends in .fifo, and needed there: messages of one group are delivered in order.' },
+                        { key: 'deduplicationIdColumn', label: 'Deduplication id column', kind: 'column', description: 'For a FIFO queue without content-based deduplication: a message whose id was sent in the last five minutes is dropped.' },
                     ],
                 },
             ],

@@ -10,7 +10,7 @@
 
 https://github.com/user-attachments/assets/8bfac3fa-3f91-4b43-b5d8-a526716c8ef1
 
-<a href="https://duckle.org/"><img src="website/assets/img/website-hero.gif" alt="Duckle connecting 217 sources and destinations - databases, warehouses, SaaS apps and the DuckDB ecosystem - all running locally on DuckDB" width="600"/></a>
+<a href="https://duckle.org/"><img src="website/assets/img/website-hero.gif" alt="Duckle connecting 219 sources and destinations - databases, warehouses, SaaS apps and the DuckDB ecosystem - all running locally on DuckDB" width="600"/></a>
 
 <p><sub><i>Duckle is an independent open-source project by SlothFlowLabs. It builds on the DuckDB engine but is not part of, affiliated with, or endorsed by DuckDB Labs or MotherDuck.</i></sub></p>
 
@@ -136,7 +136,7 @@ In short: a free, open-source, single-engine alternative to hosted, per-row-pric
 Three things set it apart:
 
 1. **An AI assistant that ships in the box.** Describe the pipeline you want in English; Duckie writes the JSON and drops it onto the canvas. The model runs wherever Duckle does - no API key, no telemetry, no vendor round-trip. Point it at your own OpenAI-compatible endpoint instead if you would rather it did not run in-process.
-2. **422 components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
+2. **424 components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
 3. **A self-contained binary you can audit.** 73 to 110 MB depending on your platform. Engines install on first launch. Workspaces are plain files in a folder you choose. Diff them, branch them, ship them.
 
 <div align="center">
@@ -154,7 +154,7 @@ Three things set it apart:
 | **Single-file binary, no bundled DB** | 73 to 110 MB depending on platform (it embeds the headless runner + MCP server). DuckDB downloads on first launch with a guided step. AI engine is opt-in. |
 | **Native speed** | Execution runs through DuckDB: vectorized, columnar, local. A clean-and-export job that crawls in a spreadsheet finishes in milliseconds. |
 | **Git-friendly by design** | Pipelines, connections, contexts, and routines persist as plain files in a folder you pick. Diff them, branch them, review them. |
-| **422 components ready today** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
+| **424 components ready today** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
 | **Honest about scope** | Single-machine and embedded by design. Built to make local and small-team data work fast, not to replace a distributed warehouse. |
 | **60 UI languages** | Topbar, palette, chat assistant, properties panel, and common dialogs ship localized. English, Spanish, Chinese (Simplified + Traditional), Hindi, Arabic, Portuguese (Brazil), Bengali, Russian, Japanese, Punjabi, German, Korean, French, Vietnamese, Telugu, Marathi, Turkish, Tamil, Urdu, Persian, Polish, Italian, Ukrainian, Indonesian, Thai, Dutch, Hebrew, Swedish, Greek, Czech, Hungarian, Romanian, Filipino, Malay, Norwegian, Danish, Finnish, Catalan, Bulgarian, Slovak, Croatian, Serbian, Slovenian, Lithuanian, Latvian, Estonian, Khmer, Burmese, Sinhala, Nepali, Swahili, Afrikaans, Welsh, Irish, Icelandic, Albanian, Azerbaijani, Mongolian, Kazakh. RTL (Arabic, Hebrew, Persian, Urdu) supported. Switch languages from the topbar globe. |
 | **Open source** | Dual-licensed MIT OR Apache-2.0. Yours to use, fork, and extend. |
@@ -1945,7 +1945,7 @@ than on every evaluation after the recovery.
 ### The connector matrix, generated (`capabilities`)
 
 A hand-maintained feature table drifts from the code the week after it is
-written, and a prose list of 427 components cannot answer "which sources do
+written, and a prose list of 429 components cannot answer "which sources do
 incremental?". So it is derived from the same manifests the editor renders forms
 from:
 
@@ -3651,9 +3651,9 @@ Duckle is in **public beta**. The visual designer, the DuckDB execution engine, 
 
 **Scope, stated plainly:** Duckle runs as a service on hardware you provision, and uses all of it. What it does not do is split one query across a cluster, so when a job outgrows the largest instance you want to pay for, push the work down into the source system or point the output at a warehouse, object store or lakehouse. It will not pretend to be a cluster.
 
-The component palette ships **427 components** so the roadmap is visible in the product itself:
+The component palette ships **429 components** so the roadmap is visible in the product itself:
 
-- **422 available** runs on the DuckDB engine today
+- **424 available** runs on the DuckDB engine today
 - **5 planned** is reserved in the palette but not yet executable - see [`docs/roadmap.md`](docs/roadmap.md)
 
 ---
@@ -3664,7 +3664,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 
 ### Sources
 
-**134 sources available today.**
+**135 sources available today.**
 
 | Group | Connectors | Status |
 |---|---|---|
@@ -3682,7 +3682,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | **Network relational DBs** | generic JDBC | Planned |
 | **Object storage** | Amazon S3, Google Cloud Storage, Azure Blob, HTTP(S), MinIO, Cloudflare R2, Backblaze B2 | Available (live CI for MinIO) |
 | **Cloud warehouses** | MotherDuck, Snowflake (SQL API + PAT/JWT), BigQuery, Redshift (postgres ATTACH), Databricks SQL (Statement Execution + chunk follow), Azure Synapse (TDS), **Teradata** (ODBC, Windows / Linux), **DuckDB Quack** (May 2026 remote protocol - HTTP on :9494, SECRET-based token auth) | Available |
-| **Streaming** | Apache Kafka / Redpanda (pure-Rust `rskafka`), NATS JetStream, GCP Pub/Sub (REST + auto-ack), RabbitMQ (`lapin` AMQP), AWS Kinesis (HTTP + SigV4 - no AWS SDK), Azure Event Hubs (its namespace's Kafka endpoint, signed in with the connection string), WebSocket (`ws://` / `wss://`, optional subscribe frame), Apache Pulsar (its WebSocket API, served on the broker's HTTP port, so no client library or `protoc`; from the oldest or newest message, Resume keeping the place) | Available |
+| **Streaming** | Apache Kafka / Redpanda (pure-Rust `rskafka`), NATS JetStream, GCP Pub/Sub (REST + auto-ack), RabbitMQ (`lapin` AMQP), AWS Kinesis (HTTP + SigV4 - no AWS SDK), Azure Event Hubs (its namespace's Kafka endpoint, signed in with the connection string), WebSocket (`ws://` / `wss://`, optional subscribe frame), Apache Pulsar (its WebSocket API, served on the broker's HTTP port, so no client library or `protoc`; from the oldest or newest message, Resume keeping the place), Amazon SQS (HTTP + SigV4 - no AWS SDK; messages stay hidden while the run works and are deleted only once it succeeds, so a failed run leaves them to be delivered again) | Available |
 | **APIs and SaaS (REST)** | Salesforce, HubSpot, Pipedrive, Zendesk, Intercom, Stripe, QuickBooks, Xero, Shopify, Notion, Airtable, Asana, Trello, ClickUp, Monday.com, GitHub, GitLab, Linear, Jira, Slack, Discord, Telegram, Twilio, Mailchimp, SendGrid, Segment - thin pre-configured wrappers over `src.rest` / `src.graphql`. `src.rest` takes a configurable API-key auth header name and offset pagination that stops on a body `total_count`, and its offset and page styles can follow the API's own more-pages flag instead (a true/false at a JSON pointer such as `/data/pagination/hasMore`), which also reads an API that caps its page below the size asked for to the end. `src.graphql`, and the Linear and Monday.com tiles on it, read a paged connection to the end: name where a response gives the next cursor (such as `pageInfo.endCursor`) and it goes into a query variable, `after` unless another is named, for the next request, until `pageInfo.hasNextPage` (when named) is false or the cursor runs out, under Max pages. `src.gsheets` reads a range of a Google Sheet as rows through the Sheets API, values as they are rather than as displayed, signed in with a service account key (the sheet shared with its email) or with an API key for a sheet anyone with the link can view. `src.excel-online` reads a workbook in OneDrive or SharePoint Online through Microsoft Graph, signed in as an app registration with the Files.Read.All application permission. Graph's workbook API takes no app-only token, so the workbook is downloaded and read as `src.excel` reads one, its sheets, range and header row alike. **Salesforce Bulk** (`src.salesforce.bulk`) - Bulk API 2.0 query source for migration-scale reads: SOQL as an async query job (query / queryAll), paged CSV result sets streamed to disk via `Sforce-Locator`, typed empty relations on 0 records | Available |
 | **SharePoint Server** | On premises (2016 / 2019 / Subscription Edition), signed in with Windows authentication (NTLM, as `DOMAIN\user` or `user@domain`): a list's items as rows, every page followed, with optional `$select` / `$filter` done by SharePoint; or a file in a document library read by its format (CSV, TSV, Parquet, JSON, Excel). Not supported: Kerberos-only farms and IIS Extended Protection (channel binding) set to Required | Available |
 | **APIs (protocols)** | OData v4 (follows `@odata.nextLink`), SOAP / generic XML APIs (XML response parsing with namespace local-name match), gRPC (one method through the server's reflection, so no .proto file or protoc: the request as JSON, each response a row, a server stream read up to Max messages) | Available |
@@ -3783,7 +3783,7 @@ Validators split their input: passing rows continue on the main port, failures r
 
 ### Sinks
 
-**83 sinks available today.**
+**84 sinks available today.**
 
 | Group | Connectors | Status |
 |---|---|---|
@@ -3806,7 +3806,7 @@ Validators split their input: passing rows continue on the main port, failures r
 | **Email (SMTP)** | Per-row SMTP send via pure-Rust `lettre` + rustls. Plain text v1; HTML + attachments follow. | Available |
 | **NoSQL** | **Neo4j** (rows as nodes over the HTTP Query API; one `UNWIND $rows` round trip per batch, `mergeKeys` switches CREATE to MERGE so re-runs update rather than duplicate), MongoDB (insert_many batched; **upsert** via replace_one on a key, plus delete propagation via delete_one), Cassandra / ScyllaDB (CQL), Elasticsearch / OpenSearch (`_bulk` NDJSON), **Manticore Search** (HTTP JSON `/bulk`; the doc rides inside the action line, insert or replace, and a batch the server rejects at HTTP 200 fails the run), Redis (pipelined SET) | Available |
 | **NoSQL** | DynamoDB | Planned |
-| **Streaming** | Kafka / Redpanda (`rskafka`), NATS JetStream, GCP Pub/Sub (REST + OAuth2), RabbitMQ (`lapin`), AWS Kinesis (PutRecords over HTTP + SigV4; records a shard refuses are sent again), WebSocket (`ws://` / `wss://`), WebSocket server (broadcast under `duckle-runner follow`), Apache Pulsar (its WebSocket API; every message acknowledged before the run succeeds) | Available |
+| **Streaming** | Kafka / Redpanda (`rskafka`), NATS JetStream, GCP Pub/Sub (REST + OAuth2), RabbitMQ (`lapin`), AWS Kinesis (PutRecords over HTTP + SigV4; records a shard refuses are sent again), WebSocket (`ws://` / `wss://`), WebSocket server (broadcast under `duckle-runner follow`), Apache Pulsar (its WebSocket API; every message acknowledged before the run succeeds), Amazon SQS (SendMessageBatch over HTTP + SigV4, the row as JSON or one column as the body, a FIFO queue's group and deduplication id from columns; what SQS fails on its side is sent again) | Available |
 | **Vector / AI databases** | pgvector, Pinecone (`/vectors/upsert`), Qdrant (`/points` PUT), Weaviate (`/v1/batch/objects`), Milvus (`/v1/vector/insert`), Chroma (`/upsert` of id, embedding and document, the other columns as metadata; the collection made if it is not there) | Available |
 | **Vector / AI databases** | LanceDB | Preview (need vendor SDK) |
 
@@ -4536,7 +4536,7 @@ Yes, free + open source. Dual-licensed **MIT OR Apache-2.0**. You can use it com
 <details>
 <summary><b>Is Duckle an open-source alternative to Fivetran or Airbyte?</b></summary>
 
-It covers similar ground - moving data across 217 sources and destinations - but locally, with nothing to host and no per-row, per-connector, or per-seat billing. Pipelines are built visually or from plain English and compile to readable DuckDB SQL that runs wherever you deploy it: a laptop, a server, CI or a container. The trade-off is scope: Duckle does not split one query across a cluster, so for warehouse-scale replication you push the work down into the source system or point the output at the system that scales.
+It covers similar ground - moving data across 219 sources and destinations - but locally, with nothing to host and no per-row, per-connector, or per-seat billing. Pipelines are built visually or from plain English and compile to readable DuckDB SQL that runs wherever you deploy it: a laptop, a server, CI or a container. The trade-off is scope: Duckle does not split one query across a cluster, so for warehouse-scale replication you push the work down into the source system or point the output at the system that scales.
 
 </details>
 

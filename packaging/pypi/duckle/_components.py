@@ -663,6 +663,11 @@ COMPONENTS = {
         'summary': 'INSERT to SQL Server via TDS (multi-row VALUES batched at 1000 rows, the SQL Server cap).',
         'params': ['connectionRef', 'host', 'port', 'user', 'password', 'database', 'trustCert', 'encrypt', 'bulk', 'schema', 'tableName', 'batchSize', 'mode', 'conflictColumns', 'deleteColumn', 'deleteValue', 'validateBeforeInsert', 'deadLetterPath', 'deadLetterFormat'],
     },
+    'snk.sqs': {
+        'kind': 'sink',
+        'summary': 'Send each upstream row to an Amazon SQS queue as one message, the row as JSON or one column as the body, ten to a SendMessageBatch call over direct HTTP + AWS SigV4 (no AWS SDK). Fills the message group and deduplication id of a FIFO queue from columns. What SQS fails on its side is sent again; a...',
+        'params': ['queueUrl', 'region', 'accessKeyId', 'secretAccessKey', 'sessionToken', 'bodyColumn', 'groupIdColumn', 'deduplicationIdColumn'],
+    },
     'snk.synapse': {
         'kind': 'sink',
         'summary': 'Azure Synapse rides the SQL Server TDS wire - same connection form as snk.sqlserver.',
@@ -1307,6 +1312,11 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'Read SQL Server via the native TDS protocol (tiberius, pure Rust). SQL auth (user/password); trust_cert option for self-signed dev servers.',
         'params': ['connectionRef', 'host', 'port', 'user', 'password', 'database', 'trustCert', 'encrypt', 'schema', 'tableName', 'query'],
+    },
+    'src.sqs': {
+        'kind': 'source',
+        'summary': 'Receive messages from an Amazon SQS queue, ten a call, over direct HTTP + AWS SigV4 (no AWS SDK). Each message is a row: its id, body, send time, receive count, FIFO group and attributes. Messages stay hidden while the run works and are deleted only once the whole run succeeds, so a failed run le...',
+        'params': ['queueUrl', 'region', 'accessKeyId', 'secretAccessKey', 'sessionToken', 'maxMessages', 'waitSeconds', 'visibilityTimeout'],
     },
     'src.stripe': {
         'kind': 'source',
