@@ -398,6 +398,55 @@ fn service_account_key(props: &JsonValue, component: &str) -> Result<Option<Stri
 }
 
 /// The Sheets API's base URL a node names, or Google's.
+/// How src.email signs in: a password, or OAuth2 (XOAUTH2), its token got at the
+/// provider's endpoint, Google's or Microsoft's, or one the node names.
+fn email_auth(props: &JsonValue, component: &str) -> Result<EmailAuth, EngineError> {
+    let text = |key: &str| string_prop(props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let config = |why: String| EngineError::Config(format!("{component}: {why}"));
+    if text("authType").as_deref() != Some("oauth2") {
+        return string_prop(props, "password")
+            .filter(|s| !s.is_empty())
+            .map(EmailAuth::Password)
+            .ok_or_else(|| config("password required".into()));
+    }
+    let client_id = text("clientId").ok_or_else(|| config("clientId required for OAuth2".into()))?;
+    let client_secret = text("clientSecret");
+    let refresh_token = text("refreshToken");
+    let provider = text("oauthProvider").unwrap_or_else(|| "google".into());
+    // A refresh token signs a person in; without one, Microsoft's client
+    // credentials grant signs an app in. Google signs an app in by a service
+    // account, which this does not do.
+    let (endpoint, scope) = match (provider.as_str(), refresh_token.is_some()) {
+        ("google", true) => (Some("https://oauth2.googleapis.com/token".to_string()), None),
+        ("google", false) => {
+            return Err(config("Google signs in to a mailbox with a refresh token; set Refresh token".into()))
+        }
+        ("microsoft", true) => (
+            Some(format!(
+                "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+                text("tenantId").as_deref().unwrap_or("common")
+            )),
+            Some("https://outlook.office.com/IMAP.AccessAsUser.All offline_access".to_string()),
+        ),
+        ("microsoft", false) => {
+            let tenant = text("tenantId")
+                .ok_or_else(|| config("an app signs in to Microsoft 365 for its tenant; set Tenant".into()))?;
+            (
+                Some(format!("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token")),
+                Some("https://outlook.office365.com/.default".to_string()),
+            )
+        }
+        _ => (None, None),
+    };
+    let token_url = text("tokenUrl")
+        .or(endpoint)
+        .ok_or_else(|| config("tokenUrl required for another provider".into()))?;
+    if refresh_token.is_none() && client_secret.is_none() {
+        return Err(config("without a refresh token, the client credentials grant needs clientSecret".into()));
+    }
+    Ok(EmailAuth::OAuth { token_url, client_id, client_secret, refresh_token, scope: text("scope").or(scope) })
+}
+
 /// Where a Pulsar node's topic lives, for Pulsar's WebSocket API. The broker
 /// serves that API on its HTTP port, so its http(s) address is taken as ws(s).
 /// A topic named in full (persistent://tenant/namespace/topic) is taken as it
@@ -5448,9 +5497,7 @@ fn build_stage(
         let user = string_prop(&props, "user")
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: user required", component_id)))?;
-        let password = string_prop(&props, "password")
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| EngineError::Config(format!("{}: password required", component_id)))?;
+        let auth = email_auth(&props, component_id)?;
         email_source = Some(EmailSourceSpec {
             node_id: node.id.clone(),
             host,
@@ -5461,7 +5508,7 @@ fn build_stage(
                 .map(|n| n as u16)
                 .unwrap_or(993),
             user,
-            password,
+            auth,
             mailbox: string_prop(&props, "mailbox")
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "INBOX".into()),

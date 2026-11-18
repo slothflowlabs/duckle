@@ -17007,7 +17007,7 @@
       "label": "Email (IMAP)",
       "kind": "source",
       "availability": "available",
-      "summary": "Fetch the N most recent messages from an IMAP mailbox. TLS via rustls (default port 993). Basic auth (user/password). Each message becomes a row {uid, from, to, subject, date, body_text}. OAuth (gmail / o365) is on the roadmap.",
+      "summary": "Fetch the N most recent messages from an IMAP mailbox. TLS via rustls (default port 993). Signed in with a password, or with OAuth2 (XOAUTH2) as Gmail and Microsoft 365 take it: a refresh token traded for an access token each run, or an app's client credentials for Microsoft 365. Each message becomes a row {uid, from, to, subject, date, body_text}.",
       "category": "Sources",
       "group": "Other",
       "ports": {
@@ -17024,7 +17024,7 @@
         "id": "src.email",
         "kind": "source",
         "label": "Email (IMAP)",
-        "description": "Fetch the N most recent messages from an IMAP mailbox. TLS via rustls (default port 993). Basic auth (user/password). Each message becomes a row {uid, from, to, subject, date, body_text}. OAuth (gmail / o365) is on the roadmap.",
+        "description": "Fetch the N most recent messages from an IMAP mailbox. TLS via rustls (default port 993). Signed in with a password, or with OAuth2 (XOAUTH2) as Gmail and Microsoft 365 take it: a refresh token traded for an access token each run, or an app's client credentials for Microsoft 365. Each message becomes a row {uid, from, to, subject, date, body_text}.",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -17051,12 +17051,140 @@
                 "required": true
               },
               {
+                "key": "authType",
+                "label": "Sign in with",
+                "kind": "select",
+                "defaultValue": "password",
+                "options": [
+                  {
+                    "label": "Password",
+                    "value": "password"
+                  },
+                  {
+                    "label": "OAuth2 (Gmail, Microsoft 365)",
+                    "value": "oauth2"
+                  }
+                ]
+              },
+              {
                 "key": "password",
                 "label": "Password",
                 "kind": "text",
                 "required": true,
                 "placeholder": "••••••••",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "password"
+                  }
+                ],
                 "secret": true
+              },
+              {
+                "key": "oauthProvider",
+                "label": "Provider",
+                "kind": "select",
+                "defaultValue": "google",
+                "options": [
+                  {
+                    "label": "Google",
+                    "value": "google"
+                  },
+                  {
+                    "label": "Microsoft 365",
+                    "value": "microsoft"
+                  },
+                  {
+                    "label": "Other",
+                    "value": "other"
+                  }
+                ],
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth2"
+                  }
+                ]
+              },
+              {
+                "key": "tenantId",
+                "label": "Tenant",
+                "kind": "text",
+                "placeholder": "contoso.onmicrosoft.com",
+                "description": "Needed when an app signs in (no refresh token). Leave empty for a person.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth2"
+                  },
+                  {
+                    "key": "oauthProvider",
+                    "equals": "microsoft"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client id",
+                "kind": "text",
+                "required": true,
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth2"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "••••••••",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth2"
+                  }
+                ]
+              },
+              {
+                "key": "refreshToken",
+                "label": "Refresh token",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "••••••••",
+                "description": "Signs in as the person who granted it, and is traded for an access token each run. Without one, an app signs in to Microsoft 365 by its client secret.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth2"
+                  }
+                ]
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token endpoint",
+                "kind": "text",
+                "description": "Leave empty for the provider's own. Required for Other.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth2"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "description": "Leave empty for the provider's IMAP scope.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth2"
+                  }
+                ]
               },
               {
                 "key": "mailbox",

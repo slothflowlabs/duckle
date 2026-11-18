@@ -1138,17 +1138,51 @@ pub struct ClipboardSourceSpec {
 
 /// src.email: connect to an IMAP server, select a mailbox, fetch up
 /// to max_messages most recent. Emits {uid, from, to, subject, date,
-/// body_text}. TLS via rustls (default port 993). Basic auth -
-/// OAuth is on the roadmap for gmail / o365.
+/// body_text}. TLS via rustls (default port 993). Signed in with a password,
+/// or with OAuth2 (XOAUTH2), as Gmail and Microsoft 365 take it.
 #[derive(Debug, Clone)]
 pub struct EmailSourceSpec {
     pub node_id: String,
     pub host: String,
     pub port: u16,
     pub user: String,
-    pub password: String,
+    pub auth: EmailAuth,
     pub mailbox: String,
     pub max_messages: u64,
+}
+
+/// How src.email signs in.
+#[derive(Clone)]
+pub enum EmailAuth {
+    Password(String),
+    /// XOAUTH2, with an access token got for each run at `token_url`: by the
+    /// refresh token when there is one (a person's mailbox), else by the client
+    /// credentials grant (an app's access to Microsoft 365 mailboxes).
+    OAuth {
+        token_url: String,
+        client_id: String,
+        client_secret: Option<String>,
+        refresh_token: Option<String>,
+        scope: Option<String>,
+    },
+}
+
+/// By hand, so a log or an error that prints a plan never prints a password, a
+/// client secret or a refresh token.
+impl std::fmt::Debug for EmailAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EmailAuth::Password(_) => f.write_str("Password(***)"),
+            EmailAuth::OAuth { token_url, client_id, refresh_token, scope, .. } => f
+                .debug_struct("OAuth")
+                .field("token_url", token_url)
+                .field("client_id", client_id)
+                .field("client_secret", &"***")
+                .field("refresh_token", &refresh_token.as_ref().map(|_| "***"))
+                .field("scope", scope)
+                .finish(),
+        }
+    }
 }
 
 /// snk.email: per-row SMTP send via lettre. Per-row to/subject/body

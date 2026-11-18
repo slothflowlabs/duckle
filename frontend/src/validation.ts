@@ -2,6 +2,7 @@ import type { Edge, Node } from '@xyflow/react';
 import type { DuckleNodeData } from './pipeline-types';
 import type { RepoItem } from './repo-types';
 import { getManifest } from './workflow-ui/fields/component-manifests';
+import { isFieldVisible } from './workflow-ui/fields/visibility';
 import { contextKeyCollisions } from './run-resolve';
 
 export type ValidationIssue = {
@@ -137,6 +138,8 @@ export function validatePipeline(
         for (const section of manifest.sections) {
             for (const field of section.fields) {
                 if (!field.required) continue;
+                // A field shown only for some choices is asked for only while shown.
+                if (!isFieldVisible(field, manifest, props)) continue;
                 if (hasConnection && CONNECTION_SUPPLIED.has(field.key)) continue;
                 const v = props[field.key];
                 const empty =

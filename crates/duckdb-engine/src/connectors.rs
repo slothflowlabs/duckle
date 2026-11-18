@@ -12882,10 +12882,20 @@ impl DuckdbEngine {
     ) -> Result<String, EngineError> {
         use mail_parser::MessageParser;
         self.check_cancelled()?;
+        // The token first, so a refused sign-in reaches no mail server.
+        let token = match &spec.auth {
+            plan::EmailAuth::OAuth { .. } => Some(email_access_token(&spec.auth)?),
+            plan::EmailAuth::Password(_) => None,
+        };
         let client = imap_connect(&spec.host, spec.port)?;
-        let mut session = client
-            .login(&spec.user, &spec.password)
-            .map_err(|(e, _)| EngineError::Query(format!("imap login: {}", e)))?;
+        let mut session = match (&spec.auth, token) {
+            (plan::EmailAuth::Password(password), _) => client
+                .login(&spec.user, password)
+                .map_err(|(e, _)| EngineError::Query(format!("imap login: {}", e)))?,
+            (_, token) => client
+                .authenticate("XOAUTH2", &XOAuth2 { user: spec.user.clone(), token: token.unwrap_or_default() })
+                .map_err(|(e, _)| EngineError::Query(format!("imap authenticate (XOAUTH2): {}", e)))?,
+        };
         let mailbox = session
             .select(&spec.mailbox)
             .map_err(|e| EngineError::Query(format!("imap select {}: {}", spec.mailbox, e)))?;
@@ -20481,6 +20491,63 @@ type ImapTls = rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream
 ///
 /// Its rule stays: TLS from the first byte on port 993, STARTTLS on any other,
 /// and a server that offers no STARTTLS is refused before the password is sent.
+/// XOAUTH2 as Gmail and Microsoft 365 take it: the user and a bearer token.
+struct XOAuth2 {
+    user: String,
+    token: String,
+}
+
+impl imap::Authenticator for XOAuth2 {
+    type Response = String;
+    fn process(&self, challenge: &[u8]) -> String {
+        // A challenge after the first is the server's refusal, as JSON. An empty
+        // answer ends the exchange, so its NO comes back as the error.
+        if !challenge.is_empty() {
+            return String::new();
+        }
+        format!("user={}\x01auth=Bearer {}\x01\x01", self.user, self.token)
+    }
+}
+
+/// An access token for XOAUTH2: by the refresh token when there is one, else by
+/// the client credentials grant.
+fn email_access_token(auth: &plan::EmailAuth) -> Result<String, EngineError> {
+    let plan::EmailAuth::OAuth { token_url, client_id, client_secret, refresh_token, scope } = auth else {
+        return Err(EngineError::Config("email: not signed in with OAuth2".into()));
+    };
+    let mut form: Vec<(&str, &str)> = vec![("client_id", client_id.as_str())];
+    match refresh_token {
+        Some(token) => form.extend([("grant_type", "refresh_token"), ("refresh_token", token.as_str())]),
+        None => form.push(("grant_type", "client_credentials")),
+    }
+    if let Some(secret) = client_secret {
+        form.push(("client_secret", secret.as_str()));
+    }
+    if let Some(scope) = scope {
+        form.push(("scope", scope.as_str()));
+    }
+    match crate::tls::http_agent().post(token_url).send_form(&form) {
+        Ok(r) => r
+            .into_json::<JsonValue>()
+            .ok()
+            .and_then(|body| body.get("access_token").and_then(JsonValue::as_str).map(str::to_string))
+            .ok_or_else(|| EngineError::Query(format!("email: {token_url} answered without an access token"))),
+        Err(ureq::Error::Status(code, r)) => {
+            let body: JsonValue = r.into_json().unwrap_or_default();
+            // The first line says what is wrong (an expired refresh token, a wrong
+            // secret); trace and timestamp lines follow it.
+            let said = body
+                .get("error_description")
+                .and_then(JsonValue::as_str)
+                .and_then(|d| d.lines().next())
+                .or_else(|| body.get("error").and_then(JsonValue::as_str))
+                .unwrap_or("no reason given");
+            Err(EngineError::Query(format!("email: the sign-in at {token_url} was refused (HTTP {code}): {said}")))
+        }
+        Err(e) => Err(EngineError::Query(format!("email: {token_url}: {e}"))),
+    }
+}
+
 fn imap_connect(host: &str, port: u16) -> Result<imap::Client<ImapTls>, EngineError> {
     let fail = |what: &str, e: &dyn std::fmt::Display| {
         EngineError::Query(format!("imap {what} {host}:{port}: {e}"))

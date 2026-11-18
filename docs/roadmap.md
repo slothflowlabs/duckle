@@ -51,13 +51,14 @@ Corresponding **sinks** are all available too.
 
 ### OAuth-heavy SaaS
 
-| Component | Notes |
-|---|---|
-| `src.excel-online` | Microsoft Graph API + OAuth |
-
 `src.gsheets` shipped without a Google SDK: a service account's key signs a
 JWT (RS256) that is traded for a token on each run, or an API key reads a
-sheet anyone with the link can view.
+sheet anyone with the link can view. `src.excel-online` shipped as an app
+registration (client credentials): Graph's workbook API takes no app-only
+token, so the workbook is downloaded and read as `src.excel` reads one.
+`src.email` signs in with OAuth2 (XOAUTH2) as well as a password: a refresh
+token traded for an access token each run, or an app's client credentials for
+Microsoft 365.
 
 The simple-auth SaaS REST tiles (GitHub, GitLab, Notion, Airtable, Stripe,
 HubSpot, Jira, etc.) ship today through the generic `src.rest` path.
@@ -69,7 +70,6 @@ OAuth-heavy vendors need a stored-credential flow + token-refresh worker.
 |---|---|
 | `src.jdbc` / `snk.jdbc` | Generic JDBC bridges to Java - design question whether to bundle a JVM, ship a separate sidecar, or skip; deferred until a real user need |
 | `src.couchdb` | Standard REST source pattern; not yet wrapped |
-| `src.email` (OAuth) | OAuth-flow IMAP (gmail / o365) - basic-auth IMAP ships today; OAuth needs the credential pattern and a token-refresh worker |
 | `src.sftp` | SFTP read (SSH-based, different protocol from FTP) - separate component, requires russh-sftp or ssh2; not yet shipped |
 | `src.airtable` / `src.notion` etc. | All **available** via the simple-auth REST aliases - see SaaS section in the README |
 

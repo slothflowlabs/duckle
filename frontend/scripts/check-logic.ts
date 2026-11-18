@@ -598,6 +598,33 @@ function context(name: string, vars: Record<string, string>): RepoItem {
 }
 
 // ---------------------------------------------------------------------------
+// A field the form shows only for one choice is asked for only while it is
+// shown. The email source asks for a password, or for an OAuth2 client id, by
+// how it signs in; asking for both refused every email node one way or the other.
+// ---------------------------------------------------------------------------
+{
+    const asked = (props: Record<string, unknown>) =>
+        validatePipeline([node('m', 'src.email', { host: 'imap.example.com', user: 'ops@example.com', ...props })], [])
+            .issues.filter(i => i.code === 'missing-required-field')
+            .map(i => i.message);
+    check(
+        'visibility: a password sign-in is not asked for an OAuth2 client id',
+        asked({ password: 'pw' }).length === 0,
+        `issues: ${JSON.stringify(asked({ password: 'pw' }))}`,
+    );
+    check(
+        'visibility: an OAuth2 sign-in is not asked for a password',
+        asked({ authType: 'oauth2', clientId: 'app' }).length === 0,
+        `issues: ${JSON.stringify(asked({ authType: 'oauth2', clientId: 'app' }))}`,
+    );
+    check(
+        'visibility: each sign-in is still asked for what it shows',
+        asked({}).some(m => m.includes("'Password'")) && asked({ authType: 'oauth2' }).some(m => m.includes("'Client id'")),
+        `issues: ${JSON.stringify([asked({}), asked({ authType: 'oauth2' })])}`,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // SQL names that differ only in case are the same name.
 //
 // A SQL name becomes a DuckDB view, and DuckDB identifiers are case-insensitive:

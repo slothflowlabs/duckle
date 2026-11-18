@@ -7158,6 +7158,118 @@ mod kinesis_source {
     }
 }
 
+/// src.email: how it signs in, worked out before the run.
+mod email_auth {
+    use super::*;
+    use crate::plan::EmailAuth;
+
+    fn auth(extra: serde_json::Value) -> Result<EmailAuth, crate::EngineError> {
+        let mut props = serde_json::json!({ "host": "imap.example.com", "user": "ops@example.com" });
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            props[k] = v;
+        }
+        let doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                {"id":"m","position":{"x":0,"y":0},"data":{"label":"M","componentId":"src.email","properties": props}},
+                {"id":"o","position":{"x":0,"y":0},"data":{"label":"out","componentId":"snk.csv","properties":{"path":"/tmp/o.csv"}}}
+            ],
+            "edges": [{"id":"e","source":"m","target":"o","data":{"connectionType":"main"}}]
+        }))
+        .unwrap();
+        Ok(compile(&doc)?
+            .stages
+            .iter()
+            .find_map(|s| match s.runtime.as_ref() {
+                Some(crate::plan::RuntimeSpec::EmailSource(e)) => Some(e.auth.clone()),
+                _ => None,
+            })
+            .expect("an email read"))
+    }
+
+    fn oauth(extra: serde_json::Value) -> Result<(String, Option<String>), crate::EngineError> {
+        let mut props = serde_json::json!({ "authType": "oauth2", "clientId": "app" });
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            props[k] = v;
+        }
+        match auth(props)? {
+            EmailAuth::OAuth { token_url, scope, .. } => Ok((token_url, scope)),
+            other => panic!("not OAuth: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_password_unless_oauth2_is_chosen() {
+        assert!(matches!(auth(serde_json::json!({ "password": "pw" })).unwrap(), EmailAuth::Password(p) if p == "pw"));
+        assert!(auth(serde_json::json!({})).unwrap_err().to_string().contains("password"));
+        assert!(auth(serde_json::json!({ "authType": "oauth2" })).unwrap_err().to_string().contains("clientId"));
+    }
+
+    /// Google signs a person in by a refresh token at its own token endpoint;
+    /// it signs an app in by a service account, which this does not do.
+    #[test]
+    fn google_takes_a_refresh_token() {
+        assert_eq!(
+            oauth(serde_json::json!({ "oauthProvider": "google", "refreshToken": "r" })).unwrap(),
+            ("https://oauth2.googleapis.com/token".to_string(), None)
+        );
+        let e = oauth(serde_json::json!({ "oauthProvider": "google", "clientSecret": "s" })).unwrap_err().to_string();
+        assert!(e.contains("refresh token"), "{e}");
+    }
+
+    /// Microsoft signs a person in by a refresh token, for the IMAP scope, and an
+    /// app by the client credentials grant, for its tenant.
+    #[test]
+    fn microsoft_takes_a_refresh_token_or_an_app_for_its_tenant() {
+        assert_eq!(
+            oauth(serde_json::json!({ "oauthProvider": "microsoft", "refreshToken": "r" })).unwrap(),
+            (
+                "https://login.microsoftonline.com/common/oauth2/v2.0/token".to_string(),
+                Some("https://outlook.office.com/IMAP.AccessAsUser.All offline_access".to_string())
+            )
+        );
+        assert_eq!(
+            oauth(serde_json::json!({ "oauthProvider": "microsoft", "tenantId": "contoso", "clientSecret": "s" })).unwrap(),
+            (
+                "https://login.microsoftonline.com/contoso/oauth2/v2.0/token".to_string(),
+                Some("https://outlook.office365.com/.default".to_string())
+            )
+        );
+        let e = oauth(serde_json::json!({ "oauthProvider": "microsoft", "clientSecret": "s" })).unwrap_err().to_string();
+        assert!(e.contains("tenant"), "{e}");
+    }
+
+    /// Another provider names its token endpoint; any provider's can be named
+    /// instead, and a scope named is the one asked for.
+    #[test]
+    fn a_token_endpoint_and_scope_can_be_named() {
+        let e = oauth(serde_json::json!({ "oauthProvider": "other", "refreshToken": "r" })).unwrap_err().to_string();
+        assert!(e.contains("tokenUrl"), "{e}");
+        assert_eq!(
+            oauth(serde_json::json!({
+                "oauthProvider": "microsoft", "refreshToken": "r", "tokenUrl": "https://login.microsoftonline.us/t/oauth2/v2.0/token", "scope": "imap",
+            }))
+            .unwrap(),
+            ("https://login.microsoftonline.us/t/oauth2/v2.0/token".to_string(), Some("imap".to_string()))
+        );
+        let e = oauth(serde_json::json!({ "oauthProvider": "other", "tokenUrl": "https://id.example.com/token" })).unwrap_err().to_string();
+        assert!(e.contains("clientSecret"), "{e}");
+    }
+
+    #[test]
+    fn no_secret_prints() {
+        let printed = format!(
+            "{:?} {:?}",
+            auth(serde_json::json!({ "password": "pw-1" })).unwrap(),
+            auth(serde_json::json!({
+                "authType": "oauth2", "clientId": "app", "clientSecret": "cs-1", "refreshToken": "rt-1", "oauthProvider": "google",
+            }))
+            .unwrap()
+        );
+        assert!(!["pw-1", "cs-1", "rt-1"].iter().any(|s| printed.contains(s)), "{printed}");
+        assert!(crate::util::is_secret_prop_key("refreshToken"));
+    }
+}
+
 /// src.grpc: what a call needs, worked out before the run.
 mod grpc_source {
     use super::*;

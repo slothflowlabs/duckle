@@ -875,8 +875,8 @@ COMPONENTS = {
     },
     'src.email': {
         'kind': 'source',
-        'summary': 'Fetch the N most recent messages from an IMAP mailbox. TLS via rustls (default port 993). Basic auth (user/password). Each message becomes a row {uid, from, to, subject, date, body_text}. OAuth (gmail / o365) is on the roadmap.',
-        'params': ['host', 'port', 'user', 'password', 'mailbox', 'maxMessages'],
+        'summary': "Fetch the N most recent messages from an IMAP mailbox. TLS via rustls (default port 993). Signed in with a password, or with OAuth2 (XOAUTH2) as Gmail and Microsoft 365 take it: a refresh token traded for an access token each run, or an app's client credentials for Microsoft 365. Each message bec...",
+        'params': ['host', 'port', 'user', 'authType', 'password', 'oauthProvider', 'tenantId', 'clientId', 'clientSecret', 'refreshToken', 'tokenUrl', 'scope', 'mailbox', 'maxMessages'],
     },
     'src.eventhubs': {
         'kind': 'source',

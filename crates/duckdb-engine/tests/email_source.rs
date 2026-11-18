@@ -135,10 +135,199 @@ fn converse(s: &mut (impl Read + Write), via: &str, log: &Mutex<Vec<String>>) ->
         let line = hear(s)?;
         log.lock().unwrap().push(format!("{via}: {line}"));
         let (tag, command) = split(&line);
+        if command == "AUTHENTICATE" {
+            authenticate(s, &tag, via, log)?;
+            continue;
+        }
         if !answer(s, &tag, &command)? {
             return Ok(());
         }
     }
+}
+
+/// XOAUTH2 as Gmail answers it: an empty challenge, the client's answer (kept,
+/// decoded), then OK for the one token this server knows. Any other gets the
+/// refusal as a JSON challenge, answered empty, then NO.
+fn authenticate(s: &mut (impl Read + Write), tag: &str, via: &str, log: &Mutex<Vec<String>>) -> io::Result<()> {
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    say(s, "+ \r\n")?;
+    let answer = hear(s)?;
+    let sasl = String::from_utf8_lossy(&b64.decode(answer.trim()).unwrap_or_default()).into_owned();
+    log.lock().unwrap().push(format!("{via}: sasl {}", sasl.replace('\x01', "^A")));
+    if sasl.contains("auth=Bearer good-token\x01") {
+        return say(s, &format!("{tag} OK AUTHENTICATE completed\r\n"));
+    }
+    let refusal = b64.encode(r#"{"status":"400","schemes":"Bearer","scope":"https://mail.google.com/"}"#);
+    say(s, &format!("+ {refusal}\r\n"))?;
+    // The client must answer the refusal with an empty line before the NO.
+    if !hear(s)?.is_empty() {
+        return say(s, &format!("{tag} BAD the refusal takes an empty answer\r\n"));
+    }
+    say(s, &format!("{tag} NO [AUTHENTICATIONFAILED] Invalid credentials\r\n"))
+}
+
+/// An OAuth token endpoint on localhost that answers one request with `status`
+/// and `body`, and keeps the form it was sent.
+fn token_endpoint(status: u16, body: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://127.0.0.1:{}/token", listener.local_addr().unwrap().port());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let keep = seen.clone();
+    std::thread::spawn(move || {
+        let Ok((mut tcp, _)) = listener.accept() else { return };
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            if tcp.read(&mut byte).unwrap_or(0) == 0 {
+                return;
+            }
+            head.push(byte[0]);
+        }
+        let head = String::from_utf8_lossy(&head).to_ascii_lowercase();
+        let len: usize = head
+            .lines()
+            .find_map(|l| l.strip_prefix("content-length:"))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
+        let mut form = vec![0u8; len];
+        let _ = tcp.read_exact(&mut form);
+        keep.lock().unwrap().push(String::from_utf8_lossy(&form).into_owned());
+        let reply = format!(
+            "HTTP/1.1 {status} Answer\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = tcp.write_all(reply.as_bytes());
+    });
+    (url, seen)
+}
+
+fn oauth_email(port: u16, out: &str, auth: serde_json::Value) -> PipelineDoc {
+    let mut props = json!({
+        "host": "127.0.0.1", "port": port, "user": "ops@example.com", "mailbox": "INBOX", "authType": "oauth2", "clientId": "app",
+    });
+    for (k, v) in auth.as_object().cloned().unwrap_or_default() {
+        props[k] = v;
+    }
+    serde_json::from_value(json!({
+        "nodes": [
+            { "id": "mail", "position": { "x": 0, "y": 0 },
+              "data": { "label": "mail", "componentId": "src.email", "properties": props } },
+            { "id": "out", "position": { "x": 0, "y": 0 },
+              "data": { "label": "out", "componentId": "snk.csv", "properties": { "path": out, "hasHeader": true } } }
+        ],
+        "edges": [ { "id": "e", "source": "mail", "target": "out", "data": { "connectionType": "main" } } ]
+    }))
+    .unwrap()
+}
+
+/// The form a token request sent, as pairs.
+fn form_of(sent: &Mutex<Vec<String>>) -> std::collections::HashMap<String, String> {
+    let sent = sent.lock().unwrap();
+    url::form_urlencoded::parse(sent.first().expect("a token request").as_bytes()).into_owned().collect()
+}
+
+/// A person's mailbox, signed in to with XOAUTH2: the refresh token traded for
+/// an access token at the token endpoint, then the user and that token as the
+/// server takes them, and no password sent at all.
+#[test]
+fn xoauth2_signs_in_with_the_token_a_refresh_token_gets() {
+    let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = engine() else { return };
+    let (ca_pem, config) = pki();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let log = serve(listener, config, Security::StartTls, 1);
+    let (token_url, sent) = token_endpoint(200, r#"{"access_token":"good-token","token_type":"Bearer","expires_in":3599}"#);
+    let tmp = tempfile::tempdir().unwrap();
+    let ca = tmp.path().join("ca.pem");
+    std::fs::write(&ca, &ca_pem).unwrap();
+    let out = tmp.path().join("mail.csv").to_string_lossy().replace('\\', "/");
+    std::env::set_var("DUCKLE_CA_CERT", &ca);
+    let r = engine.execute_pipeline(&oauth_email(port, &out, json!({
+        "oauthProvider": "other", "tokenUrl": token_url, "clientSecret": "s3cret", "refreshToken": "r-1",
+    })));
+    std::env::remove_var("DUCKLE_CA_CERT");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert!(std::fs::read_to_string(&out).unwrap().contains("Quarterly numbers"));
+    let form = form_of(&sent);
+    for (k, v) in [("grant_type", "refresh_token"), ("refresh_token", "r-1"), ("client_id", "app"), ("client_secret", "s3cret")] {
+        assert_eq!(form.get(k).map(String::as_str), Some(v), "{k} in {form:?}");
+    }
+    let log = log.lock().unwrap();
+    assert!(log.iter().any(|l| l == "tls: sasl user=ops@example.com^Aauth=Bearer good-token^A^A"), "{log:?}");
+    assert!(!log.iter().any(|l| l.contains("LOGIN")), "{log:?}");
+}
+
+/// An app's access to Microsoft 365 mailboxes: no refresh token, so the client
+/// credentials grant, for the scope Exchange Online's IMAP takes.
+#[test]
+fn xoauth2_signs_an_app_in_by_the_client_credentials_grant() {
+    let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = engine() else { return };
+    let (ca_pem, config) = pki();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let _log = serve(listener, config, Security::StartTls, 1);
+    let (token_url, sent) = token_endpoint(200, r#"{"access_token":"good-token","token_type":"Bearer","expires_in":3599}"#);
+    let tmp = tempfile::tempdir().unwrap();
+    let ca = tmp.path().join("ca.pem");
+    std::fs::write(&ca, &ca_pem).unwrap();
+    let out = tmp.path().join("mail.csv").to_string_lossy().replace('\\', "/");
+    std::env::set_var("DUCKLE_CA_CERT", &ca);
+    let r = engine.execute_pipeline(&oauth_email(port, &out, json!({
+        "oauthProvider": "microsoft", "tenantId": "contoso", "tokenUrl": token_url, "clientSecret": "s3cret",
+    })));
+    std::env::remove_var("DUCKLE_CA_CERT");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let form = form_of(&sent);
+    assert_eq!(form.get("grant_type").map(String::as_str), Some("client_credentials"));
+    assert_eq!(form.get("scope").map(String::as_str), Some("https://outlook.office365.com/.default"));
+    assert!(!form.contains_key("refresh_token"), "{form:?}");
+}
+
+/// A refused sign-in says why, by the AADSTS line, without the trace ids after
+/// it; nothing reaches the mail server.
+#[test]
+fn xoauth2_says_why_the_sign_in_was_refused() {
+    let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = engine() else { return };
+    let (token_url, _sent) = token_endpoint(
+        400,
+        r#"{"error":"invalid_grant","error_description":"AADSTS70008: The provided authorization code or refresh token has expired.\r\nTrace ID: 0ab1\r\nTimestamp: 2026-11-18 09:00:00Z"}"#,
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("mail.csv").to_string_lossy().replace('\\', "/");
+    let r = engine.execute_pipeline(&oauth_email(1, &out, json!({
+        "oauthProvider": "other", "tokenUrl": token_url, "refreshToken": "r-1",
+    })));
+    assert_eq!(r.status, "error");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("AADSTS70008") && !e.contains("Trace ID"), "{e}");
+}
+
+/// A token the mail server refuses fails the run, with the server's reason.
+#[test]
+fn xoauth2_reports_the_mail_server_refusing_the_token() {
+    let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = engine() else { return };
+    let (ca_pem, config) = pki();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let _log = serve(listener, config, Security::StartTls, 1);
+    let (token_url, _sent) = token_endpoint(200, r#"{"access_token":"stale-token"}"#);
+    let tmp = tempfile::tempdir().unwrap();
+    let ca = tmp.path().join("ca.pem");
+    std::fs::write(&ca, &ca_pem).unwrap();
+    let out = tmp.path().join("mail.csv").to_string_lossy().replace('\\', "/");
+    std::env::set_var("DUCKLE_CA_CERT", &ca);
+    let r = engine.execute_pipeline(&oauth_email(port, &out, json!({
+        "oauthProvider": "other", "tokenUrl": token_url, "refreshToken": "r-1",
+    })));
+    std::env::remove_var("DUCKLE_CA_CERT");
+    assert_eq!(r.status, "error");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("AUTHENTICATIONFAILED") || e.contains("Invalid credentials"), "{e}");
 }
 
 /// Answer one command. False once the client has logged out.

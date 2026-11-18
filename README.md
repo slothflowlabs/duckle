@@ -3692,7 +3692,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | **Vector / AI databases** | pgvector (postgres ATTACH), Qdrant (`/points/scroll`), Weaviate (`/v1/objects`), Milvus (`/v1/vector/query`), Chroma (HTTP API v2 `/get` by page, on your own server or Chroma Cloud; a collection longer than its pages fails the run rather than reading part of it), Pinecone (a serverless index's namespace: `/vectors/list` a page of ids at a time, then `/vectors/fetch`) | Available |
 | **Vector / AI databases** | LanceDB | Preview |
 | **File transfer** | FTP / FTPS (pure-Rust `suppaftp`) and SFTP (SSH, pure-Rust `russh` + `russh-sftp` on the ring backend; password or private-key auth) - one File Transfer component, pick the protocol. Glob filter, base64 content per file. **Host keys are verified**: pin a SHA256 fingerprint to accept only that key, or leave it empty and the first key seen for a host is recorded in `<workspace>/.duckle/known_hosts`, after which a different key is refused. A host that presents an OpenSSH certificate is accepted only when it certifies the key you pinned. `DUCKLE_SFTP_HOST_KEY_POLICY=accept-any` opts out for a host whose key changes per connection | Available |
-| **Mailbox** | IMAP (`mail-parser`) over Duckle's own TLS, so it trusts what the HTTP connectors trust, `DUCKLE_CA_CERT` included. TLS from the start on port 993, STARTTLS on any other, and a server that offers no STARTTLS is refused before the password is sent. Basic auth today, OAuth (gmail / o365) on the roadmap | Available |
+| **Mailbox** | IMAP (`mail-parser`) over Duckle's own TLS, so it trusts what the HTTP connectors trust, `DUCKLE_CA_CERT` included. TLS from the start on port 993, STARTTLS on any other, and a server that offers no STARTTLS is refused before the password is sent. Signed in with a password, or with OAuth2 (XOAUTH2) as Gmail and Microsoft 365 take it: a refresh token traded for an access token each run, or, for Microsoft 365, an app's client credentials | Available |
 | **Webhook listener** | Binds `127.0.0.1:port`, collects N inbound HTTP requests with a timeout, parses JSON-object / JSON-array bodies into rows | Available |
 | **Desktop** | System clipboard (pure-Rust `arboard`, auto-detects JSON-array shape) | Available |
 | **Repos** | Git (commit log or file tree from a local working copy; shells out to system `git` CLI) | Available |
@@ -5063,7 +5063,7 @@ A complete planned-component breakdown lives in [`docs/roadmap.md`](docs/roadmap
 - [x] **Pulsar** streaming (shipped - over Pulsar's WebSocket API, so no `protoc`)
 - [ ] **Apache ORC** read / write (blocked on the Arrow version conflict between `orc-rust` and our workspace pin)
 - [x] **SFTP** source (shipped - `russh` + `russh-sftp` on the ring backend, password / key auth, host-fingerprint pin)
-- [ ] **OAuth-heavy SaaS** (full Salesforce OAuth, Gmail / O365 IMAP)
+- [ ] **OAuth-heavy SaaS** (full Salesforce OAuth)
 - [ ] **Embedded Python / Rust** code stages (current code.* family: SQL, Shell, JavaScript, WebAssembly all ship)
 - [ ] **Hosted documentation site**
 - [ ] **Plugin marketplace** via the connector SDK

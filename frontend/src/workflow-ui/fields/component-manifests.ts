@@ -1751,6 +1751,7 @@ const CREDENTIAL_KEYS = new Set([
     // A Google service account's key file, private key and all.
     'serviceAccountKey',
     'clientSecret',
+    'refreshToken',
     'privateKey',
     'connectionString',
     // The PostgreSQL / MySQL family's whole DSN, password and all.
