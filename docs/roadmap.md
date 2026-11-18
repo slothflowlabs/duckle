@@ -6,7 +6,7 @@ reel; this is the full ledger.
 
 The palette currently carries **427 components**, broken down:
 
-- **419 available** - executes on the DuckDB engine today
+- **420 available** - executes on the DuckDB engine today
 - **3 preview** - configurable in the designer (drag, wire, set
   properties); execution is being wired engine-by-engine
 - **11 planned** - reserved in the palette so the roadmap is visible,
@@ -139,12 +139,6 @@ What remains on this list is SAML alone.
 | Capability | Notes |
 |---|---|
 | `auth.saml` | SAML 2.0 Web Browser SSO. Not planned: every provider this would target (Entra ID, Okta, Google Workspace, Ping, Auth0, Keycloak) speaks OIDC natively, and OIDC is the smaller attack surface. A deployment that must use SAML can terminate it in a SAML-to-OIDC gateway. |
-
-### Other
-
-| Component | Notes |
-|---|---|
-| `src.grpc` | Protobuf parsing + per-service tonic codegen; non-trivial |
 
 ---
 

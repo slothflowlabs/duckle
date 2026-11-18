@@ -7158,6 +7158,74 @@ mod kinesis_source {
     }
 }
 
+/// src.grpc: what a call needs, worked out before the run.
+mod grpc_source {
+    use super::*;
+
+    fn spec(props: serde_json::Value) -> Result<crate::plan::GrpcSourceSpec, crate::EngineError> {
+        let doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                {"id":"g","position":{"x":0,"y":0},"data":{"label":"G","componentId":"src.grpc","properties": props}},
+                {"id":"o","position":{"x":0,"y":0},"data":{"label":"out","componentId":"snk.csv","properties":{"path":"/tmp/o.csv"}}}
+            ],
+            "edges": [{"id":"e","source":"g","target":"o","data":{"connectionType":"main"}}]
+        }))
+        .unwrap();
+        Ok(compile(&doc)?
+            .stages
+            .iter()
+            .find_map(|s| match s.runtime.as_ref() {
+                Some(crate::plan::RuntimeSpec::GrpcSource(g)) => Some(g.clone()),
+                _ => None,
+            })
+            .expect("a gRPC call"))
+    }
+
+    /// A method named as grpcurl takes one, with a slash or a dot before the
+    /// method's own name.
+    #[test]
+    fn a_method_is_named_service_then_method() {
+        for method in ["grpc.health.v1.Health/Check", "grpc.health.v1.Health.Check"] {
+            let s = spec(serde_json::json!({ "endpoint": "http://h:50051", "method": method })).unwrap();
+            assert_eq!((s.service.as_str(), s.method.as_str()), ("grpc.health.v1.Health", "Check"), "{method}");
+        }
+        let e = spec(serde_json::json!({ "endpoint": "http://h:50051", "method": "Check" })).unwrap_err().to_string();
+        assert!(e.contains("method"), "{e}");
+    }
+
+    #[test]
+    fn the_endpoint_is_an_http_address() {
+        let s = spec(serde_json::json!({ "endpoint": "https://h:443/", "method": "a.B/C" })).unwrap();
+        assert_eq!(s.endpoint, "https://h:443");
+        let e = spec(serde_json::json!({ "endpoint": "h:50051", "method": "a.B/C" })).unwrap_err().to_string();
+        assert!(e.contains("endpoint"), "{e}");
+    }
+
+    /// The request is a JSON object, checked before the run; none is an empty one.
+    #[test]
+    fn the_request_is_a_json_object() {
+        let s = spec(serde_json::json!({ "endpoint": "http://h:1", "method": "a.B/C" })).unwrap();
+        assert_eq!(s.request, serde_json::json!({}));
+        let s = spec(serde_json::json!({ "endpoint": "http://h:1", "method": "a.B/C", "request": r#"{"service": "x"}"# })).unwrap();
+        assert_eq!(s.request, serde_json::json!({ "service": "x" }));
+        for bad in ["{service", "[1]"] {
+            let e = spec(serde_json::json!({ "endpoint": "http://h:1", "method": "a.B/C", "request": bad })).unwrap_err().to_string();
+            assert!(e.contains("request"), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn a_metadata_value_never_prints() {
+        let s = spec(serde_json::json!({
+            "endpoint": "http://h:1", "method": "a.B/C",
+            "headers": [{ "key": "authorization", "value": "Bearer t0k3n" }],
+        }))
+        .unwrap();
+        assert_eq!(s.metadata, vec![("authorization".to_string(), "Bearer t0k3n".to_string())]);
+        assert!(!format!("{s:?}").contains("t0k3n"));
+    }
+}
+
 /// src.pinecone: where the index is and how its records are read, worked out
 /// before the run.
 mod pinecone_source {

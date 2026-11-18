@@ -12011,6 +12011,156 @@ fn kinesis_writes_and_reads_back_every_shard_of_a_live_stream() {
     );
 }
 
+/// A gRPC server on localhost for the src.grpc tests: the health service, with
+/// reflection, one service ("demo.Orders") not serving, and calls refused
+/// unless they carry `authorization: Bearer let-me-in`. Runs until the test ends.
+fn grpc_server() -> String {
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap().block_on(async move {
+            let (reporter, health) = tonic_health::server::health_reporter();
+            reporter.set_service_status("demo.Orders", tonic_health::ServingStatus::NotServing).await;
+            reporter.set_service_status("demo.Unknown", tonic_health::ServingStatus::Unknown).await;
+            let reflection = tonic_reflection::server::Builder::configure()
+                .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
+                .build_v1()
+                .unwrap();
+            let gate = |req: tonic::Request<()>| match req.metadata().get("authorization") {
+                Some(v) if v == "Bearer let-me-in" => Ok(req),
+                _ => Err(tonic::Status::unauthenticated("no token")),
+            };
+            let health = tonic::service::interceptor::InterceptedService::new(health, gate);
+            let addr = format!("127.0.0.1:{port}").parse().unwrap();
+            let _ = ready_tx.send(());
+            tonic::transport::Server::builder().add_service(health).add_service(reflection).serve(addr).await.unwrap();
+        });
+    });
+    ready_rx.recv().unwrap();
+    let url = format!("http://127.0.0.1:{port}");
+    for _ in 0..50 {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    url
+}
+
+fn grpc_call(endpoint: &str, extra: serde_json::Value) -> serde_json::Value {
+    let mut props = json!({
+        "endpoint": endpoint,
+        // Capitalized as an HTTP header often is; gRPC takes metadata keys in lower case.
+        "headers": [{ "key": "Authorization", "value": "Bearer let-me-in" }],
+    });
+    for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+        props[k] = v;
+    }
+    node("g", "src.grpc", props)
+}
+
+/// Runs a src.grpc node and gives back its rows, or the run's error.
+fn grpc_rows(engine: &duckle_duckdb_engine::DuckdbEngine, call: serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "rows.jsonl");
+    let r = engine.execute_pipeline(&doc(
+        json!([call, node("o", "snk.jsonl", json!({ "path": &out }))]),
+        json!([main_edge("e", "g", "o")]),
+    ));
+    if r.status != "ok" {
+        return Err(r.error.unwrap_or_default());
+    }
+    Ok(duckdb_json(&format!("SELECT * FROM read_json_auto('{}')", out)))
+}
+
+/// src.grpc asks the server's reflection for the method, builds the request
+/// from JSON, and makes the call: a unary method's one response is one row,
+/// enum values by their names and fields by their proto names.
+#[test]
+fn src_grpc_calls_a_method_the_server_reflects() {
+    let engine = engine_or_skip!();
+    let url = grpc_server();
+    let all = grpc_rows(&engine, grpc_call(&url, json!({ "method": "grpc.health.v1.Health/Check" }))).unwrap();
+    assert_eq!(all, vec![json!({ "status": "SERVING" })]);
+    let one = grpc_rows(&engine, grpc_call(&url, json!({
+        "method": "grpc.health.v1.Health.Check", "request": r#"{"service": "demo.Orders"}"#,
+    })))
+    .unwrap();
+    assert_eq!(one, vec![json!({ "status": "NOT_SERVING" })]);
+    // A field at its default value (UNKNOWN is 0) is still a column.
+    let unknown = grpc_rows(&engine, grpc_call(&url, json!({
+        "method": "grpc.health.v1.Health/Check", "request": r#"{"service": "demo.Unknown"}"#,
+    })))
+    .unwrap();
+    assert_eq!(unknown, vec![json!({ "status": "UNKNOWN" })]);
+}
+
+/// A server-streaming method's responses are rows, up to Max messages.
+#[test]
+fn src_grpc_reads_a_server_stream_up_to_its_limit() {
+    let engine = engine_or_skip!();
+    let url = grpc_server();
+    // Watch sends the status, then waits for it to change: the read ends at Max
+    // messages rather than sitting out the idle timeout.
+    let started = std::time::Instant::now();
+    let watched = grpc_rows(&engine, grpc_call(&url, json!({
+        "method": "grpc.health.v1.Health/Watch", "maxRecords": 1, "timeoutMs": 30000,
+    })))
+    .unwrap();
+    assert_eq!(watched, vec![json!({ "status": "SERVING" })]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(15), "{:?}", started.elapsed());
+}
+
+/// The metadata is sent with the call: without its token the server refuses,
+/// and the error says how, in gRPC's own terms.
+#[test]
+fn src_grpc_sends_its_metadata_and_says_why_a_call_failed() {
+    let engine = engine_or_skip!();
+    let url = grpc_server();
+    let e = grpc_rows(&engine, grpc_call(&url, json!({ "method": "grpc.health.v1.Health/Check", "headers": [] }))).unwrap_err();
+    assert!(e.contains("Unauthenticated") && e.contains("no token"), "{e}");
+    let e = grpc_rows(&engine, grpc_call(&url, json!({
+        "method": "grpc.health.v1.Health/Check", "request": r#"{"service": "nowhere"}"#,
+    })))
+    .unwrap_err();
+    assert!(e.contains("NotFound"), "{e}");
+}
+
+/// A server that takes the connection and never answers fails the run within
+/// the timeout, rather than holding the pipeline for ever.
+#[test]
+fn src_grpc_gives_up_on_a_server_that_never_answers() {
+    let engine = engine_or_skip!();
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://127.0.0.1:{}", silent.local_addr().unwrap().port());
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for conn in silent.incoming().flatten() {
+            held.push(conn); // kept open, never written to
+        }
+    });
+    let (done, finished) = std::sync::mpsc::channel();
+    let started = std::time::Instant::now();
+    std::thread::spawn(move || {
+        let _ = done.send(grpc_rows(&engine, grpc_call(&url, json!({
+            "method": "grpc.health.v1.Health/Check", "timeoutMs": 1500,
+        }))));
+    });
+    let outcome = finished.recv_timeout(std::time::Duration::from_secs(60)).expect("the run still waiting after 60 s");
+    let e = outcome.unwrap_err();
+    assert!(e.contains("no answer within 1500 ms"), "{e}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(30), "{:?}", started.elapsed());
+}
+
+/// A method the service does not have is named, with the ones it does.
+#[test]
+fn src_grpc_names_the_methods_a_service_has() {
+    let engine = engine_or_skip!();
+    let url = grpc_server();
+    let e = grpc_rows(&engine, grpc_call(&url, json!({ "method": "grpc.health.v1.Health/Ping" }))).unwrap_err();
+    assert!(e.contains("Ping") && e.contains("Check") && e.contains("Watch"), "{e}");
+}
+
 /// src.pinecone sends its key and the API version it is written for on every
 /// call, asks for ids as they are (escaped in the query), and a metadata key
 /// named id does not take the record's place.

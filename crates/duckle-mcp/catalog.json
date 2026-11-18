@@ -12296,8 +12296,8 @@
       "id": "src.grpc",
       "label": "gRPC",
       "kind": "source",
-      "availability": "planned",
-      "summary": "",
+      "availability": "available",
+      "summary": "Call one method of a gRPC server through its reflection, so no .proto file or protoc: the request as JSON, each response a row, enum values by name. A server-streaming method is read up to Max messages or until it goes quiet. Metadata goes with the call.",
       "category": "Sources",
       "group": "APIs",
       "ports": {
@@ -12314,367 +12314,60 @@
         "id": "src.grpc",
         "kind": "source",
         "label": "gRPC",
-        "description": "Reads data from gRPC.",
+        "description": "Call one method of a gRPC server through its reflection, so no .proto file or protoc: the request as JSON, each response a row, enum values by name. A server-streaming method is read up to Max messages or until it goes quiet. Metadata goes with the call.",
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Request",
+            "label": "gRPC",
             "fields": [
               {
-                "key": "url",
-                "label": "URL",
+                "key": "endpoint",
+                "label": "Endpoint",
                 "kind": "text",
                 "required": true,
-                "placeholder": "https://api.example.com/v1/resource"
+                "placeholder": "http://localhost:50051",
+                "description": "http:// or https://, then host and port. The server must offer reflection."
               },
               {
                 "key": "method",
                 "label": "Method",
-                "kind": "select",
-                "defaultValue": "GET",
-                "options": [
-                  {
-                    "label": "GET",
-                    "value": "GET"
-                  },
-                  {
-                    "label": "POST",
-                    "value": "POST"
-                  },
-                  {
-                    "label": "PUT",
-                    "value": "PUT"
-                  },
-                  {
-                    "label": "DELETE",
-                    "value": "DELETE"
-                  }
-                ]
+                "kind": "text",
+                "required": true,
+                "placeholder": "grpc.health.v1.Health/Check",
+                "description": "The service's full name, then a slash or a dot, then the method, as grpcurl takes it."
               },
               {
-                "key": "body",
-                "label": "Request body",
+                "key": "request",
+                "label": "Request (JSON)",
                 "kind": "textarea",
                 "rows": 4,
-                "description": "Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one."
+                "placeholder": "{\"service\": \"\"}",
+                "description": "The request message as JSON. Leave empty for an empty message."
               },
               {
                 "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
+                "label": "Metadata",
+                "kind": "key-value",
+                "description": "Sent with the call, an authorization token say."
               }
             ]
           },
           {
-            "label": "Auth",
+            "label": "Limits",
             "fields": [
               {
-                "key": "connectionRef",
-                "label": "Saved connection",
-                "kind": "connection-ref",
-                "accepts": [
-                  "rest"
-                ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
-              },
-              {
-                "key": "transportRef",
-                "label": "HTTP transport",
-                "kind": "connection-ref",
-                "accepts": [
-                  "http"
-                ],
-                "description": "Pick a saved HTTP transport to apply a proxy, timeouts, a User-Agent, a request pace and cookie keeping without setting them on every node. Anything you set here on the node wins over the connection."
-              },
-              {
-                "key": "authType",
-                "label": "Auth type",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Bearer token",
-                    "value": "bearer"
-                  },
-                  {
-                    "label": "API key (header)",
-                    "value": "apikey"
-                  },
-                  {
-                    "label": "Basic (user:password)",
-                    "value": "basic"
-                  },
-                  {
-                    "label": "OAuth 2.0 Client Credentials (mint per run)",
-                    "value": "oauth_client_credentials"
-                  }
-                ]
-              },
-              {
-                "key": "authToken",
-                "label": "Token / API key",
-                "kind": "text",
-                "placeholder": "••••••••",
-                "description": "Bearer: the token. API key: the key. Basic: user:password, which is base64-encoded for you, so do not paste an already-encoded value. Use ${ENV:...} to keep the secret out of the pipeline JSON.",
-                "secret": true
-              },
-              {
-                "key": "authHeader",
-                "label": "API key header",
-                "kind": "text",
-                "placeholder": "X-API-Key",
-                "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
-              },
-              {
-                "key": "tokenUrl",
-                "label": "Token URL",
-                "kind": "text",
-                "placeholder": "https://identity.xero.com/connect/token",
-                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
-                "visibleWhen": [
-                  {
-                    "key": "authType",
-                    "equals": "oauth_client_credentials"
-                  }
-                ]
-              },
-              {
-                "key": "clientId",
-                "label": "Client ID",
-                "kind": "text",
-                "visibleWhen": [
-                  {
-                    "key": "authType",
-                    "equals": "oauth_client_credentials"
-                  }
-                ]
-              },
-              {
-                "key": "clientSecret",
-                "label": "Client secret",
-                "kind": "text",
-                "secret": true,
-                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
-                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
-                "visibleWhen": [
-                  {
-                    "key": "authType",
-                    "equals": "oauth_client_credentials"
-                  }
-                ]
-              },
-              {
-                "key": "clientAuth",
-                "label": "Client authentication",
-                "kind": "select",
-                "defaultValue": "body",
-                "options": [
-                  {
-                    "label": "Credentials in POST body",
-                    "value": "body"
-                  },
-                  {
-                    "label": "HTTP Basic header",
-                    "value": "basic"
-                  }
-                ],
-                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
-                "visibleWhen": [
-                  {
-                    "key": "authType",
-                    "equals": "oauth_client_credentials"
-                  }
-                ]
-              },
-              {
-                "key": "scope",
-                "label": "Scope",
-                "kind": "text",
-                "placeholder": "accounting.transactions",
-                "description": "Optional scope form field, required by some providers.",
-                "visibleWhen": [
-                  {
-                    "key": "authType",
-                    "equals": "oauth_client_credentials"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "label": "Response",
-            "fields": [
-              {
-                "key": "responseFormat",
-                "label": "Response format",
-                "kind": "select",
-                "defaultValue": "json",
-                "options": [
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "XML",
-                    "value": "xml"
-                  },
-                  {
-                    "label": "Server-sent events",
-                    "value": "sse"
-                  }
-                ],
-                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
-              },
-              {
-                "key": "responsePath",
-                "label": "Records JSON pointer",
-                "kind": "text",
-                "placeholder": "/data",
-                "description": "RFC 6901 JSON pointer to the array of row objects in the response. Leave empty if the response root IS the array."
-              },
-              {
-                "key": "jsonPath",
-                "label": "Records JSONPath (legacy)",
-                "kind": "text",
-                "placeholder": "$.data[*]",
-                "description": "JSONPath form for compatibility with older pipelines. Prefer the JSON pointer above."
-              }
-            ]
-          },
-          {
-            "label": "Pagination",
-            "fields": [
-              {
-                "key": "paginationType",
-                "label": "Style",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None (single-shot fetch)",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Cursor (token in response body)",
-                    "value": "cursor"
-                  },
-                  {
-                    "label": "Offset / limit",
-                    "value": "offset"
-                  },
-                  {
-                    "label": "Page number",
-                    "value": "page"
-                  },
-                  {
-                    "label": "RFC 5988 Link header (rel=\"next\")",
-                    "value": "link"
-                  },
-                  {
-                    "label": "Next-link in the response body (OData)",
-                    "value": "nextUrl"
-                  }
-                ]
-              },
-              {
-                "key": "nextUrlPath",
-                "label": "Next-link JSON pointer (next-link style)",
-                "kind": "text",
-                "placeholder": "/@odata.nextLink",
-                "description": "RFC 6901 JSON pointer to the field holding the full URL of the next page. Blank uses /@odata.nextLink for OData sources, /d/__next for SAP OData v2, and /next otherwise.",
-                "visibleWhen": [
-                  {
-                    "key": "paginationType",
-                    "equals": "nextUrl"
-                  }
-                ]
-              },
-              {
-                "key": "cursorNextPath",
-                "label": "Cursor JSON pointer (cursor style)",
-                "kind": "text",
-                "placeholder": "/meta/next_cursor"
-              },
-              {
-                "key": "cursorParam",
-                "label": "Cursor query parameter (cursor style)",
-                "kind": "text",
-                "placeholder": "cursor"
-              },
-              {
-                "key": "offsetParam",
-                "label": "Offset query parameter (offset style)",
-                "kind": "text",
-                "placeholder": "offset"
-              },
-              {
-                "key": "pageSize",
-                "label": "Page size (offset style)",
+                "key": "maxRecords",
+                "label": "Max messages",
                 "kind": "integer",
-                "defaultValue": 100
+                "defaultValue": 1000,
+                "description": "For a server-streaming method: at most this many responses."
               },
               {
-                "key": "totalCountPath",
-                "label": "Total-count JSON pointer (offset style)",
-                "kind": "text",
-                "placeholder": "/total_count",
-                "description": "Optional. JSON pointer to a total-row count in the response (e.g. /total_count for Redmine). When set, offset paging stops once offset + page size reaches the total, instead of relying on a short page."
-              },
-              {
-                "key": "hasMorePath",
-                "label": "More-pages flag JSON pointer (offset and page styles)",
-                "kind": "text",
-                "placeholder": "/data/pagination/hasMore",
-                "description": "Optional. JSON pointer to a true/false in each response saying whether another page exists. When set, paging goes on while it is true and stops when it is false, instead of stopping on an empty page (page style) or a short one (offset style, where the next offset then counts the rows returned). The node fails if it is missing or not true/false."
-              },
-              {
-                "key": "pageParam",
-                "label": "Page query parameter (page style)",
-                "kind": "text",
-                "placeholder": "page"
-              },
-              {
-                "key": "startPage",
-                "label": "Start page (page style)",
+                "key": "timeoutMs",
+                "label": "Timeout (ms)",
                 "kind": "integer",
-                "defaultValue": 1
-              },
-              {
-                "key": "maxPages",
-                "label": "Max pages (safety cap)",
-                "kind": "integer",
-                "defaultValue": 100
-              },
-              {
-                "key": "incrementalField",
-                "label": "Incremental field",
-                "kind": "text",
-                "placeholder": "updated_at",
-                "description": "A field of each returned record (or a /pointer/into/it) whose highest value becomes the mark for the next run. Put {incremental} in the URL, a query parameter, the body or a header and the saved mark is substituted there before the request goes out. Filtering after the fetch is not incremental for an API - you still pay for the whole dataset every run - so the cursor has to reach the request. Set the response path to the record array, not the response envelope, or there is nothing to read the mark off. Leave blank for no incremental state."
-              },
-              {
-                "key": "incrementalInitial",
-                "label": "Incremental starting value",
-                "kind": "text",
-                "placeholder": "1970-01-01",
-                "description": "What {incremental} is on the very first run, before a mark has been saved. Blank is a real choice for an API that reads an empty cursor as \"from the beginning\". The mark is saved only when the whole pipeline succeeds, and only when it moved forward."
-              },
-              {
-                "key": "responseMetadata",
-                "label": "Add response metadata",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "Stamp every row with where it came from: _http_url (the exact URL fetched, per page), _http_status, _fetched_at, _response_content_type, _response_etag, _response_last_modified, _response_sha256 and _page_number. Parsed rows alone cannot tell you whether something changed because the source changed or because the parser did - the response hash can."
-              },
-              {
-                "key": "rawResponseDestination",
-                "label": "Keep the original response at",
-                "kind": "text",
-                "description": "A path to write each response body to BEFORE parsing - local, or s3:// using the object-storage connection on this node, so a later question about the source can be answered from the bytes rather than argued about. Put {sha256} in the path and the file is named after its own content: a changed body becomes a new file and an unchanged one rewrites the same file. Naming it after the URL instead would be unsafe, because a URL is a name that can be rebound - the old body would silently be kept when the resource changed. {date} is also substituted. Leave blank to capture nothing."
+                "defaultValue": 30000,
+                "description": "How long to wait for an answer: connecting, a unary response, or the next message of a stream. A stream that goes quiet this long ends the read."
               }
             ]
           }

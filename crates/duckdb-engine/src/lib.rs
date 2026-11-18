@@ -101,6 +101,7 @@ mod excel_online;
 mod chroma;
 mod pulsar;
 mod pinecone;
+mod grpc;
 pub use connectors::remote_fingerprint;
 mod run_log;
 mod util;
@@ -2811,6 +2812,7 @@ impl DuckdbEngine {
                     }
                     Some(RuntimeSpec::PulsarSink(spec)) => self.run_pulsar_sink(&db_path, spec),
                     Some(RuntimeSpec::PineconeSource(spec)) => self.run_pinecone_source(&db_path, spec),
+                    Some(RuntimeSpec::GrpcSource(spec)) => self.run_grpc_source(&db_path, spec),
                     Some(RuntimeSpec::ClickhouseSink(spec)) => {
                         self.run_clickhouse_sink(&db_path, spec)
                     }

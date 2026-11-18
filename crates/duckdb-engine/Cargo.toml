@@ -238,6 +238,11 @@ parquet = { workspace = true }
 arrow-flight = "59"
 tonic = { version = "0.14", features = ["transport", "tls-ring", "tls-native-roots"] }
 prost = "0.14"
+# src.grpc: the reflection protocol's client (no server side), and messages
+# built from the descriptors a server reflects, to and from JSON. Both ship
+# their generated code, so neither needs protoc.
+tonic-reflection = { version = "0.14", default-features = false }
+prost-reflect = { version = "0.16", features = ["serde"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 
 # Linux-only: on top of the base odbc-sys above, request its `static` /
@@ -275,6 +280,9 @@ required-features = ["oracle"]
 
 [dev-dependencies]
 tempfile = "3.10"
+# A real gRPC server for the src.grpc tests: the health service, reflected.
+tonic-health = "0.14"
+tonic-reflection = "0.14"
 # Re-imported as dev-deps so the integration tests can BUILD the archives they
 # then read back through xf.archive.extract. Same versions as the lib deps.
 zip = { version = "9", default-features = false, features = ["deflate"] }

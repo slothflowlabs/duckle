@@ -1403,6 +1403,44 @@ impl std::fmt::Debug for PineconeSourceSpec {
     }
 }
 
+/// src.grpc: one call to a gRPC method, found through the server's reflection,
+/// so no .proto file is needed: the request as JSON, each response a row.
+#[derive(Clone)]
+pub struct GrpcSourceSpec {
+    pub node_id: String,
+    /// http:// or https://, then host and port.
+    pub endpoint: String,
+    /// The service's full name (package.Service), and the method's.
+    pub service: String,
+    pub method: String,
+    /// The request message, as JSON.
+    pub request: serde_json::Value,
+    /// Metadata sent with the call, an authorization token say.
+    pub metadata: Vec<(String, String)>,
+    /// For a server-streaming method: at most this many responses.
+    pub max_messages: u64,
+    /// How long to wait for an answer: to connect, from the reflection, for a
+    /// unary response, and for each next message of a stream.
+    pub timeout_ms: u64,
+}
+
+/// By hand, so a log or an error that prints a plan never prints a metadata
+/// value, which can be a token.
+impl std::fmt::Debug for GrpcSourceSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GrpcSourceSpec")
+            .field("node_id", &self.node_id)
+            .field("endpoint", &self.endpoint)
+            .field("service", &self.service)
+            .field("method", &self.method)
+            .field("request", &self.request)
+            .field("metadata", &self.metadata.iter().map(|(k, _)| (k.as_str(), "***")).collect::<Vec<_>>())
+            .field("max_messages", &self.max_messages)
+            .field("timeout_ms", &self.timeout_ms)
+            .finish()
+    }
+}
+
 /// src.webhook: bind 127.0.0.1:port, accept up to `max_requests`
 /// inbound HTTP requests with a global `timeout_ms` deadline, parse
 /// each request body as JSON (or fall back to a {body, method, path,

@@ -948,6 +948,11 @@ COMPONENTS = {
         'summary': 'POST a GraphQL query to an endpoint and walk the response data path. Rides snk.rest/src.rest infrastructure; auth via Bearer / API-Key.',
         'params': ['url', 'query', 'variables', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responsePath', 'jsonPath', 'cursorNextPath', 'hasMorePath', 'cursorVariable', 'maxPages', 'incrementalField', 'incrementalInitial', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs', 'httpRequestsPerSecond', 'httpKeepCookies'],
     },
+    'src.grpc': {
+        'kind': 'source',
+        'summary': 'Call one method of a gRPC server through its reflection, so no .proto file or protoc: the request as JSON, each response a row, enum values by name. A server-streaming method is read up to Max messages or until it goes quiet. Metadata goes with the call.',
+        'params': ['endpoint', 'method', 'request', 'headers', 'maxRecords', 'timeoutMs'],
+    },
     'src.gsheets': {
         'kind': 'source',
         'summary': 'Read a range of a Google Sheet as rows through the Sheets API: values as they are (numbers, true/false), not as formatted. The first row names the columns. Sign in with a service account key, with the sheet shared with its email, or with an API key for a sheet anyone with the link can view.',

@@ -10756,6 +10756,27 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
             },
         ]);
     }
+    // src.grpc: keys mirror GrpcSourceSpec's parse in plan/mod.rs.
+    if (comp.id === 'src.grpc') {
+        return base(comp, [
+            {
+                label: 'gRPC',
+                fields: [
+                    { key: 'endpoint', label: 'Endpoint', kind: 'text', required: true, placeholder: 'http://localhost:50051', description: 'http:// or https://, then host and port. The server must offer reflection.' },
+                    { key: 'method', label: 'Method', kind: 'text', required: true, placeholder: 'grpc.health.v1.Health/Check', description: 'The service\'s full name, then a slash or a dot, then the method, as grpcurl takes it.' },
+                    { key: 'request', label: 'Request (JSON)', kind: 'textarea', rows: 4, placeholder: '{"service": ""}', description: 'The request message as JSON. Leave empty for an empty message.' },
+                    { key: 'headers', label: 'Metadata', kind: 'key-value', description: 'Sent with the call, an authorization token say.' },
+                ],
+            },
+            {
+                label: 'Limits',
+                fields: [
+                    { key: 'maxRecords', label: 'Max messages', kind: 'integer', defaultValue: 1000, description: 'For a server-streaming method: at most this many responses.' },
+                    { key: 'timeoutMs', label: 'Timeout (ms)', kind: 'integer', defaultValue: 30000, description: 'How long to wait for an answer: connecting, a unary response, or the next message of a stream. A stream that goes quiet this long ends the read.' },
+                ],
+            },
+        ]);
+    }
     // src.gsheets sits in a saas.* group, which draws the REST form, and reads
     // none of it. Keys mirror GSheetsSourceSpec's parse in plan/mod.rs.
     if (comp.id === 'src.gsheets') {

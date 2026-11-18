@@ -696,6 +696,7 @@ pub enum RuntimeSpec {
     PulsarSource(PulsarSourceSpec),
     PulsarSink(PulsarSinkSpec),
     PineconeSource(PineconeSourceSpec),
+    GrpcSource(GrpcSourceSpec),
     SharePointSink(SharePointSinkSpec),
     AttachParquetSource(AttachParquetSourceSpec),
     /// materialize = "duckdb"/"duckdbfile": persist the stage into a DuckDB file.
@@ -2317,6 +2318,7 @@ fn build_stage(
     let mut pulsar_source: Option<PulsarSourceSpec> = None;
     let mut pulsar_sink: Option<PulsarSinkSpec> = None;
     let mut pinecone_source: Option<PineconeSourceSpec> = None;
+    let mut grpc_source: Option<GrpcSourceSpec> = None;
     let mut weaviate_source: Option<WeaviateSourceSpec> = None;
     let mut milvus_source: Option<MilvusSourceSpec> = None;
     let mut format_source: Option<FormatFileSourceSpec> = None;
@@ -5854,6 +5856,41 @@ fn build_stage(
             track_position: props.get("trackOffset").and_then(JsonValue::as_bool).unwrap_or(false),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.grpc" {
+        let text = |key: &str| string_prop(&props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let endpoint = text("endpoint")
+            .map(|s| s.trim_end_matches('/').to_string())
+            .filter(|s| s.starts_with("http://") || s.starts_with("https://"))
+            .ok_or_else(|| {
+                EngineError::Config(format!("{}: endpoint required, http:// or https:// then host and port", component_id))
+            })?;
+        // As grpcurl takes it: the service's full name, then a slash or a dot,
+        // then the method's own name.
+        let method = text("method").unwrap_or_default();
+        let (service, name) = method
+            .rsplit_once('/')
+            .or_else(|| method.rsplit_once('.'))
+            .filter(|(s, m)| !s.is_empty() && !m.is_empty() && s.contains('.'))
+            .ok_or_else(|| EngineError::Config(format!("{}: method {method:?} is not package.Service/Method", component_id)))?;
+        let request = match text("request") {
+            None => serde_json::json!({}),
+            Some(json) => serde_json::from_str::<JsonValue>(&json)
+                .ok()
+                .filter(JsonValue::is_object)
+                .ok_or_else(|| EngineError::Config(format!("{}: the request is not a JSON object", component_id)))?,
+        };
+        let count = |key: &str, default: u64| props.get(key).and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(default);
+        grpc_source = Some(GrpcSourceSpec {
+            node_id: node.id.clone(),
+            endpoint,
+            service: service.to_string(),
+            method: name.to_string(),
+            request,
+            metadata: headers_from_props(&props),
+            max_messages: count("maxRecords", 1000),
+            timeout_ms: count("timeoutMs", 30000),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.pinecone" {
         let host = string_prop(&props, "indexHost")
             .map(|s| s.trim().trim_end_matches('/').to_string())
@@ -8032,6 +8069,7 @@ fn build_stage(
         .or_else(|| pulsar_source.map(RuntimeSpec::PulsarSource))
         .or_else(|| pulsar_sink.map(RuntimeSpec::PulsarSink))
         .or_else(|| pinecone_source.map(RuntimeSpec::PineconeSource))
+        .or_else(|| grpc_source.map(RuntimeSpec::GrpcSource))
         .or_else(|| weaviate_source.map(RuntimeSpec::WeaviateSource))
         .or_else(|| milvus_source.map(RuntimeSpec::MilvusSource))
         .or_else(|| format_source.map(RuntimeSpec::FormatSource))
