@@ -14455,6 +14455,251 @@ fn snk_avro_writes_container_file_with_inferred_schema() {
     assert_eq!(alpha, "alpha");
 }
 
+/// fixture.orc was written by pyarrow 23 (Apache ORC C++) with zstd, so the
+/// reader is checked against a file it did not write: three rows, one column of
+/// every ORC type, nulls in most of them.
+fn orc_fixture() -> String {
+    norm(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixture.orc"))
+}
+
+/// An ORC file's columns and codec, as its footer records them.
+fn orc_footer(
+    path: &str,
+) -> (Vec<(String, arrow_schema::DataType)>, Option<orc_rust::compression::CompressionType>) {
+    let file = std::fs::File::open(path).expect("the ORC file");
+    let builder = orc_rust::ArrowReaderBuilder::try_new(file).expect("an ORC footer");
+    let columns = builder
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| (f.name().clone(), f.data_type().clone()))
+        .collect();
+    (columns, builder.file_metadata().compression().map(|c| c.compression_type()))
+}
+
+fn orc_to_parquet(engine: &DuckdbEngine, path: &str, out: &str) -> duckle_duckdb_engine::RunResult {
+    engine.execute_pipeline(&doc(
+        json!([
+            node("o", "src.orc", json!({ "path": path })),
+            node("k", "snk.parquet", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "o", "k")]),
+    ))
+}
+
+#[test]
+fn src_orc_reads_every_type_an_apache_orc_file_holds() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.parquet");
+    let r = orc_to_parquet(&engine, &orc_fixture(), &out);
+    assert_eq!(r.status, "ok", "src.orc failed: {:?}", r.error);
+    let types: Vec<String> = duckdb_json(&format!("DESCRIBE SELECT * FROM read_parquet('{out}')"))
+        .iter()
+        .map(|c| format!("{} {}", c["column_name"].as_str().unwrap(), c["column_type"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        types,
+        [
+            "id BIGINT", "tiny TINYINT", "n INTEGER", "flag BOOLEAN", "price DECIMAL(10,2)",
+            "score DOUBLE", "ratio FLOAT", "name VARCHAR", "day DATE", "ts TIMESTAMP",
+            "ts_utc TIMESTAMP WITH TIME ZONE", "bin BLOB", "tags VARCHAR[]",
+            "attrs STRUCT(a INTEGER, b VARCHAR)", "kv MAP(VARCHAR, INTEGER)",
+        ]
+    );
+    let rows = duckdb_json(&format!(
+        "SELECT id, tiny, n, flag, price::VARCHAR AS price, score, ratio, name, day::VARCHAR AS day, \
+         ts::VARCHAR AS ts, epoch(ts_utc)::BIGINT AS ts_utc, hex(bin) AS bin, tags, attrs, kv \
+         FROM read_parquet('{out}') ORDER BY id"
+    ));
+    assert_eq!(
+        rows,
+        vec![
+            json!({"id": 1, "tiny": 1, "n": 10, "flag": true, "price": "12.50", "score": 1.5,
+                   "ratio": 0.5, "name": "alpha", "day": "2024-01-15", "ts": "2024-01-15 10:30:00.123456",
+                   "ts_utc": 1705314600, "bin": "0001", "tags": ["a", "b"], "attrs": {"a": 1, "b": "x"},
+                   "kv": {"x": 1}}),
+            // 1600 is outside what a count of nanoseconds holds, so it is read
+            // to the microsecond, as DuckDB's TIMESTAMP is.
+            json!({"id": 2, "tiny": -2, "n": 20, "flag": false, "price": "0.99", "score": 2.25,
+                   "ratio": 0.25, "name": "beta", "day": "2024-02-29", "ts": "1600-03-01 00:00:00",
+                   "ts_utc": null, "bin": "", "tags": [], "attrs": {"a": null, "b": "y"}, "kv": {}}),
+            json!({"id": 3, "tiny": 3, "n": null, "flag": true, "price": "100.00", "score": null,
+                   "ratio": 0.125, "name": null, "day": "1999-12-31", "ts": null, "ts_utc": 959860800,
+                   "bin": null, "tags": null, "attrs": null, "kv": null}),
+        ]
+    );
+}
+
+#[test]
+fn src_orc_reads_every_file_a_pattern_matches() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let parts = tmp.path().join("parts");
+    std::fs::create_dir(&parts).unwrap();
+    for name in ["part-0.orc", "part-1.orc"] {
+        std::fs::copy(orc_fixture(), parts.join(name)).unwrap();
+    }
+    std::fs::write(parts.join("notes.txt"), "not an ORC file").unwrap();
+    let out = out_path(tmp.path(), "out.parquet");
+    let pattern = format!("{}/*.orc", norm(&parts.to_string_lossy()));
+    let r = orc_to_parquet(&engine, &pattern, &out);
+    assert_eq!(r.status, "ok", "src.orc over a pattern failed: {:?}", r.error);
+    assert_eq!(count(&format!("read_parquet('{out}')")), 6, "three rows from each file");
+
+    // A pattern nothing matches is a mistake, not an empty table.
+    let none = format!("{}/*.orc", norm(&tmp.path().join("none").to_string_lossy()));
+    let r = orc_to_parquet(&engine, &none, &out);
+    assert_eq!(r.status, "error");
+    assert!(format!("{:?}", r.error).contains("no file matches"), "{:?}", r.error);
+}
+
+#[test]
+fn src_orc_names_the_file_whose_columns_differ() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let parts = tmp.path().join("mixed");
+    std::fs::create_dir(&parts).unwrap();
+    std::fs::copy(orc_fixture(), parts.join("a.orc")).unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,city\n1,Oslo\n");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("w", "snk.orc", json!({ "path": norm(&parts.join("b.orc").to_string_lossy()) })),
+        ]),
+        json!([main_edge("e1", "s", "w")]),
+    ));
+    assert_eq!(r.status, "ok", "snk.orc failed: {:?}", r.error);
+    let out = out_path(tmp.path(), "out.parquet");
+    let r = orc_to_parquet(&engine, &format!("{}/*.orc", norm(&parts.to_string_lossy())), &out);
+    assert_eq!(r.status, "error", "two files with different columns are not one table");
+    let err = format!("{:?}", r.error);
+    assert!(err.contains("a.orc") && err.contains("b.orc"), "name both files: {err}");
+}
+
+#[test]
+fn snk_orc_writes_a_typed_file_that_reads_back() {
+    use arrow_schema::{DataType, TimeUnit};
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "kick.csv", "k\n1\n");
+    let orc = out_path(tmp.path(), "out.orc");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("q", "code.sql", json!({ "sql": concat!(
+                "SELECT v.* FROM input, (VALUES ",
+                "(1::BIGINT, 2::INTEGER, 3::SMALLINT, 4::TINYINT, 1.5::DOUBLE, 0.5::FLOAT, 'alpha', true, ",
+                "DATE '2024-01-15', TIMESTAMP '2024-01-15 10:30:00.123456', TIMESTAMPTZ '2024-01-15 10:30:00+00', ",
+                "'\\x00\\x01'::BLOB, 255::UTINYINT, 65535::USMALLINT, 4294967295::UINTEGER, ",
+                "'b9a4c8de-0000-4000-8000-000000000001'::UUID, '{\"a\": 1}'::JSON), ",
+                "(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
+                ") v(big, int, small, tiny, dbl, flt, txt, flag, day, ts, ts_utc, bin, u8, u16, u32, id, doc)"
+            ) })),
+            node("w", "snk.orc", json!({ "path": orc, "compression": "zstd" })),
+        ]),
+        json!([main_edge("e1", "s", "q"), main_edge("e2", "q", "w")]),
+    ));
+    assert_eq!(r.status, "ok", "snk.orc failed: {:?}", r.error);
+
+    let (columns, codec) = orc_footer(&orc);
+    assert_eq!(format!("{codec:?}"), "Some(Zstd)");
+    let ns = TimeUnit::Nanosecond;
+    let want: Vec<(String, DataType)> = [
+        ("big", DataType::Int64), ("int", DataType::Int32), ("small", DataType::Int16),
+        ("tiny", DataType::Int8), ("dbl", DataType::Float64), ("flt", DataType::Float32),
+        ("txt", DataType::Utf8), ("flag", DataType::Boolean), ("day", DataType::Date32),
+        ("ts", DataType::Timestamp(ns, None)), ("ts_utc", DataType::Timestamp(ns, Some("UTC".into()))),
+        ("bin", DataType::Binary),
+        // ORC has no unsigned integers: each widens to the signed type that holds all its values.
+        ("u8", DataType::Int16), ("u16", DataType::Int32), ("u32", DataType::Int64),
+        // ORC has no UUID or JSON type: both go as their text.
+        ("id", DataType::Utf8), ("doc", DataType::Utf8),
+    ]
+    .into_iter()
+    .map(|(n, t)| (n.to_string(), t))
+    .collect();
+    assert_eq!(columns, want);
+
+    let back = out_path(tmp.path(), "back.parquet");
+    let r = orc_to_parquet(&engine, &orc, &back);
+    assert_eq!(r.status, "ok", "src.orc on what snk.orc wrote: {:?}", r.error);
+    let rows = duckdb_json(&format!(
+        "SELECT big, int, small, tiny, dbl, flt, txt, flag, day::VARCHAR AS day, ts::VARCHAR AS ts, \
+         epoch(ts_utc)::BIGINT AS ts_utc, hex(bin) AS bin, u8, u16, u32, id, doc \
+         FROM read_parquet('{back}') ORDER BY big NULLS LAST"
+    ));
+    assert_eq!(
+        rows[0],
+        json!({"big": 1, "int": 2, "small": 3, "tiny": 4, "dbl": 1.5, "flt": 0.5, "txt": "alpha",
+               "flag": true, "day": "2024-01-15", "ts": "2024-01-15 10:30:00.123456",
+               "ts_utc": 1705314600, "bin": "0001", "u8": 255, "u16": 65535, "u32": 4294967295_u64,
+               "id": "b9a4c8de-0000-4000-8000-000000000001", "doc": "{\"a\": 1}"})
+    );
+    assert!(rows[1].as_object().unwrap().values().all(Value::is_null), "{}", rows[1]);
+}
+
+#[test]
+fn snk_orc_names_the_columns_it_cannot_write() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "kick.csv", "k\n1\n");
+    let orc = out_path(tmp.path(), "out.orc");
+    std::fs::write(&orc, "the file from the last run").unwrap();
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("q", "code.sql", json!({ "sql": concat!(
+                "SELECT k, CAST(12.50 AS DECIMAL(5,2)) AS amount, TIME '10:00' AS at, ",
+                "[1, 2] AS tags FROM input"
+            ) })),
+            node("w", "snk.orc", json!({ "path": orc })),
+        ]),
+        json!([main_edge("e1", "s", "q"), main_edge("e2", "q", "w")]),
+    ));
+    assert_eq!(r.status, "error", "a DECIMAL, a TIME and a list cannot be written to ORC here");
+    let err = format!("{:?}", r.error);
+    for named in ["amount (DECIMAL(5,2))", "at (TIME)", "tags (INTEGER[])"] {
+        assert!(err.contains(named), "name {named}: {err}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(&orc).unwrap(),
+        "the file from the last run",
+        "a refused write leaves the old file alone"
+    );
+}
+
+#[test]
+fn snk_orc_writes_the_columns_of_an_empty_result() {
+    use arrow_schema::DataType;
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "kick.csv", "k\n1\n");
+    let orc = out_path(tmp.path(), "empty.orc");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("q", "code.sql", json!({ "sql": "SELECT k AS id, 'x' AS name FROM input WHERE k > 5" })),
+            node("w", "snk.orc", json!({ "path": orc })),
+        ]),
+        json!([main_edge("e1", "s", "q"), main_edge("e2", "q", "w")]),
+    ));
+    assert_eq!(r.status, "ok", "snk.orc on no rows: {:?}", r.error);
+    let (columns, codec) = orc_footer(&orc);
+    assert_eq!(columns, vec![("id".to_string(), DataType::Int64), ("name".to_string(), DataType::Utf8)]);
+    assert_eq!(format!("{codec:?}"), "Some(Snappy)", "Snappy unless told otherwise");
+
+    let back = out_path(tmp.path(), "back.parquet");
+    let r = orc_to_parquet(&engine, &orc, &back);
+    assert_eq!(r.status, "ok", "src.orc on an empty file: {:?}", r.error);
+    assert_eq!(count(&format!("read_parquet('{back}')")), 0);
+    let types: Vec<String> = duckdb_json(&format!("DESCRIBE SELECT * FROM read_parquet('{back}')"))
+        .iter()
+        .map(|c| format!("{} {}", c["column_name"].as_str().unwrap(), c["column_type"].as_str().unwrap()))
+        .collect();
+    assert_eq!(types, ["id BIGINT", "name VARCHAR"]);
+}
+
 #[test]
 fn a_csv_source_can_leave_the_header_to_detection() {
     // "First row is header" was yes or no, and yes was sent even when nobody

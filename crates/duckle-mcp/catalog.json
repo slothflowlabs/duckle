@@ -3403,8 +3403,8 @@
       "id": "src.orc",
       "label": "ORC",
       "kind": "source",
-      "availability": "planned",
-      "summary": "",
+      "availability": "available",
+      "summary": "Apache ORC files (.orc) via the pure-Rust `orc-rust` crate, the format Hive and many Spark lakes keep their tables in. Every ORC type arrives typed, nested lists, structs and maps included, timestamps to the microsecond. A pattern such as warehouse/sales/*.orc reads every file it matches as one table.",
       "category": "Sources",
       "group": "Files",
       "ports": {
@@ -3421,7 +3421,7 @@
         "id": "src.orc",
         "kind": "source",
         "label": "ORC",
-        "description": "Reads data from ORC.",
+        "description": "Apache ORC files (.orc) via the pure-Rust `orc-rust` crate, the format Hive and many Spark lakes keep their tables in. Every ORC type arrives typed, nested lists, structs and maps included, timestamps to the microsecond. A pattern such as warehouse/sales/*.orc reads every file it matches as one table.",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -3445,121 +3445,8 @@
                       "*"
                     ]
                   }
-                ]
-              },
-              {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "allowCustom": true,
-                "placeholder": "utf-8",
-                "defaultValue": "utf-8",
-                "description": "DuckDB accepts any ICU encoding name; the list is the common ones. A name it does not know is an error, not a fallback.",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1  (ISO-8859-1)",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252  Western",
-                    "value": "windows-1252"
-                  },
-                  {
-                    "label": "Windows-1250  Central European",
-                    "value": "CP1250"
-                  },
-                  {
-                    "label": "Windows-1251  Cyrillic",
-                    "value": "CP1251"
-                  },
-                  {
-                    "label": "Windows-1253  Greek",
-                    "value": "CP1253"
-                  },
-                  {
-                    "label": "Windows-1254  Turkish",
-                    "value": "CP1254"
-                  },
-                  {
-                    "label": "Windows-1255  Hebrew",
-                    "value": "CP1255"
-                  },
-                  {
-                    "label": "Windows-1256  Arabic",
-                    "value": "CP1256"
-                  },
-                  {
-                    "label": "Windows-1257  Baltic",
-                    "value": "CP1257"
-                  },
-                  {
-                    "label": "Windows-1258  Vietnamese",
-                    "value": "CP1258"
-                  },
-                  {
-                    "label": "ISO-8859-2  Central European",
-                    "value": "iso-8859_2-1999"
-                  },
-                  {
-                    "label": "ISO-8859-5  Cyrillic",
-                    "value": "iso-8859_5-1999"
-                  },
-                  {
-                    "label": "ISO-8859-7  Greek",
-                    "value": "iso-8859_7-1987"
-                  },
-                  {
-                    "label": "ISO-8859-15  Western with euro",
-                    "value": "iso-8859_15-1999"
-                  },
-                  {
-                    "label": "Shift-JIS  Japanese",
-                    "value": "SHIFT_JIS"
-                  },
-                  {
-                    "label": "EUC-JP  Japanese",
-                    "value": "EUC_JP"
-                  },
-                  {
-                    "label": "EUC-KR  Korean",
-                    "value": "EUC_KR"
-                  },
-                  {
-                    "label": "GB18030  Simplified Chinese",
-                    "value": "GB18030"
-                  },
-                  {
-                    "label": "KOI8-R  Cyrillic",
-                    "value": "KOI8_R"
-                  },
-                  {
-                    "label": "CP852  DOS Central European",
-                    "value": "CP852"
-                  },
-                  {
-                    "label": "CP866  DOS Cyrillic",
-                    "value": "CP866"
-                  },
-                  {
-                    "label": "CP437  DOS US",
-                    "value": "CP437"
-                  }
-                ]
-              },
-              {
-                "key": "glob",
-                "label": "Glob pattern",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "Treat the path as a glob (e.g. data/*.csv) to read many files."
+                ],
+                "description": "An ORC file, or a pattern such as warehouse/sales/*.orc to read every file it matches as one table. Files read together must have the same columns."
               }
             ]
           }
@@ -32579,8 +32466,8 @@
       "id": "snk.orc",
       "label": "ORC",
       "kind": "sink",
-      "availability": "planned",
-      "summary": "",
+      "availability": "available",
+      "summary": "Write rows as one Apache ORC file via the pure-Rust `orc-rust` crate, Snappy-compressed unless you pick ZSTD, ZLIB, LZ4 or none. Takes booleans, integers, floats, text, binary, dates and timestamps; an unsigned integer widens to the next signed type and a UUID or JSON value goes as text. A DECIMAL, TIME, list, struct or map column is refused by name, before anything is written, to be cast upstream.",
       "category": "Sinks",
       "group": "Files",
       "ports": {
@@ -32597,7 +32484,7 @@
         "id": "snk.orc",
         "kind": "sink",
         "label": "ORC",
-        "description": "Writes data to ORC.",
+        "description": "Write rows as one Apache ORC file via the pure-Rust `orc-rust` crate, Snappy-compressed unless you pick ZSTD, ZLIB, LZ4 or none. Takes booleans, integers, floats, text, binary, dates and timestamps; an unsigned integer widens to the next signed type and a UUID or JSON value goes as text. A DECIMAL, TIME, list, struct or map column is refused by name, before anything is written, to be cast upstream.",
         "schemaSource": "upstream",
         "sections": [
           {
@@ -32608,6 +32495,7 @@
                 "label": "Output path",
                 "kind": "save-path",
                 "required": true,
+                "placeholder": "out/rows.orc",
                 "filters": [
                   {
                     "name": "ORC",
@@ -32624,16 +32512,33 @@
                 ]
               },
               {
-                "key": "mode",
-                "label": "Write mode",
+                "key": "compression",
+                "label": "Compression",
                 "kind": "select",
-                "defaultValue": "overwrite",
+                "defaultValue": "snappy",
                 "options": [
                   {
-                    "label": "Overwrite",
-                    "value": "overwrite"
+                    "label": "Snappy",
+                    "value": "snappy"
+                  },
+                  {
+                    "label": "ZSTD",
+                    "value": "zstd"
+                  },
+                  {
+                    "label": "ZLIB",
+                    "value": "zlib"
+                  },
+                  {
+                    "label": "LZ4",
+                    "value": "lz4"
+                  },
+                  {
+                    "label": "None",
+                    "value": "none"
                   }
-                ]
+                ],
+                "description": "Snappy is what Spark writes by default. ZSTD and ZLIB make smaller files."
               }
             ]
           }

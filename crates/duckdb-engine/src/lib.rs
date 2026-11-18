@@ -102,6 +102,7 @@ mod chroma;
 mod pulsar;
 mod pinecone;
 mod grpc;
+mod orc;
 pub use connectors::remote_fingerprint;
 mod run_log;
 mod util;
@@ -2896,6 +2897,8 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::XmlSink(spec)) => self.run_xml_sink(&db_path, spec),
                     Some(RuntimeSpec::AvroSink(spec)) => self.run_avro_sink(&db_path, spec),
                     Some(RuntimeSpec::QvdSink(spec)) => self.run_qvd_sink(&db_path, spec),
+                    Some(RuntimeSpec::OrcSource(spec)) => self.run_orc_source(&db_path, spec),
+                    Some(RuntimeSpec::OrcSink(spec)) => self.run_orc_sink(&db_path, spec),
                     Some(RuntimeSpec::GizmoSqlSource(spec)) => {
                         self.run_gizmosql_source(&db_path, spec)
                     }

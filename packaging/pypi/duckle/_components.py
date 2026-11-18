@@ -533,6 +533,11 @@ COMPONENTS = {
         'summary': 'INSERT to Oracle via the official `oracle` Rust crate. Built into the shipped binary - users need Oracle Instant Client on the library path at runtime. Multi-row INSERT ALL ... SELECT 1 FROM dual idiom batched at 1000 rows.',
         'params': ['connect', 'user', 'password', 'schema', 'tableName', 'batchSize', 'mode', 'conflictColumns', 'deleteColumn', 'deleteValue'],
     },
+    'snk.orc': {
+        'kind': 'sink',
+        'summary': 'Write rows as one Apache ORC file via the pure-Rust `orc-rust` crate, Snappy-compressed unless you pick ZSTD, ZLIB, LZ4 or none. Takes booleans, integers, floats, text, binary, dates and timestamps; an unsigned integer widens to the next signed type and a UUID or JSON value goes as text. A DECIMA...',
+        'params': ['path', 'compression'],
+    },
     'snk.parquet': {
         'kind': 'sink',
         'summary': '',
@@ -1107,6 +1112,11 @@ COMPONENTS = {
         'kind': 'source',
         'summary': "Read Oracle via the official `oracle` Rust crate (ODPI-C). Built into the shipped binary - users need Oracle Instant Client (libclntsh.{so,dll,dylib}) on the library path at RUNTIME; the executor surfaces a clear OCI loader error if it's missing. SQL auth via user / password; EZ Connect string fo...",
         'params': ['connect', 'user', 'password', 'schema', 'tableName', 'query', 'parallelColumn', 'parallelDegree'],
+    },
+    'src.orc': {
+        'kind': 'source',
+        'summary': 'Apache ORC files (.orc) via the pure-Rust `orc-rust` crate, the format Hive and many Spark lakes keep their tables in. Every ORC type arrives typed, nested lists, structs and maps included, timestamps to the microsecond. A pattern such as warehouse/sales/*.orc reads every file it matches as one t...',
+        'params': ['path'],
     },
     'src.parquet': {
         'kind': 'source',

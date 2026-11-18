@@ -6,10 +6,8 @@ reel; this is the full ledger.
 
 The palette currently carries **427 components**, broken down:
 
-- **420 available** - executes on the DuckDB engine today
-- **3 preview** - configurable in the designer (drag, wire, set
-  properties); execution is being wired engine-by-engine
-- **11 planned** - reserved in the palette so the roadmap is visible,
+- **422 available** - executes on the DuckDB engine today
+- **5 planned** - reserved in the palette so the roadmap is visible,
   not yet executable
 
 If you drop a planned or preview tile and try to run, the executor
@@ -90,11 +88,10 @@ Capabilities table in the README.
 
 | Component | Notes |
 |---|---|
-| `src.orc` / `snk.orc` | Apache ORC reader; no native DuckDB extension; the `orc` Rust crate exists but is minimal |
 | `src.xml` (large + compressed) | `src.xml` ships today but reads the whole file into memory and does not decompress, so multi-GB XML and `.gz` / `.zip` inputs are not supported. Planned: a streaming pull-parser (row-by-row, bounded memory) plus gzip / zip decompression, so a large compressed XML can be read (or converted to Parquet/JSONL) without loading it all into RAM. CSV / JSON / Parquet already stream out-of-core and read `.gz` via DuckDB; big XML is the gap. |
 
 `src.yaml`, `snk.yaml`, `src.toml`, `snk.toml`, `src.fixedwidth`,
-`src.avro`, `snk.avro`, `src.xml`, `snk.xml` shipped - see the
+`src.avro`, `snk.avro`, `src.xml`, `snk.xml`, `src.orc`, `snk.orc` shipped - see the
 Capabilities table in the README.
 
 ### Custom-code stages

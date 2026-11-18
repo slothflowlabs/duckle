@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 427 components, 420 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 215 connectors (133 sources / 82 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 427 components, 422 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 217 connectors (134 sources / 83 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -162,7 +162,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.odata` OData: OData v4 source - thin alias over src.rest. Defaults: responsePath /value, pagination follows @odata.nextLink as a complete URL. Set authType (basic / bearer / apikey) on the form. Works with SAP, D365, Microsoft Graph, any OData v4 endpoint
 - `src.opensearch` OpenSearch: Read docs from an OpenSearch index via the _search API. Same wire as Elasticsearch; same ApiKey auth
 - `src.oracle` Oracle: Read Oracle via the official `oracle` Rust crate (ODPI-C). Built into the shipped binary - users need Oracle Instant Client (libclntsh.{so,dll,dylib}) on the library path at RUNTIME; the executor surfaces a clear OCI loader error if it's missing. SQL auth via user / password; EZ Connect string for host:port/service_name
-- `src.orc` ORC [planned]: Reads data from ORC
+- `src.orc` ORC: Apache ORC files (.orc) via the pure-Rust `orc-rust` crate, the format Hive and many Spark lakes keep their tables in. Every ORC type arrives typed, nested lists, structs and maps included, timestamps to the microsecond. A pattern such as warehouse/sales/*.orc reads every file it matches as one table
 - `src.parquet` Parquet: Read columnar Parquet files
 - `src.pdf` PDF Pages: One row per PAGE of a PDF: document_id, page_number, text, has_text_layer, width, height and the document metadata. Point it at a file or a folder. Reads the text layer a document already carries, so filings, accounts and invoices become a table you can filter, join and hand to a Python or AI stage. No OCR: a scanned page comes back with has_text_layer false, which is exactly what lets you route those pages to whatever OCR you already run. document_id is the same value src.artifact puts in uri, so the two join
 - `src.pgvector` pgvector (Postgres): Read embeddings + metadata via DuckDB postgres ATTACH (server must have CREATE EXTENSION vector)
@@ -267,7 +267,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.neo4j` Neo4j: Write rows as Neo4j nodes over the HTTP Query API. Rows ride up as one $rows parameter expanded with UNWIND, so a batch is one round trip. Set mergeKeys to MERGE on those properties (re-running updates the matched nodes) instead of CREATE; or supply your own Cypher that consumes $rows
 - `snk.opensearch` OpenSearch: Bulk-index docs via the OpenSearch _bulk NDJSON API (same shape as Elasticsearch)
 - `snk.oracle` Oracle: INSERT to Oracle via the official `oracle` Rust crate. Built into the shipped binary - users need Oracle Instant Client on the library path at runtime. Multi-row INSERT ALL ... SELECT 1 FROM dual idiom batched at 1000 rows
-- `snk.orc` ORC [planned]: Writes data to ORC
+- `snk.orc` ORC: Write rows as one Apache ORC file via the pure-Rust `orc-rust` crate, Snappy-compressed unless you pick ZSTD, ZLIB, LZ4 or none. Takes booleans, integers, floats, text, binary, dates and timestamps; an unsigned integer widens to the next signed type and a UUID or JSON value goes as text. A DECIMAL, TIME, list, struct or map column is refused by name, before anything is written, to be cast upstream
 - `snk.parquet` Parquet: Write columnar Parquet files
 - `snk.pgvector` pgvector (Postgres): Write embeddings to a Postgres table (server must have CREATE EXTENSION vector)
 - `snk.pinecone` Pinecone: Upsert vectors to a Pinecone index via /vectors/upsert with Api-Key auth

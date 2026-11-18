@@ -917,6 +917,34 @@ pub struct QvdSinkSpec {
     pub path: String,
 }
 
+/// src.orc: read Apache ORC files with `orc-rust`, through a Parquet temp file
+/// into DuckDB, as src.gizmosql does. Each file carries its own schema.
+#[derive(Debug, Clone)]
+pub struct OrcSourceSpec {
+    pub node_id: String,
+    /// One file, or a pattern (`*`, `?`, `[`) naming several with the same columns.
+    pub path: String,
+}
+
+/// snk.orc: write the upstream rows as one ORC file. DuckDB copies them to a
+/// Parquet temp file first, so the columns arrive typed.
+#[derive(Debug, Clone)]
+pub struct OrcSinkSpec {
+    pub from_view: String,
+    pub path: String,
+    pub compression: OrcCompression,
+}
+
+/// The codecs `orc-rust` can write. ORC also defines LZO, which it cannot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrcCompression {
+    None,
+    Snappy,
+    Zstd,
+    Zlib,
+    Lz4,
+}
+
 /// src.gizmosql: read from a GizmoSQL (Arrow Flight SQL) server via the
 /// clean-room `crate::gizmosql` client. Result is streamed to Parquet and
 /// materialized with DuckDB read_parquet, like the ADBC source.

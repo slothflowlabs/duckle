@@ -10,7 +10,7 @@
 
 https://github.com/user-attachments/assets/8bfac3fa-3f91-4b43-b5d8-a526716c8ef1
 
-<a href="https://duckle.org/"><img src="website/assets/img/website-hero.gif" alt="Duckle connecting 215 sources and destinations - databases, warehouses, SaaS apps and the DuckDB ecosystem - all running locally on DuckDB" width="600"/></a>
+<a href="https://duckle.org/"><img src="website/assets/img/website-hero.gif" alt="Duckle connecting 217 sources and destinations - databases, warehouses, SaaS apps and the DuckDB ecosystem - all running locally on DuckDB" width="600"/></a>
 
 <p><sub><i>Duckle is an independent open-source project by SlothFlowLabs. It builds on the DuckDB engine but is not part of, affiliated with, or endorsed by DuckDB Labs or MotherDuck.</i></sub></p>
 
@@ -136,7 +136,7 @@ In short: a free, open-source, single-engine alternative to hosted, per-row-pric
 Three things set it apart:
 
 1. **An AI assistant that ships in the box.** Describe the pipeline you want in English; Duckie writes the JSON and drops it onto the canvas. The model runs wherever Duckle does - no API key, no telemetry, no vendor round-trip. Point it at your own OpenAI-compatible endpoint instead if you would rather it did not run in-process.
-2. **420 components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
+2. **422 components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
 3. **A self-contained binary you can audit.** 73 to 110 MB depending on your platform. Engines install on first launch. Workspaces are plain files in a folder you choose. Diff them, branch them, ship them.
 
 <div align="center">
@@ -154,7 +154,7 @@ Three things set it apart:
 | **Single-file binary, no bundled DB** | 73 to 110 MB depending on platform (it embeds the headless runner + MCP server). DuckDB downloads on first launch with a guided step. AI engine is opt-in. |
 | **Native speed** | Execution runs through DuckDB: vectorized, columnar, local. A clean-and-export job that crawls in a spreadsheet finishes in milliseconds. |
 | **Git-friendly by design** | Pipelines, connections, contexts, and routines persist as plain files in a folder you pick. Diff them, branch them, review them. |
-| **420 components ready today** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
+| **422 components ready today** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
 | **Honest about scope** | Single-machine and embedded by design. Built to make local and small-team data work fast, not to replace a distributed warehouse. |
 | **60 UI languages** | Topbar, palette, chat assistant, properties panel, and common dialogs ship localized. English, Spanish, Chinese (Simplified + Traditional), Hindi, Arabic, Portuguese (Brazil), Bengali, Russian, Japanese, Punjabi, German, Korean, French, Vietnamese, Telugu, Marathi, Turkish, Tamil, Urdu, Persian, Polish, Italian, Ukrainian, Indonesian, Thai, Dutch, Hebrew, Swedish, Greek, Czech, Hungarian, Romanian, Filipino, Malay, Norwegian, Danish, Finnish, Catalan, Bulgarian, Slovak, Croatian, Serbian, Slovenian, Lithuanian, Latvian, Estonian, Khmer, Burmese, Sinhala, Nepali, Swahili, Afrikaans, Welsh, Irish, Icelandic, Albanian, Azerbaijani, Mongolian, Kazakh. RTL (Arabic, Hebrew, Persian, Urdu) supported. Switch languages from the topbar globe. |
 | **Open source** | Dual-licensed MIT OR Apache-2.0. Yours to use, fork, and extend. |
@@ -3653,9 +3653,8 @@ Duckle is in **public beta**. The visual designer, the DuckDB execution engine, 
 
 The component palette ships **427 components** so the roadmap is visible in the product itself:
 
-- **420 available** runs on the DuckDB engine today
-- **3 preview** is configurable in the designer (drag, wire, set properties); execution is being wired engine-by-engine
-- **11 planned** is reserved in the palette but not yet executable - see [`docs/roadmap.md`](docs/roadmap.md)
+- **422 available** runs on the DuckDB engine today
+- **5 planned** is reserved in the palette but not yet executable - see [`docs/roadmap.md`](docs/roadmap.md)
 
 ---
 
@@ -3665,11 +3664,11 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 
 ### Sources
 
-**133 sources available today.**
+**134 sources available today.**
 
 | Group | Connectors | Status |
 |---|---|---|
-| **Files** | CSV, TSV, Parquet, JSON, JSONL / NDJSON, Excel (.xlsx), YAML, TOML, Fixed-width (mainframe / banking positional dumps), XML (slash-separated rowPath), Apache Avro (.avro / .ocf, pure-Rust, every column typed as the file's schema declares, decimals, dates and timestamps included) | Available |
+| **Files** | CSV, TSV, Parquet, JSON, JSONL / NDJSON, Excel (.xlsx), YAML, TOML, Fixed-width (mainframe / banking positional dumps), XML (slash-separated rowPath), Apache Avro (.avro / .ocf, pure-Rust, every column typed as the file's schema declares, decimals, dates and timestamps included), Apache ORC (.orc, pure-Rust `orc-rust`: every ORC type typed, lists, structs and maps included, timestamps to the microsecond; a pattern such as `sales/*.orc` reads every file it matches as one table) | Available |
 | **Geospatial files** | GeoJSON, Shapefile, GeoPackage, KML, GPX, GML via the `spatial` extension | Available (lazy-loaded) |
 | **File Geodatabase** | Esri File Geodatabase (`.gdb`) feature classes via `ST_Read` with a per-layer selector | Available (lazy-loaded) |
 | **Hugging Face** | Hugging Face Hub datasets over `hf://` (Parquet / CSV / JSON, globs, revisions); token for private or gated datasets | Available |
@@ -3784,11 +3783,11 @@ Validators split their input: passing rows continue on the main port, failures r
 
 ### Sinks
 
-**82 sinks available today.**
+**83 sinks available today.**
 
 | Group | Connectors | Status |
 |---|---|---|
-| **Files** | CSV, TSV, Parquet (ZSTD), JSON, JSONL / NDJSON, Excel (.xlsx), YAML, TOML, XML (configurable wrappers), Avro (schema inferred from first row). Parquet + CSV support Hive-partitioned writes. TSV and JSON write gzip or zstd when **Compression** says so, whatever the file is called; with None, a name ending `.gz` or `.zst` still compresses it. CSV, TSV, JSON Lines and JSON (not the array format) can **append**: the run's rows are written to a staging file, then added to the end of the destination, so a failed run leaves it as it was. The header is written only when the append makes the file, and rows whose header is not the file's are refused rather than added under the wrong columns. A compressed, partitioned or remote path cannot be appended to, and neither can Parquet, whose files cannot be added to in place: write one file per run and read the directory with a glob | Available |
+| **Files** | CSV, TSV, Parquet (ZSTD), JSON, JSONL / NDJSON, Excel (.xlsx), YAML, TOML, XML (configurable wrappers), Avro (schema inferred from first row), ORC (Snappy, ZSTD, ZLIB or LZ4; booleans, integers, floats, text, binary, dates and timestamps, and a DECIMAL, TIME or nested column is refused by name before anything is written). Parquet + CSV support Hive-partitioned writes. TSV and JSON write gzip or zstd when **Compression** says so, whatever the file is called; with None, a name ending `.gz` or `.zst` still compresses it. CSV, TSV, JSON Lines and JSON (not the array format) can **append**: the run's rows are written to a staging file, then added to the end of the destination, so a failed run leaves it as it was. The header is written only when the append makes the file, and rows whose header is not the file's are refused rather than added under the wrong columns. A compressed, partitioned or remote path cannot be appended to, and neither can Parquet, whose files cannot be added to in place: write one file per run and read the directory with a glob | Available |
 | **Geospatial files** | GeoJSON, GeoPackage, Shapefile, KML, GPX via GDAL | Available (lazy-loaded) |
 | **Lakehouse** | Apache Iceberg (full table layout, or into an **Iceberg REST catalog**: the namespace and table are created when missing, **append** matches columns by name and **overwrite** drops and recreates, as two catalog commits because the catalog cannot replace a table in one; DuckDB 1.5.5's iceberg extension leaves an empty `data` folder in the working directory after such a write, which is harmless and upstream), DuckLake - modes: **overwrite**, **append**, **truncate**, **upsert** (set-based delete-by-key + re-insert), **merge** (partial-column `MERGE INTO` that preserves columns the source omits) with optional CDC delete propagation, plus **publish groups** - several DuckLake sinks sharing a group name commit as one snapshot, so readers see all of their tables update together or none of them, and a run that cannot honour the group is refused rather than publishing part of it | Available |
 | **Delta Lake** | Append, upsert, update or delete by key in a Delta table (`snk.delta`), local or on OneLake and ADLS (`abfss://`), Azure Blob (`az://`), S3 or GCS. A missing table is created from the input's columns and types (naive timestamps under the `timestampNtz` feature), partitioned by the columns you name. Upsert, update and delete commit as one Delta MERGE through the bundled `duckle-delta` sidecar (delta-rs), because the DuckDB extension can only insert; a delete flag column applies a change feed as it arrives and is never written. Columns are matched by name, and a column missing on either side is refused by name rather than dropped or written as NULL. Credentials come from the runner's `AZURE_*`, `AWS_*` and `GOOGLE_*` environment or the node's storage options. No overwrite mode. Remote writes are tested against S3-compatible (MinIO) and Azure Blob (Azurite) storage; OneLake itself has not yet been run against a live Fabric workspace | Available |
@@ -4537,7 +4536,7 @@ Yes, free + open source. Dual-licensed **MIT OR Apache-2.0**. You can use it com
 <details>
 <summary><b>Is Duckle an open-source alternative to Fivetran or Airbyte?</b></summary>
 
-It covers similar ground - moving data across 215 sources and destinations - but locally, with nothing to host and no per-row, per-connector, or per-seat billing. Pipelines are built visually or from plain English and compile to readable DuckDB SQL that runs wherever you deploy it: a laptop, a server, CI or a container. The trade-off is scope: Duckle does not split one query across a cluster, so for warehouse-scale replication you push the work down into the source system or point the output at the system that scales.
+It covers similar ground - moving data across 217 sources and destinations - but locally, with nothing to host and no per-row, per-connector, or per-seat billing. Pipelines are built visually or from plain English and compile to readable DuckDB SQL that runs wherever you deploy it: a laptop, a server, CI or a container. The trade-off is scope: Duckle does not split one query across a cluster, so for warehouse-scale replication you push the work down into the source system or point the output at the system that scales.
 
 </details>
 
@@ -5061,7 +5060,7 @@ A complete planned-component breakdown lives in [`docs/roadmap.md`](docs/roadmap
 
 - [x] **Multi-shard Kinesis** (shipped - "Read every shard" reads them all in turn)
 - [x] **Pulsar** streaming (shipped - over Pulsar's WebSocket API, so no `protoc`)
-- [ ] **Apache ORC** read / write (blocked on the Arrow version conflict between `orc-rust` and our workspace pin)
+- [x] **Apache ORC** read / write (shipped - `orc-rust` is on the engine's own Arrow version now)
 - [x] **SFTP** source (shipped - `russh` + `russh-sftp` on the ring backend, password / key auth, host-fingerprint pin)
 - [ ] **OAuth-heavy SaaS** (full Salesforce OAuth)
 - [ ] **Embedded Python / Rust** code stages (current code.* family: SQL, Shell, JavaScript, WebAssembly all ship)

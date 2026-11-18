@@ -118,6 +118,10 @@ rskafka = { version = "0.6", features = ["transport-tls"] }
 # Kafka topics that publish Avro-encoded payloads, and reads the
 # .avro / .ocf files that exporters drop on object storage.
 apache-avro = "0.22"
+# Apache ORC reader/writer for src.orc and snk.orc. Pure Rust, on the same
+# arrow major as the engine, so batches go straight to and from Parquet.
+# Without default features: the async reader is not used.
+orc-rust = { version = "0.9", default-features = false }
 # NATS / JetStream. Pure-Rust client by the NATS team.
 async-nats = "0.50"
 # XML reader/writer. Used by src.xml (walks a row path, emits each

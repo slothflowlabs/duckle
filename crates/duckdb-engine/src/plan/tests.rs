@@ -8388,3 +8388,71 @@ fn a_file_list_with_no_folder_and_no_path_refuses() {
     .expect("a folder is enough");
     assert!(deep.contains("/data/in/**/*.csv"), "{deep}");
 }
+
+mod orc {
+    use super::*;
+    use crate::plan::{OrcCompression, RuntimeSpec};
+
+    fn compiled(nodes: serde_json::Value) -> Result<Vec<RuntimeSpec>, crate::EngineError> {
+        let doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": nodes,
+            "edges": [{"id":"e","source":"a","target":"b","data":{"connectionType":"main"}}]
+        }))
+        .unwrap();
+        Ok(compile(&doc)?.stages.into_iter().filter_map(|s| s.runtime).collect())
+    }
+
+    fn read(props: serde_json::Value) -> Result<Vec<RuntimeSpec>, crate::EngineError> {
+        compiled(serde_json::json!([
+            {"id":"a","position":{"x":0,"y":0},"data":{"label":"A","componentId":"src.orc","properties": props}},
+            {"id":"b","position":{"x":0,"y":0},"data":{"label":"B","componentId":"snk.csv","properties":{"path":"/tmp/b.csv"}}}
+        ]))
+    }
+
+    fn compression(props: serde_json::Value) -> Result<OrcCompression, crate::EngineError> {
+        let specs = compiled(serde_json::json!([
+            {"id":"a","position":{"x":0,"y":0},"data":{"label":"A","componentId":"src.csv","properties":{"path":"/tmp/a.csv"}}},
+            {"id":"b","position":{"x":0,"y":0},"data":{"label":"B","componentId":"snk.orc","properties": props}}
+        ]))?;
+        Ok(specs
+            .into_iter()
+            .find_map(|s| match s {
+                RuntimeSpec::OrcSink(o) => Some(o.compression),
+                _ => None,
+            })
+            .expect("an ORC write"))
+    }
+
+    #[test]
+    fn a_source_reads_the_path_it_is_given() {
+        let specs = read(serde_json::json!({ "path": "/lake/t/*.orc" })).unwrap();
+        assert!(
+            specs.iter().any(|s| matches!(s, RuntimeSpec::OrcSource(o) if o.path == "/lake/t/*.orc" && o.node_id == "a")),
+            "{specs:?}"
+        );
+        let err = read(serde_json::json!({ "path": "  " })).unwrap_err().to_string();
+        assert!(err.contains("path"), "say what is missing: {err}");
+    }
+
+    #[test]
+    fn a_sink_compresses_with_snappy_unless_told_otherwise() {
+        let at = |extra: serde_json::Value| {
+            let mut props = serde_json::json!({ "path": "/tmp/o.orc" });
+            for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+                props[k] = v;
+            }
+            compression(props)
+        };
+        assert_eq!(at(serde_json::json!({})).unwrap(), OrcCompression::Snappy);
+        assert_eq!(at(serde_json::json!({ "compression": "" })).unwrap(), OrcCompression::Snappy);
+        assert_eq!(at(serde_json::json!({ "compression": "zstd" })).unwrap(), OrcCompression::Zstd);
+        assert_eq!(at(serde_json::json!({ "compression": "ZLIB" })).unwrap(), OrcCompression::Zlib);
+        assert_eq!(at(serde_json::json!({ "compression": "lz4" })).unwrap(), OrcCompression::Lz4);
+        assert_eq!(at(serde_json::json!({ "compression": "none" })).unwrap(), OrcCompression::None);
+        // LZO is an ORC codec the writer cannot produce: refused before the run.
+        let err = at(serde_json::json!({ "compression": "lzo" })).unwrap_err().to_string();
+        assert!(err.contains("lzo") && err.contains("snappy"), "name it and the choices: {err}");
+        let err = compression(serde_json::json!({})).unwrap_err().to_string();
+        assert!(err.contains("path"), "say what is missing: {err}");
+    }
+}

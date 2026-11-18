@@ -99,14 +99,14 @@ algorithm (`crates/duckle-runner/src/oidc.rs`). RSA goes through the `rsa` crate
 ## RUSTSEC-2026-0391 - `zstd` 0.13.3, abandoned stream on a reused context
 
 **Is there a fix?** On 0.14.3, which Duckle's own use of `zstd` is on, and `zip` since
-9.0.5. This copy is pinned by `parquet`, `arrow-ipc` and `rskafka`, and by
+9.0.5. This copy is pinned by `parquet`, `arrow-ipc`, `rskafka` and `orc-rust`, and by
 `lance-encoding` and `vortex-zstd` in the optional `duckle-lance` sidecar.
 
 **Is it reachable?** No. The flaw is in the `with_context` constructors of the stream
 encoders and decoders, which reuse a context a previous stream may have left dirty. No
 dependency calls one. `parquet` and `arrow-ipc` reuse a context through `zstd::bulk`,
-which the advisory does not cover; `rskafka` builds a fresh `Decoder::new` for each
-stream.
+which the advisory does not cover, and `orc-rust` compresses through it too; `rskafka`
+builds a fresh `Decoder::new` for each stream, and `orc-rust` one for each ORC block.
 
 **Remove when:** the crates above reach `zstd` 0.14.3 or later.
 
@@ -119,8 +119,8 @@ when that does.
 
 **Is it reachable?** No. The memory reaches a caller only through
 `zstd::stream::write::Decoder`, and the advisory itself clears `stream::read::Decoder`,
-`decode_all` and the bulk API. No dependency uses the write decoder: `rskafka` and
-`parquet`'s command-line tools read through `Decoder::new`, and the rest use the bulk API.
+`decode_all` and the bulk API. No dependency uses the write decoder: `rskafka`, `orc-rust`
+and `parquet`'s command-line tools read through `Decoder::new`, and the rest use the bulk API.
 
 **Remove when:** `zstd` 0.13.3 leaves the tree, as above.
 

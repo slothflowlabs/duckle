@@ -775,6 +775,8 @@ pub enum RuntimeSpec {
     XmlSink(XmlSinkSpec),
     AvroSink(AvroSinkSpec),
     QvdSink(QvdSinkSpec),
+    OrcSource(OrcSourceSpec),
+    OrcSink(OrcSinkSpec),
     GizmoSqlSource(GizmoSqlSourceSpec),
     GizmoSqlSink(GizmoSqlSinkSpec),
     RabbitSink(RabbitSinkSpec),
@@ -2390,6 +2392,8 @@ fn build_stage(
     let mut xml_sink: Option<XmlSinkSpec> = None;
     let mut avro_sink: Option<AvroSinkSpec> = None;
     let mut qvd_sink: Option<QvdSinkSpec> = None;
+    let mut orc_source: Option<OrcSourceSpec> = None;
+    let mut orc_sink: Option<OrcSinkSpec> = None;
     let mut gizmosql_source: Option<GizmoSqlSourceSpec> = None;
     let mut gizmosql_sink: Option<GizmoSqlSinkSpec> = None;
     let mut rabbit_sink: Option<RabbitSinkSpec> = None;
@@ -3814,6 +3818,33 @@ fn build_stage(
         qvd_sink = Some(QvdSinkSpec {
             from_view: from_view.to_string(),
             path,
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.orc" {
+        // One ORC file through orc-rust. The codec is checked here, so a name
+        // the writer cannot produce fails before the run rather than after it.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let path = string_prop(&props, "path")
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: path required", component_id)))?;
+        let codec = string_prop(&props, "compression").unwrap_or_default().trim().to_ascii_lowercase();
+        let compression = match codec.as_str() {
+            "" | "snappy" => OrcCompression::Snappy,
+            "zstd" => OrcCompression::Zstd,
+            "zlib" => OrcCompression::Zlib,
+            "lz4" => OrcCompression::Lz4,
+            "none" => OrcCompression::None,
+            other => {
+                return Err(EngineError::Config(format!(
+                    "{}: compression '{}' is not one the ORC writer has; choose snappy, zstd, zlib, lz4 or none",
+                    component_id, other
+                )))
+            }
+        };
+        orc_sink = Some(OrcSinkSpec {
+            from_view: from_view.to_string(),
+            path,
+            compression,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.gizmosql" {
@@ -5822,6 +5853,17 @@ fn build_stage(
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: path required", component_id)))?;
         qvd_source = Some(QvdSourceSpec {
+            node_id: node.id.clone(),
+            path,
+        });
+        (String::new(), StageKind::View, None)
+    } else if component_id == "src.orc" {
+        // Apache ORC through orc-rust. Every file carries its own schema; a
+        // pattern reads several, which must agree on their columns.
+        let path = string_prop(&props, "path")
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: path required", component_id)))?;
+        orc_source = Some(OrcSourceSpec {
             node_id: node.id.clone(),
             path,
         });
@@ -8144,6 +8186,8 @@ fn build_stage(
         .or_else(|| xml_sink.map(RuntimeSpec::XmlSink))
         .or_else(|| avro_sink.map(RuntimeSpec::AvroSink))
         .or_else(|| qvd_sink.map(RuntimeSpec::QvdSink))
+        .or_else(|| orc_source.map(RuntimeSpec::OrcSource))
+        .or_else(|| orc_sink.map(RuntimeSpec::OrcSink))
         .or_else(|| rabbit_sink.map(RuntimeSpec::RabbitSink))
         .or_else(|| rabbit_source.map(RuntimeSpec::RabbitSource))
         .or_else(|| git_source.map(RuntimeSpec::GitSource))

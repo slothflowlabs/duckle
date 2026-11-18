@@ -2654,6 +2654,64 @@ function synthWrongFamilyForm(comp: ComponentDef): ComponentManifest | null {
             },
         ], 'upstream');
     }
+    // src.orc and snk.orc were drawn by the generic file synths while planned:
+    // an Encoding (ORC text is UTF-8 by the format's own rule), a Glob checkbox
+    // (a pattern in the path is what reads many files) and a one-choice Write
+    // mode. OrcSourceSpec and OrcSinkSpec have none of them.
+    if (id === 'src.orc') {
+        return base(comp, [
+            {
+                label: 'Source file',
+                fields: [
+                    {
+                        key: 'path',
+                        label: 'Path',
+                        kind: 'file-path',
+                        required: true,
+                        filters: [
+                            { name: 'ORC', extensions: ['orc'] },
+                            { name: 'All files', extensions: ['*'] },
+                        ],
+                        description: 'An ORC file, or a pattern such as warehouse/sales/*.orc to read every file it matches as one table. Files read together must have the same columns.',
+                    },
+                ],
+            },
+        ]);
+    }
+    if (id === 'snk.orc') {
+        return base(comp, [
+            {
+                label: 'Destination file',
+                fields: [
+                    {
+                        key: 'path',
+                        label: 'Output path',
+                        kind: 'save-path',
+                        required: true,
+                        placeholder: 'out/rows.orc',
+                        filters: [
+                            { name: 'ORC', extensions: ['orc'] },
+                            { name: 'All files', extensions: ['*'] },
+                        ],
+                    },
+                    {
+                        key: 'compression',
+                        label: 'Compression',
+                        kind: 'select',
+                        defaultValue: 'snappy',
+                        options: [
+                            { label: 'Snappy', value: 'snappy' },
+                            { label: 'ZSTD', value: 'zstd' },
+                            { label: 'ZLIB', value: 'zlib' },
+                            { label: 'LZ4', value: 'lz4' },
+                            { label: 'None', value: 'none' },
+                        ],
+                        description: 'Snappy is what Spark writes by default. ZSTD and ZLIB make smaller files.',
+                    },
+                ],
+            },
+        ], 'upstream');
+    }
     // --- Messaging, source side -----------------------------------------
     if (id === 'src.rabbit') {
         return base(comp, [
