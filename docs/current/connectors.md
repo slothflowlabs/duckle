@@ -1,6 +1,6 @@
 # Connectors: Sources & Sinks
 
-Duckle provides 221 visual connectors, 219 of them available today, to read data from (Sources) and write data to (Sinks) files, databases, object storage, cloud warehouses, and API streams.
+Duckle provides 222 visual connectors, 220 of them available today, to read data from (Sources) and write data to (Sinks) files, databases, object storage, cloud warehouses, and API streams.
 
 ---
 

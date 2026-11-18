@@ -989,6 +989,56 @@ pub struct SqsSinkSpec {
     pub deduplication_id_column: Option<String>,
 }
 
+/// The server src.trino talks to. Presto speaks the same protocol under its
+/// own header names; Starburst is Trino.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrinoFlavor {
+    Trino,
+    Presto,
+}
+
+impl TrinoFlavor {
+    pub fn header_prefix(self) -> &'static str {
+        match self {
+            TrinoFlavor::Trino => "X-Trino-",
+            TrinoFlavor::Presto => "X-Presto-",
+        }
+    }
+}
+
+/// How src.trino signs in: not at all, with a password (HTTP Basic), or with a
+/// bearer token (OAuth2 or JWT).
+#[derive(Clone, PartialEq, Eq)]
+pub enum TrinoAuth {
+    None,
+    Password(String),
+    Token(String),
+}
+
+impl std::fmt::Debug for TrinoAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            TrinoAuth::None => "None",
+            TrinoAuth::Password(_) => "Password(***)",
+            TrinoAuth::Token(_) => "Token(***)",
+        })
+    }
+}
+
+/// src.trino: run a query on a Trino, Starburst or Presto coordinator through
+/// the client REST protocol, following each page to the end.
+#[derive(Debug, Clone)]
+pub struct TrinoSourceSpec {
+    pub node_id: String,
+    pub server: String,
+    pub user: String,
+    pub auth: TrinoAuth,
+    pub catalog: Option<String>,
+    pub schema: Option<String>,
+    pub query: String,
+    pub flavor: TrinoFlavor,
+}
+
 /// src.gizmosql: read from a GizmoSQL (Arrow Flight SQL) server via the
 /// clean-room `crate::gizmosql` client. Result is streamed to Parquet and
 /// materialized with DuckDB read_parquet, like the ADBC source.

@@ -819,6 +819,7 @@ pub enum RuntimeSpec {
     OrcSink(OrcSinkSpec),
     SqsSource(SqsSourceSpec),
     SqsSink(SqsSinkSpec),
+    TrinoSource(TrinoSourceSpec),
     GizmoSqlSource(GizmoSqlSourceSpec),
     GizmoSqlSink(GizmoSqlSinkSpec),
     RabbitSink(RabbitSinkSpec),
@@ -2438,6 +2439,7 @@ fn build_stage(
     let mut orc_sink: Option<OrcSinkSpec> = None;
     let mut sqs_source: Option<SqsSourceSpec> = None;
     let mut sqs_sink: Option<SqsSinkSpec> = None;
+    let mut trino_source: Option<TrinoSourceSpec> = None;
     let mut gizmosql_source: Option<GizmoSqlSourceSpec> = None;
     let mut gizmosql_sink: Option<GizmoSqlSinkSpec> = None;
     let mut rabbit_sink: Option<RabbitSinkSpec> = None;
@@ -5960,6 +5962,45 @@ fn build_stage(
             visibility_timeout: visibility_timeout as u32,
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.trino" {
+        // Trino, Starburst or Presto through the client REST protocol.
+        let text = |key: &str| string_prop(&props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let required = |key: &str| text(key).ok_or_else(|| EngineError::Config(format!("{component_id}: {key} required")));
+        let server = required("server")?;
+        url::Url::parse(&server)
+            .map_err(|e| EngineError::Config(format!("{component_id}: server {server} is not a URL: {e}")))?;
+        let flavor = match text("flavor").map(|f| f.to_ascii_lowercase()).as_deref() {
+            None | Some("trino") => TrinoFlavor::Trino,
+            Some("presto") => TrinoFlavor::Presto,
+            Some(other) => {
+                return Err(EngineError::Config(format!(
+                    "{component_id}: flavor '{other}' is not one it speaks; choose trino or presto"
+                )))
+            }
+        };
+        let auth = match (text("password"), text("accessToken")) {
+            (Some(_), Some(_)) => {
+                return Err(EngineError::Config(format!(
+                    "{component_id}: set a password or an access token, not both"
+                )))
+            }
+            (Some(p), None) => TrinoAuth::Password(p),
+            (None, Some(t)) => TrinoAuth::Token(t),
+            (None, None) => TrinoAuth::None,
+        };
+        // Trino refuses a statement that ends in a semicolon.
+        let query = required("query")?.trim_end_matches(|c: char| c == ';' || c.is_whitespace()).to_string();
+        trino_source = Some(TrinoSourceSpec {
+            node_id: node.id.clone(),
+            server,
+            user: required("user")?,
+            auth,
+            catalog: text("catalog"),
+            schema: text("schema"),
+            query,
+            flavor,
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.gizmosql" {
         // GizmoSQL (Arrow Flight SQL) source via the clean-room crate::gizmosql
         // client. Result streams to Parquet + materializes like the ADBC source.
@@ -8282,6 +8323,7 @@ fn build_stage(
         .or_else(|| orc_sink.map(RuntimeSpec::OrcSink))
         .or_else(|| sqs_source.map(RuntimeSpec::SqsSource))
         .or_else(|| sqs_sink.map(RuntimeSpec::SqsSink))
+        .or_else(|| trino_source.map(RuntimeSpec::TrinoSource))
         .or_else(|| rabbit_sink.map(RuntimeSpec::RabbitSink))
         .or_else(|| rabbit_source.map(RuntimeSpec::RabbitSource))
         .or_else(|| git_source.map(RuntimeSpec::GitSource))

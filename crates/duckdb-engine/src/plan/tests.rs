@@ -8543,3 +8543,72 @@ mod sqs {
         assert!(printed.contains("AKID"), "the key id is not a secret: {printed}");
     }
 }
+
+mod trino {
+    use super::*;
+    use crate::plan::{RuntimeSpec, TrinoAuth, TrinoFlavor, TrinoSourceSpec};
+
+    fn read(extra: serde_json::Value) -> Result<TrinoSourceSpec, crate::EngineError> {
+        let mut props = serde_json::json!({ "server": "https://trino.example.com:8443", "user": "ada", "query": "SELECT 1" });
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            props[k] = v;
+        }
+        let doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                {"id": "t", "position": {"x": 0, "y": 0}, "data": {"label": "t", "componentId": "src.trino", "properties": props}},
+                {"id": "o", "position": {"x": 0, "y": 0}, "data": {"label": "o", "componentId": "snk.csv", "properties": {"path": "/tmp/o.csv"}}}
+            ],
+            "edges": [{"id": "e", "source": "t", "target": "o", "data": {"connectionType": "main"}}]
+        }))
+        .unwrap();
+        Ok(compile(&doc)?
+            .stages
+            .into_iter()
+            .find_map(|s| match s.runtime {
+                Some(RuntimeSpec::TrinoSource(t)) => Some(t),
+                _ => None,
+            })
+            .expect("a Trino read"))
+    }
+
+    #[test]
+    fn a_query_needs_a_server_a_user_and_its_sql() {
+        for key in ["server", "user", "query"] {
+            let err = read(serde_json::json!({ key: " " })).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}: {err}");
+        }
+        let err = read(serde_json::json!({ "server": "trino here" })).unwrap_err().to_string();
+        assert!(err.contains("not a URL"), "{err}");
+    }
+
+    #[test]
+    fn the_sql_loses_the_semicolon_trino_refuses() {
+        assert_eq!(read(serde_json::json!({ "query": "SELECT 1;  \n" })).unwrap().query, "SELECT 1");
+        assert_eq!(read(serde_json::json!({ "query": "SELECT ';' AS s" })).unwrap().query, "SELECT ';' AS s");
+    }
+
+    #[test]
+    fn a_password_or_a_token_not_both() {
+        assert_eq!(read(serde_json::json!({})).unwrap().auth, TrinoAuth::None);
+        assert_eq!(read(serde_json::json!({ "password": "pw" })).unwrap().auth, TrinoAuth::Password("pw".into()));
+        assert_eq!(read(serde_json::json!({ "accessToken": "jwt" })).unwrap().auth, TrinoAuth::Token("jwt".into()));
+        let err = read(serde_json::json!({ "password": "pw", "accessToken": "jwt" })).unwrap_err().to_string();
+        assert!(err.contains("not both"), "{err}");
+    }
+
+    #[test]
+    fn presto_is_the_one_other_flavor() {
+        assert_eq!(read(serde_json::json!({})).unwrap().flavor, TrinoFlavor::Trino);
+        assert_eq!(read(serde_json::json!({ "flavor": "Presto" })).unwrap().flavor, TrinoFlavor::Presto);
+        let err = read(serde_json::json!({ "flavor": "hive" })).unwrap_err().to_string();
+        assert!(err.contains("hive"), "{err}");
+    }
+
+    #[test]
+    fn no_password_or_token_prints() {
+        let printed = format!("{:?}", read(serde_json::json!({ "password": "s3cret" })).unwrap());
+        assert!(!printed.contains("s3cret"), "{printed}");
+        let printed = format!("{:?}", read(serde_json::json!({ "accessToken": "t0ken" })).unwrap());
+        assert!(!printed.contains("t0ken"), "{printed}");
+    }
+}

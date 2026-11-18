@@ -3105,6 +3105,46 @@ function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
     // Apache Druid (#23). Routed by id so the databases group's generic
     // synth cannot claim it: Druid is reached over HTTP - SQL to read, the
     // task API to ingest - not with a connection string.
+    if (comp.id === 'src.trino') {
+        return base(comp, [
+            {
+                label: 'Coordinator',
+                fields: [
+                    { key: 'server', label: 'Server', kind: 'text', required: true, placeholder: 'https://trino.example.com:8443', description: 'The coordinator, as a client connects to it. Starburst Galaxy and Starburst Enterprise are Trino.' },
+                    {
+                        key: 'flavor',
+                        label: 'Server kind',
+                        kind: 'select',
+                        defaultValue: 'trino',
+                        options: [
+                            { label: 'Trino or Starburst', value: 'trino' },
+                            { label: 'Presto', value: 'presto' },
+                        ],
+                        description: 'Presto takes the same protocol under its own header names.',
+                    },
+                    { key: 'user', label: 'User', kind: 'text', required: true },
+                    { key: 'password', label: 'Password', kind: 'text', secret: true, placeholder: '••••••••', description: 'For password sign-in, which Trino accepts over https only.' },
+                    { key: 'accessToken', label: 'Access token', kind: 'text', secret: true, description: 'For OAuth2 or JWT sign-in, sent as a bearer token. Set this or a password, not both.' },
+                    { key: 'catalog', label: 'Catalog', kind: 'text', placeholder: 'hive' },
+                    { key: 'schema', label: 'Schema', kind: 'text', placeholder: 'sales' },
+                ],
+            },
+            {
+                label: 'Query',
+                fields: [
+                    {
+                        key: 'query',
+                        label: 'SQL',
+                        kind: 'textarea',
+                        rows: 6,
+                        required: true,
+                        placeholder: 'SELECT order_id, total FROM orders LIMIT 100',
+                        description: 'Each column is typed from the type Trino reports for it, so an empty result still has its columns. Arrays, maps and rows arrive as JSON.',
+                    },
+                ],
+            },
+        ]);
+    }
     if (comp.id === 'src.druid' || comp.id === 'snk.druid') {
         const isSource = comp.id === 'src.druid';
         const connection: FormSection = {

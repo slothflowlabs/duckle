@@ -104,6 +104,7 @@ mod pinecone;
 mod grpc;
 mod orc;
 mod sqs;
+mod trino;
 pub use connectors::remote_fingerprint;
 mod run_log;
 mod util;
@@ -2908,6 +2909,7 @@ impl DuckdbEngine {
                         self.run_sqs_source(&db_path, spec, sqs_peek, &mut sqs_received)
                     }
                     Some(RuntimeSpec::SqsSink(spec)) => self.run_sqs_sink(&db_path, spec),
+                    Some(RuntimeSpec::TrinoSource(spec)) => self.run_trino_source(&db_path, spec),
                     Some(RuntimeSpec::GizmoSqlSource(spec)) => {
                         self.run_gizmosql_source(&db_path, spec)
                     }

@@ -1348,6 +1348,11 @@ COMPONENTS = {
         'summary': 'Trello REST. Anonymous-style auth: append `?key={apiKey}&token={token}` to the URL. No body, no pagination (the API returns full result sets by default). Set responsePath empty since responses are top-level arrays. Base URL https://api.trello.com/1.',
         'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responseFormat', 'responsePath', 'jsonPath', 'paginationType', 'nextUrlPath', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'hasMorePath', 'pageParam', 'startPage', 'maxPages', 'incrementalField', 'incrementalInitial', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs', 'httpRequestsPerSecond', 'httpKeepCookies'],
     },
+    'src.trino': {
+        'kind': 'source',
+        'summary': 'Run SQL on a Trino, Starburst or Presto coordinator through the client REST protocol: the statement is posted, then every page is followed to the end. Each column is typed from the type the server reports, decimals, zoned timestamps, binary and UUIDs included, so an empty result still has its col...',
+        'params': ['server', 'flavor', 'user', 'password', 'accessToken', 'catalog', 'schema', 'query'],
+    },
     'src.tsv': {
         'kind': 'source',
         'summary': 'Read tab-separated files',

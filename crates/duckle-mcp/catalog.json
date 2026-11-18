@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 429,
+  "componentCount": 430,
   "components": [
     {
       "id": "src.csv",
@@ -6637,6 +6637,121 @@
                 "kind": "expression",
                 "rows": 4,
                 "placeholder": "SELECT * FROM events WHERE ..."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.trino",
+      "label": "Trino / Presto",
+      "kind": "source",
+      "availability": "available",
+      "summary": "Run SQL on a Trino, Starburst or Presto coordinator through the client REST protocol: the statement is posted, then every page is followed to the end. Each column is typed from the type the server reports, decimals, zoned timestamps, binary and UUIDs included, so an empty result still has its columns. Password or bearer-token sign-in.",
+      "category": "Sources",
+      "group": "Databases",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.trino",
+        "kind": "source",
+        "label": "Trino / Presto",
+        "description": "Run SQL on a Trino, Starburst or Presto coordinator through the client REST protocol: the statement is posted, then every page is followed to the end. Each column is typed from the type the server reports, decimals, zoned timestamps, binary and UUIDs included, so an empty result still has its columns. Password or bearer-token sign-in.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Coordinator",
+            "fields": [
+              {
+                "key": "server",
+                "label": "Server",
+                "kind": "text",
+                "required": true,
+                "placeholder": "https://trino.example.com:8443",
+                "description": "The coordinator, as a client connects to it. Starburst Galaxy and Starburst Enterprise are Trino."
+              },
+              {
+                "key": "flavor",
+                "label": "Server kind",
+                "kind": "select",
+                "defaultValue": "trino",
+                "options": [
+                  {
+                    "label": "Trino or Starburst",
+                    "value": "trino"
+                  },
+                  {
+                    "label": "Presto",
+                    "value": "presto"
+                  }
+                ],
+                "description": "Presto takes the same protocol under its own header names."
+              },
+              {
+                "key": "user",
+                "label": "User",
+                "kind": "text",
+                "required": true
+              },
+              {
+                "key": "password",
+                "label": "Password",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "••••••••",
+                "description": "For password sign-in, which Trino accepts over https only."
+              },
+              {
+                "key": "accessToken",
+                "label": "Access token",
+                "kind": "text",
+                "secret": true,
+                "description": "For OAuth2 or JWT sign-in, sent as a bearer token. Set this or a password, not both."
+              },
+              {
+                "key": "catalog",
+                "label": "Catalog",
+                "kind": "text",
+                "placeholder": "hive"
+              },
+              {
+                "key": "schema",
+                "label": "Schema",
+                "kind": "text",
+                "placeholder": "sales"
+              }
+            ]
+          },
+          {
+            "label": "Query",
+            "fields": [
+              {
+                "key": "query",
+                "label": "SQL",
+                "kind": "textarea",
+                "rows": 6,
+                "required": true,
+                "placeholder": "SELECT order_id, total FROM orders LIMIT 100",
+                "description": "Each column is typed from the type Trino reports for it, so an empty result still has its columns. Arrays, maps and rows arrive as JSON."
               }
             ]
           }
