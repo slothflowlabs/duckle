@@ -1043,6 +1043,11 @@ COMPONENTS = {
         'summary': 'Read a Lance table (local dir, LanceDB Cloud db://, or s3:// / gs:// / az:// object store) via the bundled duckle-lance sidecar.',
         'params': ['uri', 'table', 'limit', 'apiKey', 'region'],
     },
+    'src.ldap': {
+        'kind': 'source',
+        'summary': 'Search an LDAP directory, OpenLDAP or Active Directory among them, and read each entry as a row: its DN and the attributes you list, each a list of values, or every attribute as JSON. Pages through large results. objectGUID and objectSid come as Windows shows them. Over TLS (ldaps:// or StartTLS)...',
+        'params': ['url', 'startTls', 'bindDn', 'password', 'baseDn', 'scope', 'filter', 'attributes', 'pageSize'],
+    },
     'src.linear': {
         'kind': 'source',
         'summary': 'Linear GraphQL. Rides src.graphql; auth via API key in Authorization header. responsePath walks /data.<query>.<edges> or similar.',

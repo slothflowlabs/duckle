@@ -397,6 +397,34 @@ fn service_account_key(props: &JsonValue, component: &str) -> Result<Option<Stri
     Ok(key)
 }
 
+/// The attributes an LDAP search reads, as listed, one per line or separated
+/// by commas: names or OIDs, with any options after ';' (userCertificate;binary),
+/// each once. Each becomes a column, so its name is checked here.
+fn ldap_attributes(props: &JsonValue, component: &str) -> Result<Vec<String>, EngineError> {
+    let raw = string_prop(props, "attributes").unwrap_or_default();
+    let mut out: Vec<String> = Vec::new();
+    for a in raw.split([',', '\n']).map(str::trim).filter(|s| !s.is_empty()) {
+        let fits = a.starts_with(|c: char| c.is_ascii_alphanumeric())
+            && a.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | ';'));
+        if !fits {
+            return Err(EngineError::Config(format!(
+                "{component}: '{a}' is not an attribute name: letters, digits and '-', with any options after ';'. \
+                 Leave Attributes empty to read every attribute"
+            )));
+        }
+        if a.eq_ignore_ascii_case("dn") {
+            return Err(EngineError::Config(format!(
+                "{component}: the DN is always read, as the dn column, so leave it out of Attributes"
+            )));
+        }
+        if out.iter().any(|o| o.eq_ignore_ascii_case(a)) {
+            return Err(EngineError::Config(format!("{component}: {a} is listed twice in Attributes")));
+        }
+        out.push(a.to_string());
+    }
+    Ok(out)
+}
+
 /// An MQTT broker from its URL: mqtt:// (or tcp://) in the clear, on 1883
 /// unless the URL names a port; mqtts:// (or ssl://, tls://) over TLS, on 8883.
 fn mqtt_conn(props: &JsonValue, component: &str) -> Result<MqttConn, EngineError> {
@@ -962,6 +990,7 @@ pub enum RuntimeSpec {
     ServiceBusSink(ServiceBusSinkSpec),
     MqttSource(MqttSourceSpec),
     MqttSink(MqttSinkSpec),
+    LdapSource(LdapSourceSpec),
     GizmoSqlSource(GizmoSqlSourceSpec),
     GizmoSqlSink(GizmoSqlSinkSpec),
     RabbitSink(RabbitSinkSpec),
@@ -2588,6 +2617,7 @@ fn build_stage(
     let mut servicebus_sink: Option<ServiceBusSinkSpec> = None;
     let mut mqtt_source: Option<MqttSourceSpec> = None;
     let mut mqtt_sink: Option<MqttSinkSpec> = None;
+    let mut ldap_source: Option<LdapSourceSpec> = None;
     let mut gizmosql_source: Option<GizmoSqlSourceSpec> = None;
     let mut gizmosql_sink: Option<GizmoSqlSinkSpec> = None;
     let mut rabbit_sink: Option<RabbitSinkSpec> = None;
@@ -6317,6 +6347,53 @@ fn build_stage(
             receive_and_delete,
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.ldap" {
+        // An LDAP search, paged, through ldap3 on Duckle's own TLS.
+        let text = |key: &str| string_prop(&props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let config = |why: String| EngineError::Config(format!("{component_id}: {why}"));
+        let url = text("url").ok_or_else(|| config("a directory URL is required, such as ldaps://dc1.corp.example.com".into()))?;
+        let tls_from_start = match url::Url::parse(&url).map(|u| u.scheme().to_string()).as_deref() {
+            Ok("ldap") => false,
+            Ok("ldaps") => true,
+            _ => return Err(config(format!("'{url}' is not a directory URL: it starts with ldap:// or, over TLS, ldaps://"))),
+        };
+        let start_tls = props.get("startTls").and_then(|v| v.as_bool()).unwrap_or(false);
+        if start_tls && tls_from_start {
+            return Err(config("StartTLS is for ldap://, and ldaps:// is TLS from the start".into()));
+        }
+        // A password is kept as written: spaces at its ends are part of it.
+        let (bind_dn, password) = (text("bindDn"), string_prop(&props, "password").filter(|s| !s.is_empty()));
+        match (&bind_dn, &password) {
+            (None, Some(_)) => return Err(config("a password needs a bind DN".into())),
+            (Some(_), None) => {
+                return Err(config(
+                    "a bind DN needs its password: a bind with none is anonymous on some directories and refused on others".into(),
+                ))
+            }
+            _ => {}
+        }
+        let base_dn = text("baseDn").ok_or_else(|| config("a base DN is required, such as dc=example,dc=org".into()))?;
+        let scope = text("scope").unwrap_or_else(|| "sub".into());
+        if !matches!(scope.as_str(), "base" | "one" | "sub") {
+            return Err(config(format!("scope '{scope}' is not base, one or sub")));
+        }
+        let page_size = whole_number(&props, "pageSize", component_id)?.unwrap_or(500);
+        if !(1..=100_000).contains(&page_size) {
+            return Err(config(format!("pageSize must be from 1 to 100000, not {page_size}")));
+        }
+        ldap_source = Some(LdapSourceSpec {
+            node_id: node.id.clone(),
+            url,
+            start_tls,
+            bind_dn,
+            password,
+            base_dn,
+            scope,
+            filter: text("filter").unwrap_or_else(|| "(objectClass=*)".into()),
+            attributes: ldap_attributes(&props, component_id)?,
+            page_size: page_size as u32,
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.gizmosql" {
         // GizmoSQL (Arrow Flight SQL) source via the clean-room crate::gizmosql
         // client. Result streams to Parquet + materializes like the ADBC source.
@@ -8646,6 +8723,7 @@ fn build_stage(
         .or_else(|| servicebus_sink.map(RuntimeSpec::ServiceBusSink))
         .or_else(|| mqtt_source.map(RuntimeSpec::MqttSource))
         .or_else(|| mqtt_sink.map(RuntimeSpec::MqttSink))
+        .or_else(|| ldap_source.map(RuntimeSpec::LdapSource))
         .or_else(|| rabbit_sink.map(RuntimeSpec::RabbitSink))
         .or_else(|| rabbit_source.map(RuntimeSpec::RabbitSource))
         .or_else(|| git_source.map(RuntimeSpec::GitSource))

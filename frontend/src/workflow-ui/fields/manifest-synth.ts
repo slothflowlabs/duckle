@@ -6863,6 +6863,39 @@ function synthMiscSource(comp: ComponentDef): ComponentManifest {
             },
         ]);
     }
+    if (id === 'src.ldap') {
+        return base(comp, [
+            {
+                label: 'Directory',
+                fields: [
+                    { key: 'url', label: 'Directory URL', kind: 'text', required: true, placeholder: 'ldaps://dc1.corp.example.com', description: 'ldap:// on port 389 unless the URL names one; ldaps:// over TLS, on 636.' },
+                    { key: 'startTls', label: 'StartTLS', kind: 'bool', defaultValue: false, description: 'For ldap://: turn the connection to TLS before signing in.' },
+                    { key: 'bindDn', label: 'Bind DN', kind: 'text', placeholder: 'cn=reader,dc=example,dc=org', description: 'Who to sign in as. Active Directory also takes reader@corp.example.com. Left empty with no password, the search runs anonymously.' },
+                    { key: 'password', label: 'Password', kind: 'text', secret: true },
+                ],
+            },
+            {
+                label: 'Search',
+                fields: [
+                    { key: 'baseDn', label: 'Base DN', kind: 'text', required: true, placeholder: 'dc=example,dc=org', description: 'Where the search starts.' },
+                    {
+                        key: 'scope',
+                        label: 'Scope',
+                        kind: 'select',
+                        defaultValue: 'sub',
+                        options: [
+                            { label: 'The base and everything below it', value: 'sub' },
+                            { label: 'The entries one level below the base', value: 'one' },
+                            { label: 'The base entry alone', value: 'base' },
+                        ],
+                    },
+                    { key: 'filter', label: 'Filter', kind: 'text', defaultValue: '(objectClass=*)', placeholder: '(&(objectClass=user)(mail=*))' },
+                    { key: 'attributes', label: 'Attributes', kind: 'textarea', placeholder: 'cn, mail, memberOf', description: 'One per line or separated by commas. Each becomes a column holding a list of its values. Left empty, every attribute is read into one JSON column. Values that are not text come as base64; objectGUID and objectSid come as Windows shows them.' },
+                    { key: 'pageSize', label: 'Page size', kind: 'integer', defaultValue: 500, description: 'Entries the directory sends at a time. Active Directory sends at most 1000.' },
+                ],
+            },
+        ]);
+    }
     if (id === 'src.git') {
         // Every field here was wrong. The reader shells out to the system `git`
         // against a LOCAL CLONE (plan/mod.rs, the src.git arm: "repo required

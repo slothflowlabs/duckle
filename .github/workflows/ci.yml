@@ -666,6 +666,36 @@ jobs:
           DUCKLE_SFTP_DIR: /srv/duckle-sftp
         run: cargo test -p duckle-duckdb-engine --test sftp
 
+  ldap-integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install DuckDB CLI
+        run: |
+          set -e
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
+          mkdir -p "$RUNNER_TEMP/duckdb"
+          tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
+          echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
+      - name: Start an OpenLDAP directory
+        run: |
+          set -e
+          # The image demands a client certificate by default; a directory rarely does.
+          docker run -d --name ldap --hostname localhost -p 1389:389 --env LDAP_TLS_VERIFY_CLIENT=never osixia/openldap:1.5.0
+          for i in $(seq 1 60); do
+            docker exec ldap ldapsearch -x -H ldap://localhost -D cn=admin,dc=example,dc=org -w admin -b dc=example,dc=org -s base > /dev/null 2>&1 && break
+            sleep 2
+          done
+          # ca.crt is a symlink inside the image, which docker cp would copy as a link.
+          docker exec ldap cat /container/service/slapd/assets/certs/ca.crt > "$RUNNER_TEMP/ldap-ca.crt"
+      - name: Run LDAP tests
+        env:
+          DUCKLE_LDAP_URL: ldap://localhost:1389
+          DUCKLE_LDAP_CA: ${{ runner.temp }}/ldap-ca.crt
+        run: cargo test -p duckle-duckdb-engine --test ldap
+
   mysql-integration:
     runs-on: ubuntu-24.04
     services:

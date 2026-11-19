@@ -1141,6 +1141,42 @@ pub struct MqttSinkSpec {
     pub retain: bool,
 }
 
+/// src.ldap: a search of an LDAP directory, a page at a time.
+#[derive(Clone)]
+pub struct LdapSourceSpec {
+    pub node_id: String,
+    /// ldap:// or ldaps://.
+    pub url: String,
+    pub start_tls: bool,
+    /// Both or neither: neither binds anonymously.
+    pub bind_dn: Option<String>,
+    pub password: Option<String>,
+    pub base_dn: String,
+    /// base, one or sub.
+    pub scope: String,
+    pub filter: String,
+    /// Empty: every user attribute, in one JSON object.
+    pub attributes: Vec<String>,
+    pub page_size: u32,
+}
+
+impl std::fmt::Debug for LdapSourceSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LdapSourceSpec")
+            .field("node_id", &self.node_id)
+            .field("url", &self.url)
+            .field("start_tls", &self.start_tls)
+            .field("bind_dn", &self.bind_dn)
+            .field("password", &self.password.as_ref().map(|_| "***"))
+            .field("base_dn", &self.base_dn)
+            .field("scope", &self.scope)
+            .field("filter", &self.filter)
+            .field("attributes", &self.attributes)
+            .field("page_size", &self.page_size)
+            .finish()
+    }
+}
+
 /// src.mongodb.cdc: the changes a MongoDB change stream reports for one
 /// collection, from where the last successful run stopped.
 #[derive(Clone)]

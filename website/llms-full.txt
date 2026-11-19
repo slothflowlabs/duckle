@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 436 components, 431 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 226 connectors (140 sources / 86 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 437 components, 432 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 227 connectors (141 sources / 86 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -81,7 +81,7 @@ Every component, by id. `src.*` reads, `snk.*` writes, `xf.*` transforms,
 `qa.*` checks, `ctl.*` controls flow, `code.*` runs your own code. Entries
 marked [planned] or [preview] are not usable yet.
 
-### Sources (read) (141)
+### Sources (read) (142)
 
 - `src.access` Microsoft Access: Read an Access database (.accdb / .mdb): a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver, Linux and macOS through mdbtools. Text, currency, yes/no and dates keep their types
 - `src.adbc` ADBC (Arrow): Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options
@@ -145,6 +145,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.kafka` Apache Kafka: Batch-consume up to maxRecords messages from one partition, or from every partition of the topic in turn (allPartitions, each row then carries its partition), via the pure-Rust `rskafka` driver. Emits {offset, key, value, timestamp_ms} rows. startOffset negative = read from earliest available; positive = read from that offset. Batch ETL semantics - continuous streaming is on the roadmap
 - `src.kinesis` AWS Kinesis: Read one shard of a Kinesis stream, or every shard in turn, via direct HTTP + AWS SigV4 (no AWS SDK). Walks ListShards -> GetShardIterator -> GetRecords. Props: region, accessKeyId, secretAccessKey, sessionToken (optional STS), streamName, shardIndex (default 0), allShards, iteratorType (TRIM_HORIZON or LATEST), maxRecords (across every shard read), endpoint (a VPC endpoint or LocalStack). Records with JSON-object payloads unfold as rows; others land as {partition_key, sequence_number, data}
 - `src.lancedb` LanceDB: Read a Lance table (local dir, LanceDB Cloud db://, or s3:// / gs:// / az:// object store) via the bundled duckle-lance sidecar
+- `src.ldap` LDAP / Active Directory: Search an LDAP directory, OpenLDAP or Active Directory among them, and read each entry as a row: its DN and the attributes you list, each a list of values, or every attribute as JSON. Pages through large results. objectGUID and objectSid come as Windows shows them. Over TLS (ldaps:// or StartTLS) with the roots Duckle trusts
 - `src.linear` Linear: Linear GraphQL. Rides src.graphql; auth via API key in Authorization header. responsePath walks /data.<query>.<edges> or similar
 - `src.mailchimp` Mailchimp: Mailchimp REST. Bearer API key (the key has a region suffix - the URL is https://{region}.api.mailchimp.com/3.0). Offset pagination via `offset` + `count`. responsePath /lists (or /campaigns / etc)
 - `src.manticore` Manticore Search: Read rows from a Manticore table via the HTTP JSON /search API (port 9308). Manticore answers in the Elasticsearch response shape but takes its own request: the table is named in the body as `table` (renamed from `index` in 6.0) and paging is limit/offset. A window past the default 1000 best-ranked matches raises max_matches to suit. Optional raw JSON query; optional HTTP Basic auth

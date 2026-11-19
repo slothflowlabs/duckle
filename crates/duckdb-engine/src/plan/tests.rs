@@ -8966,3 +8966,83 @@ mod mqtt {
         assert!(printed.contains("ada"), "the user name is not a secret: {printed}");
     }
 }
+
+mod ldap {
+    use super::*;
+    use crate::plan::{LdapSourceSpec, RuntimeSpec};
+    use serde_json::json;
+
+    fn source(extra: serde_json::Value) -> Result<LdapSourceSpec, crate::EngineError> {
+        let mut props = json!({ "url": "ldap://dc1.corp.example.com", "baseDn": "dc=example,dc=org" });
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            props[k] = v;
+        }
+        let doc: PipelineDoc = serde_json::from_value(json!({
+            "nodes": [
+                {"id": "a", "position": {"x": 0, "y": 0}, "data": {"label": "a", "componentId": "src.ldap", "properties": props}},
+                {"id": "b", "position": {"x": 0, "y": 0}, "data": {"label": "b", "componentId": "snk.csv", "properties": { "path": "/tmp/b.csv" }}}
+            ],
+            "edges": [{"id": "e", "source": "a", "target": "b", "data": {"connectionType": "main"}}]
+        }))
+        .unwrap();
+        Ok(compile(&doc)?
+            .stages
+            .into_iter()
+            .filter_map(|s| s.runtime)
+            .find_map(|s| match s {
+                RuntimeSpec::LdapSource(l) => Some(l),
+                _ => None,
+            })
+            .expect("an LDAP search"))
+    }
+
+    #[test]
+    fn a_directory_is_reached_with_ldap_or_ldaps() {
+        assert_eq!(source(json!({})).unwrap().url, "ldap://dc1.corp.example.com");
+        assert!(source(json!({ "url": "ldaps://dc1.corp.example.com:636" })).is_ok());
+        for bad in ["http://dc1.corp.example.com", "dc1.corp.example.com:389", ""] {
+            assert!(source(json!({ "url": bad })).is_err(), "{bad}");
+        }
+        assert!(source(json!({ "startTls": true })).unwrap().start_tls);
+        let err = source(json!({ "url": "ldaps://dc1.corp.example.com", "startTls": true })).unwrap_err().to_string();
+        assert!(err.contains("StartTLS"), "{err}");
+    }
+
+    #[test]
+    fn a_bind_takes_a_dn_and_its_password_or_neither() {
+        let s = source(json!({})).unwrap();
+        assert_eq!((s.bind_dn, s.password), (None, None), "anonymous");
+        let s = source(json!({ "bindDn": "reader@corp.example.com", "password": " pw " })).unwrap();
+        assert_eq!((s.bind_dn.as_deref(), s.password.as_deref()), (Some("reader@corp.example.com"), Some(" pw ")), "a password is kept as written");
+        assert!(source(json!({ "password": "pw" })).is_err());
+        assert!(source(json!({ "bindDn": "cn=reader,dc=example,dc=org" })).is_err());
+    }
+
+    #[test]
+    fn a_search_takes_its_options_as_written() {
+        let s = source(json!({})).unwrap();
+        assert_eq!((s.scope.as_str(), s.filter.as_str(), s.page_size), ("sub", "(objectClass=*)", 500));
+        assert!(s.attributes.is_empty(), "every attribute, as JSON");
+        let s = source(json!({ "scope": "one", "filter": "(mail=*)", "pageSize": "50" })).unwrap();
+        assert_eq!((s.scope.as_str(), s.filter.as_str(), s.page_size), ("one", "(mail=*)", 50));
+        for (key, value) in [("scope", json!("subtree")), ("pageSize", json!(0)), ("pageSize", json!(100_001)), ("baseDn", json!(""))] {
+            assert!(source(json!({ key: value })).is_err(), "{key}={value}");
+        }
+    }
+
+    #[test]
+    fn attributes_are_listed_once_each_as_names() {
+        let s = source(json!({ "attributes": "cn, mail\nuserCertificate;binary, 2.5.4.3" })).unwrap();
+        assert_eq!(s.attributes, ["cn", "mail", "userCertificate;binary", "2.5.4.3"]);
+        for bad in ["*", "dn", "cn, CN", "mail@x", "-cn"] {
+            assert!(source(json!({ "attributes": bad })).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn no_password_prints() {
+        let printed = format!("{:?}", source(json!({ "bindDn": "cn=reader", "password": "s3cr3t-pw" })).unwrap());
+        assert!(!printed.contains("s3cr3t"), "{printed}");
+        assert!(printed.contains("cn=reader"), "the bind DN is not a secret: {printed}");
+    }
+}

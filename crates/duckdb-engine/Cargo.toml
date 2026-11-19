@@ -40,6 +40,9 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 webpki-roots = "1.0"
 rustls-native-certs = "0.8"
 rustls-pemfile = "2"
+# src.ldap: LDAP and Active Directory. Its rustls feature takes Duckle's own
+# client config (set_config), so it trusts what every other connector trusts.
+ldap3 = { version = "0.12.1", default-features = false, features = ["sync", "tls-rustls-ring"] }
 # Snowflake JWT RS256 auth path. Reads a PEM-encoded private key,
 # derives the public-key fingerprint, and signs the standard
 # Snowflake claims (iss / sub / iat / exp). PAT bearer auth is also
