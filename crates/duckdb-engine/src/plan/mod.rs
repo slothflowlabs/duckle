@@ -986,6 +986,7 @@ pub enum RuntimeSpec {
     TrinoSource(TrinoSourceSpec),
     SqlServerCdc(SqlServerCdcSpec),
     MongoCdc(MongoCdcSpec),
+    MysqlCdc(MysqlCdcSpec),
     ServiceBusSource(ServiceBusSourceSpec),
     ServiceBusSink(ServiceBusSinkSpec),
     MqttSource(MqttSourceSpec),
@@ -2613,6 +2614,7 @@ fn build_stage(
     let mut trino_source: Option<TrinoSourceSpec> = None;
     let mut sqlserver_cdc: Option<SqlServerCdcSpec> = None;
     let mut mongo_cdc: Option<MongoCdcSpec> = None;
+    let mut mysql_cdc: Option<MysqlCdcSpec> = None;
     let mut servicebus_source: Option<ServiceBusSourceSpec> = None;
     let mut servicebus_sink: Option<ServiceBusSinkSpec> = None;
     let mut mqtt_source: Option<MqttSourceSpec> = None;
@@ -6257,6 +6259,46 @@ fn build_stage(
             batch_size,
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.mysql.cdc" {
+        // The binary log, read the way a replica reads it, for one table.
+        let text = |key: &str| string_prop(&props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let config = |why: String| EngineError::Config(format!("{component_id}: {why}"));
+        let host = text("host").ok_or_else(|| config("a host is required".into()))?;
+        let port = whole_number(&props, "port", component_id)?.unwrap_or(3306);
+        let port = u16::try_from(port).ok().filter(|p| *p > 0).ok_or_else(|| config(format!("port {port} is not a port")))?;
+        let user = text("user").or_else(|| text("username")).ok_or_else(|| config("a user is required".into()))?;
+        let database = text("database").ok_or_else(|| config("a database is required".into()))?;
+        let table = text("table").ok_or_else(|| config("name the table whose changes to read".into()))?;
+        let batch_size = whole_number(&props, "batchSize", component_id)?.unwrap_or(100_000);
+        if batch_size == 0 {
+            return Err(config("batchSize must be at least 1".into()));
+        }
+        let server_id = match whole_number(&props, "serverId", component_id)? {
+            None => None,
+            Some(id) => Some(u32::try_from(id).ok().filter(|i| *i > 0).ok_or_else(|| {
+                config(format!("serverId {id} is not a replica id: it runs from 1 to 4294967295"))
+            })?),
+        };
+        let ssl_mode = text("sslMode").unwrap_or_else(|| "preferred".into()).to_ascii_lowercase();
+        if !matches!(ssl_mode.as_str(), "disabled" | "preferred" | "required" | "verify_ca" | "verify_identity") {
+            return Err(config(format!(
+                "sslMode '{ssl_mode}' is not disabled, preferred, required, verify_ca or verify_identity"
+            )));
+        }
+        mysql_cdc = Some(MysqlCdcSpec {
+            node_id: node.id.clone(),
+            host,
+            port,
+            user,
+            // A password is kept as written: spaces at its ends are part of it.
+            password: string_prop(&props, "password").unwrap_or_default(),
+            database,
+            table,
+            batch_size,
+            server_id,
+            ssl_mode,
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.mongodb.cdc" {
         // A change stream on one collection, resumed after the saved token.
         let text = |key: &str| string_prop(&props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
@@ -8719,6 +8761,7 @@ fn build_stage(
         .or_else(|| trino_source.map(RuntimeSpec::TrinoSource))
         .or_else(|| sqlserver_cdc.map(RuntimeSpec::SqlServerCdc))
         .or_else(|| mongo_cdc.map(RuntimeSpec::MongoCdc))
+        .or_else(|| mysql_cdc.map(RuntimeSpec::MysqlCdc))
         .or_else(|| servicebus_source.map(RuntimeSpec::ServiceBusSource))
         .or_else(|| servicebus_sink.map(RuntimeSpec::ServiceBusSink))
         .or_else(|| mqtt_source.map(RuntimeSpec::MqttSource))

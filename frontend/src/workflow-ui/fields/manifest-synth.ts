@@ -2266,6 +2266,36 @@ function synthPostgresCdc(comp: ComponentDef): ComponentManifest {
     ]);
 }
 
+function synthMysqlCdc(comp: ComponentDef): ComponentManifest {
+    const my = synthDbSource({ ...comp, id: 'src.mysql' });
+    const connection = my.sections.filter(s => s.label === 'Connection');
+    return base(comp, [
+        ...connection,
+        {
+            label: 'Change feed',
+            fields: [
+                { key: 'table', label: 'Table', kind: 'text', required: true, placeholder: 'orders', description: 'The table to read, in the database above. The server needs its binary log on in ROW format with FULL row images, as MySQL 8 has it by default, and the user REPLICATION SLAVE and REPLICATION CLIENT. Each change arrives as one row: _op (insert / update / delete), _file and _pos (where in the log), _ts, then the row, typed as the table declares it. A delete carries the values the row had. The first run starts at the end of the log: load the table once, then read its changes from there.' },
+                { key: 'batchSize', label: 'Changes per run', kind: 'integer', defaultValue: 100000, description: 'Reading stops at the end of the transaction that reaches this, so a transaction is never split across runs. The rest arrive on the next run.' },
+                {
+                    key: 'sslMode',
+                    label: 'TLS',
+                    kind: 'select',
+                    defaultValue: 'preferred',
+                    options: [
+                        { label: 'Preferred: TLS when the server offers it', value: 'preferred' },
+                        { label: 'Required: TLS, certificate not checked', value: 'required' },
+                        { label: 'Verify CA: TLS, certificate from a trusted CA', value: 'verify_ca' },
+                        { label: 'Verify identity: TLS, certificate for this host', value: 'verify_identity' },
+                        { label: 'Disabled', value: 'disabled' },
+                    ],
+                    description: 'As MySQL\'s --ssl-mode. The verify modes trust the built-in roots and DUCKLE_CA_CERT.',
+                },
+                { key: 'serverId', label: 'Replica id', kind: 'integer', description: 'The server_id this read registers with, as a replica does. It must differ from every other replica of this server, or one pushes the other off. Left empty, one is made from the pipeline and node, above a billion.' },
+            ],
+        },
+    ]);
+}
+
 function synthSqlServerCdc(comp: ComponentDef): ComponentManifest {
     const ms = synthDbSource({ ...comp, id: 'src.sqlserver' });
     const connection = ms.sections.filter(s => s.label === 'SQL Server connection');
@@ -11022,6 +11052,7 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
     // form; routed by id ahead of the group checks.
     if (comp.id === 'src.postgres.cdc') return synthPostgresCdc(comp);
     if (comp.id === 'src.sqlserver.cdc') return synthSqlServerCdc(comp);
+    if (comp.id === 'src.mysql.cdc') return synthMysqlCdc(comp);
     if (comp.id === 'src.generate') return synthGenerator(comp);
     if (comp.id === 'qa.assert') return synthAssert(comp);
     if (comp.id === 'src.model') return synthModelSource(comp);

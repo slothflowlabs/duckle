@@ -43,6 +43,8 @@ rustls-pemfile = "2"
 # src.ldap: LDAP and Active Directory. Its rustls feature takes Duckle's own
 # client config (set_config), so it trusts what every other connector trusts.
 ldap3 = { version = "0.12.1", default-features = false, features = ["sync", "tls-rustls-ring"] }
+# src.mysql.cdc: the binlog, read the way a replica reads it, over rustls on ring.
+mysql_async = { version = "0.37", default-features = false, features = ["minimal-rust", "binlog", "rustls-tls", "ring", "tls12"] }
 # Snowflake JWT RS256 auth path. Reads a PEM-encoded private key,
 # derives the public-key fingerprint, and signs the standard
 # Snowflake claims (iss / sub / iat / exp). PAT bearer auth is also

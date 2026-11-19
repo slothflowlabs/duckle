@@ -1113,6 +1113,11 @@ COMPONENTS = {
         'summary': 'Read from MySQL via the DuckDB mysql extension',
         'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'mode', 'schemaName', 'tableName', 'sql', 'pushdown', 'readOnly', 'connString'],
     },
+    'src.mysql.cdc': {
+        'kind': 'source',
+        'summary': 'Change data capture from MySQL and MariaDB: every insert, update and delete of a table, read from the binary log the way a replica reads it, from where the last run stopped to the end of the log. The position is saved only when the run succeeds, so a failed run reads the same changes again; a log...',
+        'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'table', 'batchSize', 'sslMode', 'serverId'],
+    },
     'src.nats': {
         'kind': 'source',
         'summary': 'Subscribe-with-timeout collector via the pure-Rust `async-nats` driver. Drains up to maxRecords messages from subject within timeoutMs wall-clock. Emits {subject, payload} rows. Batch ETL semantics - continuous streaming is on the roadmap.',

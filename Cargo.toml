@@ -94,6 +94,20 @@ strip = "symbols"
 # existing catch_unwind boundaries (autodetect probe, duckle-runner serve)
 # actually work in shipped builds (#141).
 
+# mysql_common 0.37 subtracts 256 from an unsigned fraction when it decodes a
+# negative TIME(1) or TIME(2) from the binary log. Checked, that panics, and
+# src.mysql.cdc reports it; unchecked, as release builds would leave it, it
+# wraps into a wrong time without a word. Each release profile says so, so the
+# runner built with release-runner does too.
+[profile.release.package.mysql_common]
+overflow-checks = true
+
+[profile.release-fast.package.mysql_common]
+overflow-checks = true
+
+[profile.release-runner.package.mysql_common]
+overflow-checks = true
+
 # Faster release builds for dev iteration on the desktop app.
 [profile.release-fast]
 inherits = "release"

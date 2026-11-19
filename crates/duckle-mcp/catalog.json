@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 437,
+  "componentCount": 438,
   "components": [
     {
       "id": "src.csv",
@@ -6070,6 +6070,145 @@
                 "kind": "integer",
                 "defaultValue": 100000,
                 "description": "Reading stops at the end of the transaction that reaches this, so a transaction is never split across runs. The rest arrive on the next run."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.mysql.cdc",
+      "label": "MySQL CDC",
+      "kind": "source",
+      "availability": "available",
+      "summary": "Change data capture from MySQL and MariaDB: every insert, update and delete of a table, read from the binary log the way a replica reads it, from where the last run stopped to the end of the log. The position is saved only when the run succeeds, so a failed run reads the same changes again; a log purged before a run read it fails the run rather than skipping changes. Each change is a row typed as the table declares it.",
+      "category": "Sources",
+      "group": "Databases",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.mysql.cdc",
+        "kind": "source",
+        "label": "MySQL CDC",
+        "description": "Change data capture from MySQL and MariaDB: every insert, update and delete of a table, read from the binary log the way a replica reads it, from where the last run stopped to the end of the log. The position is saved only when the run succeeds, so a failed run reads the same changes again; a log purged before a run read it fails the run rather than skipping changes. Each change is a row typed as the table declares it.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Connection",
+            "fields": [
+              {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "mysql"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
+                "key": "host",
+                "label": "Host",
+                "kind": "text",
+                "required": true,
+                "placeholder": "localhost"
+              },
+              {
+                "key": "port",
+                "label": "Port",
+                "kind": "integer",
+                "defaultValue": 3306
+              },
+              {
+                "key": "database",
+                "label": "Database",
+                "kind": "text",
+                "required": true,
+                "placeholder": "mydb"
+              },
+              {
+                "key": "username",
+                "label": "Username",
+                "kind": "text"
+              },
+              {
+                "key": "password",
+                "label": "Password",
+                "kind": "text",
+                "placeholder": "••••••••",
+                "secret": true
+              }
+            ]
+          },
+          {
+            "label": "Change feed",
+            "fields": [
+              {
+                "key": "table",
+                "label": "Table",
+                "kind": "text",
+                "required": true,
+                "placeholder": "orders",
+                "description": "The table to read, in the database above. The server needs its binary log on in ROW format with FULL row images, as MySQL 8 has it by default, and the user REPLICATION SLAVE and REPLICATION CLIENT. Each change arrives as one row: _op (insert / update / delete), _file and _pos (where in the log), _ts, then the row, typed as the table declares it. A delete carries the values the row had. The first run starts at the end of the log: load the table once, then read its changes from there."
+              },
+              {
+                "key": "batchSize",
+                "label": "Changes per run",
+                "kind": "integer",
+                "defaultValue": 100000,
+                "description": "Reading stops at the end of the transaction that reaches this, so a transaction is never split across runs. The rest arrive on the next run."
+              },
+              {
+                "key": "sslMode",
+                "label": "TLS",
+                "kind": "select",
+                "defaultValue": "preferred",
+                "options": [
+                  {
+                    "label": "Preferred: TLS when the server offers it",
+                    "value": "preferred"
+                  },
+                  {
+                    "label": "Required: TLS, certificate not checked",
+                    "value": "required"
+                  },
+                  {
+                    "label": "Verify CA: TLS, certificate from a trusted CA",
+                    "value": "verify_ca"
+                  },
+                  {
+                    "label": "Verify identity: TLS, certificate for this host",
+                    "value": "verify_identity"
+                  },
+                  {
+                    "label": "Disabled",
+                    "value": "disabled"
+                  }
+                ],
+                "description": "As MySQL's --ssl-mode. The verify modes trust the built-in roots and DUCKLE_CA_CERT."
+              },
+              {
+                "key": "serverId",
+                "label": "Replica id",
+                "kind": "integer",
+                "description": "The server_id this read registers with, as a replica does. It must differ from every other replica of this server, or one pushes the other off. Left empty, one is made from the pipeline and node, above a billion."
               }
             ]
           }

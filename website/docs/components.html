@@ -17,16 +17,16 @@
 <meta property="og:site_name" content="Duckle" />
 <meta property="og:url" content="https://duckle.org/docs/components.html" />
 <meta property="og:title" content="Component reference - Duckle" />
-<meta property="og:description" content="The Duckle component reference: 437 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta property="og:description" content="The Duckle component reference: 438 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta property="og:image" content="https://duckle.org/assets/img/og-card.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:url" content="https://duckle.org/docs/components.html" />
 <meta name="twitter:title" content="Component reference - Duckle" />
-<meta name="twitter:description" content="The Duckle component reference: 437 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta name="twitter:description" content="The Duckle component reference: 438 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta name="twitter:image" content="https://duckle.org/assets/img/og-card.png" />
-<meta name="description" content="The Duckle component reference: 437 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta name="description" content="The Duckle component reference: 438 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta name="keywords" content="visual ETL tool, DuckDB ETL, open source ETL, ELT tool, code-first ETL, Python ETL, ETL for AI agents, MCP ETL, data pipeline builder, dbt GUI, dbt on DuckDB, DuckLake, Quack DuckDB, no-code data pipeline, Fivetran alternative, Airbyte alternative, Talend alternative, dlt alternative, self-hosted ETL, local-first ETL" />
 <meta name="theme-color" content="#07090f" />
 <link rel="apple-touch-icon" href="../assets/img/duckle-mark.v4.svg" />
@@ -61,8 +61,8 @@
 {
   "@context": "https://schema.org",
   "@type": "TechArticle",
-  "headline": "Duckle components reference: 437 sources, transforms, sinks and data-quality nodes",
-  "description": "The Duckle component reference: 437 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB.",
+  "headline": "Duckle components reference: 438 sources, transforms, sinks and data-quality nodes",
+  "description": "The Duckle component reference: 438 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB.",
   "author": {
     "@type": "Organization",
     "name": "SlothFlow Labs"
@@ -133,10 +133,10 @@
 <span class="eyebrow">Reference</span>
 <h1>Component reference</h1>
 <!-- BEGIN GENERATED summary (website/scripts/build-llms.mjs writes this from the component catalog; edit it there) -->
-<p class="lead">Duckle ships 437 components across six kinds - 142 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 87 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 25 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 432 are available today; the 0 in preview and the 5 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
+<p class="lead">Duckle ships 438 components across six kinds - 143 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 87 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 25 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 433 are available today; the 0 in preview and the 5 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
 
 <div class="grid cols-3">
-  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span><h3>142 sources</h3><p>Files, lakehouse, databases, warehouses, object storage, streaming, SaaS APIs, NoSQL, vector DBs and more, all under <code>src.*</code>.</p></div>
+  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span><h3>143 sources</h3><p>Files, lakehouse, databases, warehouses, object storage, streaming, SaaS APIs, NoSQL, vector DBs and more, all under <code>src.*</code>.</p></div>
   <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg></span><h3>145 transforms</h3><p>Fields, rows, aggregates, joins, windows, strings, dates, JSON, arrays, CDC/SCD, AI and search, all under <code>xf.*</code>.</p></div>
   <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg></span><h3>87 sinks</h3><p>Files, databases, warehouses, object storage, vector DBs, messaging and comms, all under <code>snk.*</code> with universal write modes.</p></div>
 </div>
@@ -195,7 +195,7 @@
 </table>
 </div>
 
-<h3 id="sources-databases">Databases (19)</h3>
+<h3 id="sources-databases">Databases (20)</h3>
 <div style="overflow-x:auto">
 <table>
   <thead><tr><th>Component</th><th>What it does</th></tr></thead>
@@ -206,6 +206,7 @@
     <tr><td>MariaDB<br><code>src.mariadb</code></td><td>Read from MariaDB via the DuckDB mysql extension</td></tr>
     <tr><td>SQL Server<br><code>src.sqlserver</code></td><td>Read SQL Server via the native TDS protocol (tiberius, pure Rust). SQL auth (user/password); trust_cert option for self-signed dev servers</td></tr>
     <tr><td>SQL Server CDC<br><code>src.sqlserver.cdc</code></td><td>Change data capture from SQL Server: every insert, update and delete its CDC recorded for a table, in commit order, read from the change table between where the last run stopped and the newest change. The position is saved only when the run succeeds, so a failed run reads the same changes again; changes cleaned up before a run read them fail it rather than be skipped. Needs CDC on for the table (sp_cdc_enable_db, sp_cdc_enable_table); no JVM, no Kafka</td></tr>
+    <tr><td>MySQL CDC<br><code>src.mysql.cdc</code></td><td>Change data capture from MySQL and MariaDB: every insert, update and delete of a table, read from the binary log the way a replica reads it, from where the last run stopped to the end of the log. The position is saved only when the run succeeds, so a failed run reads the same changes again; a log purged before a run read it fails the run rather than skipping changes. Each change is a row typed as the table declares it</td></tr>
     <tr><td>Oracle<br><code>src.oracle</code></td><td>Read Oracle via the official <code>oracle</code> Rust crate (ODPI-C). Built into the shipped binary - users need Oracle Instant Client (libclntsh.{so,dll,dylib}) on the library path at RUNTIME; the executor surfaces a clear OCI loader error if it's missing. SQL auth via user / password; EZ Connect string for host:port/service_name</td></tr>
     <tr><td>IBM DB2<br><code>src.db2</code></td><td>Read IBM DB2 through the IBM Data Server ODBC driver (DB2 ships no DuckDB extension and no native Rust driver). Install the IBM driver, then connect with friendly host / port / database / user / password fields, a DSN, or a full ODBC connection string. Whole-table read or custom SQL; types preserved</td></tr>
     <tr><td>SQLite<br><code>src.sqlite</code></td><td>Read SQLite tables</td></tr>

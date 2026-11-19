@@ -732,6 +732,14 @@ jobs:
           DUCKLE_MYSQL_USER: root
           DUCKLE_MYSQL_PASS: mytest
         run: cargo test -p duckle-duckdb-engine --test execution -- mysql_
+      - name: Run MySQL change data capture tests
+        env:
+          DUCKLE_MYSQL_HOST: 127.0.0.1
+          DUCKLE_MYSQL_PORT: '3306'
+          DUCKLE_MYSQL_DB: ducktest
+          DUCKLE_MYSQL_USER: root
+          DUCKLE_MYSQL_PASS: mytest
+        run: cargo test -p duckle-duckdb-engine --test mysql_cdc
 
   # Live SQL Server tests: date/time typing (#362) and the sink's upserts. They
   # skipped everywhere else, which is how the default bulk path broke every

@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 437 components, 432 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 227 connectors (141 sources / 86 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 438 components, 433 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 228 connectors (142 sources / 86 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -81,7 +81,7 @@ Every component, by id. `src.*` reads, `snk.*` writes, `xf.*` transforms,
 `qa.*` checks, `ctl.*` controls flow, `code.*` runs your own code. Entries
 marked [planned] or [preview] are not usable yet.
 
-### Sources (read) (142)
+### Sources (read) (143)
 
 - `src.access` Microsoft Access: Read an Access database (.accdb / .mdb): a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver, Linux and macOS through mdbtools. Text, currency, yes/no and dates keep their types
 - `src.adbc` ADBC (Arrow): Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options
@@ -159,6 +159,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.motherduck` MotherDuck: Read from MotherDuck via ATTACH md:
 - `src.mqtt` MQTT: Subscribe to topics on an MQTT 3.1.1 broker such as Mosquitto, EMQX or HiveMQ and read each message as a row: its topic, its payload (as text, or base64 when it is not UTF-8), its QoS and whether it was retained. The read ends once a wait passes with no message. With a kept session the broker holds QoS 1 messages between runs. Duckle speaks MQTT itself, over TLS for mqtts://
 - `src.mysql` MySQL: Read from MySQL via the DuckDB mysql extension
+- `src.mysql.cdc` MySQL CDC: Change data capture from MySQL and MariaDB: every insert, update and delete of a table, read from the binary log the way a replica reads it, from where the last run stopped to the end of the log. The position is saved only when the run succeeds, so a failed run reads the same changes again; a log purged before a run read it fails the run rather than skipping changes. Each change is a row typed as the table declares it
 - `src.nats` NATS JetStream: Subscribe-with-timeout collector via the pure-Rust `async-nats` driver. Drains up to maxRecords messages from subject within timeoutMs wall-clock. Emits {subject, payload} rows. Batch ETL semantics - continuous streaming is on the roadmap
 - `src.neo4j` Neo4j: Run Cypher against Neo4j over the HTTP Query API (/db/{database}/query/v2) - works with a self-hosted server and with Aura, and needs no Bolt driver. Basic auth; optional Cypher $parameters. Node and relationship values keep their properties as structs
 - `src.notion` Notion: Notion REST. Bearer integration token + Notion-Version header. Cursor pagination on `next_cursor` (cursorNextPath /next_cursor, cursorParam `start_cursor`). responsePath /results

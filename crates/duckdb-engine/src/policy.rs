@@ -257,7 +257,7 @@ pub fn load(workspace: Option<&Path>) -> Result<Policy, EngineError> {
 /// when another appears. The number is a fact about the engine's source files,
 /// not a limit.
 #[cfg(test)]
-const STATE_WRITE_SITES: usize = 12;
+const STATE_WRITE_SITES: usize = 13;
 
 /// Every component that advances saved state when it runs.
 ///
@@ -288,6 +288,8 @@ pub fn advances_saved_state(component_id: &str) -> bool {
             | "src.sqlserver.cdc"
             // the resume token a change stream was read through
             | "src.mongodb.cdc"
+            // the binary log file and position a run read through
+            | "src.mysql.cdc"
             // uri -> fingerprint map of what has been seen
             | "src.changed"
             // topic/partition resume offsets
@@ -1537,7 +1539,7 @@ mod tests {
     /// position on every successful run.
     #[test]
     fn every_change_feed_advances_saved_state() {
-        for id in ["src.postgres.cdc", "src.sqlserver.cdc", "src.mongodb.cdc"] {
+        for id in ["src.postgres.cdc", "src.sqlserver.cdc", "src.mongodb.cdc", "src.mysql.cdc"] {
             assert!(advances_saved_state(id), "{id} saves its position and the policy does not know");
             assert!(state_write_is_armed(id, &serde_json::json!({})), "{id} saves it unconditionally");
         }

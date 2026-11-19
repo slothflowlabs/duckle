@@ -9046,3 +9046,65 @@ mod ldap {
         assert!(printed.contains("cn=reader"), "the bind DN is not a secret: {printed}");
     }
 }
+
+mod mysql_cdc {
+    use super::*;
+    use crate::plan::{MysqlCdcSpec, RuntimeSpec};
+    use serde_json::json;
+
+    fn spec(extra: serde_json::Value) -> Result<MysqlCdcSpec, crate::EngineError> {
+        let mut props = json!({ "host": "db.example.com", "user": "repl", "password": "pw", "database": "shop", "table": "orders" });
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            props[k] = v;
+        }
+        let doc: PipelineDoc = serde_json::from_value(json!({
+            "nodes": [
+                {"id": "a", "position": {"x": 0, "y": 0}, "data": {"label": "a", "componentId": "src.mysql.cdc", "properties": props}},
+                {"id": "b", "position": {"x": 0, "y": 0}, "data": {"label": "b", "componentId": "snk.csv", "properties": { "path": "/tmp/b.csv" }}}
+            ],
+            "edges": [{"id": "e", "source": "a", "target": "b", "data": {"connectionType": "main"}}]
+        }))
+        .unwrap();
+        Ok(compile(&doc)?
+            .stages
+            .into_iter()
+            .filter_map(|s| s.runtime)
+            .find_map(|s| match s {
+                RuntimeSpec::MysqlCdc(m) => Some(m),
+                _ => None,
+            })
+            .expect("a MySQL change feed"))
+    }
+
+    #[test]
+    fn a_change_feed_needs_a_host_a_user_a_database_and_a_table() {
+        let s = spec(json!({})).unwrap();
+        assert_eq!((s.host.as_str(), s.port, s.user.as_str(), s.database.as_str(), s.table.as_str()), ("db.example.com", 3306, "repl", "shop", "orders"));
+        assert_eq!(spec(json!({ "user": "", "username": "reader" })).unwrap().user, "reader", "the connection form's key");
+        for key in ["host", "database", "table"] {
+            let err = spec(json!({ key: "" })).unwrap_err().to_string();
+            assert!(err.contains(key) || err.contains("table"), "{key}: {err}");
+        }
+        assert!(spec(json!({ "user": "" })).is_err());
+        assert!(spec(json!({ "port": 70000 })).is_err());
+    }
+
+    #[test]
+    fn a_read_takes_its_options_as_written() {
+        let s = spec(json!({ "password": " pw " })).unwrap();
+        assert_eq!((s.batch_size, s.server_id, s.ssl_mode.as_str(), s.password.as_str()), (100_000, None, "preferred", " pw "));
+        let s = spec(json!({ "batchSize": "50", "serverId": 4_000_000_000_u64, "sslMode": "VERIFY_CA" })).unwrap();
+        assert_eq!((s.batch_size, s.server_id, s.ssl_mode.as_str()), (50, Some(4_000_000_000), "verify_ca"));
+        for (key, value) in [("batchSize", json!(0)), ("serverId", json!(0)), ("serverId", json!(5_000_000_000_u64)), ("sslMode", json!("on"))] {
+            let err = spec(json!({ key: value })).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}={value}: {err}");
+        }
+    }
+
+    #[test]
+    fn no_password_prints() {
+        let printed = format!("{:?}", spec(json!({ "password": "s3cr3t-pw" })).unwrap());
+        assert!(!printed.contains("s3cr3t"), "{printed}");
+        assert!(printed.contains("repl"), "the user is not a secret: {printed}");
+    }
+}

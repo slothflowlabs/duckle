@@ -1177,6 +1177,41 @@ impl std::fmt::Debug for LdapSourceSpec {
     }
 }
 
+/// src.mysql.cdc: the changes the binary log holds for one MySQL table.
+#[derive(Clone)]
+pub struct MysqlCdcSpec {
+    pub node_id: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub password: String,
+    pub database: String,
+    pub table: String,
+    /// The most changes one run reads, rounded up to the end of a transaction.
+    pub batch_size: u64,
+    /// The replica id the read registers as; None: one made from the pipeline and node.
+    pub server_id: Option<u32>,
+    /// disabled, preferred, required, verify_ca or verify_identity, as MySQL's --ssl-mode.
+    pub ssl_mode: String,
+}
+
+impl std::fmt::Debug for MysqlCdcSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MysqlCdcSpec")
+            .field("node_id", &self.node_id)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("user", &self.user)
+            .field("password", &"***")
+            .field("database", &self.database)
+            .field("table", &self.table)
+            .field("batch_size", &self.batch_size)
+            .field("server_id", &self.server_id)
+            .field("ssl_mode", &self.ssl_mode)
+            .finish()
+    }
+}
+
 /// src.mongodb.cdc: the changes a MongoDB change stream reports for one
 /// collection, from where the last successful run stopped.
 #[derive(Clone)]
