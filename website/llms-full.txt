@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 432 components, 427 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 222 connectors (138 sources / 84 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 434 components, 429 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 224 connectors (139 sources / 85 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -81,7 +81,7 @@ Every component, by id. `src.*` reads, `snk.*` writes, `xf.*` transforms,
 `qa.*` checks, `ctl.*` controls flow, `code.*` runs your own code. Entries
 marked [planned] or [preview] are not usable yet.
 
-### Sources (read) (139)
+### Sources (read) (140)
 
 - `src.access` Microsoft Access: Read an Access database (.accdb / .mdb): a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver, Linux and macOS through mdbtools. Text, currency, yes/no and dates keep their types
 - `src.adbc` ADBC (Arrow): Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options
@@ -193,6 +193,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.scylla` ScyllaDB: Read CQL via the scylla driver. Same wire as src.cassandra
 - `src.segment` Segment: Segment Public API. Bearer access token. Cursor pagination via `pagination.next` + `pagination[cursor]` param. responsePath /data
 - `src.sendgrid` SendGrid: SendGrid REST. Bearer API key. Offset pagination via `offset` + `limit`. responsePath /result for /v3/marketing/* endpoints
+- `src.servicebus` Azure Service Bus: Receive messages from a Service Bus queue or topic subscription over its REST API, signed with a SAS token made from the connection string (no Azure SDK). Each message is a row: its id, body, subject, session, sequence number, delivery count and enqueue time. Taken under a peek-lock and completed only once the whole run succeeds, so a failed run leaves them to be delivered again; or removed as read
 - `src.sharepoint` SharePoint Server: SharePoint Server on premises (2016 / 2019 / Subscription Edition) over REST, signed in with Windows authentication (NTLM). A list reads as rows, every page followed; a document library file reads by its format (CSV, TSV, Parquet, JSON, Excel)
 - `src.shopify` Shopify: Shopify Admin API. Bearer auth via X-Shopify-Access-Token. Link header pagination supported by recent Admin API endpoints. responsePath depends on resource (e.g. /products)
 - `src.slack` Slack: Slack Web API. Bearer Bot User OAuth Token (xoxb-...). Cursor pagination via `response_metadata.next_cursor` + `cursor` param. responsePath depends on endpoint (e.g. /messages for conversations.history). Base URL https://slack.com/api
@@ -223,7 +224,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.yaml` YAML: Read a YAML file as a table. Top-level YAML arrays become one row per element; non-array docs become a single row. Suits config-data ETL (Helm values, GitHub Actions matrices) not bulk logs
 - `src.zendesk` Zendesk: Zendesk Support REST. Basic auth (email/token + API token). Cursor pagination via `meta.after_cursor` + `page[after]` param. responsePath /tickets (or whatever resource)
 
-### Destinations (write) (85)
+### Destinations (write) (86)
 
 - `snk.access` Microsoft Access: Write a table into an Access database (.accdb / .mdb), creating the file and the table when missing. Append or overwrite in one transaction; an empty upstream leaves the table alone. Windows only, through the Microsoft Access ODBC driver
 - `snk.avro` Avro: Write rows as an Apache Avro container file via the pure-Rust `apache-avro` crate. Schema is inferred from the first row's column types (long / double / string / boolean) - or supply a JSON Avro schema via the schemaJson field to override. recordName names the inferred record (default `Row`)
@@ -292,6 +293,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.salesforce` Salesforce: Write rows into a Salesforce object via the REST sObject Collections API (<=200 records/request). insert / update / upsert (by external Id) / delete; auth is a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app). For migration-scale loads use Salesforce Bulk
 - `snk.salesforce.bulk` Salesforce Bulk: Write rows into a Salesforce object via Bulk API 2.0 - the migration-scale path. DuckDB streams the upstream to CSV on disk and each <=90MB part runs as an async job (insert / update / upsert / delete / hardDelete). Same Bearer / OAuth client-credentials auth as Salesforce. Result sets are written to an optional Results directory
 - `snk.scylla` ScyllaDB: Same wire as snk.cassandra - INSERT via the scylla CQL driver
+- `snk.servicebus` Azure Service Bus: Send each upstream row to a Service Bus queue or topic as one message over its REST API (no Azure SDK), the row as JSON or one column as the body, in batches of up to 256 KiB. Message and session ids come from columns, for duplicate detection and sessions. A busy namespace is asked again; a refusal fails the run with the reason Service Bus gave
 - `snk.sharepoint` SharePoint Server: SharePoint Server on premises over REST, signed in with Windows authentication (NTLM). Rows become list items, or the output uploads as a document library file (CSV, TSV, Parquet, JSON, Excel). An upstream with no rows changes nothing
 - `snk.snowflake` Snowflake: INSERT to a Snowflake table via the SQL API (/api/v2/statements) with PAT (Personal Access Token) bearer auth. Multi-row INSERTs batched at 1000 rows by default
 - `snk.spatial` Geospatial (GeoJSON / GeoPackage / ...): Write geospatial files via the spatial extension

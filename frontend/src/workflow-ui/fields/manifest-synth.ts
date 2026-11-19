@@ -2841,6 +2841,37 @@ function synthWrongFamilyForm(comp: ComponentDef): ComponentManifest | null {
             },
         ]);
     }
+    if (id === 'src.servicebus') {
+        return base(comp, [
+            {
+                label: 'Service Bus',
+                fields: [
+                    { key: 'connectionString', label: 'Connection string', kind: 'text', required: true, secret: true, placeholder: 'Endpoint=sb://acme.servicebus.windows.net/;SharedAccessKeyName=...;SharedAccessKey=...', description: 'From Shared access policies in the Azure portal, for the namespace or for this queue or topic.' },
+                    { key: 'entity', label: 'Queue or topic', kind: 'text', placeholder: 'orders', description: 'Taken from the connection string when it ends in EntityPath=...' },
+                    { key: 'subscription', label: 'Subscription', kind: 'text', placeholder: 'audit', description: 'For a topic: the subscription to read.' },
+                    { key: 'endpoint', label: 'Endpoint', kind: 'text', placeholder: 'https://acme.servicebus.windows.net', description: 'Leave empty for the namespace in the connection string. Set it for a proxy in between.' },
+                ],
+            },
+            {
+                label: 'Receive',
+                fields: [
+                    {
+                        key: 'receiveMode',
+                        label: 'Receive mode',
+                        kind: 'select',
+                        defaultValue: 'peekLock',
+                        options: [
+                            { label: 'Peek-lock, complete when the run succeeds', value: 'peekLock' },
+                            { label: 'Receive and delete', value: 'receiveAndDelete' },
+                        ],
+                        description: 'Peek-lock completes each message only once the whole run succeeds, so a failed run leaves them to be delivered again; the run must finish within the lock duration of the queue (one minute unless set, five at most). Receive and delete takes them off as they are read: a failed run loses them.',
+                    },
+                    { key: 'maxMessages', label: 'Max messages', kind: 'integer', defaultValue: 1000, description: 'The most one run takes. It stops sooner when there are none to give.' },
+                    { key: 'waitSeconds', label: 'Wait for a message (seconds)', kind: 'integer', defaultValue: 1, description: 'How long each receive waits for a message, up to 60. The run ends after one that brings nothing.' },
+                ],
+            },
+        ]);
+    }
     if (id === 'src.dynamodb') {
         return base(comp, [
             {
@@ -5527,6 +5558,30 @@ function synthStreamingSink(comp: ComponentDef): ComponentManifest {
                         { key: 'bodyColumn', label: 'Body column', kind: 'column', description: 'The column sent as each message body. Left empty, the whole row is sent as JSON.' },
                         { key: 'groupIdColumn', label: 'Message group column', kind: 'column', description: 'For a FIFO queue, whose URL ends in .fifo, and needed there: messages of one group are delivered in order.' },
                         { key: 'deduplicationIdColumn', label: 'Deduplication id column', kind: 'column', description: 'For a FIFO queue without content-based deduplication: a message whose id was sent in the last five minutes is dropped.' },
+                    ],
+                },
+            ],
+            'upstream',
+        );
+    }
+    if (comp.id === 'snk.servicebus') {
+        return base(
+            comp,
+            [
+                {
+                    label: 'Service Bus',
+                    fields: [
+                        { key: 'connectionString', label: 'Connection string', kind: 'text', required: true, secret: true, placeholder: 'Endpoint=sb://acme.servicebus.windows.net/;SharedAccessKeyName=...;SharedAccessKey=...', description: 'From Shared access policies in the Azure portal, for the namespace or for this queue or topic.' },
+                        { key: 'entity', label: 'Queue or topic', kind: 'text', placeholder: 'orders', description: 'Taken from the connection string when it ends in EntityPath=...' },
+                        { key: 'endpoint', label: 'Endpoint', kind: 'text', placeholder: 'https://acme.servicebus.windows.net', description: 'Leave empty for the namespace in the connection string. Set it for a proxy in between.' },
+                    ],
+                },
+                {
+                    label: 'Messages',
+                    fields: [
+                        { key: 'bodyColumn', label: 'Body column', kind: 'column', description: 'The column sent as each message body. Left empty, the whole row is sent as JSON.' },
+                        { key: 'messageIdColumn', label: 'Message id column', kind: 'column', description: 'For a queue with duplicate detection: a message whose id was sent within its window is dropped.' },
+                        { key: 'sessionIdColumn', label: 'Session id column', kind: 'column', description: 'For a queue or subscription with sessions, which needs one: the messages of a session are delivered in order.' },
                     ],
                 },
             ],

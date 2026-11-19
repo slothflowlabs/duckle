@@ -397,6 +397,62 @@ fn service_account_key(props: &JsonValue, component: &str) -> Result<Option<Stri
     Ok(key)
 }
 
+/// A Service Bus queue or topic from the connection string the Azure portal
+/// hands out (Shared access policies): the namespace from its Endpoint, the key
+/// from SharedAccessKeyName and SharedAccessKey, the entity from its EntityPath
+/// or from the node. `subscription` is read only where one can be read from.
+fn servicebus_target(props: &JsonValue, component: &str, subscription: bool) -> Result<ServiceBusTarget, EngineError> {
+    let text = |key: &str| string_prop(props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let conn = text("connectionString")
+        .ok_or_else(|| EngineError::Config(format!("{component}: a connection string is required")))?;
+    // `key=value` pairs, split on the first `=` (a key ends in `=`), keys in any case.
+    let field = |name: &str| {
+        conn.split(';').find_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            let v = v.trim();
+            (k.trim().eq_ignore_ascii_case(name) && !v.is_empty()).then(|| v.to_string())
+        })
+    };
+    let host = field("Endpoint")
+        .and_then(|e| {
+            let host = e.strip_prefix("sb://").unwrap_or(&e).split('/').next().unwrap_or_default().trim();
+            (!host.is_empty()).then(|| host.to_string())
+        })
+        .ok_or_else(|| {
+            EngineError::Config(format!(
+                "{component}: the connection string has no Endpoint=sb://<namespace>.servicebus.windows.net/. \
+                 Copy it from Shared access policies in the Azure portal."
+            ))
+        })?;
+    let key_name = field("SharedAccessKeyName")
+        .ok_or_else(|| EngineError::Config(format!("{component}: the connection string has no SharedAccessKeyName")))?;
+    let key = field("SharedAccessKey")
+        .ok_or_else(|| EngineError::Config(format!("{component}: the connection string has no SharedAccessKey")))?;
+    let entity = match (field("EntityPath"), text("entity")) {
+        (Some(path), Some(named)) if !path.eq_ignore_ascii_case(&named) => {
+            return Err(EngineError::Config(format!(
+                "{component}: the connection string was issued for '{path}', and the node names '{named}'. \
+                 A key for one entity cannot reach another: clear Queue or topic, or use a key for '{named}' \
+                 or for the namespace."
+            )))
+        }
+        (Some(path), _) => path,
+        (None, Some(named)) => named,
+        (None, None) => {
+            return Err(EngineError::Config(format!(
+                "{component}: name the queue or topic, or use a connection string that ends in EntityPath=<queue or topic>"
+            )))
+        }
+    };
+    Ok(ServiceBusTarget {
+        base_url: text("endpoint").map(|e| e.trim_end_matches('/').to_string()).unwrap_or_else(|| format!("https://{host}")),
+        key_name,
+        key,
+        entity,
+        subscription: if subscription { text("subscription") } else { None },
+    })
+}
+
 /// Where an SQS queue is and how to sign for it. The region is read from an AWS
 /// queue URL (https://sqs.<region>.amazonaws.com/...) when the node names none.
 fn sqs_queue(props: &JsonValue, component: &str) -> Result<SqsQueue, EngineError> {
@@ -822,6 +878,8 @@ pub enum RuntimeSpec {
     TrinoSource(TrinoSourceSpec),
     SqlServerCdc(SqlServerCdcSpec),
     MongoCdc(MongoCdcSpec),
+    ServiceBusSource(ServiceBusSourceSpec),
+    ServiceBusSink(ServiceBusSinkSpec),
     GizmoSqlSource(GizmoSqlSourceSpec),
     GizmoSqlSink(GizmoSqlSinkSpec),
     RabbitSink(RabbitSinkSpec),
@@ -2444,6 +2502,8 @@ fn build_stage(
     let mut trino_source: Option<TrinoSourceSpec> = None;
     let mut sqlserver_cdc: Option<SqlServerCdcSpec> = None;
     let mut mongo_cdc: Option<MongoCdcSpec> = None;
+    let mut servicebus_source: Option<ServiceBusSourceSpec> = None;
+    let mut servicebus_sink: Option<ServiceBusSinkSpec> = None;
     let mut gizmosql_source: Option<GizmoSqlSourceSpec> = None;
     let mut gizmosql_sink: Option<GizmoSqlSinkSpec> = None;
     let mut rabbit_sink: Option<RabbitSinkSpec> = None;
@@ -3915,6 +3975,19 @@ fn build_stage(
             body_column: column("bodyColumn"),
             group_id_column,
             deduplication_id_column: column("deduplicationIdColumn"),
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.servicebus" {
+        // One message a row, sent in batches.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let target = servicebus_target(&props, component_id, false)?;
+        let column = |key: &str| string_prop(&props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        servicebus_sink = Some(ServiceBusSinkSpec {
+            from_view: from_view.to_string(),
+            target,
+            body_column: column("bodyColumn"),
+            message_id_column: column("messageIdColumn"),
+            session_id_column: column("sessionIdColumn"),
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.gizmosql" {
@@ -6069,6 +6142,38 @@ fn build_stage(
             max_events,
             wait_ms,
             full_document,
+        });
+        (String::new(), StageKind::View, None)
+    } else if component_id == "src.servicebus" {
+        // Service Bus over REST: messages taken under a peek-lock and completed
+        // once the whole run has succeeded, or removed as they are read.
+        let target = servicebus_target(&props, component_id, true)?;
+        let max_messages = whole_number(&props, "maxMessages", component_id)?.unwrap_or(1000);
+        if max_messages == 0 {
+            return Err(EngineError::Config(format!("{component_id}: maxMessages must be at least 1")));
+        }
+        let wait_seconds = whole_number(&props, "waitSeconds", component_id)?.unwrap_or(1);
+        if wait_seconds > 60 {
+            return Err(EngineError::Config(format!(
+                "{component_id}: waitSeconds is {wait_seconds}, and a receive waits at most 60 here"
+            )));
+        }
+        let mode = string_prop(&props, "receiveMode").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let receive_and_delete = match mode.as_deref() {
+            None | Some("peekLock") => false,
+            Some("receiveAndDelete") => true,
+            Some(other) => {
+                return Err(EngineError::Config(format!(
+                    "{component_id}: receiveMode '{other}' is not peekLock or receiveAndDelete"
+                )))
+            }
+        };
+        servicebus_source = Some(ServiceBusSourceSpec {
+            node_id: node.id.clone(),
+            target,
+            max_messages: max_messages as usize,
+            wait_seconds: wait_seconds as u32,
+            receive_and_delete,
         });
         (String::new(), StageKind::View, None)
     } else if component_id == "src.gizmosql" {
@@ -8396,6 +8501,8 @@ fn build_stage(
         .or_else(|| trino_source.map(RuntimeSpec::TrinoSource))
         .or_else(|| sqlserver_cdc.map(RuntimeSpec::SqlServerCdc))
         .or_else(|| mongo_cdc.map(RuntimeSpec::MongoCdc))
+        .or_else(|| servicebus_source.map(RuntimeSpec::ServiceBusSource))
+        .or_else(|| servicebus_sink.map(RuntimeSpec::ServiceBusSink))
         .or_else(|| rabbit_sink.map(RuntimeSpec::RabbitSink))
         .or_else(|| rabbit_source.map(RuntimeSpec::RabbitSource))
         .or_else(|| git_source.map(RuntimeSpec::GitSource))

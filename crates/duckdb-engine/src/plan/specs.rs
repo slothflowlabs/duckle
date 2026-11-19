@@ -1025,6 +1025,67 @@ impl std::fmt::Debug for TrinoAuth {
     }
 }
 
+/// An Azure Service Bus queue or topic, and the SAS key to sign for it.
+#[derive(Clone)]
+pub struct ServiceBusTarget {
+    /// https://<namespace>, or the endpoint a node names.
+    pub base_url: String,
+    pub key_name: String,
+    pub key: String,
+    /// A queue, or a topic.
+    pub entity: String,
+    /// The subscription to read, for a topic.
+    pub subscription: Option<String>,
+}
+
+impl ServiceBusTarget {
+    /// What a SAS token is signed for: the queue or topic.
+    pub fn resource(&self) -> String {
+        format!("{}/{}", self.base_url, self.entity)
+    }
+
+    /// Where messages are received from: the queue, or the topic's subscription.
+    pub fn receive_path(&self) -> String {
+        match &self.subscription {
+            Some(s) => format!("{}/subscriptions/{}", self.entity, s),
+            None => self.entity.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for ServiceBusTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServiceBusTarget")
+            .field("base_url", &self.base_url)
+            .field("key_name", &self.key_name)
+            .field("key", &"***")
+            .field("entity", &self.entity)
+            .field("subscription", &self.subscription)
+            .finish()
+    }
+}
+
+/// src.servicebus: receive up to `max_messages`, one a call, under a peek-lock
+/// completed after the run succeeds, or removed as read.
+#[derive(Debug, Clone)]
+pub struct ServiceBusSourceSpec {
+    pub node_id: String,
+    pub target: ServiceBusTarget,
+    pub max_messages: usize,
+    pub wait_seconds: u32,
+    pub receive_and_delete: bool,
+}
+
+/// snk.servicebus: each upstream row as one message.
+#[derive(Debug, Clone)]
+pub struct ServiceBusSinkSpec {
+    pub from_view: String,
+    pub target: ServiceBusTarget,
+    pub body_column: Option<String>,
+    pub message_id_column: Option<String>,
+    pub session_id_column: Option<String>,
+}
+
 /// src.mongodb.cdc: the changes a MongoDB change stream reports for one
 /// collection, from where the last successful run stopped.
 #[derive(Clone)]

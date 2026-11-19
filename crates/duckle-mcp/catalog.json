@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 432,
+  "componentCount": 434,
   "components": [
     {
       "id": "src.csv",
@@ -11476,6 +11476,115 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "The most messages one run will take. This is a batch connector, not a streaming pump."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.servicebus",
+      "label": "Azure Service Bus",
+      "kind": "source",
+      "availability": "available",
+      "summary": "Receive messages from a Service Bus queue or topic subscription over its REST API, signed with a SAS token made from the connection string (no Azure SDK). Each message is a row: its id, body, subject, session, sequence number, delivery count and enqueue time. Taken under a peek-lock and completed only once the whole run succeeds, so a failed run leaves them to be delivered again; or removed as read.",
+      "category": "Sources",
+      "group": "Streaming",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.servicebus",
+        "kind": "source",
+        "label": "Azure Service Bus",
+        "description": "Receive messages from a Service Bus queue or topic subscription over its REST API, signed with a SAS token made from the connection string (no Azure SDK). Each message is a row: its id, body, subject, session, sequence number, delivery count and enqueue time. Taken under a peek-lock and completed only once the whole run succeeds, so a failed run leaves them to be delivered again; or removed as read.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Service Bus",
+            "fields": [
+              {
+                "key": "connectionString",
+                "label": "Connection string",
+                "kind": "text",
+                "required": true,
+                "secret": true,
+                "placeholder": "Endpoint=sb://acme.servicebus.windows.net/;SharedAccessKeyName=...;SharedAccessKey=...",
+                "description": "From Shared access policies in the Azure portal, for the namespace or for this queue or topic."
+              },
+              {
+                "key": "entity",
+                "label": "Queue or topic",
+                "kind": "text",
+                "placeholder": "orders",
+                "description": "Taken from the connection string when it ends in EntityPath=..."
+              },
+              {
+                "key": "subscription",
+                "label": "Subscription",
+                "kind": "text",
+                "placeholder": "audit",
+                "description": "For a topic: the subscription to read."
+              },
+              {
+                "key": "endpoint",
+                "label": "Endpoint",
+                "kind": "text",
+                "placeholder": "https://acme.servicebus.windows.net",
+                "description": "Leave empty for the namespace in the connection string. Set it for a proxy in between."
+              }
+            ]
+          },
+          {
+            "label": "Receive",
+            "fields": [
+              {
+                "key": "receiveMode",
+                "label": "Receive mode",
+                "kind": "select",
+                "defaultValue": "peekLock",
+                "options": [
+                  {
+                    "label": "Peek-lock, complete when the run succeeds",
+                    "value": "peekLock"
+                  },
+                  {
+                    "label": "Receive and delete",
+                    "value": "receiveAndDelete"
+                  }
+                ],
+                "description": "Peek-lock completes each message only once the whole run succeeds, so a failed run leaves them to be delivered again; the run must finish within the lock duration of the queue (one minute unless set, five at most). Receive and delete takes them off as they are read: a failed run loses them."
+              },
+              {
+                "key": "maxMessages",
+                "label": "Max messages",
+                "kind": "integer",
+                "defaultValue": 1000,
+                "description": "The most one run takes. It stops sooner when there are none to give."
+              },
+              {
+                "key": "waitSeconds",
+                "label": "Wait for a message (seconds)",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How long each receive waits for a message, up to 60. The run ends after one that brings nothing."
               }
             ]
           }
@@ -40975,6 +41084,95 @@
                 "label": "Deduplication id column",
                 "kind": "column",
                 "description": "For a FIFO queue without content-based deduplication: a message whose id was sent in the last five minutes is dropped."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
+      "id": "snk.servicebus",
+      "label": "Azure Service Bus",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "Send each upstream row to a Service Bus queue or topic as one message over its REST API (no Azure SDK), the row as JSON or one column as the body, in batches of up to 256 KiB. Message and session ids come from columns, for duplicate detection and sessions. A busy namespace is asked again; a refusal fails the run with the reason Service Bus gave.",
+      "category": "Sinks",
+      "group": "Streaming",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.servicebus",
+        "kind": "sink",
+        "label": "Azure Service Bus",
+        "description": "Send each upstream row to a Service Bus queue or topic as one message over its REST API (no Azure SDK), the row as JSON or one column as the body, in batches of up to 256 KiB. Message and session ids come from columns, for duplicate detection and sessions. A busy namespace is asked again; a refusal fails the run with the reason Service Bus gave.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Service Bus",
+            "fields": [
+              {
+                "key": "connectionString",
+                "label": "Connection string",
+                "kind": "text",
+                "required": true,
+                "secret": true,
+                "placeholder": "Endpoint=sb://acme.servicebus.windows.net/;SharedAccessKeyName=...;SharedAccessKey=...",
+                "description": "From Shared access policies in the Azure portal, for the namespace or for this queue or topic."
+              },
+              {
+                "key": "entity",
+                "label": "Queue or topic",
+                "kind": "text",
+                "placeholder": "orders",
+                "description": "Taken from the connection string when it ends in EntityPath=..."
+              },
+              {
+                "key": "endpoint",
+                "label": "Endpoint",
+                "kind": "text",
+                "placeholder": "https://acme.servicebus.windows.net",
+                "description": "Leave empty for the namespace in the connection string. Set it for a proxy in between."
+              }
+            ]
+          },
+          {
+            "label": "Messages",
+            "fields": [
+              {
+                "key": "bodyColumn",
+                "label": "Body column",
+                "kind": "column",
+                "description": "The column sent as each message body. Left empty, the whole row is sent as JSON."
+              },
+              {
+                "key": "messageIdColumn",
+                "label": "Message id column",
+                "kind": "column",
+                "description": "For a queue with duplicate detection: a message whose id was sent within its window is dropped."
+              },
+              {
+                "key": "sessionIdColumn",
+                "label": "Session id column",
+                "kind": "column",
+                "description": "For a queue or subscription with sessions, which needs one: the messages of a session are delivered in order."
               }
             ]
           }

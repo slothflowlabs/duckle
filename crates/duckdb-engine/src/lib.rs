@@ -107,6 +107,7 @@ mod sqs;
 mod trino;
 mod sqlserver_cdc;
 mod mongo_cdc;
+mod servicebus;
 pub use connectors::remote_fingerprint;
 mod run_log;
 mod util;
@@ -1962,10 +1963,12 @@ impl DuckdbEngine {
         // run succeeds, so a later-stage failure never advances the mark past
         // rows that were never actually delivered. (state file path, json).
         let mut pending_writes: Vec<PendingWrite> = Vec::new();
-        // Messages a queue source received, deleted only if the whole run
-        // succeeds. A preview or a probe only looks: it hides and deletes nothing.
+        // Messages a queue source (SQS, Service Bus) received, deleted or
+        // completed only if the whole run succeeds. A preview or a probe only
+        // looks: it deletes and completes nothing.
         let mut sqs_received: Vec<crate::sqs::SqsReceived> = Vec::new();
-        let sqs_peek = target.is_some() || self.probing;
+        let mut servicebus_received: Vec<crate::servicebus::ServiceBusReceived> = Vec::new();
+        let queue_peek = target.is_some() || self.probing;
         // Remote objects this run reads or writes, for the signed manifest. A
         // local file source is already pinned by path; an s3:// or https:// one
         // has no path, so without this the most important boundary in a raw-zone
@@ -2908,9 +2911,13 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::OrcSource(spec)) => self.run_orc_source(&db_path, spec),
                     Some(RuntimeSpec::OrcSink(spec)) => self.run_orc_sink(&db_path, spec),
                     Some(RuntimeSpec::SqsSource(spec)) => {
-                        self.run_sqs_source(&db_path, spec, sqs_peek, &mut sqs_received)
+                        self.run_sqs_source(&db_path, spec, queue_peek, &mut sqs_received)
                     }
                     Some(RuntimeSpec::SqsSink(spec)) => self.run_sqs_sink(&db_path, spec),
+                    Some(RuntimeSpec::ServiceBusSource(spec)) => {
+                        self.run_servicebus_source(&db_path, spec, queue_peek, &mut servicebus_received)
+                    }
+                    Some(RuntimeSpec::ServiceBusSink(spec)) => self.run_servicebus_sink(&db_path, spec),
                     Some(RuntimeSpec::TrinoSource(spec)) => self.run_trino_source(&db_path, spec),
                     Some(RuntimeSpec::SqlServerCdc(spec)) => {
                         self.run_sqlserver_cdc(&db_path, spec, pipeline_name, &mut pending_writes)
@@ -3504,8 +3511,11 @@ impl DuckdbEngine {
             }
             // Received messages are deleted only now, the run known to have
             // succeeded. One left undeleted comes back, which the run says.
-            let undeleted: Vec<String> =
-                sqs_received.iter().filter_map(|r| crate::sqs::delete_received(r).err()).collect();
+            let undeleted: Vec<String> = sqs_received
+                .iter()
+                .filter_map(|r| crate::sqs::delete_received(r).err())
+                .chain(servicebus_received.iter().filter_map(|r| crate::servicebus::complete_received(self, r).err()))
+                .collect();
             if !undeleted.is_empty() {
                 overall_error.get_or_insert(format!("the pipeline ran, but {}", undeleted.join("; ")));
                 final_status = "error";

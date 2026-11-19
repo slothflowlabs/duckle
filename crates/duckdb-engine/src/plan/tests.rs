@@ -8737,3 +8737,107 @@ mod mongo_cdc {
         assert!(printed.contains("db.example.com"), "the host is not a secret: {printed}");
     }
 }
+
+mod servicebus {
+    use super::*;
+    use crate::plan::{RuntimeSpec, ServiceBusSinkSpec, ServiceBusSourceSpec};
+
+    const NAMESPACE: &str = "Endpoint=sb://acme.servicebus.windows.net/;SharedAccessKeyName=listen;SharedAccessKey=k3y+AbC/dEf=";
+
+    fn specs(component: &str, props: serde_json::Value) -> Result<Vec<RuntimeSpec>, crate::EngineError> {
+        let node = |id: &str, component: &str, props: serde_json::Value| {
+            serde_json::json!({"id": id, "position": {"x": 0, "y": 0}, "data": {"label": id, "componentId": component, "properties": props}})
+        };
+        let nodes = if component.starts_with("src.") {
+            [node("a", component, props), node("b", "snk.csv", serde_json::json!({ "path": "/tmp/b.csv" }))]
+        } else {
+            [node("a", "src.csv", serde_json::json!({ "path": "/tmp/a.csv" })), node("b", component, props)]
+        };
+        let doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": nodes,
+            "edges": [{"id": "e", "source": "a", "target": "b", "data": {"connectionType": "main"}}]
+        }))
+        .unwrap();
+        Ok(compile(&doc)?.stages.into_iter().filter_map(|s| s.runtime).collect())
+    }
+
+    fn source(extra: serde_json::Value) -> Result<ServiceBusSourceSpec, crate::EngineError> {
+        let mut props = serde_json::json!({ "connectionString": NAMESPACE, "entity": "orders" });
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            props[k] = v;
+        }
+        Ok(specs("src.servicebus", props)?
+            .into_iter()
+            .find_map(|s| match s {
+                RuntimeSpec::ServiceBusSource(q) => Some(q),
+                _ => None,
+            })
+            .expect("a Service Bus read"))
+    }
+
+    fn sink(extra: serde_json::Value) -> Result<ServiceBusSinkSpec, crate::EngineError> {
+        let mut props = serde_json::json!({ "connectionString": NAMESPACE, "entity": "orders" });
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            props[k] = v;
+        }
+        Ok(specs("snk.servicebus", props)?
+            .into_iter()
+            .find_map(|s| match s {
+                RuntimeSpec::ServiceBusSink(q) => Some(q),
+                _ => None,
+            })
+            .expect("a Service Bus write"))
+    }
+
+    #[test]
+    fn the_connection_string_names_the_namespace_and_the_key() {
+        let t = source(serde_json::json!({})).unwrap().target;
+        assert_eq!(t.base_url, "https://acme.servicebus.windows.net");
+        assert_eq!((t.key_name.as_str(), t.key.as_str(), t.entity.as_str()), ("listen", "k3y+AbC/dEf=", "orders"));
+        assert_eq!(t.resource(), "https://acme.servicebus.windows.net/orders");
+        let t = source(serde_json::json!({ "endpoint": "http://127.0.0.1:9000/" })).unwrap().target;
+        assert_eq!(t.base_url, "http://127.0.0.1:9000");
+        for broken in ["SharedAccessKeyName=listen;SharedAccessKey=k", "Endpoint=sb://acme.servicebus.windows.net/;SharedAccessKey=k",
+                       "Endpoint=sb://acme.servicebus.windows.net/;SharedAccessKeyName=listen"] {
+            assert!(source(serde_json::json!({ "connectionString": broken })).is_err(), "{broken}");
+        }
+    }
+
+    #[test]
+    fn a_key_for_one_entity_names_it_and_cannot_reach_another() {
+        let with_path = format!("{NAMESPACE};EntityPath=orders");
+        assert_eq!(source(serde_json::json!({ "connectionString": with_path, "entity": "" })).unwrap().target.entity, "orders");
+        let err = source(serde_json::json!({ "connectionString": with_path, "entity": "invoices" })).unwrap_err().to_string();
+        assert!(err.contains("orders") && err.contains("invoices"), "{err}");
+        let err = source(serde_json::json!({ "entity": "" })).unwrap_err().to_string();
+        assert!(err.contains("queue or topic"), "{err}");
+    }
+
+    #[test]
+    fn a_topic_is_read_through_its_subscription() {
+        let t = source(serde_json::json!({ "entity": "events", "subscription": "audit" })).unwrap().target;
+        assert_eq!(t.receive_path(), "events/subscriptions/audit");
+        assert_eq!(t.resource(), "https://acme.servicebus.windows.net/events", "signed for the topic");
+        let t = sink(serde_json::json!({ "entity": "events", "subscription": "audit" })).unwrap().target;
+        assert_eq!(t.subscription, None, "a send goes to the topic");
+    }
+
+    #[test]
+    fn a_receive_takes_its_options_as_written() {
+        let s = source(serde_json::json!({})).unwrap();
+        assert_eq!((s.max_messages, s.wait_seconds, s.receive_and_delete), (1000, 1, false));
+        let s = source(serde_json::json!({ "maxMessages": "5", "waitSeconds": 0, "receiveMode": "receiveAndDelete" })).unwrap();
+        assert_eq!((s.max_messages, s.wait_seconds, s.receive_and_delete), (5, 0, true));
+        for (key, value) in [("maxMessages", serde_json::json!(0)), ("waitSeconds", serde_json::json!(61)), ("receiveMode", serde_json::json!("peek"))] {
+            let err = source(serde_json::json!({ key: value })).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}={value}: {err}");
+        }
+    }
+
+    #[test]
+    fn no_key_prints() {
+        let printed = format!("{:?}", source(serde_json::json!({})).unwrap());
+        assert!(!printed.contains("k3y"), "{printed}");
+        assert!(printed.contains("listen"), "the key name is not a secret: {printed}");
+    }
+}

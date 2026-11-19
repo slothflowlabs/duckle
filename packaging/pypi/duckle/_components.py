@@ -638,6 +638,11 @@ COMPONENTS = {
         'summary': 'Same wire as snk.cassandra - INSERT via the scylla CQL driver.',
         'params': ['contactPoints', 'user', 'password', 'keyspace', 'tableName', 'batchSize'],
     },
+    'snk.servicebus': {
+        'kind': 'sink',
+        'summary': 'Send each upstream row to a Service Bus queue or topic as one message over its REST API (no Azure SDK), the row as JSON or one column as the body, in batches of up to 256 KiB. Message and session ids come from columns, for duplicate detection and sessions. A busy namespace is asked again; a refus...',
+        'params': ['connectionString', 'entity', 'endpoint', 'bodyColumn', 'messageIdColumn', 'sessionIdColumn'],
+    },
     'snk.sharepoint': {
         'kind': 'sink',
         'summary': 'SharePoint Server on premises over REST, signed in with Windows authentication (NTLM). Rows become list items, or the output uploads as a document library file (CSV, TSV, Parquet, JSON, Excel). An upstream with no rows changes nothing.',
@@ -1272,6 +1277,11 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'SendGrid REST. Bearer API key. Offset pagination via `offset` + `limit`. responsePath /result for /v3/marketing/* endpoints.',
         'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responseFormat', 'responsePath', 'jsonPath', 'paginationType', 'nextUrlPath', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'hasMorePath', 'pageParam', 'startPage', 'maxPages', 'incrementalField', 'incrementalInitial', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs', 'httpRequestsPerSecond', 'httpKeepCookies'],
+    },
+    'src.servicebus': {
+        'kind': 'source',
+        'summary': 'Receive messages from a Service Bus queue or topic subscription over its REST API, signed with a SAS token made from the connection string (no Azure SDK). Each message is a row: its id, body, subject, session, sequence number, delivery count and enqueue time. Taken under a peek-lock and completed...',
+        'params': ['connectionString', 'entity', 'subscription', 'endpoint', 'receiveMode', 'maxMessages', 'waitSeconds'],
     },
     'src.sharepoint': {
         'kind': 'source',
