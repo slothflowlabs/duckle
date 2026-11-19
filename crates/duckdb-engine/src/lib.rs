@@ -108,6 +108,7 @@ mod trino;
 mod sqlserver_cdc;
 mod mongo_cdc;
 mod servicebus;
+mod mqtt;
 pub use connectors::remote_fingerprint;
 mod run_log;
 mod util;
@@ -2918,6 +2919,8 @@ impl DuckdbEngine {
                         self.run_servicebus_source(&db_path, spec, queue_peek, &mut servicebus_received)
                     }
                     Some(RuntimeSpec::ServiceBusSink(spec)) => self.run_servicebus_sink(&db_path, spec),
+                    Some(RuntimeSpec::MqttSource(spec)) => self.run_mqtt_source(&db_path, spec, queue_peek),
+                    Some(RuntimeSpec::MqttSink(spec)) => self.run_mqtt_sink(&db_path, spec),
                     Some(RuntimeSpec::TrinoSource(spec)) => self.run_trino_source(&db_path, spec),
                     Some(RuntimeSpec::SqlServerCdc(spec)) => {
                         self.run_sqlserver_cdc(&db_path, spec, pipeline_name, &mut pending_writes)

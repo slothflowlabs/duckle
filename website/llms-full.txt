@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 434 components, 429 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 224 connectors (139 sources / 85 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 436 components, 431 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 226 connectors (140 sources / 86 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -81,7 +81,7 @@ Every component, by id. `src.*` reads, `snk.*` writes, `xf.*` transforms,
 `qa.*` checks, `ctl.*` controls flow, `code.*` runs your own code. Entries
 marked [planned] or [preview] are not usable yet.
 
-### Sources (read) (140)
+### Sources (read) (141)
 
 - `src.access` Microsoft Access: Read an Access database (.accdb / .mdb): a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver, Linux and macOS through mdbtools. Text, currency, yes/no and dates keep their types
 - `src.adbc` ADBC (Arrow): Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options
@@ -156,6 +156,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.mongodb` MongoDB: Read documents from a MongoDB collection via the official Rust driver (find with optional filter / projection / limit). Auth via mongodb:// connection string
 - `src.mongodb.cdc` MongoDB CDC: Change data capture from MongoDB through a change stream: every insert, update, replace and delete in a collection, in order, each as one row with the document as JSON. The resume token is saved only when the run succeeds, so a failed run reads the same changes again. The first run starts from when it opens the stream. Needs a replica set or a sharded cluster; no JVM, no Kafka
 - `src.motherduck` MotherDuck: Read from MotherDuck via ATTACH md:
+- `src.mqtt` MQTT: Subscribe to topics on an MQTT 3.1.1 broker such as Mosquitto, EMQX or HiveMQ and read each message as a row: its topic, its payload (as text, or base64 when it is not UTF-8), its QoS and whether it was retained. The read ends once a wait passes with no message. With a kept session the broker holds QoS 1 messages between runs. Duckle speaks MQTT itself, over TLS for mqtts://
 - `src.mysql` MySQL: Read from MySQL via the DuckDB mysql extension
 - `src.nats` NATS JetStream: Subscribe-with-timeout collector via the pure-Rust `async-nats` driver. Drains up to maxRecords messages from subject within timeoutMs wall-clock. Emits {subject, payload} rows. Batch ETL semantics - continuous streaming is on the roadmap
 - `src.neo4j` Neo4j: Run Cypher against Neo4j over the HTTP Query API (/db/{database}/query/v2) - works with a self-hosted server and with Aura, and needs no Bolt driver. Basic auth; optional Cypher $parameters. Node and relationship values keep their properties as structs
@@ -224,7 +225,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.yaml` YAML: Read a YAML file as a table. Top-level YAML arrays become one row per element; non-array docs become a single row. Suits config-data ETL (Helm values, GitHub Actions matrices) not bulk logs
 - `src.zendesk` Zendesk: Zendesk Support REST. Basic auth (email/token + API token). Cursor pagination via `meta.after_cursor` + `page[after]` param. responsePath /tickets (or whatever resource)
 
-### Destinations (write) (86)
+### Destinations (write) (87)
 
 - `snk.access` Microsoft Access: Write a table into an Access database (.accdb / .mdb), creating the file and the table when missing. Append or overwrite in one transaction; an empty upstream leaves the table alone. Windows only, through the Microsoft Access ODBC driver
 - `snk.avro` Avro: Write rows as an Apache Avro container file via the pure-Rust `apache-avro` crate. Schema is inferred from the first row's column types (long / double / string / boolean) - or supply a JSON Avro schema via the schemaJson field to override. recordName names the inferred record (default `Row`)
@@ -267,6 +268,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.model` Model Card: Register a trained model. The card IS the upstream row - the artifact URI your training script wrote, plus whatever metrics, framework and hashes it recorded - written to <path>/<name>/<version>.json with a latest.json pointer beside it. It needs exactly one row and a version column. The write happens only if the whole run succeeds, so a training pipeline that fails later never registers a model, and a failed retrain never moves the pointer off the model that still works
 - `snk.mongodb` MongoDB: Insert documents into a MongoDB collection via the official driver. Bulk insert_many batched at 1000 docs by default; replace mode drops the collection first
 - `snk.motherduck` MotherDuck: Write a table into MotherDuck via ATTACH md:
+- `snk.mqtt` MQTT: Publish each upstream row to an MQTT 3.1.1 broker as one message, to a fixed topic or to one from a column, the row as JSON or one column as the payload, retained if asked. At QoS 1 the broker acknowledges every message before the run succeeds. Duckle speaks MQTT itself, over TLS for mqtts://
 - `snk.mysql` MySQL: Write to MySQL via the DuckDB mysql extension
 - `snk.nats` NATS JetStream: Publish each upstream row as one NATS message via the pure-Rust `async-nats` driver. Payload = JSON-stringified row. Optional subjectSuffixColumn appends a per-row suffix (subject.value) for routed multi-tenant publishing
 - `snk.neo4j` Neo4j: Write rows as Neo4j nodes over the HTTP Query API. Rows ride up as one $rows parameter expanded with UNWIND, so a batch is one round trip. Set mergeKeys to MERGE on those properties (re-running updates the matched nodes) instead of CREATE; or supply your own Cypher that consumes $rows

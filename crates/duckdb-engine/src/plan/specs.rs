@@ -1086,6 +1086,61 @@ pub struct ServiceBusSinkSpec {
     pub session_id_column: Option<String>,
 }
 
+/// An MQTT broker and how to sign in to it (src.mqtt and snk.mqtt).
+#[derive(Clone)]
+pub struct MqttConn {
+    pub host: String,
+    pub port: u16,
+    /// mqtts://: TLS from the first byte.
+    pub tls: bool,
+    /// None: a fresh id for each connection.
+    pub client_id: Option<String>,
+    pub user: Option<String>,
+    pub password: Option<String>,
+}
+
+impl std::fmt::Debug for MqttConn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MqttConn")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("tls", &self.tls)
+            .field("client_id", &self.client_id)
+            .field("user", &self.user)
+            .field("password", &self.password.as_ref().map(|_| "***"))
+            .finish()
+    }
+}
+
+/// src.mqtt: subscribe to `topics`, then take messages until `max_messages`,
+/// or until `wait_ms` passes with none.
+#[derive(Debug, Clone)]
+pub struct MqttSourceSpec {
+    pub node_id: String,
+    pub conn: MqttConn,
+    pub topics: Vec<String>,
+    /// 0 or 1.
+    pub qos: u8,
+    /// Keep the session for the client id between runs.
+    pub persistent_session: bool,
+    pub max_messages: usize,
+    pub wait_ms: u64,
+}
+
+/// snk.mqtt: each upstream row as one message, to `topic` or to the topic in
+/// `topic_column`.
+#[derive(Debug, Clone)]
+pub struct MqttSinkSpec {
+    pub from_view: String,
+    pub conn: MqttConn,
+    pub topic: Option<String>,
+    pub topic_column: Option<String>,
+    pub payload_column: Option<String>,
+    /// 0 or 1.
+    pub qos: u8,
+    pub retain: bool,
+}
+
 /// src.mongodb.cdc: the changes a MongoDB change stream reports for one
 /// collection, from where the last successful run stopped.
 #[derive(Clone)]

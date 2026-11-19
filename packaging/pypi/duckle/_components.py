@@ -508,6 +508,11 @@ COMPONENTS = {
         'summary': 'Write a table into MotherDuck via ATTACH md:',
         'params': ['database', 'token', 'schemaName', 'tableName', 'mode', 'conflictColumns', 'validateBeforeInsert', 'deadLetterPath', 'deadLetterFormat'],
     },
+    'snk.mqtt': {
+        'kind': 'sink',
+        'summary': 'Publish each upstream row to an MQTT 3.1.1 broker as one message, to a fixed topic or to one from a column, the row as JSON or one column as the payload, retained if asked. At QoS 1 the broker acknowledges every message before the run succeeds. Duckle speaks MQTT itself, over TLS for mqtts://.',
+        'params': ['url', 'user', 'password', 'clientId', 'topic', 'topicColumn', 'payloadColumn', 'qos', 'retain'],
+    },
     'snk.mysql': {
         'kind': 'sink',
         'summary': 'Write to MySQL via the DuckDB mysql extension',
@@ -1092,6 +1097,11 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'Read from MotherDuck via ATTACH md:',
         'params': ['database', 'token', 'mode', 'schemaName', 'tableName', 'sql'],
+    },
+    'src.mqtt': {
+        'kind': 'source',
+        'summary': 'Subscribe to topics on an MQTT 3.1.1 broker such as Mosquitto, EMQX or HiveMQ and read each message as a row: its topic, its payload (as text, or base64 when it is not UTF-8), its QoS and whether it was retained. The read ends once a wait passes with no message. With a kept session the broker hol...',
+        'params': ['url', 'user', 'password', 'clientId', 'topics', 'qos', 'persistentSession', 'maxMessages', 'waitMs'],
     },
     'src.mysql': {
         'kind': 'source',

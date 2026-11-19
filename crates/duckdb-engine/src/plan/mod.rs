@@ -397,6 +397,86 @@ fn service_account_key(props: &JsonValue, component: &str) -> Result<Option<Stri
     Ok(key)
 }
 
+/// An MQTT broker from its URL: mqtt:// (or tcp://) in the clear, on 1883
+/// unless the URL names a port; mqtts:// (or ssl://, tls://) over TLS, on 8883.
+fn mqtt_conn(props: &JsonValue, component: &str) -> Result<MqttConn, EngineError> {
+    let text = |key: &str| string_prop(props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let config = |why: String| EngineError::Config(format!("{component}: {why}"));
+    let raw = text("url").ok_or_else(|| config("a broker URL is required, such as mqtt://broker.example.com:1883".into()))?;
+    let url = url::Url::parse(&raw).map_err(|e| config(format!("'{raw}' is not a broker URL: {e}")))?;
+    let (tls, default_port) = match url.scheme() {
+        "mqtt" | "tcp" => (false, 1883),
+        "mqtts" | "ssl" | "tls" => (true, 8883),
+        other => {
+            return Err(config(format!(
+                "the URL starts with {other}:, and a broker is reached with mqtt:// or, over TLS, mqtts://"
+            )))
+        }
+    };
+    let host = match url.host() {
+        Some(url::Host::Domain(d)) if !d.is_empty() => d.to_string(),
+        Some(url::Host::Ipv4(a)) => a.to_string(),
+        Some(url::Host::Ipv6(a)) => a.to_string(),
+        _ => return Err(config(format!("'{raw}' names no host"))),
+    };
+    // A password is kept as written: spaces at its ends are part of it.
+    let (user, password) = (text("user"), string_prop(props, "password").filter(|s| !s.is_empty()));
+    if password.is_some() && user.is_none() {
+        return Err(config("a password needs a user name: MQTT 3.1.1 sends no password alone".into()));
+    }
+    Ok(MqttConn { host, port: url.port().unwrap_or(default_port), tls, client_id: text("clientId"), user, password })
+}
+
+/// The topic filters a subscription names, one per line or separated by
+/// commas. `+` stands for one whole level and `#` for every level after it.
+fn mqtt_filters(props: &JsonValue, component: &str) -> Result<Vec<String>, EngineError> {
+    let raw = string_prop(props, "topics").unwrap_or_default();
+    let filters: Vec<String> = raw.split([',', '\n']).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    if filters.is_empty() {
+        return Err(EngineError::Config(format!("{component}: name at least one topic to subscribe to")));
+    }
+    for f in &filters {
+        let levels: Vec<&str> = f.split('/').collect();
+        let fits = levels.iter().enumerate().all(|(i, level)| match *level {
+            "#" => i + 1 == levels.len(),
+            "+" => true,
+            other => !other.contains(['+', '#']),
+        });
+        if !fits || f.contains('\0') {
+            return Err(EngineError::Config(format!(
+                "{component}: '{f}' is not a topic filter MQTT allows: + stands for one whole level, \
+                 and # for every level after it, so it comes last"
+            )));
+        }
+    }
+    Ok(filters)
+}
+
+/// QoS 0 or 1. QoS 2 is not spoken here.
+fn mqtt_qos(props: &JsonValue, component: &str) -> Result<u8, EngineError> {
+    match whole_number(props, "qos", component)? {
+        None | Some(1) => Ok(1),
+        Some(0) => Ok(0),
+        Some(n) => Err(EngineError::Config(format!(
+            "{component}: QoS {n} is not 0 or 1. QoS 2 is not supported here; 1 delivers at least once"
+        ))),
+    }
+}
+
+/// Why a message cannot go to `topic`, if it cannot: a message goes to one
+/// topic, with no wildcards, of at most 65,535 bytes.
+pub(crate) fn mqtt_topic_problem(topic: &str) -> Option<String> {
+    if topic.is_empty() {
+        Some("a message needs a topic".into())
+    } else if topic.contains(['+', '#']) {
+        Some(format!("'{topic}' has a wildcard, and a message goes to one topic"))
+    } else if topic.contains('\0') || topic.len() > 65_535 {
+        Some(format!("'{topic}' is not a topic MQTT allows"))
+    } else {
+        None
+    }
+}
+
 /// A Service Bus queue or topic from the connection string the Azure portal
 /// hands out (Shared access policies): the namespace from its Endpoint, the key
 /// from SharedAccessKeyName and SharedAccessKey, the entity from its EntityPath
@@ -880,6 +960,8 @@ pub enum RuntimeSpec {
     MongoCdc(MongoCdcSpec),
     ServiceBusSource(ServiceBusSourceSpec),
     ServiceBusSink(ServiceBusSinkSpec),
+    MqttSource(MqttSourceSpec),
+    MqttSink(MqttSinkSpec),
     GizmoSqlSource(GizmoSqlSourceSpec),
     GizmoSqlSink(GizmoSqlSinkSpec),
     RabbitSink(RabbitSinkSpec),
@@ -2504,6 +2586,8 @@ fn build_stage(
     let mut mongo_cdc: Option<MongoCdcSpec> = None;
     let mut servicebus_source: Option<ServiceBusSourceSpec> = None;
     let mut servicebus_sink: Option<ServiceBusSinkSpec> = None;
+    let mut mqtt_source: Option<MqttSourceSpec> = None;
+    let mut mqtt_sink: Option<MqttSinkSpec> = None;
     let mut gizmosql_source: Option<GizmoSqlSourceSpec> = None;
     let mut gizmosql_sink: Option<GizmoSqlSinkSpec> = None;
     let mut rabbit_sink: Option<RabbitSinkSpec> = None;
@@ -3975,6 +4059,38 @@ fn build_stage(
             body_column: column("bodyColumn"),
             group_id_column,
             deduplication_id_column: column("deduplicationIdColumn"),
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.mqtt" {
+        // One message a row, to a fixed topic or to the one in a column.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let conn = mqtt_conn(&props, component_id)?;
+        let column = |key: &str| string_prop(&props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let (topic, topic_column) = (column("topic"), column("topicColumn"));
+        match (&topic, &topic_column) {
+            (Some(_), Some(_)) => {
+                return Err(EngineError::Config(format!("{component_id}: set Topic or Topic column, not both")))
+            }
+            (None, None) => {
+                return Err(EngineError::Config(format!(
+                    "{component_id}: name a Topic, or a Topic column that holds each row's"
+                )))
+            }
+            (Some(t), None) => {
+                if let Some(why) = mqtt_topic_problem(t) {
+                    return Err(EngineError::Config(format!("{component_id}: {why}")));
+                }
+            }
+            (None, Some(_)) => {}
+        }
+        mqtt_sink = Some(MqttSinkSpec {
+            from_view: from_view.to_string(),
+            conn,
+            topic,
+            topic_column,
+            payload_column: column("payloadColumn"),
+            qos: mqtt_qos(&props, component_id)?,
+            retain: props.get("retain").and_then(|v| v.as_bool()).unwrap_or(false),
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.servicebus" {
@@ -6142,6 +6258,31 @@ fn build_stage(
             max_events,
             wait_ms,
             full_document,
+        });
+        (String::new(), StageKind::View, None)
+    } else if component_id == "src.mqtt" {
+        // MQTT 3.1.1 over Duckle's own small client: subscribe, then take what
+        // comes until a wait passes with nothing or Max messages is reached.
+        let conn = mqtt_conn(&props, component_id)?;
+        let topics = mqtt_filters(&props, component_id)?;
+        let persistent_session = props.get("persistentSession").and_then(|v| v.as_bool()).unwrap_or(false);
+        if persistent_session && conn.client_id.is_none() {
+            return Err(EngineError::Config(format!(
+                "{component_id}: a kept session is found again by its client id, so set Client id"
+            )));
+        }
+        let max_messages = whole_number(&props, "maxMessages", component_id)?.unwrap_or(10_000);
+        if max_messages == 0 {
+            return Err(EngineError::Config(format!("{component_id}: maxMessages must be at least 1")));
+        }
+        mqtt_source = Some(MqttSourceSpec {
+            node_id: node.id.clone(),
+            conn,
+            topics,
+            qos: mqtt_qos(&props, component_id)?,
+            persistent_session,
+            max_messages: max_messages as usize,
+            wait_ms: whole_number(&props, "waitMs", component_id)?.unwrap_or(2000),
         });
         (String::new(), StageKind::View, None)
     } else if component_id == "src.servicebus" {
@@ -8503,6 +8644,8 @@ fn build_stage(
         .or_else(|| mongo_cdc.map(RuntimeSpec::MongoCdc))
         .or_else(|| servicebus_source.map(RuntimeSpec::ServiceBusSource))
         .or_else(|| servicebus_sink.map(RuntimeSpec::ServiceBusSink))
+        .or_else(|| mqtt_source.map(RuntimeSpec::MqttSource))
+        .or_else(|| mqtt_sink.map(RuntimeSpec::MqttSink))
         .or_else(|| rabbit_sink.map(RuntimeSpec::RabbitSink))
         .or_else(|| rabbit_source.map(RuntimeSpec::RabbitSource))
         .or_else(|| git_source.map(RuntimeSpec::GitSource))

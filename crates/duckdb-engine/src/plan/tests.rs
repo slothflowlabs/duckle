@@ -8841,3 +8841,128 @@ mod servicebus {
         assert!(printed.contains("listen"), "the key name is not a secret: {printed}");
     }
 }
+
+mod mqtt {
+    use super::*;
+    use crate::plan::{MqttSinkSpec, MqttSourceSpec, RuntimeSpec};
+    use serde_json::json;
+
+    fn specs(component: &str, props: serde_json::Value) -> Result<Vec<RuntimeSpec>, crate::EngineError> {
+        let node = |id: &str, component: &str, props: serde_json::Value| {
+            json!({"id": id, "position": {"x": 0, "y": 0}, "data": {"label": id, "componentId": component, "properties": props}})
+        };
+        let nodes = if component.starts_with("src.") {
+            [node("a", component, props), node("b", "snk.csv", json!({ "path": "/tmp/b.csv" }))]
+        } else {
+            [node("a", "src.csv", json!({ "path": "/tmp/a.csv" })), node("b", component, props)]
+        };
+        let doc: PipelineDoc = serde_json::from_value(json!({
+            "nodes": nodes,
+            "edges": [{"id": "e", "source": "a", "target": "b", "data": {"connectionType": "main"}}]
+        }))
+        .unwrap();
+        Ok(compile(&doc)?.stages.into_iter().filter_map(|s| s.runtime).collect())
+    }
+
+    fn with(mut props: serde_json::Value, extra: serde_json::Value) -> serde_json::Value {
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            props[k] = v;
+        }
+        props
+    }
+
+    fn source(extra: serde_json::Value) -> Result<MqttSourceSpec, crate::EngineError> {
+        let props = with(json!({ "url": "mqtt://broker.example.com", "topics": "sensors/#" }), extra);
+        Ok(specs("src.mqtt", props)?
+            .into_iter()
+            .find_map(|s| match s {
+                RuntimeSpec::MqttSource(m) => Some(m),
+                _ => None,
+            })
+            .expect("an MQTT read"))
+    }
+
+    fn sink(extra: serde_json::Value) -> Result<MqttSinkSpec, crate::EngineError> {
+        let props = with(json!({ "url": "mqtt://broker.example.com" }), extra);
+        Ok(specs("snk.mqtt", props)?
+            .into_iter()
+            .find_map(|s| match s {
+                RuntimeSpec::MqttSink(m) => Some(m),
+                _ => None,
+            })
+            .expect("an MQTT write"))
+    }
+
+    #[test]
+    fn a_broker_url_names_its_host_its_port_and_whether_it_is_tls() {
+        for (url, host, port, tls) in [
+            ("mqtt://broker.example.com", "broker.example.com", 1883, false),
+            ("mqtts://broker.example.com", "broker.example.com", 8883, true),
+            ("tcp://10.0.0.5:1884", "10.0.0.5", 1884, false),
+            ("ssl://[::1]:8884", "::1", 8884, true),
+        ] {
+            let c = source(json!({ "url": url })).unwrap().conn;
+            assert_eq!((c.host.as_str(), c.port, c.tls), (host, port, tls), "{url}");
+        }
+        for bad in ["http://broker.example.com", "broker.example.com:1883", "mqtt://", ""] {
+            assert!(source(json!({ "url": bad })).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn topic_filters_are_listed_and_checked() {
+        let s = source(json!({ "topics": "sensors/+/temp, alerts/#\nplant" })).unwrap();
+        assert_eq!(s.topics, ["sensors/+/temp", "alerts/#", "plant"]);
+        for bad in ["a/#/b", "a+", "a/b#", "", " , "] {
+            let err = source(json!({ "topics": bad })).unwrap_err().to_string();
+            assert!(err.contains("topic"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_kept_session_needs_a_client_id() {
+        let err = source(json!({ "persistentSession": true })).unwrap_err().to_string();
+        assert!(err.contains("Client id"), "{err}");
+        let s = source(json!({ "persistentSession": true, "clientId": "plant-7" })).unwrap();
+        assert!(s.persistent_session);
+        assert_eq!(s.conn.client_id.as_deref(), Some("plant-7"));
+    }
+
+    #[test]
+    fn a_read_takes_its_options_as_written() {
+        let s = source(json!({})).unwrap();
+        assert_eq!((s.qos, s.max_messages, s.wait_ms, s.persistent_session), (1, 10_000, 2000, false));
+        assert_eq!(s.conn.client_id, None, "a fresh id each run unless one is set");
+        let s = source(json!({ "qos": "0", "maxMessages": "5", "waitMs": 0 })).unwrap();
+        assert_eq!((s.qos, s.max_messages, s.wait_ms), (0, 5, 0));
+        let err = source(json!({ "qos": "2" })).unwrap_err().to_string();
+        assert!(err.contains("QoS 2"), "{err}");
+        let err = source(json!({ "maxMessages": 0 })).unwrap_err().to_string();
+        assert!(err.contains("maxMessages"), "{err}");
+    }
+
+    #[test]
+    fn a_password_needs_a_user_name() {
+        assert!(source(json!({ "password": "pw" })).is_err());
+        let c = source(json!({ "user": "ada", "password": " pw " })).unwrap().conn;
+        assert_eq!((c.user.as_deref(), c.password.as_deref()), (Some("ada"), Some(" pw ")), "a password is kept as written");
+    }
+
+    #[test]
+    fn a_send_names_one_topic_or_a_column_that_holds_it() {
+        let s = sink(json!({ "topic": "plant/1" })).unwrap();
+        assert_eq!((s.topic.as_deref(), s.topic_column.as_deref(), s.qos, s.retain), (Some("plant/1"), None, 1, false));
+        let s = sink(json!({ "topicColumn": "t", "payloadColumn": "p", "qos": 0, "retain": true })).unwrap();
+        assert_eq!((s.topic_column.as_deref(), s.payload_column.as_deref(), s.qos, s.retain), (Some("t"), Some("p"), 0, true));
+        for bad in [json!({}), json!({ "topic": "plant/+" }), json!({ "topic": "a", "topicColumn": "t" })] {
+            assert!(sink(bad.clone()).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn no_password_prints() {
+        let printed = format!("{:?}", source(json!({ "user": "ada", "password": "s3cr3t-pw" })).unwrap());
+        assert!(!printed.contains("s3cr3t"), "{printed}");
+        assert!(printed.contains("ada"), "the user name is not a secret: {printed}");
+    }
+}

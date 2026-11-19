@@ -517,6 +517,14 @@ jobs:
         env:
           DUCKLE_MONGO_RS_URI: mongodb://localhost:27017/?directConnection=true
         run: cargo test -p duckle-duckdb-engine --test mongo_cdc
+      - name: Start an MQTT broker
+        run: |
+          docker run -d --name mosquitto -p 1883:1883 eclipse-mosquitto:2 mosquitto -c /mosquitto-no-auth.conf
+          for i in $(seq 1 30); do nc -z localhost 1883 && break; sleep 1; done
+      - name: Run MQTT tests
+        env:
+          DUCKLE_MQTT_URL: mqtt://localhost:1883
+        run: cargo test -p duckle-duckdb-engine --test mqtt
       - name: Start Pulsar standalone
         run: |
           set -e

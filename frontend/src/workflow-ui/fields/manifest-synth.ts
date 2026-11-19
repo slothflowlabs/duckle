@@ -2841,6 +2841,39 @@ function synthWrongFamilyForm(comp: ComponentDef): ComponentManifest | null {
             },
         ]);
     }
+    if (id === 'src.mqtt') {
+        return base(comp, [
+            {
+                label: 'Broker',
+                fields: [
+                    { key: 'url', label: 'Broker URL', kind: 'text', required: true, placeholder: 'mqtt://broker.example.com:1883', description: 'mqtt:// in the clear, on port 1883 unless the URL names one; mqtts:// over TLS, on 8883.' },
+                    { key: 'user', label: 'User name', kind: 'text' },
+                    { key: 'password', label: 'Password', kind: 'text', secret: true },
+                    { key: 'clientId', label: 'Client id', kind: 'text', placeholder: 'plant-7-reader', description: 'Needed to keep a session between runs. Left empty, each run connects as a new client.' },
+                ],
+            },
+            {
+                label: 'Subscribe',
+                fields: [
+                    { key: 'topics', label: 'Topics', kind: 'textarea', required: true, placeholder: 'sensors/+/temperature', description: 'Topic filters, one per line or separated by commas. + stands for one level of a topic, # for every level after it.' },
+                    {
+                        key: 'qos',
+                        label: 'QoS',
+                        kind: 'select',
+                        defaultValue: '1',
+                        options: [
+                            { label: 'At least once (1)', value: '1' },
+                            { label: 'At most once (0)', value: '0' },
+                        ],
+                        description: 'The most a message is delivered at: the lower of this and the QoS it was published with. A QoS 1 message is acknowledged as it is read.',
+                    },
+                    { key: 'persistentSession', label: 'Keep the session between runs', kind: 'bool', defaultValue: false, description: 'The broker holds QoS 1 messages for this client id while no run is connected, and the next run reads them. Each is acknowledged as it is read, so a run that fails after reading does not get it again.' },
+                    { key: 'maxMessages', label: 'Max messages', kind: 'integer', defaultValue: 10000, description: 'The most one run takes.' },
+                    { key: 'waitMs', label: 'Wait for a message (ms)', kind: 'integer', defaultValue: 2000, description: 'The read ends once this long passes with no message.' },
+                ],
+            },
+        ]);
+    }
     if (id === 'src.servicebus') {
         return base(comp, [
             {
@@ -5558,6 +5591,43 @@ function synthStreamingSink(comp: ComponentDef): ComponentManifest {
                         { key: 'bodyColumn', label: 'Body column', kind: 'column', description: 'The column sent as each message body. Left empty, the whole row is sent as JSON.' },
                         { key: 'groupIdColumn', label: 'Message group column', kind: 'column', description: 'For a FIFO queue, whose URL ends in .fifo, and needed there: messages of one group are delivered in order.' },
                         { key: 'deduplicationIdColumn', label: 'Deduplication id column', kind: 'column', description: 'For a FIFO queue without content-based deduplication: a message whose id was sent in the last five minutes is dropped.' },
+                    ],
+                },
+            ],
+            'upstream',
+        );
+    }
+    if (comp.id === 'snk.mqtt') {
+        return base(
+            comp,
+            [
+                {
+                    label: 'Broker',
+                    fields: [
+                        { key: 'url', label: 'Broker URL', kind: 'text', required: true, placeholder: 'mqtt://broker.example.com:1883', description: 'mqtt:// in the clear, on port 1883 unless the URL names one; mqtts:// over TLS, on 8883.' },
+                        { key: 'user', label: 'User name', kind: 'text' },
+                        { key: 'password', label: 'Password', kind: 'text', secret: true },
+                        { key: 'clientId', label: 'Client id', kind: 'text', description: 'Left empty, each run connects as a new client.' },
+                    ],
+                },
+                {
+                    label: 'Messages',
+                    fields: [
+                        { key: 'topic', label: 'Topic', kind: 'text', placeholder: 'plant/line-1/readings', description: 'Every row is sent to this topic. Or name a Topic column instead.' },
+                        { key: 'topicColumn', label: 'Topic column', kind: 'column', description: 'Each row is sent to the topic in this column.' },
+                        { key: 'payloadColumn', label: 'Payload column', kind: 'column', description: 'Sent as each message. Left empty, the whole row is sent as JSON.' },
+                        {
+                            key: 'qos',
+                            label: 'QoS',
+                            kind: 'select',
+                            defaultValue: '1',
+                            options: [
+                                { label: 'At least once (1)', value: '1' },
+                                { label: 'At most once (0)', value: '0' },
+                            ],
+                            description: 'At least once waits for the broker to acknowledge every message, and fails the run if one is not.',
+                        },
+                        { key: 'retain', label: 'Retain', kind: 'bool', defaultValue: false, description: 'The broker keeps the last message on each topic and hands it to the next subscriber. An empty payload clears it.' },
                     ],
                 },
             ],
