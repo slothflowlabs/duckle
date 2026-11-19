@@ -1025,6 +1025,40 @@ impl std::fmt::Debug for TrinoAuth {
     }
 }
 
+/// src.mongodb.cdc: the changes a MongoDB change stream reports for one
+/// collection, from where the last successful run stopped.
+#[derive(Clone)]
+pub struct MongoCdcSpec {
+    pub node_id: String,
+    pub uri: String,
+    pub database: String,
+    pub collection: String,
+    /// Changes a run reads at most.
+    pub max_events: u64,
+    /// How long each read waits for a change before the run calls it done.
+    pub wait_ms: u64,
+    /// Look up the whole document for an update (updateLookup), not only what changed.
+    pub full_document: bool,
+}
+
+impl std::fmt::Debug for MongoCdcSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut uri = self.uri.clone();
+        for password in crate::util::url_passwords(&self.uri) {
+            uri = uri.replace(password, "***");
+        }
+        f.debug_struct("MongoCdcSpec")
+            .field("node_id", &self.node_id)
+            .field("uri", &uri)
+            .field("database", &self.database)
+            .field("collection", &self.collection)
+            .field("max_events", &self.max_events)
+            .field("wait_ms", &self.wait_ms)
+            .field("full_document", &self.full_document)
+            .finish()
+    }
+}
+
 /// src.sqlserver.cdc: the inserts, updates and deletes SQL Server's change data
 /// capture recorded for one table, from where the last successful run stopped.
 #[derive(Clone)]

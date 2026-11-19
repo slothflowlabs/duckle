@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 431,
+  "componentCount": 432,
   "components": [
     {
       "id": "src.csv",
@@ -14937,6 +14937,106 @@
               "label": "reject",
               "type": "reject",
               "optional": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.mongodb.cdc",
+      "label": "MongoDB CDC",
+      "kind": "source",
+      "availability": "available",
+      "summary": "Change data capture from MongoDB through a change stream: every insert, update, replace and delete in a collection, in order, each as one row with the document as JSON. The resume token is saved only when the run succeeds, so a failed run reads the same changes again. The first run starts from when it opens the stream. Needs a replica set or a sharded cluster; no JVM, no Kafka.",
+      "category": "Sources",
+      "group": "NoSQL & Search",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.mongodb.cdc",
+        "kind": "source",
+        "label": "MongoDB CDC",
+        "description": "Change data capture from MongoDB through a change stream: every insert, update, replace and delete in a collection, in order, each as one row with the document as JSON. The resume token is saved only when the run succeeds, so a failed run reads the same changes again. The first run starts from when it opens the stream. Needs a replica set or a sharded cluster; no JVM, no Kafka.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "MongoDB connection",
+            "fields": [
+              {
+                "key": "uri",
+                "label": "Connection URI",
+                "kind": "text",
+                "required": true,
+                "placeholder": "mongodb://user:pass@host:27017/?replicaSet=rs0",
+                "secret": true,
+                "description": "A replica set or a sharded cluster: a standalone server has no change streams."
+              },
+              {
+                "key": "database",
+                "label": "Database",
+                "kind": "text",
+                "required": true
+              },
+              {
+                "key": "collection",
+                "label": "Collection",
+                "kind": "text",
+                "required": true
+              }
+            ]
+          },
+          {
+            "label": "Change feed",
+            "fields": [
+              {
+                "key": "fullDocument",
+                "label": "For an update",
+                "kind": "select",
+                "defaultValue": "updateLookup",
+                "options": [
+                  {
+                    "label": "Look up the whole document",
+                    "value": "updateLookup"
+                  },
+                  {
+                    "label": "Only what changed",
+                    "value": "none"
+                  }
+                ],
+                "description": "Each change arrives as one row: _op, _token, _ts, _id, then document, updated and removed as JSON. The whole document is the one in the collection when the change is read."
+              },
+              {
+                "key": "maxEvents",
+                "label": "Changes per run",
+                "kind": "integer",
+                "defaultValue": 100000,
+                "description": "The rest arrive on the next run."
+              },
+              {
+                "key": "waitMs",
+                "label": "Wait for changes (ms)",
+                "kind": "integer",
+                "defaultValue": 1000,
+                "description": "How long a read waits for a change before the run calls it done, up to 60000."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
             }
           ]
         }

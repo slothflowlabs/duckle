@@ -1,7 +1,7 @@
 //! Backfill support: inspect, set, and clear the persisted state that a node
 //! advances only on a fully successful run.
 //!
-//! State lives at `<workspace>/state/<pipeline>/<node_id>.json`, and EIGHT
+//! State lives at `<workspace>/state/<pipeline>/<node_id>.json`, and NINE
 //! different node kinds write there, each with its own shape:
 //!
 //! | kind          | written by             | shape                                    |
@@ -15,6 +15,7 @@
 //! | `tumble`      | `xf.tumble`            | `{ buffer, watermark, emitted_through }` |
 //! | `pg_lsn`      | `src.postgres.cdc`     | `{ slot, lsn }`                          |
 //! | `mssql_lsn`   | `src.sqlserver.cdc`    | `{ lsn, captureInstance }`               |
+//! | `mongo_token` | `src.mongodb.cdc`      | `{ resumeToken, collection }`            |
 //!
 //! Editing this lets an operator replay from an earlier point ("backfill from
 //! date X", "re-read from snapshot N") or clear it to force a full reload,
@@ -71,6 +72,10 @@ pub fn kind_of(v: &Value) -> &'static str {
         // Listed, never hand-editable: an LSN set by hand skips or repeats
         // changes, and one older than CDC keeps fails the next run.
         "mssql_lsn"
+    } else if v.get("resumeToken").is_some() {
+        // Listed, never hand-editable: a resume token is the server's own
+        // opaque position, with nothing a person could write in its place.
+        "mongo_token"
     } else if v.get("snapshot_id").is_some() {
         "snapshot"
     } else if v.get("value").is_some() {
@@ -153,6 +158,7 @@ pub fn list(workspace: &Path, pipeline: &str) -> Vec<WatermarkEntry> {
             "tumble" => format!("watermark {}", as_str(v.get("watermark"))),
             "pg_lsn" => format!("slot {} @ {}", as_str(v.get("slot")), as_str(v.get("lsn"))),
             "mssql_lsn" => format!("{} @ {}", as_str(v.get("captureInstance")), as_str(v.get("lsn"))),
+            "mongo_token" => format!("{} after {}", as_str(v.get("collection")), as_str(v.pointer("/resumeToken/_data"))),
             _ => text.trim().chars().take(120).collect(),
         };
         out.push(WatermarkEntry {
@@ -597,6 +603,7 @@ mod shape_tests {
         write(d.path(), "p", "spl", r#"{"path":"/spool/a.ndjson","next_offset":4096}"#);
         write(d.path(), "p", "pgc", r#"{"slot":"duckle_orders","lsn":"0/15260B8"}"#);
         write(d.path(), "p", "mss", r#"{"lsn":"0x0000002A000001A80003","captureInstance":"dbo_orders"}"#);
+        write(d.path(), "p", "mgo", r#"{"resumeToken":{"_data":"8263A1B2"},"collection":"shop.orders"}"#);
         write(
             d.path(),
             "p",
@@ -615,6 +622,7 @@ mod shape_tests {
                 ("cdc", "snapshot"),
                 ("inc", "incremental"),
                 ("kaf", "kafka"),
+                ("mgo", "mongo_token"),
                 ("mss", "mssql_lsn"),
                 ("pgc", "pg_lsn"),
                 ("spl", "spool"),
@@ -630,6 +638,8 @@ mod shape_tests {
         assert!(kaf.value.contains("orders") && kaf.value.contains("991"), "{}", kaf.value);
         let pgc = got.iter().find(|e| e.node_id == "pgc").unwrap();
         assert!(pgc.value.contains("duckle_orders") && pgc.value.contains("0/15260B8"), "{}", pgc.value);
+        let mgo = got.iter().find(|e| e.node_id == "mgo").unwrap();
+        assert!(mgo.value.contains("shop.orders") && mgo.value.contains("8263A1B2"), "{}", mgo.value);
         let mss = got.iter().find(|e| e.node_id == "mss").unwrap();
         assert!(mss.value.contains("dbo_orders") && mss.value.contains("0x0000002A000001A80003"), "{}", mss.value);
     }

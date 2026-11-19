@@ -1078,6 +1078,11 @@ COMPONENTS = {
         'summary': 'Read documents from a MongoDB collection via the official Rust driver (find with optional filter / projection / limit). Auth via mongodb:// connection string.',
         'params': ['uri', 'database', 'collection', 'filter', 'projection', 'limit', 'pipeline'],
     },
+    'src.mongodb.cdc': {
+        'kind': 'source',
+        'summary': 'Change data capture from MongoDB through a change stream: every insert, update, replace and delete in a collection, in order, each as one row with the document as JSON. The resume token is saved only when the run succeeds, so a failed run reads the same changes again. The first run starts from wh...',
+        'params': ['uri', 'database', 'collection', 'fullDocument', 'maxEvents', 'waitMs'],
+    },
     'src.motherduck': {
         'kind': 'source',
         'summary': 'Read from MotherDuck via ATTACH md:',

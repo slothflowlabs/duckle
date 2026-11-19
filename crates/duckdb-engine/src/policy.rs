@@ -257,7 +257,7 @@ pub fn load(workspace: Option<&Path>) -> Result<Policy, EngineError> {
 /// when another appears. The number is a fact about the engine's source files,
 /// not a limit.
 #[cfg(test)]
-const STATE_WRITE_SITES: usize = 11;
+const STATE_WRITE_SITES: usize = 12;
 
 /// Every component that advances saved state when it runs.
 ///
@@ -286,6 +286,8 @@ pub fn advances_saved_state(component_id: &str) -> bool {
             | "src.postgres.cdc"
             // the LSN a capture instance's change table was read through
             | "src.sqlserver.cdc"
+            // the resume token a change stream was read through
+            | "src.mongodb.cdc"
             // uri -> fingerprint map of what has been seen
             | "src.changed"
             // topic/partition resume offsets
@@ -1531,11 +1533,11 @@ mod tests {
     }
 
     /// A change feed's saved position is state like any other: a workspace that
-    /// forbids state mutation must refuse both CDC sources, which save theirs
-    /// on every successful run.
+    /// forbids state mutation must refuse every CDC source, which saves its
+    /// position on every successful run.
     #[test]
-    fn both_change_feeds_advance_saved_state() {
-        for id in ["src.postgres.cdc", "src.sqlserver.cdc"] {
+    fn every_change_feed_advances_saved_state() {
+        for id in ["src.postgres.cdc", "src.sqlserver.cdc", "src.mongodb.cdc"] {
             assert!(advances_saved_state(id), "{id} saves its position and the policy does not know");
             assert!(state_write_is_armed(id, &serde_json::json!({})), "{id} saves it unconditionally");
         }

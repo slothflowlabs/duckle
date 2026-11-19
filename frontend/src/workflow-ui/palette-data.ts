@@ -221,6 +221,7 @@ export const PALETTE: Category[] = [
                 id: 'src.nosql',
                 label: 'NoSQL & Search',
                 components: [
+                    src('mongodb.cdc', 'MongoDB CDC', 'available', 'Change data capture from MongoDB through a change stream: every insert, update, replace and delete in a collection, in order, each as one row with the document as JSON. The resume token is saved only when the run succeeds, so a failed run reads the same changes again. The first run starts from when it opens the stream. Needs a replica set or a sharded cluster; no JVM, no Kafka.'),
                     src('mongodb', 'MongoDB', 'available', 'Read documents from a MongoDB collection via the official Rust driver (find with optional filter / projection / limit). Auth via mongodb:// connection string.'),
                     src('cassandra', 'Cassandra', 'available', 'Read CQL via the scylla driver (works with both Cassandra and ScyllaDB).'),
                     src('scylla', 'ScyllaDB', 'available', 'Read CQL via the scylla driver. Same wire as src.cassandra.'),

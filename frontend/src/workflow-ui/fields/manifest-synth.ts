@@ -6327,6 +6327,36 @@ function synthNoSqlSource(comp: ComponentDef): ComponentManifest {
             },
         ]);
     }
+    if (comp.id === 'src.mongodb.cdc') {
+        return base(comp, [
+            {
+                label: 'MongoDB connection',
+                fields: [
+                    { key: 'uri', label: 'Connection URI', kind: 'text', required: true, placeholder: 'mongodb://user:pass@host:27017/?replicaSet=rs0', secret: true, description: 'A replica set or a sharded cluster: a standalone server has no change streams.' },
+                    { key: 'database', label: 'Database', kind: 'text', required: true },
+                    { key: 'collection', label: 'Collection', kind: 'text', required: true },
+                ],
+            },
+            {
+                label: 'Change feed',
+                fields: [
+                    {
+                        key: 'fullDocument',
+                        label: 'For an update',
+                        kind: 'select',
+                        defaultValue: 'updateLookup',
+                        options: [
+                            { label: 'Look up the whole document', value: 'updateLookup' },
+                            { label: 'Only what changed', value: 'none' },
+                        ],
+                        description: 'Each change arrives as one row: _op, _token, _ts, _id, then document, updated and removed as JSON. The whole document is the one in the collection when the change is read.',
+                    },
+                    { key: 'maxEvents', label: 'Changes per run', kind: 'integer', defaultValue: 100000, description: 'The rest arrive on the next run.' },
+                    { key: 'waitMs', label: 'Wait for changes (ms)', kind: 'integer', defaultValue: 1000, description: 'How long a read waits for a change before the run calls it done, up to 60000.' },
+                ],
+            },
+        ]);
+    }
     if (comp.id === 'src.mongodb') {
         return base(comp, [
             {

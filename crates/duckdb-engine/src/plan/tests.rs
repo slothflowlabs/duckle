@@ -8674,3 +8674,66 @@ mod sqlserver_cdc {
         assert!(!printed.contains("s3cret"), "{printed}");
     }
 }
+
+mod mongo_cdc {
+    use super::*;
+    use crate::plan::{MongoCdcSpec, RuntimeSpec};
+
+    fn read(extra: serde_json::Value) -> Result<MongoCdcSpec, crate::EngineError> {
+        let mut props = serde_json::json!({
+            "uri": "mongodb://reader:s3cret@db.example.com:27017/?replicaSet=rs0", "database": "shop", "collection": "orders"
+        });
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            props[k] = v;
+        }
+        let doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                {"id": "c", "position": {"x": 0, "y": 0}, "data": {"label": "c", "componentId": "src.mongodb.cdc", "properties": props}},
+                {"id": "o", "position": {"x": 0, "y": 0}, "data": {"label": "o", "componentId": "snk.csv", "properties": {"path": "/tmp/o.csv"}}}
+            ],
+            "edges": [{"id": "e", "source": "c", "target": "o", "data": {"connectionType": "main"}}]
+        }))
+        .unwrap();
+        Ok(compile(&doc)?
+            .stages
+            .into_iter()
+            .find_map(|s| match s.runtime {
+                Some(RuntimeSpec::MongoCdc(c)) => Some(c),
+                _ => None,
+            })
+            .expect("a change stream read"))
+    }
+
+    #[test]
+    fn a_change_stream_needs_a_uri_a_database_and_a_collection() {
+        let spec = read(serde_json::json!({})).unwrap();
+        assert_eq!((spec.database.as_str(), spec.collection.as_str()), ("shop", "orders"));
+        for key in ["uri", "database", "collection"] {
+            let err = read(serde_json::json!({ key: " " })).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_read_takes_its_limits_as_written_and_looks_up_whole_documents_by_default() {
+        let spec = read(serde_json::json!({})).unwrap();
+        assert_eq!((spec.max_events, spec.wait_ms, spec.full_document), (100_000, 1000, true));
+        let spec = read(serde_json::json!({ "maxEvents": "50", "waitMs": 200, "fullDocument": "none" })).unwrap();
+        assert_eq!((spec.max_events, spec.wait_ms, spec.full_document), (50, 200, false));
+        for (key, value) in [
+            ("maxEvents", serde_json::json!(0)),
+            ("waitMs", serde_json::json!(60_001)),
+            ("fullDocument", serde_json::json!("required")),
+        ] {
+            let err = read(serde_json::json!({ key: value })).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}={value}: {err}");
+        }
+    }
+
+    #[test]
+    fn no_password_prints() {
+        let printed = format!("{:?}", read(serde_json::json!({})).unwrap());
+        assert!(!printed.contains("s3cret"), "{printed}");
+        assert!(printed.contains("db.example.com"), "the host is not a secret: {printed}");
+    }
+}

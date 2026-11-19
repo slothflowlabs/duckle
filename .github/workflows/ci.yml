@@ -502,6 +502,21 @@ jobs:
         env:
           DUCKLE_KINESIS_ENDPOINT: http://localhost:4568
         run: cargo test -p duckle-duckdb-engine --test execution -- kinesis
+      - name: Start a MongoDB replica set
+        run: |
+          set -e
+          for i in 1 2 3; do
+            docker pull mongo:7 && break
+            echo "docker pull attempt $i failed; retrying in 5s"; sleep 5
+          done
+          docker run -d --name mongo -p 27017:27017 mongo:7 --replSet rs0 --bind_ip_all
+          for i in $(seq 1 30); do docker exec mongo mongosh --quiet --eval 'db.runCommand({ping: 1}).ok' > /dev/null 2>&1 && break; sleep 2; done
+          docker exec mongo mongosh --quiet --eval 'rs.initiate({_id: "rs0", members: [{_id: 0, host: "localhost:27017"}]})'
+          for i in $(seq 1 30); do docker exec mongo mongosh --quiet --eval 'db.hello().isWritablePrimary' | grep -q true && break; sleep 2; done
+      - name: Run MongoDB change stream tests
+        env:
+          DUCKLE_MONGO_RS_URI: mongodb://localhost:27017/?directConnection=true
+        run: cargo test -p duckle-duckdb-engine --test mongo_cdc
       - name: Start Pulsar standalone
         run: |
           set -e

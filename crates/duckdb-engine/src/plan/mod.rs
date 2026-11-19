@@ -821,6 +821,7 @@ pub enum RuntimeSpec {
     SqsSink(SqsSinkSpec),
     TrinoSource(TrinoSourceSpec),
     SqlServerCdc(SqlServerCdcSpec),
+    MongoCdc(MongoCdcSpec),
     GizmoSqlSource(GizmoSqlSourceSpec),
     GizmoSqlSink(GizmoSqlSinkSpec),
     RabbitSink(RabbitSinkSpec),
@@ -2442,6 +2443,7 @@ fn build_stage(
     let mut sqs_sink: Option<SqsSinkSpec> = None;
     let mut trino_source: Option<TrinoSourceSpec> = None;
     let mut sqlserver_cdc: Option<SqlServerCdcSpec> = None;
+    let mut mongo_cdc: Option<MongoCdcSpec> = None;
     let mut gizmosql_source: Option<GizmoSqlSourceSpec> = None;
     let mut gizmosql_sink: Option<GizmoSqlSinkSpec> = None;
     let mut rabbit_sink: Option<RabbitSinkSpec> = None;
@@ -6036,6 +6038,39 @@ fn build_stage(
             batch_size,
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.mongodb.cdc" {
+        // A change stream on one collection, resumed after the saved token.
+        let text = |key: &str| string_prop(&props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let required = |key: &str| text(key).ok_or_else(|| EngineError::Config(format!("{component_id}: {key} required")));
+        let max_events = whole_number(&props, "maxEvents", component_id)?.unwrap_or(100_000);
+        if max_events == 0 {
+            return Err(EngineError::Config(format!("{component_id}: maxEvents must be at least 1")));
+        }
+        let wait_ms = whole_number(&props, "waitMs", component_id)?.unwrap_or(1000);
+        if wait_ms > 60_000 {
+            return Err(EngineError::Config(format!(
+                "{component_id}: waitMs is {wait_ms}, and a read waits at most 60000 ms here"
+            )));
+        }
+        let full_document = match text("fullDocument").as_deref() {
+            None | Some("updateLookup") => true,
+            Some("none") => false,
+            Some(other) => {
+                return Err(EngineError::Config(format!(
+                    "{component_id}: fullDocument '{other}' is not updateLookup or none"
+                )))
+            }
+        };
+        mongo_cdc = Some(MongoCdcSpec {
+            node_id: node.id.clone(),
+            uri: required("uri")?,
+            database: required("database")?,
+            collection: required("collection")?,
+            max_events,
+            wait_ms,
+            full_document,
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.gizmosql" {
         // GizmoSQL (Arrow Flight SQL) source via the clean-room crate::gizmosql
         // client. Result streams to Parquet + materializes like the ADBC source.
@@ -8360,6 +8395,7 @@ fn build_stage(
         .or_else(|| sqs_sink.map(RuntimeSpec::SqsSink))
         .or_else(|| trino_source.map(RuntimeSpec::TrinoSource))
         .or_else(|| sqlserver_cdc.map(RuntimeSpec::SqlServerCdc))
+        .or_else(|| mongo_cdc.map(RuntimeSpec::MongoCdc))
         .or_else(|| rabbit_sink.map(RuntimeSpec::RabbitSink))
         .or_else(|| rabbit_source.map(RuntimeSpec::RabbitSource))
         .or_else(|| git_source.map(RuntimeSpec::GitSource))
