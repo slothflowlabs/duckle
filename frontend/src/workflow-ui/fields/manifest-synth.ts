@@ -2703,6 +2703,26 @@ function synthWrongFamilyForm(comp: ComponentDef): ComponentManifest | null {
     // an Encoding (ORC text is UTF-8 by the format's own rule), a Glob checkbox
     // (a pattern in the path is what reads many files) and a one-choice Write
     // mode. OrcSourceSpec and OrcSinkSpec have none of them.
+    if (id === 'src.arrow') {
+        return base(comp, [
+            {
+                label: 'Source file',
+                fields: [
+                    {
+                        key: 'path',
+                        label: 'Path',
+                        kind: 'file-path',
+                        required: true,
+                        filters: [
+                            { name: 'Arrow IPC / Feather', extensions: ['arrow', 'feather', 'arrows', 'ipc'] },
+                            { name: 'All files', extensions: ['*'] },
+                        ],
+                        description: 'An Arrow IPC file (Feather version 2: .arrow, .feather) or stream (.arrows), compressed or not, or a pattern such as exports/*.feather to read every file it matches as one table. Files read together must have the same columns.',
+                    },
+                ],
+            },
+        ]);
+    }
     if (id === 'src.orc') {
         return base(comp, [
             {
@@ -2722,6 +2742,49 @@ function synthWrongFamilyForm(comp: ComponentDef): ComponentManifest | null {
                 ],
             },
         ]);
+    }
+    if (id === 'snk.arrow') {
+        return base(comp, [
+            {
+                label: 'Destination file',
+                fields: [
+                    {
+                        key: 'path',
+                        label: 'Output path',
+                        kind: 'save-path',
+                        required: true,
+                        placeholder: 'out/rows.arrow',
+                        filters: [
+                            { name: 'Arrow IPC / Feather', extensions: ['arrow', 'feather', 'arrows'] },
+                            { name: 'All files', extensions: ['*'] },
+                        ],
+                    },
+                    {
+                        key: 'format',
+                        label: 'Format',
+                        kind: 'select',
+                        defaultValue: 'file',
+                        options: [
+                            { label: 'File (Feather version 2)', value: 'file' },
+                            { label: 'Stream', value: 'stream' },
+                        ],
+                        description: 'The file format is what pandas, Polars and R read as Feather. The stream format is read front to back, as a pipe or a socket hands it over.',
+                    },
+                    {
+                        key: 'compression',
+                        label: 'Compression',
+                        kind: 'select',
+                        defaultValue: 'none',
+                        options: [
+                            { label: 'None', value: 'none' },
+                            { label: 'LZ4', value: 'lz4' },
+                            { label: 'ZSTD', value: 'zstd' },
+                        ],
+                        description: 'pyarrow writes Feather with LZ4 by default. Every current Arrow reader opens all three.',
+                    },
+                ],
+            },
+        ], 'upstream');
     }
     if (id === 'snk.orc') {
         return base(comp, [

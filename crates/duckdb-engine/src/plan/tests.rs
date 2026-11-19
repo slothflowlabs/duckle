@@ -9108,3 +9108,43 @@ mod mysql_cdc {
         assert!(printed.contains("repl"), "the user is not a secret: {printed}");
     }
 }
+
+mod arrow_file {
+    use super::*;
+    use crate::plan::{ArrowCompression, ArrowSinkSpec, RuntimeSpec};
+    use serde_json::json;
+
+    fn sink(props: serde_json::Value) -> Result<ArrowSinkSpec, crate::EngineError> {
+        let doc: PipelineDoc = serde_json::from_value(json!({
+            "nodes": [
+                {"id": "a", "position": {"x": 0, "y": 0}, "data": {"label": "a", "componentId": "src.csv", "properties": { "path": "/tmp/a.csv" }}},
+                {"id": "b", "position": {"x": 0, "y": 0}, "data": {"label": "b", "componentId": "snk.arrow", "properties": props}}
+            ],
+            "edges": [{"id": "e", "source": "a", "target": "b", "data": {"connectionType": "main"}}]
+        }))
+        .unwrap();
+        Ok(compile(&doc)?
+            .stages
+            .into_iter()
+            .filter_map(|s| s.runtime)
+            .find_map(|s| match s {
+                RuntimeSpec::ArrowSink(a) => Some(a),
+                _ => None,
+            })
+            .expect("an Arrow write"))
+    }
+
+    #[test]
+    fn a_write_is_a_feather_file_unless_it_asks_for_a_stream() {
+        let s = sink(json!({ "path": "out.arrow" })).unwrap();
+        assert_eq!((s.stream, s.compression), (false, ArrowCompression::None));
+        let s = sink(json!({ "path": "out.arrows", "format": "Stream", "compression": "ZSTD" })).unwrap();
+        assert_eq!((s.stream, s.compression), (true, ArrowCompression::Zstd));
+        assert_eq!(sink(json!({ "path": "o", "compression": "lz4" })).unwrap().compression, ArrowCompression::Lz4);
+        for (key, value) in [("format", "parquet"), ("compression", "snappy")] {
+            let err = sink(json!({ "path": "o", key: value })).unwrap_err().to_string();
+            assert!(err.contains(value), "{key}={value}: {err}");
+        }
+        assert!(sink(json!({ "path": " " })).is_err());
+    }
+}

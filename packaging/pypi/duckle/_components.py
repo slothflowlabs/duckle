@@ -313,6 +313,11 @@ COMPONENTS = {
         'summary': 'Write a table into an Access database (.accdb / .mdb), creating the file and the table when missing. Append or overwrite in one transaction; an empty upstream leaves the table alone. Windows only, through the Microsoft Access ODBC driver.',
         'params': ['path', 'password', 'tableName', 'mode'],
     },
+    'snk.arrow': {
+        'kind': 'sink',
+        'summary': 'Write rows as one Arrow IPC file (Feather version 2) or stream, for pandas, Polars, R or Spark to read, uncompressed or with LZ4 or ZSTD. Types stay typed, lists and structs included; a HUGEINT goes as a 38-digit decimal rather than a DOUBLE, and a UUID as its text. The file replaces the old one ...',
+        'params': ['path', 'format', 'compression'],
+    },
     'snk.avro': {
         'kind': 'sink',
         'summary': "Write rows as an Apache Avro container file via the pure-Rust `apache-avro` crate. Schema is inferred from the first row's column types (long / double / string / boolean) - or supply a JSON Avro schema via the schemaJson field to override. recordName names the inferred record (default `Row`).",
@@ -752,6 +757,11 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'Airtable REST. Bearer Personal Access Token. Cursor pagination on `offset` (cursorNextPath /offset, cursorParam `offset`). responsePath /records.',
         'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responseFormat', 'responsePath', 'jsonPath', 'paginationType', 'nextUrlPath', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'hasMorePath', 'pageParam', 'startPage', 'maxPages', 'incrementalField', 'incrementalInitial', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs', 'httpRequestsPerSecond', 'httpKeepCookies'],
+    },
+    'src.arrow': {
+        'kind': 'source',
+        'summary': 'Arrow IPC files (Feather version 2: .arrow, .feather) and streams (.arrows), the format pandas, Polars, R and Spark hand each other, read through the arrow crates. Every Arrow type arrives typed, decimals, zoned timestamps, lists and categorical columns included, compressed with LZ4 or ZSTD or no...',
+        'params': ['path'],
     },
     'src.artifact': {
         'kind': 'source',

@@ -108,6 +108,7 @@ mod trino;
 mod sqlserver_cdc;
 mod mongo_cdc;
 mod mysql_cdc;
+mod arrow_file;
 mod servicebus;
 mod mqtt;
 mod ldap;
@@ -2934,6 +2935,8 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::MysqlCdc(spec)) => {
                         self.run_mysql_cdc(&db_path, spec, pipeline_name, &mut pending_writes)
                     }
+                    Some(RuntimeSpec::ArrowSource(spec)) => self.run_arrow_source(&db_path, spec),
+                    Some(RuntimeSpec::ArrowSink(spec)) => self.run_arrow_sink(&db_path, spec),
                     Some(RuntimeSpec::GizmoSqlSource(spec)) => {
                         self.run_gizmosql_source(&db_path, spec)
                     }

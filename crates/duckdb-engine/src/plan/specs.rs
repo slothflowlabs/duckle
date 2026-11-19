@@ -1212,6 +1212,31 @@ impl std::fmt::Debug for MysqlCdcSpec {
     }
 }
 
+/// src.arrow: an Arrow IPC file or stream, or every file a pattern names.
+#[derive(Debug, Clone)]
+pub struct ArrowSourceSpec {
+    pub node_id: String,
+    pub path: String,
+}
+
+/// How snk.arrow compresses each buffer, as the IPC format allows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrowCompression {
+    None,
+    Lz4,
+    Zstd,
+}
+
+/// snk.arrow: the upstream rows as one Arrow IPC file, or a stream.
+#[derive(Debug, Clone)]
+pub struct ArrowSinkSpec {
+    pub from_view: String,
+    pub path: String,
+    /// The stream format rather than the file format (Feather v2).
+    pub stream: bool,
+    pub compression: ArrowCompression,
+}
+
 /// src.mongodb.cdc: the changes a MongoDB change stream reports for one
 /// collection, from where the last successful run stopped.
 #[derive(Clone)]

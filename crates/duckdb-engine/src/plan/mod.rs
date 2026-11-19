@@ -987,6 +987,8 @@ pub enum RuntimeSpec {
     SqlServerCdc(SqlServerCdcSpec),
     MongoCdc(MongoCdcSpec),
     MysqlCdc(MysqlCdcSpec),
+    ArrowSource(ArrowSourceSpec),
+    ArrowSink(ArrowSinkSpec),
     ServiceBusSource(ServiceBusSourceSpec),
     ServiceBusSink(ServiceBusSinkSpec),
     MqttSource(MqttSourceSpec),
@@ -2615,6 +2617,8 @@ fn build_stage(
     let mut sqlserver_cdc: Option<SqlServerCdcSpec> = None;
     let mut mongo_cdc: Option<MongoCdcSpec> = None;
     let mut mysql_cdc: Option<MysqlCdcSpec> = None;
+    let mut arrow_source: Option<ArrowSourceSpec> = None;
+    let mut arrow_sink: Option<ArrowSinkSpec> = None;
     let mut servicebus_source: Option<ServiceBusSourceSpec> = None;
     let mut servicebus_sink: Option<ServiceBusSinkSpec> = None;
     let mut mqtt_source: Option<MqttSourceSpec> = None;
@@ -4045,6 +4049,35 @@ fn build_stage(
             from_view: from_view.to_string(),
             path,
         });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.arrow" {
+        // One Arrow IPC file, or a stream. The format and codec are checked
+        // here, so a name the writer does not have fails before the run.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let path = string_prop(&props, "path")
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: path required", component_id)))?;
+        let pick = |key: &str| string_prop(&props, key).unwrap_or_default().trim().to_ascii_lowercase();
+        let stream = match pick("format").as_str() {
+            "" | "file" => false,
+            "stream" => true,
+            other => {
+                return Err(EngineError::Config(format!(
+                    "{component_id}: format '{other}' is not file (Feather v2) or stream"
+                )))
+            }
+        };
+        let compression = match pick("compression").as_str() {
+            "" | "none" => ArrowCompression::None,
+            "lz4" => ArrowCompression::Lz4,
+            "zstd" => ArrowCompression::Zstd,
+            other => {
+                return Err(EngineError::Config(format!(
+                    "{component_id}: compression '{other}' is not one Arrow IPC has; choose none, lz4 or zstd"
+                )))
+            }
+        };
+        arrow_sink = Some(ArrowSinkSpec { from_view: from_view.to_string(), path, stream, compression });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.orc" {
         // One ORC file through orc-rust. The codec is checked here, so a name
@@ -6147,6 +6180,14 @@ fn build_stage(
             node_id: node.id.clone(),
             path,
         });
+        (String::new(), StageKind::View, None)
+    } else if component_id == "src.arrow" {
+        // Arrow IPC through the arrow crates: each file says its own schema, and
+        // a pattern reads several, which must agree on their columns.
+        let path = string_prop(&props, "path")
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: path required", component_id)))?;
+        arrow_source = Some(ArrowSourceSpec { node_id: node.id.clone(), path });
         (String::new(), StageKind::View, None)
     } else if component_id == "src.orc" {
         // Apache ORC through orc-rust. Every file carries its own schema; a
@@ -8762,6 +8803,8 @@ fn build_stage(
         .or_else(|| sqlserver_cdc.map(RuntimeSpec::SqlServerCdc))
         .or_else(|| mongo_cdc.map(RuntimeSpec::MongoCdc))
         .or_else(|| mysql_cdc.map(RuntimeSpec::MysqlCdc))
+        .or_else(|| arrow_source.map(RuntimeSpec::ArrowSource))
+        .or_else(|| arrow_sink.map(RuntimeSpec::ArrowSink))
         .or_else(|| servicebus_source.map(RuntimeSpec::ServiceBusSource))
         .or_else(|| servicebus_sink.map(RuntimeSpec::ServiceBusSink))
         .or_else(|| mqtt_source.map(RuntimeSpec::MqttSource))

@@ -17,16 +17,16 @@
 <meta property="og:site_name" content="Duckle" />
 <meta property="og:url" content="https://duckle.org/docs/components.html" />
 <meta property="og:title" content="Component reference - Duckle" />
-<meta property="og:description" content="The Duckle component reference: 438 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta property="og:description" content="The Duckle component reference: 440 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta property="og:image" content="https://duckle.org/assets/img/og-card.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:url" content="https://duckle.org/docs/components.html" />
 <meta name="twitter:title" content="Component reference - Duckle" />
-<meta name="twitter:description" content="The Duckle component reference: 438 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta name="twitter:description" content="The Duckle component reference: 440 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta name="twitter:image" content="https://duckle.org/assets/img/og-card.png" />
-<meta name="description" content="The Duckle component reference: 438 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta name="description" content="The Duckle component reference: 440 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta name="keywords" content="visual ETL tool, DuckDB ETL, open source ETL, ELT tool, code-first ETL, Python ETL, ETL for AI agents, MCP ETL, data pipeline builder, dbt GUI, dbt on DuckDB, DuckLake, Quack DuckDB, no-code data pipeline, Fivetran alternative, Airbyte alternative, Talend alternative, dlt alternative, self-hosted ETL, local-first ETL" />
 <meta name="theme-color" content="#07090f" />
 <link rel="apple-touch-icon" href="../assets/img/duckle-mark.v4.svg" />
@@ -61,8 +61,8 @@
 {
   "@context": "https://schema.org",
   "@type": "TechArticle",
-  "headline": "Duckle components reference: 438 sources, transforms, sinks and data-quality nodes",
-  "description": "The Duckle component reference: 438 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB.",
+  "headline": "Duckle components reference: 440 sources, transforms, sinks and data-quality nodes",
+  "description": "The Duckle component reference: 440 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB.",
   "author": {
     "@type": "Organization",
     "name": "SlothFlow Labs"
@@ -133,12 +133,12 @@
 <span class="eyebrow">Reference</span>
 <h1>Component reference</h1>
 <!-- BEGIN GENERATED summary (website/scripts/build-llms.mjs writes this from the component catalog; edit it there) -->
-<p class="lead">Duckle ships 438 components across six kinds - 143 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 87 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 25 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 433 are available today; the 0 in preview and the 5 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
+<p class="lead">Duckle ships 440 components across six kinds - 144 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 88 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 25 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 435 are available today; the 0 in preview and the 5 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
 
 <div class="grid cols-3">
-  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span><h3>143 sources</h3><p>Files, lakehouse, databases, warehouses, object storage, streaming, SaaS APIs, NoSQL, vector DBs and more, all under <code>src.*</code>.</p></div>
+  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span><h3>144 sources</h3><p>Files, lakehouse, databases, warehouses, object storage, streaming, SaaS APIs, NoSQL, vector DBs and more, all under <code>src.*</code>.</p></div>
   <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg></span><h3>145 transforms</h3><p>Fields, rows, aggregates, joins, windows, strings, dates, JSON, arrays, CDC/SCD, AI and search, all under <code>xf.*</code>.</p></div>
-  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg></span><h3>87 sinks</h3><p>Files, databases, warehouses, object storage, vector DBs, messaging and comms, all under <code>snk.*</code> with universal write modes.</p></div>
+  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg></span><h3>88 sinks</h3><p>Files, databases, warehouses, object storage, vector DBs, messaging and comms, all under <code>snk.*</code> with universal write modes.</p></div>
 </div>
 <!-- END GENERATED summary -->
 
@@ -149,7 +149,7 @@
 
 <p>Sources read data into a pipeline. Connection-backed sources reuse saved, encrypted connections; file sources accept paths, globs and object-storage URIs.</p>
 
-<h3 id="sources-files">Files (23)</h3>
+<h3 id="sources-files">Files (24)</h3>
 <div style="overflow-x:auto">
 <table>
   <thead><tr><th>Component</th><th>What it does</th></tr></thead>
@@ -170,6 +170,7 @@
     <tr><td>Qlik QVD<br><code>src.qvd</code></td><td>Qlik QVD files (.qvd) via a clean-room pure-Rust reader (no Qlik runtime). The QVD header carries its own schema; the symbol table + bit-stuffed index are decoded directly. Move QlikView / Qlik Sense extracts into DuckDB, Parquet or any sink</td></tr>
     <tr><td>Parquet<br><code>src.parquet</code></td><td>Read columnar Parquet files</td></tr>
     <tr><td>Vortex<br><code>src.vortex</code></td><td>Read Vortex columnar files (.vortex) via the bundled duckle-lance sidecar. Vortex is a next-gen columnar format with fast random access; the sidecar bridges it into the engine through Parquet</td></tr>
+    <tr><td>Arrow IPC / Feather<br><code>src.arrow</code></td><td>Arrow IPC files (Feather version 2: .arrow, .feather) and streams (.arrows), the format pandas, Polars, R and Spark hand each other, read through the arrow crates. Every Arrow type arrives typed, decimals, zoned timestamps, lists and categorical columns included, compressed with LZ4 or ZSTD or not. A pattern such as exports/*.feather reads every file it matches as one table</td></tr>
     <tr><td>ORC<br><code>src.orc</code></td><td>Apache ORC files (.orc) via the pure-Rust <code>orc-rust</code> crate, the format Hive and many Spark lakes keep their tables in. Every ORC type arrives typed, nested lists, structs and maps included, timestamps to the microsecond. A pattern such as warehouse/sales/*.orc reads every file it matches as one table</td></tr>
     <tr><td>Fixed-width<br><code>src.fixedwidth</code></td><td>Read positional / fixed-width text files (mainframe / banking exports). Form provides a columns array - {name, start (1-based), width}; engine builds SUBSTR projections. Trailing whitespace stripped by default</td></tr>
     <tr><td>YAML<br><code>src.yaml</code></td><td>Read a YAML file as a table. Top-level YAML arrays become one row per element; non-array docs become a single row. Suits config-data ETL (Helm values, GitHub Actions matrices) not bulk logs</td></tr>
@@ -751,7 +752,7 @@
 
 <p>Sinks write pipeline output to a destination. All sinks support the same write modes.</p>
 
-<h3 id="sinks-files">Files (17)</h3>
+<h3 id="sinks-files">Files (18)</h3>
 <div style="overflow-x:auto">
 <table>
   <thead><tr><th>Component</th><th>What it does</th></tr></thead>
@@ -766,6 +767,7 @@
     <tr><td>Vortex<br><code>snk.vortex</code></td><td>Write rows as a Vortex columnar file (.vortex) via the bundled duckle-lance sidecar. Next-gen columnar format with fast random access; the engine bridges the upstream rows through Parquet into Vortex</td></tr>
     <tr><td>Avro<br><code>snk.avro</code></td><td>Write rows as an Apache Avro container file via the pure-Rust <code>apache-avro</code> crate. Schema is inferred from the first row's column types (long / double / string / boolean) - or supply a JSON Avro schema via the schemaJson field to override. recordName names the inferred record (default <code>Row</code>)</td></tr>
     <tr><td>Qlik QVD<br><code>snk.qvd</code></td><td>Write rows as a Qlik QVD file (.qvd) via a clean-room pure-Rust encoder (no Qlik runtime). Builds the per-column symbol tables + bit-stuffed index; values are typed per cell (int / double / string), nulls preserved. Round-trips with the QVD source and loads in QlikView / Qlik Sense</td></tr>
+    <tr><td>Arrow IPC / Feather<br><code>snk.arrow</code></td><td>Write rows as one Arrow IPC file (Feather version 2) or stream, for pandas, Polars, R or Spark to read, uncompressed or with LZ4 or ZSTD. Types stay typed, lists and structs included; a HUGEINT goes as a 38-digit decimal rather than a DOUBLE, and a UUID as its text. The file replaces the old one only once it is complete</td></tr>
     <tr><td>ORC<br><code>snk.orc</code></td><td>Write rows as one Apache ORC file via the pure-Rust <code>orc-rust</code> crate, Snappy-compressed unless you pick ZSTD, ZLIB, LZ4 or none. Takes booleans, integers, floats, text, binary, dates and timestamps; an unsigned integer widens to the next signed type and a UUID or JSON value goes as text. A DECIMAL, TIME, list, struct or map column is refused by name, before anything is written, to be cast upstream</td></tr>
     <tr><td>Model Card<br><code>snk.model</code></td><td>Register a trained model. The card IS the upstream row - the artifact URI your training script wrote, plus whatever metrics, framework and hashes it recorded - written to &lt;path&gt;/&lt;name&gt;/&lt;version&gt;.json with a latest.json pointer beside it. It needs exactly one row and a version column. The write happens only if the whole run succeeds, so a training pipeline that fails later never registers a model, and a failed retrain never moves the pointer off the model that still works</td></tr>
     <tr><td>YAML<br><code>snk.yaml</code></td><td>Write the upstream rows as a top-level YAML array (<code>- key: value</code> per row)</td></tr>

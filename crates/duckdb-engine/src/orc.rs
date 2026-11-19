@@ -95,7 +95,7 @@ fn codec(c: plan::OrcCompression) -> Option<CompressionType> {
 }
 
 /// A Parquet temp file beside the run database, named for the node it serves.
-fn temp_beside(db: &Path, tag: &str, node: &str) -> PathBuf {
+pub(crate) fn temp_beside(db: &Path, tag: &str, node: &str) -> PathBuf {
     let safe: String = node
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
@@ -104,7 +104,7 @@ fn temp_beside(db: &Path, tag: &str, node: &str) -> PathBuf {
     db.with_file_name(format!("{db_name}.{tag}-{safe}.parquet"))
 }
 
-fn sql_path(p: &Path) -> String {
+pub(crate) fn sql_path(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/").replace('\'', "''")
 }
 

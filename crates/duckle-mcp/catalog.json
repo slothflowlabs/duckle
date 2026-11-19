@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 438,
+  "componentCount": 440,
   "components": [
     {
       "id": "src.csv",
@@ -3383,6 +3383,73 @@
                     ]
                   }
                 ]
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.arrow",
+      "label": "Arrow IPC / Feather",
+      "kind": "source",
+      "availability": "available",
+      "summary": "Arrow IPC files (Feather version 2: .arrow, .feather) and streams (.arrows), the format pandas, Polars, R and Spark hand each other, read through the arrow crates. Every Arrow type arrives typed, decimals, zoned timestamps, lists and categorical columns included, compressed with LZ4 or ZSTD or not. A pattern such as exports/*.feather reads every file it matches as one table.",
+      "category": "Sources",
+      "group": "Files",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.arrow",
+        "kind": "source",
+        "label": "Arrow IPC / Feather",
+        "description": "Arrow IPC files (Feather version 2: .arrow, .feather) and streams (.arrows), the format pandas, Polars, R and Spark hand each other, read through the arrow crates. Every Arrow type arrives typed, decimals, zoned timestamps, lists and categorical columns included, compressed with LZ4 or ZSTD or not. A pattern such as exports/*.feather reads every file it matches as one table.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Source file",
+            "fields": [
+              {
+                "key": "path",
+                "label": "Path",
+                "kind": "file-path",
+                "required": true,
+                "filters": [
+                  {
+                    "name": "Arrow IPC / Feather",
+                    "extensions": [
+                      "arrow",
+                      "feather",
+                      "arrows",
+                      "ipc"
+                    ]
+                  },
+                  {
+                    "name": "All files",
+                    "extensions": [
+                      "*"
+                    ]
+                  }
+                ],
+                "description": "An Arrow IPC file (Feather version 2: .arrow, .feather) or stream (.arrows), compressed or not, or a pattern such as exports/*.feather to read every file it matches as one table. Files read together must have the same columns."
               }
             ]
           }
@@ -33376,6 +33443,110 @@
                     "value": "overwrite"
                   }
                 ]
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
+      "id": "snk.arrow",
+      "label": "Arrow IPC / Feather",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "Write rows as one Arrow IPC file (Feather version 2) or stream, for pandas, Polars, R or Spark to read, uncompressed or with LZ4 or ZSTD. Types stay typed, lists and structs included; a HUGEINT goes as a 38-digit decimal rather than a DOUBLE, and a UUID as its text. The file replaces the old one only once it is complete.",
+      "category": "Sinks",
+      "group": "Files",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.arrow",
+        "kind": "sink",
+        "label": "Arrow IPC / Feather",
+        "description": "Write rows as one Arrow IPC file (Feather version 2) or stream, for pandas, Polars, R or Spark to read, uncompressed or with LZ4 or ZSTD. Types stay typed, lists and structs included; a HUGEINT goes as a 38-digit decimal rather than a DOUBLE, and a UUID as its text. The file replaces the old one only once it is complete.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Destination file",
+            "fields": [
+              {
+                "key": "path",
+                "label": "Output path",
+                "kind": "save-path",
+                "required": true,
+                "placeholder": "out/rows.arrow",
+                "filters": [
+                  {
+                    "name": "Arrow IPC / Feather",
+                    "extensions": [
+                      "arrow",
+                      "feather",
+                      "arrows"
+                    ]
+                  },
+                  {
+                    "name": "All files",
+                    "extensions": [
+                      "*"
+                    ]
+                  }
+                ]
+              },
+              {
+                "key": "format",
+                "label": "Format",
+                "kind": "select",
+                "defaultValue": "file",
+                "options": [
+                  {
+                    "label": "File (Feather version 2)",
+                    "value": "file"
+                  },
+                  {
+                    "label": "Stream",
+                    "value": "stream"
+                  }
+                ],
+                "description": "The file format is what pandas, Polars and R read as Feather. The stream format is read front to back, as a pipe or a socket hands it over."
+              },
+              {
+                "key": "compression",
+                "label": "Compression",
+                "kind": "select",
+                "defaultValue": "none",
+                "options": [
+                  {
+                    "label": "None",
+                    "value": "none"
+                  },
+                  {
+                    "label": "LZ4",
+                    "value": "lz4"
+                  },
+                  {
+                    "label": "ZSTD",
+                    "value": "zstd"
+                  }
+                ],
+                "description": "pyarrow writes Feather with LZ4 by default. Every current Arrow reader opens all three."
               }
             ]
           }

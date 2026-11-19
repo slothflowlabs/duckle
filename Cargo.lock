@@ -4420,6 +4420,7 @@ dependencies = [
  "arboard",
  "arrow-array 59.3.2",
  "arrow-flight 59.3.2",
+ "arrow-ipc 59.3.2",
  "arrow-schema 59.3.2",
  "async-nats",
  "base64 0.23.1",

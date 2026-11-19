@@ -245,6 +245,9 @@ parquet = { workspace = true }
 # unifies with the workspace arrow pins; do_get RecordBatches stream to a Parquet
 # temp file + materialize via DuckDB read_parquet, like the ADBC source.
 arrow-flight = "59"
+# src.arrow / snk.arrow: Arrow IPC files (Feather v2) and streams. Already in the
+# lock through arrow-flight, its lz4 and zstd codecs with it.
+arrow-ipc = { version = "59", features = ["lz4", "zstd"] }
 tonic = { version = "0.14", features = ["transport", "tls-ring", "tls-native-roots"] }
 prost = "0.14"
 # src.grpc: the reflection protocol's client (no server side), and messages
