@@ -4641,15 +4641,20 @@ fn build_stage(
                         .unwrap_or_else(|| "output".into()),
                 });
         }
-        // build_csv_sink leaves the quote and the escape at DuckDB's default,
-        // the double quote, which is what lets the records be counted outside
-        // the reader. A delimiter or null string holding a quote or a line
-        // break would throw that count off, so such a sink is not offered one.
+        // The records are counted outside the reader by taking a double quote
+        // to open and close a quoted value, which is what build_csv_sink writes
+        // while the quote and the escape are the double quote. Another quote, an
+        // escape character, no quote at all (a line break in a value is then a
+        // line of its own), or a delimiter or null string holding a quote or a
+        // line break would each throw that count off, so such a sink is not
+        // offered one.
         if matches!(component_id, "snk.csv" | "snk.tsv") {
             let plain = |key: &str| {
                 string_prop(&props, key).map_or(true, |s| !s.contains(['"', '\n', '\r']))
             };
-            if (component_id == "snk.tsv" || plain("delimiter")) && plain("nullValue") {
+            let doubled = string_prop(&props, "quoteChar").map_or(true, |q| q == "\"")
+                && string_prop(&props, "escapeChar").map_or(true, |e| e.is_empty() || e == "\"");
+            if doubled && (component_id == "snk.tsv" || plain("delimiter")) && plain("nullValue") {
                 sink_count = Some(SinkCount::CsvRecords {
                     header: builders::csv_writes_header(&props),
                 });

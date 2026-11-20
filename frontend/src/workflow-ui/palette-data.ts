@@ -244,6 +244,7 @@ export const PALETTE: Category[] = [
                 id: 'src.misc',
                 label: 'Other',
                 components: [
+                    src('sql', 'SQL query', 'available', 'The rows a DuckDB query of your own returns: read_csv, read_xlsx, read_text, or a reader from an extension it loads'),
                     src('generate', 'Data Generator', 'available', 'Believable fake rows, with no source to connect to: names, emails, addresses, companies, numbers, dates, picks from a list and patterns, in fourteen locales. The same seed gives the same rows on every run, so a test can rely on them, and a preview stays instant at any row count.'),
                     src('ftp', 'FTP', 'available', 'List + download files from an FTP server via the pure-Rust suppaftp client. Glob pattern filter (`*`, `?`); each file becomes one row {filename, size, modified, content_b64}. Use DuckDB `from_base64(content_b64)` downstream for the raw bytes. SFTP is a separate protocol and a separate component.'),
                     src('http', 'HTTP', 'available', 'Read CSV / Parquet / JSON from any HTTP(S) URL via httpfs'),
@@ -529,6 +530,8 @@ export const PALETTE: Category[] = [
                 components: [
                     snk('csv', 'CSV', 'available'),
                     snk('tsv', 'TSV', 'available', 'Write tab-separated files'),
+                    snk('text', 'Raw text', 'available', 'Write one column as plain lines, each value exactly as it is: no header, no quoting, no escaping'),
+                    snk('sql', 'SQL statements', 'available', 'Run your own SQL on the upstream rows (as `input`): COPY ... TO in any format DuckDB writes, INSERT into an attached database'),
                     snk('json', 'JSON', 'available'),
                     snk('jsonl', 'JSONL / NDJSON', 'available'),
                     snk('xml', 'XML', 'available', 'Write rows as XML via `quick-xml`. Default shape: `<root><row><col>val</col>...</row>...</root>`. rootElement / rowElement override the wrapper names. Complex (object/array) cell values are JSON-encoded inside CDATA so the file round-trips back through src.xml losslessly.'),

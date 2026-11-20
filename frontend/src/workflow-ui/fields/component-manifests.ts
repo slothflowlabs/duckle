@@ -5,6 +5,7 @@ import {
     portsForComponent,
     deadLetterFields,
     delimiterField,
+    sinkQuoteFields,
     storageAuthFields,
     encodingField,
 } from './manifest-synth';
@@ -1012,6 +1013,7 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                             { label: 'Pipe  |', value: '|' },
                         ],
                     },
+                    ...sinkQuoteFields(),
                     {
                         key: 'writeHeader',
                         label: 'Write header row',

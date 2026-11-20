@@ -805,11 +805,16 @@ impl Policy {
 }
 
 /// Does a component id match a deny entry? `code.*` denies the family.
+///
+/// The SQL source and the SQL sink run the SQL they are given, as Inline SQL
+/// does, so whatever denies Inline SQL (`code.sql`, `code.*`, `*`) denies them
+/// too: a policy written before they existed does not gain a way around itself.
 fn denied(entry: &str, component: &str) -> bool {
-    match entry.strip_suffix('*') {
-        Some(prefix) => component.starts_with(prefix),
-        None => entry == component,
-    }
+    let hit = |id: &str| match entry.strip_suffix('*') {
+        Some(prefix) => id.starts_with(prefix),
+        None => entry == id,
+    };
+    hit(component) || (matches!(component, "src.sql" | "snk.sql") && hit("code.sql"))
 }
 
 /// The host part of a URL-ish property, for the domain allowlist.
@@ -1281,6 +1286,24 @@ mod tests {
         assert!(enforce(&p, &d).is_err());
         let other = doc_of(serde_json::json!([node("c", "src.csv", serde_json::json!({}))]));
         assert!(enforce(&p, &other).is_ok());
+    }
+
+    /// The SQL source and sink run the SQL they are given, as Inline SQL does,
+    /// so whatever denies Inline SQL denies them: a policy written before they
+    /// existed does not gain a way around itself.
+    #[test]
+    fn denying_inline_sql_denies_the_sql_source_and_sink() {
+        for deny in ["code.*", "code.sql"] {
+            let p = policy_from(&format!("components:\n  deny:\n    - {deny}\n"));
+            for id in ["code.sql", "src.sql", "snk.sql"] {
+                assert!(!p.allows_component(id), "denying {deny} let {id} through");
+            }
+            assert!(p.allows_component("src.csv"), "{deny}");
+        }
+        let p = policy_from("components:\n  deny:\n    - code.shell\n");
+        assert!(p.allows_component("src.sql") && p.allows_component("snk.sql"), "only Inline SQL brings them");
+        let p = policy_from("components:\n  deny:\n    - snk.sql\n");
+        assert!(!p.allows_component("snk.sql") && p.allows_component("code.sql"), "and each is its own id");
     }
 
     /// A subdomain of an allowed domain is allowed; a name that merely ENDS

@@ -2541,16 +2541,17 @@
         // A trigger says "after this". It constrains when a node runs; it does
         // not claim rows flow along it. Sorting on data edges alone meant the
         // canvas drew the link and the planner ignored it, so the two ends ran
-        // in whatever order the sort happened to produce.
+        // in whatever order the sort happened to produce. Pure SQL, the mode a
+        // CREATE runs in as written: wrapped as a query it could never run.
         let doc: super::PipelineDoc = serde_json::from_str(
             r#"{
               "nodes": [
                 {"id":"a","type":"source","position":{"x":0,"y":0},
                  "data":{"label":"a","componentId":"code.sql",
-                         "properties":{"sql":"CREATE OR REPLACE TABLE t1 AS SELECT 1 AS x"}}},
+                         "properties":{"sql":"CREATE OR REPLACE TABLE t1 AS SELECT 1 AS x","pureSql":true}}},
                 {"id":"b","type":"transform","position":{"x":200,"y":0},
                  "data":{"label":"b","componentId":"code.sql",
-                         "properties":{"sql":"CREATE OR REPLACE TABLE t2 AS SELECT 2 AS x"}}}
+                         "properties":{"sql":"CREATE OR REPLACE TABLE t2 AS SELECT 2 AS x","pureSql":true}}}
               ],
               "edges": [
                 {"id":"e1","source":"a","target":"b",
@@ -3497,18 +3498,76 @@
     fn attach_prelude_loads_user_extensions_for_sql_template() {
         // #113: loadExtensions installs + loads each named extension. Accepts a
         // comma/space-separated string or a JSON array; names are sanitized so
-        // they can never inject SQL; spatial is not loaded twice.
+        // they can never inject SQL; spatial is not loaded twice. One the core
+        // repository does not serve (h3, a5) installs from the community one: a
+        // bare INSTALL asked the core repository and the run failed there.
         let s = attach_prelude("code.sql", &serde_json::json!({ "loadExtensions": "h3, a5" }));
-        assert!(s.contains("INSTALL h3; LOAD h3;"), "h3: {}", s);
-        assert!(s.contains("INSTALL a5; LOAD a5;"), "a5: {}", s);
+        assert!(s.contains("INSTALL h3 FROM community; LOAD h3;"), "h3: {}", s);
+        assert!(s.contains("INSTALL a5 FROM community; LOAD a5;"), "a5: {}", s);
         let arr = attach_prelude("code.sqltemplate", &serde_json::json!({ "loadExtensions": ["h3", "h3", "INET!"] }));
         // Dedup + sanitize: "INET!" -> "inet", duplicate h3 collapsed.
         assert_eq!(arr.matches("LOAD h3;").count(), 1, "dedup: {}", arr);
-        assert!(arr.contains("INSTALL inet; LOAD inet;"), "sanitized: {}", arr);
+        assert!(arr.contains("INSTALL inet; LOAD inet;"), "sanitized, and inet is a core extension: {}", arr);
         // spatial requested via both loadSpatial and loadExtensions -> once only.
         let both = attach_prelude("code.sql", &serde_json::json!({ "loadSpatial": true, "loadExtensions": "spatial,h3" }));
         assert_eq!(both.matches("LOAD spatial;").count(), 1, "spatial once: {}", both);
         assert!(both.contains("LOAD h3;"), "h3 alongside spatial: {}", both);
+        // The SQL source and the SQL sink load them the same way.
+        for id in ["src.sql", "snk.sql"] {
+            let p = attach_prelude(id, &serde_json::json!({ "loadExtensions": "opendal, spatial" }));
+            assert_eq!(p, "INSTALL opendal FROM community; LOAD opendal; INSTALL spatial; LOAD spatial; ", "{id}");
+        }
+    }
+
+    /// Every extension the pinned DuckDB knows, by name and by alias, installs
+    /// from the core repository. A core name missing from the list would be
+    /// asked of the community repository, which does not have it. One installed
+    /// from the community repository on this machine is listed too, and left out.
+    #[test]
+    fn every_extension_the_pinned_duckdb_knows_installs_from_the_core_repository() {
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN").ok().filter(|b| std::path::Path::new(b).exists()) else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN to the pinned duckdb CLI");
+            return;
+        };
+        let out = std::process::Command::new(bin)
+            .args([
+                ":memory:",
+                "-noheader",
+                "-list",
+                "-c",
+                "SELECT extension_name || ' ' || array_to_string(aliases, ' ') FROM duckdb_extensions() \
+                 WHERE installed_from IS DISTINCT FROM 'community'",
+            ])
+            .output()
+            .expect("run duckdb");
+        let names: Vec<String> = String::from_utf8_lossy(&out.stdout).split_whitespace().map(str::to_string).collect();
+        assert!(names.len() > 20, "duckdb_extensions() gave {names:?}: {}", String::from_utf8_lossy(&out.stderr));
+        for name in names {
+            let p = attach_prelude("code.sql", &serde_json::json!({ "loadExtensions": name }));
+            assert!(!p.contains("FROM community"), "{name} is a core extension: {p}");
+        }
+    }
+
+    /// The raw text sink writes through a staging file the executor publishes,
+    /// as the other text sinks do, so a stopped run leaves nothing under the
+    /// output's name for a glob to read.
+    #[test]
+    fn a_raw_text_sink_writes_through_a_staging_file() {
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{"label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/in.csv","hasHeader":true}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"Text","componentId":"snk.text",
+                  "properties":{"path":"/tmp/out.txt","column":"line"}}}
+              ],
+              "edges": [{"id":"e1","source":"s","target":"k","data":{"connectionType":"main"}}]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let k = compiled.stages.iter().find(|s| s.node_id == "k").unwrap();
+        assert!(k.sql.contains("TO '/tmp/out.txt.duckle-partial' (FORMAT CSV, HEADER false, QUOTE ''"), "{}", k.sql);
+        assert_eq!(k.staged_write.as_deref(), Some("/tmp/out.txt.duckle-partial"));
     }
 
     #[test]

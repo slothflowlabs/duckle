@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 443 components, 438 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 233 connectors (145 sources / 88 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 446 components, 441 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 236 connectors (146 sources / 90 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -81,7 +81,7 @@ Every component, by id. `src.*` reads, `snk.*` writes, `xf.*` transforms,
 `qa.*` checks, `ctl.*` controls flow, `code.*` runs your own code. Entries
 marked [planned] or [preview] are not usable yet.
 
-### Sources (read) (146)
+### Sources (read) (147)
 
 - `src.access` Microsoft Access: Read an Access database (.accdb / .mdb): a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver, Linux and macOS through mdbtools. Text, currency, yes/no and dates keep their types
 - `src.adbc` ADBC (Arrow): Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options
@@ -207,6 +207,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.soap` SOAP: SOAP / generic XML-API source. Thin alias over src.rest with defaults: POST, Content-Type text/xml; charset=utf-8, responseFormat=xml. Set responsePath to the element-name walk into the body (e.g. Envelope/Body/GetUsersResponse/Users/User), supply the XML envelope in `body`, optionally add a `soapAction` prop for the SOAPAction header
 - `src.spatial` Geospatial (GeoParquet / GeoJSON / Shapefile / GeoPackage): Read geospatial files: GeoParquet natively, and GeoJSON / Shapefile / GeoPackage / KML / GPX / GML via the DuckDB spatial extension (ST_Read)
 - `src.spool` Spool (tail NDJSON): Tail an append-only NDJSON file from where the last SUCCESSFUL run stopped, by byte offset. Pairs with `duckle-runner listen`, which keeps a webhook listener up and appends here - so nothing is lost between pipeline runs, unlike src.webhook which only collects while a run is executing. A failed run leaves the position alone, so those records are re-read rather than dropped
+- `src.sql` SQL query: The rows a DuckDB query of your own returns: read_csv, read_xlsx, read_text, or a reader from an extension it loads
 - `src.sqlite` SQLite: Read SQLite tables
 - `src.sqlserver` SQL Server: Read SQL Server via the native TDS protocol (tiberius, pure Rust). SQL auth (user/password); trust_cert option for self-signed dev servers
 - `src.sqlserver.cdc` SQL Server CDC: Change data capture from SQL Server: every insert, update and delete its CDC recorded for a table, in commit order, read from the change table between where the last run stopped and the newest change. The position is saved only when the run succeeds, so a failed run reads the same changes again; changes cleaned up before a run read them fail it rather than be skipped. Needs CDC on for the table (sp_cdc_enable_db, sp_cdc_enable_table); no JVM, no Kafka
@@ -230,7 +231,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.yaml` YAML: Read a YAML file as a table. Top-level YAML arrays become one row per element; non-array docs become a single row. Suits config-data ETL (Helm values, GitHub Actions matrices) not bulk logs
 - `src.zendesk` Zendesk: Zendesk Support REST. Basic auth (email/token + API token). Cursor pagination via `meta.after_cursor` + `page[after]` param. responsePath /tickets (or whatever resource)
 
-### Destinations (write) (89)
+### Destinations (write) (91)
 
 - `snk.access` Microsoft Access: Write a table into an Access database (.accdb / .mdb), creating the file and the table when missing. Append or overwrite in one transaction; an empty upstream leaves the table alone. Windows only, through the Microsoft Access ODBC driver
 - `snk.arrow` Arrow IPC / Feather: Write rows as one Arrow IPC file (Feather version 2) or stream, for pandas, Polars, R or Spark to read, uncompressed or with LZ4 or ZSTD. Types stay typed, lists and structs included; a HUGEINT goes as a 38-digit decimal rather than a DOUBLE, and a UUID as its text. The file replaces the old one only once it is complete
@@ -306,11 +307,13 @@ marked [planned] or [preview] are not usable yet.
 - `snk.sharepoint` SharePoint Server: SharePoint Server on premises over REST, signed in with Windows authentication (NTLM). Rows become list items, or the output uploads as a document library file (CSV, TSV, Parquet, JSON, Excel). An upstream with no rows changes nothing
 - `snk.snowflake` Snowflake: INSERT to a Snowflake table via the SQL API (/api/v2/statements) with PAT (Personal Access Token) bearer auth. Multi-row INSERTs batched at 1000 rows by default
 - `snk.spatial` Geospatial (GeoJSON / GeoPackage / ...): Write geospatial files via the spatial extension
+- `snk.sql` SQL statements: Run your own SQL on the upstream rows (as `input`): COPY ... TO in any format DuckDB writes, INSERT into an attached database
 - `snk.sqlite` SQLite: Write a table into a SQLite file
 - `snk.sqlserver` SQL Server: INSERT to SQL Server via TDS (multi-row VALUES batched at 1000 rows, the SQL Server cap)
 - `snk.sqs` AWS SQS: Send each upstream row to an Amazon SQS queue as one message, the row as JSON or one column as the body, ten to a SendMessageBatch call over direct HTTP + AWS SigV4 (no AWS SDK). Fills the message group and deduplication id of a FIFO queue from columns. What SQS fails on its side is sent again; a message it refuses fails the run, naming the row
 - `snk.synapse` Azure Synapse: Azure Synapse rides the SQL Server TDS wire - same connection form as snk.sqlserver
 - `snk.teradata` Teradata: Write to Teradata through its free ODBC driver. Install the Teradata ODBC driver, then connect with friendly fields, a DSN, or a full ODBC connection string. Append creates the table if missing then appends; Overwrite clears it first. No upsert
+- `snk.text` Raw text: Write one column as plain lines, each value exactly as it is: no header, no quoting, no escaping
 - `snk.toml` TOML: Write the upstream rows as TOML. TOML disallows a top-level array so the engine wraps under a `rows` key: `[[rows]]` per row
 - `snk.tsv` TSV: Write tab-separated files
 - `snk.turso` Turso / libSQL: INSERT rows into a Turso (libSQL) database over the HTTP pipeline API. Creates the table if missing from the upstream column types; Append adds rows, Overwrite clears it first. Values go up as bound parameters, batched (default 500)

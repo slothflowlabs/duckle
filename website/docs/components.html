@@ -17,16 +17,16 @@
 <meta property="og:site_name" content="Duckle" />
 <meta property="og:url" content="https://duckle.org/docs/components.html" />
 <meta property="og:title" content="Component reference - Duckle" />
-<meta property="og:description" content="The Duckle component reference: 443 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta property="og:description" content="The Duckle component reference: 446 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta property="og:image" content="https://duckle.org/assets/img/og-card.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:url" content="https://duckle.org/docs/components.html" />
 <meta name="twitter:title" content="Component reference - Duckle" />
-<meta name="twitter:description" content="The Duckle component reference: 443 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta name="twitter:description" content="The Duckle component reference: 446 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta name="twitter:image" content="https://duckle.org/assets/img/og-card.png" />
-<meta name="description" content="The Duckle component reference: 443 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta name="description" content="The Duckle component reference: 446 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta name="keywords" content="visual ETL tool, DuckDB ETL, open source ETL, ELT tool, code-first ETL, Python ETL, ETL for AI agents, MCP ETL, data pipeline builder, dbt GUI, dbt on DuckDB, DuckLake, Quack DuckDB, no-code data pipeline, Fivetran alternative, Airbyte alternative, Talend alternative, dlt alternative, self-hosted ETL, local-first ETL" />
 <meta name="theme-color" content="#07090f" />
 <link rel="apple-touch-icon" href="../assets/img/duckle-mark.v4.svg" />
@@ -61,8 +61,8 @@
 {
   "@context": "https://schema.org",
   "@type": "TechArticle",
-  "headline": "Duckle components reference: 443 sources, transforms, sinks and data-quality nodes",
-  "description": "The Duckle component reference: 443 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB.",
+  "headline": "Duckle components reference: 446 sources, transforms, sinks and data-quality nodes",
+  "description": "The Duckle component reference: 446 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB.",
   "author": {
     "@type": "Organization",
     "name": "SlothFlow Labs"
@@ -133,12 +133,12 @@
 <span class="eyebrow">Reference</span>
 <h1>Component reference</h1>
 <!-- BEGIN GENERATED summary (website/scripts/build-llms.mjs writes this from the component catalog; edit it there) -->
-<p class="lead">Duckle ships 443 components across six kinds - 146 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 89 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 25 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 438 are available today; the 0 in preview and the 5 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
+<p class="lead">Duckle ships 446 components across six kinds - 147 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 91 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 25 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 441 are available today; the 0 in preview and the 5 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
 
 <div class="grid cols-3">
-  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span><h3>146 sources</h3><p>Files, lakehouse, databases, warehouses, object storage, streaming, SaaS APIs, NoSQL, vector DBs and more, all under <code>src.*</code>.</p></div>
+  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span><h3>147 sources</h3><p>Files, lakehouse, databases, warehouses, object storage, streaming, SaaS APIs, NoSQL, vector DBs and more, all under <code>src.*</code>.</p></div>
   <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg></span><h3>145 transforms</h3><p>Fields, rows, aggregates, joins, windows, strings, dates, JSON, arrays, CDC/SCD, AI and search, all under <code>xf.*</code>.</p></div>
-  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg></span><h3>89 sinks</h3><p>Files, databases, warehouses, object storage, vector DBs, messaging and comms, all under <code>snk.*</code> with universal write modes.</p></div>
+  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg></span><h3>91 sinks</h3><p>Files, databases, warehouses, object storage, vector DBs, messaging and comms, all under <code>snk.*</code> with universal write modes.</p></div>
 </div>
 <!-- END GENERATED summary -->
 
@@ -318,11 +318,12 @@
 </table>
 </div>
 
-<h3 id="sources-other">Other (7)</h3>
+<h3 id="sources-other">Other (8)</h3>
 <div style="overflow-x:auto">
 <table>
   <thead><tr><th>Component</th><th>What it does</th></tr></thead>
   <tbody>
+    <tr><td>SQL query<br><code>src.sql</code></td><td>The rows a DuckDB query of your own returns: read_csv, read_xlsx, read_text, or a reader from an extension it loads</td></tr>
     <tr><td>Data Generator<br><code>src.generate</code></td><td>Believable fake rows, with no source to connect to: names, emails, addresses, companies, numbers, dates, picks from a list and patterns, in fourteen locales. The same seed gives the same rows on every run, so a test can rely on them, and a preview stays instant at any row count</td></tr>
     <tr><td>FTP<br><code>src.ftp</code></td><td>List + download files from an FTP server via the pure-Rust suppaftp client. Glob pattern filter (<code>*</code>, <code>?</code>); each file becomes one row {filename, size, modified, content_b64}. Use DuckDB <code>from_base64(content_b64)</code> downstream for the raw bytes. SFTP is a separate protocol and a separate component</td></tr>
     <tr><td>HTTP<br><code>src.http</code></td><td>Read CSV / Parquet / JSON from any HTTP(S) URL via httpfs</td></tr>
@@ -754,13 +755,15 @@
 
 <p>Sinks write pipeline output to a destination. All sinks support the same write modes.</p>
 
-<h3 id="sinks-files">Files (18)</h3>
+<h3 id="sinks-files">Files (20)</h3>
 <div style="overflow-x:auto">
 <table>
   <thead><tr><th>Component</th><th>What it does</th></tr></thead>
   <tbody>
     <tr><td>CSV<br><code>snk.csv</code></td><td>Write delimited text files</td></tr>
     <tr><td>TSV<br><code>snk.tsv</code></td><td>Write tab-separated files</td></tr>
+    <tr><td>Raw text<br><code>snk.text</code></td><td>Write one column as plain lines, each value exactly as it is: no header, no quoting, no escaping</td></tr>
+    <tr><td>SQL statements<br><code>snk.sql</code></td><td>Run your own SQL on the upstream rows (as <code>input</code>): COPY ... TO in any format DuckDB writes, INSERT into an attached database</td></tr>
     <tr><td>JSON<br><code>snk.json</code></td><td>Writes data to JSON</td></tr>
     <tr><td>JSONL / NDJSON<br><code>snk.jsonl</code></td><td>Writes data to JSONL / NDJSON</td></tr>
     <tr><td>XML<br><code>snk.xml</code></td><td>Write rows as XML via <code>quick-xml</code>. Default shape: <code>&lt;root&gt;&lt;row&gt;&lt;col&gt;val&lt;/col&gt;...&lt;/row&gt;...&lt;/root&gt;</code>. rootElement / rowElement override the wrapper names. Complex (object/array) cell values are JSON-encoded inside CDATA so the file round-trips back through src.xml losslessly</td></tr>

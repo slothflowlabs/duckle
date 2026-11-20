@@ -1,6 +1,6 @@
 # Connectors: Sources & Sinks
 
-Duckle provides 235 visual connectors, 233 of them available today, to read data from (Sources) and write data to (Sinks) files, databases, object storage, cloud warehouses, and API streams.
+Duckle provides 238 visual connectors, 236 of them available today, to read data from (Sources) and write data to (Sinks) files, databases, object storage, cloud warehouses, and API streams.
 
 ---
 
@@ -42,6 +42,7 @@ The CSV source node is the most common starting block for visual pipelines. Sele
 
 * **"Autodetect schema" Button**: Click this button after setting your file path. The node reads a sample of the file, infers columns, and populates the **Schema** tab.
 * **Visual Lineage**: Click the **Preview** tab in the bottom panel to inspect rows, ensuring column formatting matches your expectations.
+* **Writing CSV / TSV**: the sinks take a **Quote character** (`quoteChar`: double, single or None) and an **Escape character** (`escapeChar`: the quote repeated, or a backslash). With None every value is written exactly as it is. To write one column as plain lines, use the **Raw text** sink; to run your own `COPY ... TO`, the **SQL statements** sink.
 
 ---
 

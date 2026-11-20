@@ -422,6 +422,9 @@ pub(crate) fn build_view_sql(
         // Custom SQL - runs the user's SELECT as a real stage, with the
         // upstream exposed as `input`. Makes SQL routines executable too.
         "code.sql" | "code.sqltemplate" => build_custom_sql(inputs, props),
+        // A source whose rows are what its query returns. It has no input, so
+        // build_custom_sql runs the query as written.
+        "src.sql" => build_custom_sql(inputs, props),
         // Routing: replicate is a passthrough (the graph already lets
         // multiple downstream edges read the same materialized table);
         // merge concatenates multiple input streams with UNION ALL.
@@ -718,6 +721,14 @@ pub(crate) fn build_custom_sql(inputs: &NodeInputs, props: &JsonValue) -> Result
     // `SELECT * FROM "node_id"`. Pure mode (#102 follow-up) is a superset: it
     // also drops the CREATE wrapper in plan/mod.rs, so the body must be verbatim
     // here too.
+    // Every mode but Pure makes the node's table with `CREATE ... AS <sql>`,
+    // which takes a query. A statement there failed on a parser error that named
+    // neither the cause nor the way round it.
+    if !props.get("pureSql").and_then(JsonValue::as_bool).unwrap_or(false) {
+        if let Some(advice) = statement_advice(&sql) {
+            return Err(advice);
+        }
+    }
     if props.get("rawSql").and_then(JsonValue::as_bool).unwrap_or(false)
         || props.get("pureSql").and_then(JsonValue::as_bool).unwrap_or(false)
     {
@@ -729,6 +740,41 @@ pub(crate) fn build_custom_sql(inputs: &NodeInputs, props: &JsonValue) -> Result
         }
         None => sql,
     })
+}
+
+/// Why SQL that has to be a query cannot run when it opens with a statement,
+/// and what to use instead. A COPY, an INSTALL or an INSERT in Inline SQL, or in
+/// the SQL source, has nowhere to go: the node makes its rows from a query.
+fn statement_advice(sql: &str) -> Option<String> {
+    let mut rest = sql.trim_start();
+    // Past any comments, so a query that explains itself is read by its first word.
+    loop {
+        if let Some(after) = rest.strip_prefix("--") {
+            rest = after.split_once('\n').map_or("", |(_, r)| r).trim_start();
+        } else if let Some(after) = rest.strip_prefix("/*") {
+            rest = after.split_once("*/").map_or("", |(_, r)| r).trim_start();
+        } else {
+            break;
+        }
+    }
+    let word = rest.chars().take_while(char::is_ascii_alphabetic).collect::<String>().to_ascii_uppercase();
+    let instead = match word.as_str() {
+        "INSTALL" | "LOAD" => {
+            "name the extension in Load extensions, which installs and loads it before the SQL runs \
+             (a community extension from the community repository)"
+        }
+        "COPY" | "EXPORT" | "IMPORT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "TRUNCATE" | "CREATE"
+        | "DROP" | "ALTER" | "ATTACH" | "DETACH" | "USE" | "SET" | "RESET" | "CHECKPOINT" | "VACUUM"
+        | "BEGIN" | "COMMIT" | "ROLLBACK" => {
+            "write rows out with the SQL sink, where the upstream rows are `input` too, or run \
+             statements as written with Inline SQL in Pure SQL mode"
+        }
+        _ => return None,
+    };
+    Some(format!(
+        "{word} is a statement, not a query, and this node makes its rows from a query (SELECT, FROM, \
+         WITH ...): {instead}"
+    ))
 }
 
 /// Sanitize an inline dbt model name to a safe SQL identifier. The same rule
@@ -5977,6 +6023,20 @@ fn parse_extension_names(v: Option<&JsonValue>) -> Vec<String> {
     out
 }
 
+/// The extensions the core repository serves, by name and by alias, as the
+/// pinned DuckDB's `duckdb_extensions()` lists them, and jemalloc, which only a
+/// Linux build has. Any other name in `loadExtensions` is a community extension:
+/// a bare `INSTALL h3` asks the core repository, which has no h3, and the run
+/// failed before the SQL started. Held to the pinned DuckDB by
+/// `every_extension_the_pinned_duckdb_knows_installs_from_the_core_repository`.
+const CORE_EXTENSIONS: &[&str] = &[
+    "autocomplete", "avro", "aws", "azure", "core_functions", "delta", "ducklake", "encodings", "excel",
+    "fts", "http", "https", "httpfs", "iceberg", "icu", "inet", "jemalloc", "json", "lance", "md",
+    "motherduck", "mysql", "mysql_scanner", "odbc", "odbc_scanner", "parquet", "postgres",
+    "postgres_scanner", "quack", "s3", "shell", "spatial", "sqlite", "sqlite3", "sqlite_scanner",
+    "tpcds", "tpch", "uc_catalog", "ui", "unity_catalog", "vortex", "vss",
+];
+
 pub(crate) fn references_spatial(sql: &str) -> bool {
     let lower = sql.to_ascii_lowercase();
     let bytes = lower.as_bytes();
@@ -6000,7 +6060,7 @@ pub(crate) fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
     // #113: also INSTALL + LOAD any extensions the user listed in
     // `loadExtensions` (e.g. h3, a5), so SQL Template can reach the wider DuckDB
     // ecosystem. Both feed one prelude, returned even when empty.
-    if matches!(component_id, "code.sql" | "code.sqltemplate") {
+    if matches!(component_id, "code.sql" | "code.sqltemplate" | "src.sql" | "snk.sql") {
         let mut prelude = String::new();
         let opt_in = props.get("loadSpatial").and_then(JsonValue::as_bool).unwrap_or(false);
         let auto = string_prop(props, "sql").map(|s| references_spatial(&s)).unwrap_or(false);
@@ -6013,7 +6073,8 @@ pub(crate) fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
             if ext == "spatial" && want_spatial {
                 continue;
             }
-            prelude.push_str(&crate::policy::duckdb_extension_prelude(&ext, false));
+            let community = !CORE_EXTENSIONS.contains(&ext.as_str());
+            prelude.push_str(&crate::policy::duckdb_extension_prelude(&ext, community));
         }
         return prelude;
     }
@@ -10063,7 +10124,7 @@ pub(crate) const STAGED_SUFFIX: &str = ".duckle-partial";
 pub(crate) fn staged_sink_path(component_id: &str, props: &JsonValue) -> Option<String> {
     if !matches!(
         component_id,
-        "snk.csv" | "snk.tsv" | "snk.parquet" | "snk.json" | "snk.jsonl"
+        "snk.csv" | "snk.tsv" | "snk.parquet" | "snk.json" | "snk.jsonl" | "snk.text"
     ) {
         return None;
     }
@@ -10118,6 +10179,12 @@ pub(crate) fn build_sink_sql(
             }
             Ok(build_csv_sink(&p, from_view))
         }
+        "snk.text" => {
+            refuse_unimplemented_file_mode(component_id, props)?;
+            refuse_unwritable_compression(component_id, props)?;
+            build_text_sink(&staged_props(component_id, props), from_view)
+        }
+        "snk.sql" => build_sql_sink(props, from_view),
         "snk.parquet" => {
             refuse_unimplemented_file_mode(component_id, props)?;
             Ok(build_parquet_sink(&staged_props(component_id, props), from_view))
@@ -10393,6 +10460,19 @@ pub(crate) fn build_csv_sink(props: &JsonValue, from_view: &str) -> String {
     if !null_val.is_empty() {
         options.push(format!("NULLSTR '{}'", sql_escape(&null_val)));
     }
+    // DuckDB quotes with the double quote and escapes a quote inside a value with
+    // a second one. An empty quote is the form's "None": every value goes out as
+    // it is, with no quoting and so nothing to escape. Another quote is escaped by
+    // itself, repeated, unless an escape character is named - DuckDB's own default
+    // escape is the double quote whatever the quote, which writes 'it"'s'.
+    let quote = string_prop(props, "quoteChar");
+    if let Some(q) = &quote {
+        options.push(format!("QUOTE '{}'", sql_escape(q)));
+    }
+    let escape = string_prop(props, "escapeChar").filter(|e| !e.is_empty());
+    if let Some(e) = escape.or(quote.filter(|q| !q.is_empty())) {
+        options.push(format!("ESCAPE '{}'", sql_escape(&e)));
+    }
     if let Some(c) = text_compression(props, &path) {
         options.push(format!("COMPRESSION '{c}'"));
     }
@@ -10413,6 +10493,46 @@ pub(crate) fn build_csv_sink(props: &JsonValue, from_view: &str) -> String {
         sql_escape(&path),
         options.join(", ")
     )
+}
+
+/// One column as plain lines, each value exactly as it is: no header, no quote
+/// and so no escape, which is what DuckDB's CSV writer does with the quote turned
+/// off - and a single column never meets the delimiter. A NULL is an empty line,
+/// and a value holding a line break is written with it.
+pub(crate) fn build_text_sink(props: &JsonValue, from_view: &str) -> Result<String, EngineError> {
+    let column = string_prop(props, "column")
+        .filter(|c| !c.trim().is_empty())
+        .ok_or_else(|| EngineError::Config("snk.text: name the column whose values to write".into()))?;
+    let path = string_prop(props, "path").unwrap_or_default();
+    let mut options = vec!["FORMAT CSV".to_string(), "HEADER false".to_string(), "QUOTE ''".to_string()];
+    if let Some(c) = text_compression(props, &path) {
+        options.push(format!("COMPRESSION '{c}'"));
+    }
+    staged_write(&mut options, false);
+    Ok(format!(
+        "COPY (SELECT CAST({} AS VARCHAR) FROM {}) TO '{}' ({})",
+        quote_ident(&column),
+        quote_ident(from_view),
+        sql_escape(&path),
+        options.join(", ")
+    ))
+}
+
+/// The SQL sink: the statements as written, with the upstream named `input` as
+/// Inline SQL names it. The view is temporary and dropped afterwards, so a later
+/// stage that reads a node whose id is `input` reads that node. The `;` on a line
+/// of its own ends the last statement when it has no `;` or ends in a comment,
+/// and an empty statement is no error.
+pub(crate) fn build_sql_sink(props: &JsonValue, from_view: &str) -> Result<String, EngineError> {
+    let sql = string_prop(props, "sql")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| EngineError::Config("snk.sql: write the SQL statements to run".into()))?;
+    Ok(format!(
+        "CREATE OR REPLACE TEMP VIEW input AS SELECT * FROM {};\n{}\n;\nDROP VIEW IF EXISTS temp.input;\n",
+        quote_ident(from_view),
+        sql
+    ))
 }
 
 pub(crate) fn build_parquet_sink(props: &JsonValue, from_view: &str) -> String {

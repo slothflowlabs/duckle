@@ -352,6 +352,45 @@ const textCompressionField = (): Field => ({
         'Gzip or Zstd compresses the file whatever it is called. None leaves it to the name: a path ending .gz or .zst is still compressed. A compressed file cannot be appended to.',
 });
 
+// The quote and escape a CSV or TSV sink writes with, read by build_csv_sink.
+// None writes every value exactly as it is: no quoting, so nothing to escape.
+export const sinkQuoteFields = (): Field[] => [
+    {
+        key: 'quoteChar',
+        label: 'Quote character',
+        kind: 'select',
+        defaultValue: '"',
+        options: [
+            { label: 'Double quote  "', value: '"' },
+            { label: "Single quote  '", value: "'" },
+            { label: 'None (each value as it is)', value: '' },
+        ],
+        description:
+            'Wraps a value that holds the delimiter, the quote or a line break. None writes every value exactly as it is, with no quoting and so no escaping: a tab or a line break in a value goes out as it is.',
+    },
+    {
+        key: 'escapeChar',
+        label: 'Escape character',
+        kind: 'select',
+        defaultValue: '',
+        options: [
+            { label: 'Repeat the quote', value: '' },
+            { label: 'Backslash  \\', value: '\\' },
+        ],
+        description: 'Written before a quote inside a quoted value. Not used when the quote is None.',
+    },
+];
+
+// Inline SQL, the SQL source and the SQL sink all read this (attach_prelude).
+const loadExtensionsField = (): Field => ({
+    key: 'loadExtensions',
+    label: 'Load extensions',
+    kind: 'text',
+    placeholder: 'h3, a5, opendal',
+    description:
+        'Comma-separated DuckDB extensions to INSTALL + LOAD before the SQL runs, so it can use the wider DuckDB ecosystem. One the core repository does not serve (h3, a5, opendal ...) installs from the community repository. Names are sanitized to letters / digits / underscore.',
+});
+
 // Map a database component to the saved-connection kind its picker should
 // offer. Wire-compatible engines reuse a base kind (Cockroach speaks the
 // Postgres protocol; OpenSearch speaks the Elasticsearch API).
@@ -1600,6 +1639,57 @@ function partitionBySection(): FormSection {
 }
 
 function synthFileSink(comp: ComponentDef): ComponentManifest {
+    if (comp.id === 'snk.text') {
+        // One column, one line a row, each value exactly as it is. build_text_sink
+        // reads these three and nothing else.
+        return base(comp, [
+            {
+                label: 'Destination file',
+                fields: [
+                    {
+                        key: 'path',
+                        label: 'Output path',
+                        kind: 'save-path',
+                        required: true,
+                        filters: [
+                            { name: 'Text', extensions: ['txt'] },
+                            { name: 'All files', extensions: ['*'] },
+                        ],
+                    },
+                    {
+                        key: 'column',
+                        label: 'Column',
+                        kind: 'column',
+                        required: true,
+                        description:
+                            'Each row writes this column as one line, exactly as it is: no header, no quotes, no escaping. A NULL writes an empty line, and a value holding a line break is written with it.',
+                    },
+                    textCompressionField(),
+                ],
+            },
+        ], 'upstream');
+    }
+    if (comp.id === 'snk.sql') {
+        // build_sql_sink: the statements as written, the upstream as `input`.
+        return base(comp, [
+            {
+                label: 'SQL',
+                fields: [
+                    {
+                        key: 'sql',
+                        label: 'SQL statements',
+                        kind: 'expression',
+                        rows: 10,
+                        required: true,
+                        placeholder: "COPY (SELECT line FROM input) TO 'out.txt' (FORMAT CSV, HEADER false, QUOTE '')",
+                        description:
+                            'Run as written, one statement after another, with the upstream rows available as `input`: COPY ... TO writes any format DuckDB can, INSERT writes into a database you ATTACH.',
+                    },
+                    loadExtensionsField(),
+                ],
+            },
+        ], 'upstream');
+    }
     if (comp.id === 'snk.huggingface') {
         // Native Hugging Face dataset push. DuckDB's hf:// is read-only, so the
         // engine materializes the upstream to a Parquet and commits it over the
@@ -1864,6 +1954,26 @@ function fileFormatSection(comp: ComponentDef): FormSection[] {
                 { key: 'hasHeader', label: 'Has header row', kind: 'bool', defaultValue: true },
             ],
         }];
+    }
+    if (id === 'snk.tsv') {
+        // The sink's own: the delimiter is the tab whatever a field says
+        // (build_sink_sql sets it), and skipping lines is a reader's business.
+        return [
+            {
+                label: 'Format',
+                fields: [
+                    { key: 'hasHeader', label: 'Write header row', kind: 'bool', defaultValue: true },
+                    ...sinkQuoteFields(),
+                    {
+                        key: 'nullValue',
+                        label: 'Write NULL as',
+                        kind: 'text',
+                        placeholder: 'leave blank for an empty field',
+                        description: 'The text written for a NULL. Blank (the default) writes nothing between the tabs.',
+                    },
+                ],
+            },
+        ];
     }
     if (id.endsWith('.csv') || id.endsWith('.tsv')) {
         return [
@@ -6931,6 +7041,27 @@ function synthNoSqlSink(comp: ComponentDef): ComponentManifest {
 
 function synthMiscSource(comp: ComponentDef): ComponentManifest {
     const id = comp.id;
+    if (id === 'src.sql') {
+        // build_custom_sql with no input: the rows are what the query returns.
+        return base(comp, [
+            {
+                label: 'Query',
+                fields: [
+                    {
+                        key: 'sql',
+                        label: 'SQL query',
+                        kind: 'expression',
+                        rows: 10,
+                        required: true,
+                        placeholder: "SELECT * FROM read_csv('data/*.csv')",
+                        description:
+                            'The rows this query returns: read_csv, read_json, read_xlsx, read_text, or a reader from an extension loaded below. A query, not statements; to run statements as written, use Inline SQL in Pure SQL mode.',
+                    },
+                    loadExtensionsField(),
+                ],
+            },
+        ]);
+    }
     if (id === 'src.ftp') {
         return base(comp, [
             {
@@ -9465,13 +9596,7 @@ function synthCustomCode(comp: ComponentDef): ComponentManifest {
                         defaultValue: false,
                         description: 'Load the DuckDB spatial extension so ST_* functions (ST_Point, ST_AsText, ...) work over any source, including CSV lat/lon. Auto-loads when the SQL references an ST_ function; enable this to force it.',
                     },
-                    {
-                        key: 'loadExtensions',
-                        label: 'Load extensions',
-                        kind: 'text',
-                        placeholder: 'h3, a5',
-                        description: 'Comma-separated DuckDB extensions to INSTALL + LOAD before the query runs (e.g. h3, a5), so SQL Template can use the wider DuckDB ecosystem. Names are sanitized to letters / digits / underscore.',
-                    },
+                    loadExtensionsField(),
                 ],
             },
         ], 'declared');

@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 443,
+  "componentCount": 446,
   "components": [
     {
       "id": "src.csv",
@@ -16959,6 +16959,65 @@
       }
     },
     {
+      "id": "src.sql",
+      "label": "SQL query",
+      "kind": "source",
+      "availability": "available",
+      "summary": "The rows a DuckDB query of your own returns: read_csv, read_xlsx, read_text, or a reader from an extension it loads",
+      "category": "Sources",
+      "group": "Other",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.sql",
+        "kind": "source",
+        "label": "SQL query",
+        "description": "The rows a DuckDB query of your own returns: read_csv, read_xlsx, read_text, or a reader from an extension it loads",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Query",
+            "fields": [
+              {
+                "key": "sql",
+                "label": "SQL query",
+                "kind": "expression",
+                "rows": 10,
+                "required": true,
+                "placeholder": "SELECT * FROM read_csv('data/*.csv')",
+                "description": "The rows this query returns: read_csv, read_json, read_xlsx, read_text, or a reader from an extension loaded below. A query, not statements; to run statements as written, use Inline SQL in Pure SQL mode."
+              },
+              {
+                "key": "loadExtensions",
+                "label": "Load extensions",
+                "kind": "text",
+                "placeholder": "h3, a5, opendal",
+                "description": "Comma-separated DuckDB extensions to INSTALL + LOAD before the SQL runs, so it can use the wider DuckDB ecosystem. One the core repository does not serve (h3, a5, opendal ...) installs from the community repository. Names are sanitized to letters / digits / underscore."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
       "id": "src.generate",
       "label": "Data Generator",
       "kind": "source",
@@ -32556,6 +32615,44 @@
                 ]
               },
               {
+                "key": "quoteChar",
+                "label": "Quote character",
+                "kind": "select",
+                "defaultValue": "\"",
+                "options": [
+                  {
+                    "label": "Double quote  \"",
+                    "value": "\""
+                  },
+                  {
+                    "label": "Single quote  '",
+                    "value": "'"
+                  },
+                  {
+                    "label": "None (each value as it is)",
+                    "value": ""
+                  }
+                ],
+                "description": "Wraps a value that holds the delimiter, the quote or a line break. None writes every value exactly as it is, with no quoting and so no escaping: a tab or a line break in a value goes out as it is."
+              },
+              {
+                "key": "escapeChar",
+                "label": "Escape character",
+                "kind": "select",
+                "defaultValue": "",
+                "options": [
+                  {
+                    "label": "Repeat the quote",
+                    "value": ""
+                  },
+                  {
+                    "label": "Backslash  \\",
+                    "value": "\\"
+                  }
+                ],
+                "description": "Written before a quote inside a quoted value. Not used when the quote is None."
+              },
+              {
                 "key": "writeHeader",
                 "label": "Write header row",
                 "kind": "bool",
@@ -32687,60 +32784,9 @@
             "fields": [
               {
                 "key": "hasHeader",
-                "label": "Has header row",
+                "label": "Write header row",
                 "kind": "bool",
                 "defaultValue": true
-              },
-              {
-                "key": "delimiter",
-                "label": "Delimiter",
-                "kind": "select",
-                "allowCustom": true,
-                "placeholder": "pick one, or type it - any length",
-                "defaultValue": "\t",
-                "options": [
-                  {
-                    "label": "Comma  ,",
-                    "value": ","
-                  },
-                  {
-                    "label": "Tab  \\t",
-                    "value": "\t"
-                  },
-                  {
-                    "label": "Semicolon  ;",
-                    "value": ";"
-                  },
-                  {
-                    "label": "Pipe  |",
-                    "value": "|"
-                  },
-                  {
-                    "label": "Space",
-                    "value": " "
-                  },
-                  {
-                    "label": "Colon  :",
-                    "value": ":"
-                  },
-                  {
-                    "label": "Caret  ^",
-                    "value": "^"
-                  },
-                  {
-                    "label": "Tilde  ~",
-                    "value": "~"
-                  },
-                  {
-                    "label": "Hash  #",
-                    "value": "#"
-                  },
-                  {
-                    "label": "Unit separator  0x1F",
-                    "value": "\u001f"
-                  }
-                ],
-                "description": "Leave blank to let DuckDB sniff it. Anything not listed can be typed in, including a multi-character delimiter such as || or <=>."
               },
               {
                 "key": "quoteChar",
@@ -32757,27 +32803,185 @@
                     "value": "'"
                   },
                   {
-                    "label": "None",
+                    "label": "None (each value as it is)",
                     "value": ""
+                  }
+                ],
+                "description": "Wraps a value that holds the delimiter, the quote or a line break. None writes every value exactly as it is, with no quoting and so no escaping: a tab or a line break in a value goes out as it is."
+              },
+              {
+                "key": "escapeChar",
+                "label": "Escape character",
+                "kind": "select",
+                "defaultValue": "",
+                "options": [
+                  {
+                    "label": "Repeat the quote",
+                    "value": ""
+                  },
+                  {
+                    "label": "Backslash  \\",
+                    "value": "\\"
+                  }
+                ],
+                "description": "Written before a quote inside a quoted value. Not used when the quote is None."
+              },
+              {
+                "key": "nullValue",
+                "label": "Write NULL as",
+                "kind": "text",
+                "placeholder": "leave blank for an empty field",
+                "description": "The text written for a NULL. Blank (the default) writes nothing between the tabs."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
+      "id": "snk.text",
+      "label": "Raw text",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "Write one column as plain lines, each value exactly as it is: no header, no quoting, no escaping",
+      "category": "Sinks",
+      "group": "Files",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.text",
+        "kind": "sink",
+        "label": "Raw text",
+        "description": "Write one column as plain lines, each value exactly as it is: no header, no quoting, no escaping",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Destination file",
+            "fields": [
+              {
+                "key": "path",
+                "label": "Output path",
+                "kind": "save-path",
+                "required": true,
+                "filters": [
+                  {
+                    "name": "Text",
+                    "extensions": [
+                      "txt"
+                    ]
+                  },
+                  {
+                    "name": "All files",
+                    "extensions": [
+                      "*"
+                    ]
                   }
                 ]
               },
               {
-                "key": "skipLines",
-                "label": "Skip lines",
-                "kind": "integer",
-                "defaultValue": 0
+                "key": "column",
+                "label": "Column",
+                "kind": "column",
+                "required": true,
+                "description": "Each row writes this column as one line, exactly as it is: no header, no quotes, no escaping. A NULL writes an empty line, and a value holding a line break is written with it."
+              },
+              {
+                "key": "compression",
+                "label": "Compression",
+                "kind": "select",
+                "defaultValue": "none",
+                "options": [
+                  {
+                    "label": "None",
+                    "value": "none"
+                  },
+                  {
+                    "label": "Gzip",
+                    "value": "gzip"
+                  },
+                  {
+                    "label": "Zstd",
+                    "value": "zstd"
+                  }
+                ],
+                "description": "Gzip or Zstd compresses the file whatever it is called. None leaves it to the name: a path ending .gz or .zst is still compressed. A compressed file cannot be appended to."
               }
             ]
-          },
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
+      "id": "snk.sql",
+      "label": "SQL statements",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "Run your own SQL on the upstream rows (as `input`): COPY ... TO in any format DuckDB writes, INSERT into an attached database",
+      "category": "Sinks",
+      "group": "Files",
+      "ports": {
+        "inputs": [
           {
-            "label": "Partitioning (write side, applies to sinks only)",
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.sql",
+        "kind": "sink",
+        "label": "SQL statements",
+        "description": "Run your own SQL on the upstream rows (as `input`): COPY ... TO in any format DuckDB writes, INSERT into an attached database",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "SQL",
             "fields": [
               {
-                "key": "partitionBy",
-                "label": "Partition by columns",
-                "kind": "columns",
-                "description": "Write a Hive-style partitioned dataset under the output path. Each partition column becomes a directory level (col=value/). Reruns overwrite the slice we just emitted."
+                "key": "sql",
+                "label": "SQL statements",
+                "kind": "expression",
+                "rows": 10,
+                "required": true,
+                "placeholder": "COPY (SELECT line FROM input) TO 'out.txt' (FORMAT CSV, HEADER false, QUOTE '')",
+                "description": "Run as written, one statement after another, with the upstream rows available as `input`: COPY ... TO writes any format DuckDB can, INSERT writes into a database you ATTACH."
+              },
+              {
+                "key": "loadExtensions",
+                "label": "Load extensions",
+                "kind": "text",
+                "placeholder": "h3, a5, opendal",
+                "description": "Comma-separated DuckDB extensions to INSTALL + LOAD before the SQL runs, so it can use the wider DuckDB ecosystem. One the core repository does not serve (h3, a5, opendal ...) installs from the community repository. Names are sanitized to letters / digits / underscore."
               }
             ]
           }
@@ -49589,8 +49793,8 @@
                 "key": "loadExtensions",
                 "label": "Load extensions",
                 "kind": "text",
-                "placeholder": "h3, a5",
-                "description": "Comma-separated DuckDB extensions to INSTALL + LOAD before the query runs (e.g. h3, a5), so SQL Template can use the wider DuckDB ecosystem. Names are sanitized to letters / digits / underscore."
+                "placeholder": "h3, a5, opendal",
+                "description": "Comma-separated DuckDB extensions to INSTALL + LOAD before the SQL runs, so it can use the wider DuckDB ecosystem. One the core repository does not serve (h3, a5, opendal ...) installs from the community repository. Names are sanitized to letters / digits / underscore."
               }
             ]
           }
@@ -49691,8 +49895,8 @@
                 "key": "loadExtensions",
                 "label": "Load extensions",
                 "kind": "text",
-                "placeholder": "h3, a5",
-                "description": "Comma-separated DuckDB extensions to INSTALL + LOAD before the query runs (e.g. h3, a5), so SQL Template can use the wider DuckDB ecosystem. Names are sanitized to letters / digits / underscore."
+                "placeholder": "h3, a5, opendal",
+                "description": "Comma-separated DuckDB extensions to INSTALL + LOAD before the SQL runs, so it can use the wider DuckDB ecosystem. One the core repository does not serve (h3, a5, opendal ...) installs from the community repository. Names are sanitized to letters / digits / underscore."
               }
             ]
           }

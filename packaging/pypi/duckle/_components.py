@@ -361,7 +361,7 @@ COMPONENTS = {
     'snk.csv': {
         'kind': 'sink',
         'summary': '',
-        'params': ['path', 'mode', 'delimiter', 'writeHeader', 'nullValue', 'partitionBy'],
+        'params': ['path', 'mode', 'delimiter', 'quoteChar', 'escapeChar', 'writeHeader', 'nullValue', 'partitionBy'],
     },
     'snk.databricks': {
         'kind': 'sink',
@@ -673,6 +673,11 @@ COMPONENTS = {
         'summary': 'Write geospatial files via the spatial extension',
         'params': ['path', 'driver', 'encoding', 'hilbertColumn'],
     },
+    'snk.sql': {
+        'kind': 'sink',
+        'summary': 'Run your own SQL on the upstream rows (as `input`): COPY ... TO in any format DuckDB writes, INSERT into an attached database',
+        'params': ['sql', 'loadExtensions'],
+    },
     'snk.sqlite': {
         'kind': 'sink',
         'summary': 'Write a table into a SQLite file',
@@ -698,6 +703,11 @@ COMPONENTS = {
         'summary': 'Write to Teradata through its free ODBC driver. Install the Teradata ODBC driver, then connect with friendly fields, a DSN, or a full ODBC connection string. Append creates the table if missing then appends; Overwrite clears it first. No upsert.',
         'params': ['driver', 'host', 'user', 'password', 'dsn', 'connectionString', 'tableName', 'database', 'writeMode'],
     },
+    'snk.text': {
+        'kind': 'sink',
+        'summary': 'Write one column as plain lines, each value exactly as it is: no header, no quoting, no escaping',
+        'params': ['path', 'column', 'compression'],
+    },
     'snk.toml': {
         'kind': 'sink',
         'summary': 'Write the upstream rows as TOML. TOML disallows a top-level array so the engine wraps under a `rows` key: `[[rows]]` per row.',
@@ -706,7 +716,7 @@ COMPONENTS = {
     'snk.tsv': {
         'kind': 'sink',
         'summary': 'Write tab-separated files',
-        'params': ['path', 'mode', 'compression', 'hasHeader', 'delimiter', 'quoteChar', 'skipLines', 'partitionBy'],
+        'params': ['path', 'mode', 'compression', 'hasHeader', 'quoteChar', 'escapeChar', 'nullValue'],
     },
     'snk.turso': {
         'kind': 'sink',
@@ -1362,6 +1372,11 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'Tail an append-only NDJSON file from where the last SUCCESSFUL run stopped, by byte offset. Pairs with `duckle-runner listen`, which keeps a webhook listener up and appends here - so nothing is lost between pipeline runs, unlike src.webhook which only collects while a run is executing. A failed r...',
         'params': ['path', 'trackOffset', 'maxBytes'],
+    },
+    'src.sql': {
+        'kind': 'source',
+        'summary': 'The rows a DuckDB query of your own returns: read_csv, read_xlsx, read_text, or a reader from an extension it loads',
+        'params': ['sql', 'loadExtensions'],
     },
     'src.sqlite': {
         'kind': 'source',
