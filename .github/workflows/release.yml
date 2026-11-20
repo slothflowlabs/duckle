@@ -213,11 +213,19 @@ jobs:
         shell: bash
         run: |
           set -e
+          # One binary at a time: built together, their fat-LTO links run at
+          # once, and the arm64 runner ran out of memory at the end of the
+          # build (the runner shut down, exit 143).
+          for pkg in duckle-runner duckle-mcp; do
+            if [ -n "${{ matrix.target }}" ]; then
+              cargo build --profile release-runner --target "${{ matrix.target }}" -p "$pkg"
+            else
+              cargo build --profile release-runner -p "$pkg"
+            fi
+          done
           if [ -n "${{ matrix.target }}" ]; then
-            cargo build --profile release-runner --target "${{ matrix.target }}" -p duckle-runner -p duckle-mcp
             base="target/${{ matrix.target }}/release-runner"
           else
-            cargo build --profile release-runner -p duckle-runner -p duckle-mcp
             base="target/release-runner"
           fi
           mkdir -p apps/desktop/bin
