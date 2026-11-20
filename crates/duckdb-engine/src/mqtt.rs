@@ -118,7 +118,9 @@ pub(crate) fn connect_packet(client_id: &str, clean: bool, user: Option<&str>, p
 fn read_packet(w: &mut Wire) -> std::io::Result<(u8, Vec<u8>)> {
     let mut first = [0u8; 1];
     w.read_exact(&mut first)?;
-    w.socket().set_read_timeout(Some(STEP))?;
+    // macOS refuses the option on a socket the peer has already closed; the
+    // read below then says what happened, so a refusal here is not the error.
+    let _ = w.socket().set_read_timeout(Some(STEP));
     let (mut len, mut shift) = (0usize, 0u32);
     loop {
         let mut b = [0u8; 1];
@@ -267,7 +269,9 @@ impl DuckdbEngine {
                 last_sent = Instant::now();
             }
             // Short polls, so a cancelled run is noticed within a moment.
-            wire.socket().set_read_timeout(Some(left.min(Duration::from_millis(250)))).map_err(|e| fail("read", &e))?;
+            // As in read_packet: on macOS this fails once the broker has gone,
+            // and the read that follows reports that.
+            let _ = wire.socket().set_read_timeout(Some(left.min(Duration::from_millis(250))));
             let (header, body) = match read_packet(&mut wire) {
                 Ok(p) => p,
                 Err(e) if timed_out(&e) => continue,
@@ -366,7 +370,9 @@ impl DuckdbEngine {
                 out.extend(packet(header, &body));
             }
             wire.write_all(&out).and_then(|_| wire.flush()).map_err(|e| fail("PUBLISH", &e))?;
-            wire.socket().set_read_timeout(Some(STEP)).map_err(|e| fail("PUBLISH", &e))?;
+            // The connection keeps the STEP read timeout `open` gave it. Setting
+            // it again here failed on macOS once the broker had hung up, and
+            // reported "Invalid argument" in place of the unacknowledged rows.
             while !waiting.is_empty() {
                 let (h, b) = read_packet(&mut wire).map_err(|e| {
                     let rows = format!("rows {} to {} were sent and not all acknowledged", sent + 1, sent + window.len());
