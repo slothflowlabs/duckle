@@ -125,9 +125,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
+          # One binary at a time: built in one cargo call, their fat-LTO links
+          # run at once, and the linux-arm64 wheel's rustc was SIGKILLed for
+          # memory linking duckle-mcp while duckle-runner was still linking.
           docker run --rm -v "$PWD:/io" -w /io -e CARGO_TARGET_DIR=/tmp/t \
             "${{ matrix.image }}" \
-            bash -lc "cargo build --profile release-runner --target ${{ matrix.triple }} -p duckle-runner -p duckle-mcp \
+            bash -lc "cargo build --profile release-runner --target ${{ matrix.triple }} -p duckle-runner \
+                      && cargo build --profile release-runner --target ${{ matrix.triple }} -p duckle-mcp \
                       && cp /tmp/t/${{ matrix.triple }}/release-runner/duckle-runner /io/duckle-runner \
                       && cp /tmp/t/${{ matrix.triple }}/release-runner/duckle-mcp /io/duckle-mcp"
           file duckle-runner duckle-mcp || true
@@ -151,7 +155,9 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
         run: |
           set -euo pipefail
-          cargo build --profile release-runner --target ${{ matrix.triple }} -p duckle-runner -p duckle-mcp
+          # One binary at a time, for the memory reason in the Linux step.
+          cargo build --profile release-runner --target ${{ matrix.triple }} -p duckle-runner
+          cargo build --profile release-runner --target ${{ matrix.triple }} -p duckle-mcp
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp "target/${{ matrix.triple }}/release-runner/duckle-runner.exe" duckle-runner.exe
             cp "target/${{ matrix.triple }}/release-runner/duckle-mcp.exe" duckle-mcp.exe
