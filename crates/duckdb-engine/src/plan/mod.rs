@@ -989,6 +989,7 @@ pub enum RuntimeSpec {
     MysqlCdc(MysqlCdcSpec),
     ArrowSource(ArrowSourceSpec),
     ArrowSink(ArrowSinkSpec),
+    EdiSource(EdiSourceSpec),
     ServiceBusSource(ServiceBusSourceSpec),
     ServiceBusSink(ServiceBusSinkSpec),
     MqttSource(MqttSourceSpec),
@@ -2619,6 +2620,7 @@ fn build_stage(
     let mut mysql_cdc: Option<MysqlCdcSpec> = None;
     let mut arrow_source: Option<ArrowSourceSpec> = None;
     let mut arrow_sink: Option<ArrowSinkSpec> = None;
+    let mut edi_source: Option<EdiSourceSpec> = None;
     let mut servicebus_source: Option<ServiceBusSourceSpec> = None;
     let mut servicebus_sink: Option<ServiceBusSinkSpec> = None;
     let mut mqtt_source: Option<MqttSourceSpec> = None;
@@ -6189,6 +6191,14 @@ fn build_stage(
             .ok_or_else(|| EngineError::Config(format!("{}: path required", component_id)))?;
         arrow_source = Some(ArrowSourceSpec { node_id: node.id.clone(), path });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.edi" {
+        // X12 and EDIFACT: each interchange names its own delimiters, so the
+        // node needs only where the files are.
+        let path = string_prop(&props, "path")
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: path required", component_id)))?;
+        edi_source = Some(EdiSourceSpec { node_id: node.id.clone(), path });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.orc" {
         // Apache ORC through orc-rust. Every file carries its own schema; a
         // pattern reads several, which must agree on their columns.
@@ -8805,6 +8815,7 @@ fn build_stage(
         .or_else(|| mysql_cdc.map(RuntimeSpec::MysqlCdc))
         .or_else(|| arrow_source.map(RuntimeSpec::ArrowSource))
         .or_else(|| arrow_sink.map(RuntimeSpec::ArrowSink))
+        .or_else(|| edi_source.map(RuntimeSpec::EdiSource))
         .or_else(|| servicebus_source.map(RuntimeSpec::ServiceBusSource))
         .or_else(|| servicebus_sink.map(RuntimeSpec::ServiceBusSink))
         .or_else(|| mqtt_source.map(RuntimeSpec::MqttSource))

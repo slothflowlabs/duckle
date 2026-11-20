@@ -9148,3 +9148,30 @@ mod arrow_file {
         assert!(sink(json!({ "path": " " })).is_err());
     }
 }
+
+mod edi {
+    use super::*;
+    use crate::plan::RuntimeSpec;
+    use serde_json::json;
+
+    #[test]
+    fn an_edi_read_needs_a_path() {
+        let doc = |props: serde_json::Value| -> PipelineDoc {
+            serde_json::from_value(json!({
+                "nodes": [
+                    {"id": "a", "position": {"x": 0, "y": 0}, "data": {"label": "a", "componentId": "src.edi", "properties": props}},
+                    {"id": "b", "position": {"x": 0, "y": 0}, "data": {"label": "b", "componentId": "snk.csv", "properties": { "path": "/tmp/b.csv" }}}
+                ],
+                "edges": [{"id": "e", "source": "a", "target": "b", "data": {"connectionType": "main"}}]
+            }))
+            .unwrap()
+        };
+        let plan = compile(&doc(json!({ "path": "inbound/*.edi" }))).unwrap();
+        let spec = plan.stages.into_iter().filter_map(|s| s.runtime).find_map(|s| match s {
+            RuntimeSpec::EdiSource(e) => Some(e),
+            _ => None,
+        });
+        assert_eq!(spec.map(|e| e.path).as_deref(), Some("inbound/*.edi"));
+        assert!(compile(&doc(json!({ "path": "  " }))).is_err());
+    }
+}

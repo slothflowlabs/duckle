@@ -4,9 +4,9 @@ This document is the source of truth for what's in the palette but
 not yet executable. The README's capability tables are the highlight
 reel; this is the full ledger.
 
-The palette currently carries **440 components**, broken down:
+The palette currently carries **441 components**, broken down:
 
-- **435 available** - executes on the DuckDB engine today
+- **436 available** - executes on the DuckDB engine today
 - **5 planned** - reserved in the palette so the roadmap is visible,
   not yet executable
 

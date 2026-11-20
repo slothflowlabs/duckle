@@ -2723,6 +2723,26 @@ function synthWrongFamilyForm(comp: ComponentDef): ComponentManifest | null {
             },
         ]);
     }
+    if (id === 'src.edi') {
+        return base(comp, [
+            {
+                label: 'Source file',
+                fields: [
+                    {
+                        key: 'path',
+                        label: 'Path',
+                        kind: 'file-path',
+                        required: true,
+                        filters: [
+                            { name: 'EDI', extensions: ['edi', 'x12', 'edifact', 'txt'] },
+                            { name: 'All files', extensions: ['*'] },
+                        ],
+                        description: 'An X12 or EDIFACT file, or a pattern such as inbound/*.edi to read every file it matches. Each segment arrives as a row: the envelope it sits in (interchange, group and message control numbers, sender, receiver, message type), its tag, and its elements as lists of components, so elements[3][1] is BEG03. The delimiters are read from the ISA or UNA of each interchange.',
+                    },
+                ],
+            },
+        ]);
+    }
     if (id === 'src.orc') {
         return base(comp, [
             {

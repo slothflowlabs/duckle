@@ -898,6 +898,11 @@ COMPONENTS = {
         'summary': 'Scan a DynamoDB table via direct HTTP + AWS SigV4 signing (no aws-sdk-rust dep). Auto-unwraps the typed-attribute response shape ({S: x}, {N: 5}, {BOOL: t}, {L: [...]}, {M: {...}}) into plain JSON. Pagination follows LastEvaluatedKey. Props: region, accessKeyId, secretAccessKey, sessionToken (opt...',
         'params': ['region', 'tableName', 'accessKeyId', 'secretAccessKey', 'sessionToken', 'limitPerPage', 'maxPages'],
     },
+    'src.edi': {
+        'kind': 'source',
+        'summary': 'X12 and EDIFACT interchanges, as trading partners send orders, invoices and shipping notices (850, 810, 856, ORDERS, INVOIC, DESADV), read as one row per segment: the envelope it sits in (interchange, group and message control numbers, sender, receiver, message type), its tag, and its elements as...',
+        'params': ['path'],
+    },
     'src.elastic': {
         'kind': 'source',
         'summary': 'Read docs from an Elasticsearch index via the _search API. from+size pagination (up to 10000 rows by default); ApiKey auth.',

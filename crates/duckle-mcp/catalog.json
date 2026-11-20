@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 440,
+  "componentCount": 441,
   "components": [
     {
       "id": "src.csv",
@@ -3710,6 +3710,73 @@
                 "kind": "bool",
                 "defaultValue": true,
                 "description": "Fixed-width fields are space-padded. Turn this off to keep the padding."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.edi",
+      "label": "EDI (X12 / EDIFACT)",
+      "kind": "source",
+      "availability": "available",
+      "summary": "X12 and EDIFACT interchanges, as trading partners send orders, invoices and shipping notices (850, 810, 856, ORDERS, INVOIC, DESADV), read as one row per segment: the envelope it sits in (interchange, group and message control numbers, sender, receiver, message type), its tag, and its elements as lists of components, for SQL to map. Each interchange names its own delimiters; a file cut short before its trailer fails the run.",
+      "category": "Sources",
+      "group": "Files",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.edi",
+        "kind": "source",
+        "label": "EDI (X12 / EDIFACT)",
+        "description": "X12 and EDIFACT interchanges, as trading partners send orders, invoices and shipping notices (850, 810, 856, ORDERS, INVOIC, DESADV), read as one row per segment: the envelope it sits in (interchange, group and message control numbers, sender, receiver, message type), its tag, and its elements as lists of components, for SQL to map. Each interchange names its own delimiters; a file cut short before its trailer fails the run.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Source file",
+            "fields": [
+              {
+                "key": "path",
+                "label": "Path",
+                "kind": "file-path",
+                "required": true,
+                "filters": [
+                  {
+                    "name": "EDI",
+                    "extensions": [
+                      "edi",
+                      "x12",
+                      "edifact",
+                      "txt"
+                    ]
+                  },
+                  {
+                    "name": "All files",
+                    "extensions": [
+                      "*"
+                    ]
+                  }
+                ],
+                "description": "An X12 or EDIFACT file, or a pattern such as inbound/*.edi to read every file it matches. Each segment arrives as a row: the envelope it sits in (interchange, group and message control numbers, sender, receiver, message type), its tag, and its elements as lists of components, so elements[3][1] is BEG03. The delimiters are read from the ISA or UNA of each interchange."
               }
             ]
           }

@@ -1237,6 +1237,13 @@ pub struct ArrowSinkSpec {
     pub compression: ArrowCompression,
 }
 
+/// src.edi: X12 and EDIFACT interchanges, a file or every file a pattern names.
+#[derive(Debug, Clone)]
+pub struct EdiSourceSpec {
+    pub node_id: String,
+    pub path: String,
+}
+
 /// src.mongodb.cdc: the changes a MongoDB change stream reports for one
 /// collection, from where the last successful run stopped.
 #[derive(Clone)]
