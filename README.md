@@ -50,6 +50,7 @@ https://github.com/user-attachments/assets/8bfac3fa-3f91-4b43-b5d8-a526716c8ef1
 
 - [Where Duckle runs](#where-duckle-runs)
 - [What is Duckle?](#what-is-duckle)
+- [What's new in v0.9.0](#whats-new-in-v090)
 - [What's new in v0.8.0](#whats-new-in-v080)
 - [What's new in v0.7.4](#whats-new-in-v074)
 - [What's new in v0.7.3](#whats-new-in-v073)
@@ -213,7 +214,7 @@ That's a real, native ETL pipeline built and run in under a minute. CSV is just 
 
 ## Download / Install
 
-Pick the binary for your OS from the [latest release](https://github.com/slothflowlabs/duckle/releases/tag/v0.8.0):
+Pick the binary for your OS from the [latest release](https://github.com/slothflowlabs/duckle/releases/tag/v0.9.0):
 
 | OS | Asset | How to run |
 |---|---|---|
@@ -4805,6 +4806,77 @@ gh release edit vX.Y.Z --draft=false --latest
 ```
 
 ---
+
+## What's new in v0.9.0
+
+82 commits. **38 more components run today**, change data capture from MySQL,
+SQL Server and MongoDB among them, and **a pipeline can be one step of
+others**. Read *Before you upgrade* first: the desktop scheduler now catches up
+the runs it missed, and a policy's domain allowlist now covers database hosts.
+
+- **Before you upgrade.** The desktop app now follows each cron schedule's
+  misfire policy, as `duckle serve` does: opened after being closed, or woken
+  from sleep, it runs what `latest` or `all` says it missed, and records what
+  `skip` passed over. A policy's `network.allowedDomains` now holds a
+  database's host to the list as well, so a pipeline whose database is not on
+  it is refused when it is planned. Every file the desktop downloads (the
+  DuckDB CLI, uv, dbt Fusion, the Duckie models) is pinned to a SHA-256, and
+  one without a pin is refused instead of installed with a warning;
+  `DUCKLE_ARTIFACT_DIR` installs from a folder, offline. A TSV sink now writes
+  with the quote character its form shows, so one saved with None writes its
+  values unquoted.
+- **New connectors.** Change data capture from MySQL and MariaDB (the binary
+  log), SQL Server (its CDC tables) and MongoDB (change streams). MQTT, Azure
+  Service Bus, Amazon SQS and Pulsar, read and write; Azure Event Hubs; every
+  partition of a Kafka topic and every shard of a Kinesis stream, and a Kinesis
+  sink. LDAP and Active Directory. InfluxDB (SQL or InfluxQL in, line protocol
+  out), Trino, Starburst and Presto, and Apache Druid (#23). Google Sheets read
+  and write, Excel Online, Chroma, Pinecone, gRPC through the server's
+  reflection, and IMAP signed in with OAuth2. ORC and Arrow IPC / Feather files
+  read and write, and EDI interchanges (X12 and EDIFACT) read. The Delta sink
+  upserts, updates and deletes by key, on object storage too (#390). A
+  WebSocket server sink broadcasts the rows of a follow loop (#292).
+- **Raw text and SQL of your own.** A Raw text sink writes one column as plain
+  lines, each value as it is. A SQL statements sink runs your own statements
+  on the upstream rows, named `input`: a `COPY ... TO` in any format DuckDB
+  writes, an `INSERT` into an attached database. A SQL query source reads what
+  a query returns. CSV and TSV sinks take a quote character (double, single or
+  None) and an escape character. **Load extensions** installs a community
+  extension (h3, a5, opendal) from the community repository, and a `COPY` or an
+  `INSTALL` in Inline SQL is answered with what to use instead.
+- **Sub-flows.** A Sub-flow node runs another pipeline in place, its rows
+  passing through it, the way a Talend joblet does. Sub-flow input and output
+  nodes name its ports, and the run panel names its steps.
+- **The editor.** Group steps into named frames that move and collapse
+  together. After a run, click a link to see the rows that went down it, and
+  stop an editor run at a breakpoint. A GEOMETRY column draws on a map, over
+  tiles from a server you name (#372). Deleting a pipeline, folder or
+  connection moves it to a recycle bin, its secrets still encrypted. All 59
+  interface languages are complete (#378).
+- **Scheduling.** A schedule says what becomes of an occurrence that comes due
+  while its last run is still going: skip (the default, and what every schedule
+  did), queue, replace or allow, on `duckle serve` and the desktop alike. The
+  console's Run button takes the run lock a scheduled run takes.
+- **HTTP sources.** A 429 or a 503 is sent again after the wait the server asks
+  for, requests can be paced and keep cookies, an API's own more-pages flag is
+  followed (#399), a redirect never drops a request body (#398), and the
+  GraphQL sources read a paged connection to the end.
+- **Security.** The SQLite behind the serve console's accounts, sessions and
+  API keys moves to 3.54.1 (RUSTSEC-2026-0459), on Linux too, where a build
+  flag had linked the system's older SQLite in its place. lettre moves past
+  six SMTP advisories for the email sink. A credential typed into a header or
+  another key-value field is treated as one: refused on deploy, scrubbed from
+  logs, masked by MCP. `duckle-runner policy check` checks every pipeline
+  against the effective policy, and a policy denying `code.sql` denies the SQL
+  source and sink too.
+- **Also fixed.** Typing in a Settings field keeps going (#400). A source's
+  preview shows its run columns once its schema is out of date (#364). The
+  console keeps a Schedules row's unsaved edits through its refresh. The
+  canvas's steps no longer show through the other tabs. `xf.cdc.diff`'s
+  deletes reach the sinks and count in the Diff Summary. The Data Generator's
+  columns no longer move in lockstep. Druid arrays and nested columns arrive as
+  their own types, and MQTT on macOS names the rows a broker left
+  unacknowledged.
 
 ## What's new in v0.8.0
 
