@@ -10,7 +10,7 @@
 
 https://github.com/user-attachments/assets/8bfac3fa-3f91-4b43-b5d8-a526716c8ef1
 
-<a href="https://duckle.org/"><img src="website/assets/img/website-hero.gif" alt="Duckle connecting 231 sources and destinations - databases, warehouses, SaaS apps and the DuckDB ecosystem - all running locally on DuckDB" width="600"/></a>
+<a href="https://duckle.org/"><img src="website/assets/img/website-hero.gif" alt="Duckle connecting 233 sources and destinations - databases, warehouses, SaaS apps and the DuckDB ecosystem - all running locally on DuckDB" width="600"/></a>
 
 <p><sub><i>Duckle is an independent open-source project by SlothFlowLabs. It builds on the DuckDB engine but is not part of, affiliated with, or endorsed by DuckDB Labs or MotherDuck.</i></sub></p>
 
@@ -136,7 +136,7 @@ In short: a free, open-source, single-engine alternative to hosted, per-row-pric
 Three things set it apart:
 
 1. **An AI assistant that ships in the box.** Describe the pipeline you want in English; Duckie writes the JSON and drops it onto the canvas. The model runs wherever Duckle does - no API key, no telemetry, no vendor round-trip. Point it at your own OpenAI-compatible endpoint instead if you would rather it did not run in-process.
-2. **436 components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
+2. **438 components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
 3. **A self-contained binary you can audit.** 73 to 110 MB depending on your platform. Engines install on first launch. Workspaces are plain files in a folder you choose. Diff them, branch them, ship them.
 
 <div align="center">
@@ -154,7 +154,7 @@ Three things set it apart:
 | **Single-file binary, no bundled DB** | 73 to 110 MB depending on platform (it embeds the headless runner + MCP server). DuckDB downloads on first launch with a guided step. AI engine is opt-in. |
 | **Native speed** | Execution runs through DuckDB: vectorized, columnar, local. A clean-and-export job that crawls in a spreadsheet finishes in milliseconds. |
 | **Git-friendly by design** | Pipelines, connections, contexts, and routines persist as plain files in a folder you pick. Diff them, branch them, review them. |
-| **436 components ready today** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
+| **438 components ready today** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
 | **Honest about scope** | Single-machine and embedded by design. Built to make local and small-team data work fast, not to replace a distributed warehouse. |
 | **60 UI languages** | Topbar, palette, chat assistant, properties panel, and common dialogs ship localized. English, Spanish, Chinese (Simplified + Traditional), Hindi, Arabic, Portuguese (Brazil), Bengali, Russian, Japanese, Punjabi, German, Korean, French, Vietnamese, Telugu, Marathi, Turkish, Tamil, Urdu, Persian, Polish, Italian, Ukrainian, Indonesian, Thai, Dutch, Hebrew, Swedish, Greek, Czech, Hungarian, Romanian, Filipino, Malay, Norwegian, Danish, Finnish, Catalan, Bulgarian, Slovak, Croatian, Serbian, Slovenian, Lithuanian, Latvian, Estonian, Khmer, Burmese, Sinhala, Nepali, Swahili, Afrikaans, Welsh, Irish, Icelandic, Albanian, Azerbaijani, Mongolian, Kazakh. RTL (Arabic, Hebrew, Persian, Urdu) supported. Switch languages from the topbar globe. |
 | **Open source** | Dual-licensed MIT OR Apache-2.0. Yours to use, fork, and extend. |
@@ -1945,7 +1945,7 @@ than on every evaluation after the recovery.
 ### The connector matrix, generated (`capabilities`)
 
 A hand-maintained feature table drifts from the code the week after it is
-written, and a prose list of 441 components cannot answer "which sources do
+written, and a prose list of 443 components cannot answer "which sources do
 incremental?". So it is derived from the same manifests the editor renders forms
 from:
 
@@ -3733,9 +3733,9 @@ Duckle is in **public beta**. The visual designer, the DuckDB execution engine, 
 
 **Scope, stated plainly:** Duckle runs as a service on hardware you provision, and uses all of it. What it does not do is split one query across a cluster, so when a job outgrows the largest instance you want to pay for, push the work down into the source system or point the output at a warehouse, object store or lakehouse. It will not pretend to be a cluster.
 
-The component palette ships **441 components** so the roadmap is visible in the product itself:
+The component palette ships **443 components** so the roadmap is visible in the product itself:
 
-- **436 available** runs on the DuckDB engine today
+- **438 available** runs on the DuckDB engine today
 - **5 planned** is reserved in the palette but not yet executable - see [`docs/roadmap.md`](docs/roadmap.md)
 
 ---
@@ -3746,7 +3746,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 
 ### Sources
 
-**144 sources available today.**
+**145 sources available today.**
 
 | Group | Connectors | Status |
 |---|---|---|
@@ -3760,7 +3760,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | **Microsoft Access** | `.accdb` / `.mdb`: a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver (Office, or the free Access Database Engine) with each column's own type and a database password if set; Linux and macOS read a table through mdbtools, which reads a zero-length text as NULL | Available |
 | **Network relational DBs** | PostgreSQL, MySQL, MariaDB, CockroachDB | Available (live CI for PG + MySQL) |
 | **Change data capture** | PostgreSQL log-based CDC (`src.postgres.cdc`): inserts, updates and deletes from a replication slot through the built-in `pgoutput` plugin, no JVM or Kafka; the position is saved only on a successful run, and the slot's WAL retention is reported on every run; SQL Server CDC (`src.sqlserver.cdc`): the change table of a capture instance read over TDS, no JVM or Debezium, a run ending on a whole transaction, and changes cleaned up before a run read them failing it rather than skipped; MongoDB change streams (`src.mongodb.cdc`): a collection's inserts, updates, replaces and deletes with the document as JSON, resumed after the saved token; MySQL / MariaDB binlog CDC (`src.mysql.cdc`): a table's inserts, updates and deletes read from the binary log as a replica reads it, typed as the table declares them, ending each run on a whole transaction | Available |
-| **Network relational DBs** | SQL Server (TDS), Oracle (Instant Client at runtime), ClickHouse (HTTP API), **Apache Druid** (SQL API; columns typed from the SQL types Druid reports), **Trino / Starburst / Presto** (the client REST protocol, every page followed; columns typed from the types the coordinator reports, decimals, zoned timestamps, binary and UUIDs included; password or bearer-token sign-in), **IBM DB2** (IBM Data Server ODBC driver), **Turso / libSQL** (HTTP pipeline API - no driver install; `libsql://` URLs accepted) | Available |
+| **Network relational DBs** | SQL Server (TDS), Oracle (Instant Client at runtime), ClickHouse (HTTP API), **Apache Druid** (SQL API; columns typed from the SQL types Druid reports), **InfluxDB** (HTTP API with an API token: SQL on InfluxDB 3 answered as Parquet, so every column keeps the type InfluxDB has for it, or InfluxQL on 1.x, 2.x and 3, numbers as DOUBLE; a result the server cut short is refused), **Trino / Starburst / Presto** (the client REST protocol, every page followed; columns typed from the types the coordinator reports, decimals, zoned timestamps, binary and UUIDs included; password or bearer-token sign-in), **IBM DB2** (IBM Data Server ODBC driver), **Turso / libSQL** (HTTP pipeline API - no driver install; `libsql://` URLs accepted) | Available |
 | **Network relational DBs** | generic JDBC | Planned |
 | **Object storage** | Amazon S3, Google Cloud Storage, Azure Blob, HTTP(S), MinIO, Cloudflare R2, Backblaze B2 | Available (live CI for MinIO) |
 | **Cloud warehouses** | MotherDuck, Snowflake (SQL API + PAT/JWT), BigQuery, Redshift (postgres ATTACH), Databricks SQL (Statement Execution + chunk follow), Azure Synapse (TDS), **Teradata** (ODBC, Windows / Linux), **DuckDB Quack** (May 2026 remote protocol - HTTP on :9494, SECRET-based token auth) | Available |
@@ -3866,7 +3866,7 @@ Validators split their input: passing rows continue on the main port, failures r
 
 ### Sinks
 
-**87 sinks available today.**
+**88 sinks available today.**
 
 | Group | Connectors | Status |
 |---|---|---|
@@ -3877,7 +3877,7 @@ Validators split their input: passing rows continue on the main port, failures r
 | **Microsoft Access** | `.accdb` / `.mdb`, Windows only (Microsoft Access ODBC driver): the file and the table are created when missing; **append** or **overwrite** in one transaction, so a failed load leaves the table as it was; an upstream that produced no rows leaves the table alone; values are bound as typed parameters, so accents, quotes and the machine's decimal separator cannot change what lands | Available |
 | **Embedded databases** | SQLite, DuckDB - modes: **overwrite**, **append**, **upsert** (set-based delete-by-key + re-insert, no PK required), **merge** (partial-column `MERGE INTO` that preserves columns the source omits) with optional CDC delete propagation | Available |
 | **Network relational DBs** | PostgreSQL, MySQL, MariaDB, CockroachDB - modes: **overwrite**, **append**, **truncate**, **upsert** (ON CONFLICT / ON DUPLICATE KEY) with optional CDC delete propagation | Available (live CI for PG + MySQL) |
-| **Network relational DBs** | SQL Server / Azure Synapse (TDS, multi-row VALUES batched; auto-creates the table if absent; **upsert** via MERGE), Oracle (Instant Client; INSERT ALL, batched per statement; auto-creates the table if absent; **upsert** via MERGE), ClickHouse (HTTP JSONEachRow; upsert by pointing at a ReplacingMergeTree target table), **Apache Druid** (a native batch ingestion task carrying the rows inline, followed until it succeeds; append, or replace the time chunks the rows cover), **IBM DB2** (ODBC; auto-creates the table, booleans as SMALLINT 1/0 so DB2 for z/OS also accepts them), **Turso / libSQL** (HTTP pipeline API; auto-creates the table, values sent as bound parameters) - every MERGE sink supports **CDC delete propagation** (a delete-flag column removes matched rows) | Available (SQL Server + Oracle + MySQL upsert and delete propagation verified live in Docker) |
+| **Network relational DBs** | SQL Server / Azure Synapse (TDS, multi-row VALUES batched; auto-creates the table if absent; **upsert** via MERGE), Oracle (Instant Client; INSERT ALL, batched per statement; auto-creates the table if absent; **upsert** via MERGE), ClickHouse (HTTP JSONEachRow; upsert by pointing at a ReplacingMergeTree target table), **Apache Druid** (a native batch ingestion task carrying the rows inline, followed until it succeeds; append, or replace the time chunks the rows cover), **InfluxDB** (line protocol through /api/v2/write, which InfluxDB 2, 3 and 1.8+ take: a measurement fixed or from a column, tag and field columns, field types from the column types, a time column in ns, us, ms or s; every line built before the first write, so a row that cannot be one sends nothing), **IBM DB2** (ODBC; auto-creates the table, booleans as SMALLINT 1/0 so DB2 for z/OS also accepts them), **Turso / libSQL** (HTTP pipeline API; auto-creates the table, values sent as bound parameters) - every MERGE sink supports **CDC delete propagation** (a delete-flag column removes matched rows) | Available (SQL Server + Oracle + MySQL upsert and delete propagation verified live in Docker) |
 | **Network relational DBs** | generic JDBC | Planned |
 | **Object storage** | S3, GCS, Azure Blob via DuckDB `httpfs` (MinIO / R2 / B2 via endpoint) | Available |
 | **Hugging Face** | Push to a Hugging Face Hub dataset repo (`snk.huggingface`): the upstream is materialized to Parquet and committed over the Hub API (create-repo → preupload → git-LFS → commit); write token required, repo auto-created (public or private) | Available |
@@ -4619,7 +4619,7 @@ Yes, free + open source. Dual-licensed **MIT OR Apache-2.0**. You can use it com
 <details>
 <summary><b>Is Duckle an open-source alternative to Fivetran or Airbyte?</b></summary>
 
-It covers similar ground - moving data across 231 sources and destinations - but locally, with nothing to host and no per-row, per-connector, or per-seat billing. Pipelines are built visually or from plain English and compile to readable DuckDB SQL that runs wherever you deploy it: a laptop, a server, CI or a container. The trade-off is scope: Duckle does not split one query across a cluster, so for warehouse-scale replication you push the work down into the source system or point the output at the system that scales.
+It covers similar ground - moving data across 233 sources and destinations - but locally, with nothing to host and no per-row, per-connector, or per-seat billing. Pipelines are built visually or from plain English and compile to readable DuckDB SQL that runs wherever you deploy it: a laptop, a server, CI or a container. The trade-off is scope: Duckle does not split one query across a cluster, so for warehouse-scale replication you push the work down into the source system or point the output at the system that scales.
 
 </details>
 

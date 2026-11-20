@@ -525,6 +525,18 @@ jobs:
         env:
           DUCKLE_MQTT_URL: mqtt://localhost:1883
         run: cargo test -p duckle-duckdb-engine --test mqtt
+      - name: Start InfluxDB 3
+        run: |
+          docker run -d --name influx -p 8181:8181 influxdb:3-core influxdb3 serve --node-id node0 --object-store memory
+          for i in $(seq 1 30); do curl -s -o /dev/null -w '%{http_code}' http://localhost:8181/health | grep -qE '200|401' && break; sleep 1; done
+          # One admin token a server; it is printed once, so it goes straight to the job's env, masked.
+          token=$(docker exec influx influxdb3 create token --admin 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -o 'apiv3_[A-Za-z0-9_-]*' | head -1)
+          echo "::add-mask::$token"
+          echo "DUCKLE_INFLUXDB_TOKEN=$token" >> "$GITHUB_ENV"
+      - name: Run InfluxDB tests
+        env:
+          DUCKLE_INFLUXDB_URL: http://localhost:8181
+        run: cargo test -p duckle-duckdb-engine --test influxdb
       - name: Start Pulsar standalone
         run: |
           set -e

@@ -425,6 +425,20 @@ fn ldap_attributes(props: &JsonValue, component: &str) -> Result<Vec<String>, En
     Ok(out)
 }
 
+/// Where an InfluxDB node goes: its URL, its token (kept as written) and the
+/// database (a bucket, on InfluxDB 2).
+fn influx_target(props: &JsonValue, component: &str) -> Result<(String, Option<String>, String), EngineError> {
+    let text = |key: &str| string_prop(props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let url = text("url").ok_or_else(|| {
+        EngineError::Config(format!("{component}: a URL is required, such as http://localhost:8181 (InfluxDB 3) or :8086 (1.x, 2.x)"))
+    })?;
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(EngineError::Config(format!("{component}: '{url}' is not an http:// or https:// URL")));
+    }
+    let database = text("database").ok_or_else(|| EngineError::Config(format!("{component}: a database is required")))?;
+    Ok((url.trim_end_matches('/').to_string(), string_prop(props, "token").filter(|s| !s.is_empty()), database))
+}
+
 /// An MQTT broker from its URL: mqtt:// (or tcp://) in the clear, on 1883
 /// unless the URL names a port; mqtts:// (or ssl://, tls://) over TLS, on 8883.
 fn mqtt_conn(props: &JsonValue, component: &str) -> Result<MqttConn, EngineError> {
@@ -990,6 +1004,8 @@ pub enum RuntimeSpec {
     ArrowSource(ArrowSourceSpec),
     ArrowSink(ArrowSinkSpec),
     EdiSource(EdiSourceSpec),
+    InfluxSource(InfluxSourceSpec),
+    InfluxSink(InfluxSinkSpec),
     ServiceBusSource(ServiceBusSourceSpec),
     ServiceBusSink(ServiceBusSinkSpec),
     MqttSource(MqttSourceSpec),
@@ -2621,6 +2637,8 @@ fn build_stage(
     let mut arrow_source: Option<ArrowSourceSpec> = None;
     let mut arrow_sink: Option<ArrowSinkSpec> = None;
     let mut edi_source: Option<EdiSourceSpec> = None;
+    let mut influx_source: Option<InfluxSourceSpec> = None;
+    let mut influx_sink: Option<InfluxSinkSpec> = None;
     let mut servicebus_source: Option<ServiceBusSourceSpec> = None;
     let mut servicebus_sink: Option<ServiceBusSinkSpec> = None;
     let mut mqtt_source: Option<MqttSourceSpec> = None;
@@ -4050,6 +4068,40 @@ fn build_stage(
         qvd_sink = Some(QvdSinkSpec {
             from_view: from_view.to_string(),
             path,
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.influxdb" {
+        // One line of line protocol a row, through /api/v2/write.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let (base_url, token, database) = influx_target(&props, component_id)?;
+        let text = |key: &str| string_prop(&props, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let config = |why: String| EngineError::Config(format!("{component_id}: {why}"));
+        let (measurement, measurement_column) = (text("measurement"), text("measurementColumn"));
+        if measurement.is_some() == measurement_column.is_some() {
+            return Err(config("name a Measurement, or a Measurement column that holds each row's, one of the two".into()));
+        }
+        let (tags, fields, time_column) = (columns_list(&props, "tags"), columns_list(&props, "fields"), text("timeColumn"));
+        let mut roles: Vec<&String> = tags.iter().chain(&fields).chain(&measurement_column).chain(&time_column).collect();
+        roles.sort();
+        if let Some(twice) = roles.windows(2).find(|w| w[0] == w[1]) {
+            return Err(config(format!("{} has two parts in a line; a column is a tag, a field, the measurement or the time", twice[0])));
+        }
+        let precision = text("precision").unwrap_or_else(|| "ns".into()).to_ascii_lowercase();
+        if !matches!(precision.as_str(), "ns" | "us" | "ms" | "s") {
+            return Err(config(format!("precision '{precision}' is not ns, us, ms or s")));
+        }
+        influx_sink = Some(InfluxSinkSpec {
+            from_view: from_view.to_string(),
+            base_url,
+            token,
+            database,
+            org: text("org"),
+            measurement,
+            measurement_column,
+            tags,
+            fields,
+            time_column,
+            precision,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.arrow" {
@@ -6190,6 +6242,30 @@ fn build_stage(
             .filter(|s| !s.trim().is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: path required", component_id)))?;
         arrow_source = Some(ArrowSourceSpec { node_id: node.id.clone(), path });
+        (String::new(), StageKind::View, None)
+    } else if component_id == "src.influxdb" {
+        // InfluxDB over HTTP: SQL on InfluxDB 3, InfluxQL on any version.
+        let (base_url, token, database) = influx_target(&props, component_id)?;
+        let language = string_prop(&props, "language").unwrap_or_default().trim().to_ascii_lowercase();
+        let influxql = match language.as_str() {
+            "" | "sql" => false,
+            "influxql" => true,
+            other => {
+                return Err(EngineError::Config(format!("{component_id}: language '{other}' is not sql or influxql")))
+            }
+        };
+        let query = string_prop(&props, "query")
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{component_id}: a query is required")))?;
+        influx_source = Some(InfluxSourceSpec {
+            node_id: node.id.clone(),
+            base_url,
+            token,
+            database,
+            influxql,
+            query,
+            declared_schema: node.data.schema.clone(),
+        });
         (String::new(), StageKind::View, None)
     } else if component_id == "src.edi" {
         // X12 and EDIFACT: each interchange names its own delimiters, so the
@@ -8816,6 +8892,8 @@ fn build_stage(
         .or_else(|| arrow_source.map(RuntimeSpec::ArrowSource))
         .or_else(|| arrow_sink.map(RuntimeSpec::ArrowSink))
         .or_else(|| edi_source.map(RuntimeSpec::EdiSource))
+        .or_else(|| influx_source.map(RuntimeSpec::InfluxSource))
+        .or_else(|| influx_sink.map(RuntimeSpec::InfluxSink))
         .or_else(|| servicebus_source.map(RuntimeSpec::ServiceBusSource))
         .or_else(|| servicebus_sink.map(RuntimeSpec::ServiceBusSink))
         .or_else(|| mqtt_source.map(RuntimeSpec::MqttSource))

@@ -17,16 +17,16 @@
 <meta property="og:site_name" content="Duckle" />
 <meta property="og:url" content="https://duckle.org/docs/components.html" />
 <meta property="og:title" content="Component reference - Duckle" />
-<meta property="og:description" content="The Duckle component reference: 441 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta property="og:description" content="The Duckle component reference: 443 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta property="og:image" content="https://duckle.org/assets/img/og-card.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:url" content="https://duckle.org/docs/components.html" />
 <meta name="twitter:title" content="Component reference - Duckle" />
-<meta name="twitter:description" content="The Duckle component reference: 441 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta name="twitter:description" content="The Duckle component reference: 443 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta name="twitter:image" content="https://duckle.org/assets/img/og-card.png" />
-<meta name="description" content="The Duckle component reference: 441 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
+<meta name="description" content="The Duckle component reference: 443 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB." />
 <meta name="keywords" content="visual ETL tool, DuckDB ETL, open source ETL, ELT tool, code-first ETL, Python ETL, ETL for AI agents, MCP ETL, data pipeline builder, dbt GUI, dbt on DuckDB, DuckLake, Quack DuckDB, no-code data pipeline, Fivetran alternative, Airbyte alternative, Talend alternative, dlt alternative, self-hosted ETL, local-first ETL" />
 <meta name="theme-color" content="#07090f" />
 <link rel="apple-touch-icon" href="../assets/img/duckle-mark.v4.svg" />
@@ -61,8 +61,8 @@
 {
   "@context": "https://schema.org",
   "@type": "TechArticle",
-  "headline": "Duckle components reference: 441 sources, transforms, sinks and data-quality nodes",
-  "description": "The Duckle component reference: 441 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB.",
+  "headline": "Duckle components reference: 443 sources, transforms, sinks and data-quality nodes",
+  "description": "The Duckle component reference: 443 sources, transforms, sinks, quality checks and control-flow nodes. Every pipeline node compiles to readable SQL on DuckDB.",
   "author": {
     "@type": "Organization",
     "name": "SlothFlow Labs"
@@ -133,12 +133,12 @@
 <span class="eyebrow">Reference</span>
 <h1>Component reference</h1>
 <!-- BEGIN GENERATED summary (website/scripts/build-llms.mjs writes this from the component catalog; edit it there) -->
-<p class="lead">Duckle ships 441 components across six kinds - 145 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 88 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 25 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 436 are available today; the 0 in preview and the 5 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
+<p class="lead">Duckle ships 443 components across six kinds - 146 sources (<code>src.*</code>), 145 transforms (<code>xf.*</code>), 89 sinks (<code>snk.*</code>), 31 data-quality validators (<code>qa.*</code>), 25 control-flow nodes (<code>ctl.*</code>), and 7 code runners (<code>code.*</code>). Of these, 438 are available today; the 0 in preview and the 5 planned are marked in the tables below. Every component has Basic, Schema, Preview, Advanced, and Validation tabs and a live preview.</p>
 
 <div class="grid cols-3">
-  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span><h3>145 sources</h3><p>Files, lakehouse, databases, warehouses, object storage, streaming, SaaS APIs, NoSQL, vector DBs and more, all under <code>src.*</code>.</p></div>
+  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span><h3>146 sources</h3><p>Files, lakehouse, databases, warehouses, object storage, streaming, SaaS APIs, NoSQL, vector DBs and more, all under <code>src.*</code>.</p></div>
   <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg></span><h3>145 transforms</h3><p>Fields, rows, aggregates, joins, windows, strings, dates, JSON, arrays, CDC/SCD, AI and search, all under <code>xf.*</code>.</p></div>
-  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg></span><h3>88 sinks</h3><p>Files, databases, warehouses, object storage, vector DBs, messaging and comms, all under <code>snk.*</code> with universal write modes.</p></div>
+  <div class="card"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg></span><h3>89 sinks</h3><p>Files, databases, warehouses, object storage, vector DBs, messaging and comms, all under <code>snk.*</code> with universal write modes.</p></div>
 </div>
 <!-- END GENERATED summary -->
 
@@ -258,7 +258,7 @@
 </table>
 </div>
 
-<h3 id="sources-streaming">Streaming (12)</h3>
+<h3 id="sources-streaming">Streaming (13)</h3>
 <div style="overflow-x:auto">
 <table>
   <thead><tr><th>Component</th><th>What it does</th></tr></thead>
@@ -271,6 +271,7 @@
     <tr><td>AWS Kinesis<br><code>src.kinesis</code></td><td>Read one shard of a Kinesis stream, or every shard in turn, via direct HTTP + AWS SigV4 (no AWS SDK). Walks ListShards -&gt; GetShardIterator -&gt; GetRecords. Props: region, accessKeyId, secretAccessKey, sessionToken (optional STS), streamName, shardIndex (default 0), allShards, iteratorType (TRIM_HORIZON or LATEST), maxRecords (across every shard read), endpoint (a VPC endpoint or LocalStack). Records with JSON-object payloads unfold as rows; others land as {partition_key, sequence_number, data}</td></tr>
     <tr><td>AWS SQS<br><code>src.sqs</code></td><td>Receive messages from an Amazon SQS queue, ten a call, over direct HTTP + AWS SigV4 (no AWS SDK). Each message is a row: its id, body, send time, receive count, FIFO group and attributes. Messages stay hidden while the run works and are deleted only once the whole run succeeds, so a failed run leaves them to be delivered again</td></tr>
     <tr><td>Azure Event Hubs<br><code>src.eventhubs</code></td><td>Read an event hub through its namespace's Kafka endpoint, signed in with the connection string from the Azure portal (Shared access policies, a policy with Listen). Batch-consumes up to Max messages from one partition, or from every partition in turn, like src.kafka, and emits {offset, key, value, timestamp_ms} rows. Needs the Standard tier or higher: Basic has no Kafka endpoint</td></tr>
+    <tr><td>InfluxDB<br><code>src.influxdb</code></td><td>Query InfluxDB over its HTTP API: SQL on InfluxDB 3, answered as Parquet so every column keeps the type InfluxDB has for it, or InfluxQL on InfluxDB 1.x, 2.x and 3. Signed with an API token. A result the server cut short is refused rather than read partly</td></tr>
     <tr><td>MQTT<br><code>src.mqtt</code></td><td>Subscribe to topics on an MQTT 3.1.1 broker such as Mosquitto, EMQX or HiveMQ and read each message as a row: its topic, its payload (as text, or base64 when it is not UTF-8), its QoS and whether it was retained. The read ends once a wait passes with no message. With a kept session the broker holds QoS 1 messages between runs. Duckle speaks MQTT itself, over TLS for mqtts://</td></tr>
     <tr><td>Azure Service Bus<br><code>src.servicebus</code></td><td>Receive messages from a Service Bus queue or topic subscription over its REST API, signed with a SAS token made from the connection string (no Azure SDK). Each message is a row: its id, body, subject, session, sequence number, delivery count and enqueue time. Taken under a peek-lock and completed only once the whole run succeeds, so a failed run leaves them to be delivered again; or removed as read</td></tr>
     <tr><td>GCP Pub/Sub<br><code>src.pubsub</code></td><td>Pull messages via the Pub/Sub REST API (POST /v1/projects/{p}/subscriptions/{s}:pull) - sidesteps the gRPC build dependency. Auto-acks the batch. Auth via a pre-fetched OAuth2 Bearer access token (mint with <code>gcloud auth print-access-token</code>). Emits {message_id, publish_time, data} rows</td></tr>
@@ -862,7 +863,7 @@
 </table>
 </div>
 
-<h3 id="sinks-streaming">Streaming (12)</h3>
+<h3 id="sinks-streaming">Streaming (13)</h3>
 <div style="overflow-x:auto">
 <table>
   <thead><tr><th>Component</th><th>What it does</th></tr></thead>
@@ -874,6 +875,7 @@
     <tr><td>RabbitMQ<br><code>snk.rabbit</code></td><td>Publish each upstream row as one persistent-delivery-mode AMQP 0.9.1 message via the pure-Rust <code>lapin</code> driver. Configurable exchange + routingKey; empty exchange = default direct exchange (route to queue named by routingKey)</td></tr>
     <tr><td>GCP Pub/Sub<br><code>snk.pubsub</code></td><td>Publish messages via the Pub/Sub REST API (POST /v1/projects/{p}/topics/{t}:publish). Each upstream row -&gt; one base64-encoded message. Auth via OAuth2 Bearer access token. Batched at 100 messages per request (Pub/Sub max)</td></tr>
     <tr><td>AWS SQS<br><code>snk.sqs</code></td><td>Send each upstream row to an Amazon SQS queue as one message, the row as JSON or one column as the body, ten to a SendMessageBatch call over direct HTTP + AWS SigV4 (no AWS SDK). Fills the message group and deduplication id of a FIFO queue from columns. What SQS fails on its side is sent again; a message it refuses fails the run, naming the row</td></tr>
+    <tr><td>InfluxDB<br><code>snk.influxdb</code></td><td>Write each upstream row to InfluxDB 2, 3 or 1.8+ as one line of line protocol: a fixed measurement or one from a column, tag columns, field columns typed from theirs (integers, unsigned, floats, booleans, text), and a time column in ns, us, ms or s. Every line is built before the first write, so a row that cannot be one sends nothing; a busy server is asked again</td></tr>
     <tr><td>MQTT<br><code>snk.mqtt</code></td><td>Publish each upstream row to an MQTT 3.1.1 broker as one message, to a fixed topic or to one from a column, the row as JSON or one column as the payload, retained if asked. At QoS 1 the broker acknowledges every message before the run succeeds. Duckle speaks MQTT itself, over TLS for mqtts://</td></tr>
     <tr><td>Azure Service Bus<br><code>snk.servicebus</code></td><td>Send each upstream row to a Service Bus queue or topic as one message over its REST API (no Azure SDK), the row as JSON or one column as the body, in batches of up to 256 KiB. Message and session ids come from columns, for duplicate detection and sessions. A busy namespace is asked again; a refusal fails the run with the reason Service Bus gave</td></tr>
     <tr><td>AWS Kinesis<br><code>snk.kinesis</code></td><td>Put each upstream row into a Kinesis data stream as one record, its data the row as JSON, with PutRecords over direct HTTP + AWS SigV4 (no AWS SDK). Up to 500 records and 5 MiB a call; the records Kinesis refuses (a shard over its write limit) are sent again, and any still refused fail the run. Partition key from a column, or spread by position. Record order is not kept</td></tr>

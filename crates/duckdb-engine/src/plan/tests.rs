@@ -9175,3 +9175,75 @@ mod edi {
         assert!(compile(&doc(json!({ "path": "  " }))).is_err());
     }
 }
+
+mod influxdb {
+    use super::*;
+    use crate::plan::{InfluxSinkSpec, InfluxSourceSpec, RuntimeSpec};
+    use serde_json::json;
+
+    fn compiled(component: &str, props: serde_json::Value) -> Result<Vec<RuntimeSpec>, crate::EngineError> {
+        let node = |id: &str, component: &str, props: serde_json::Value| {
+            json!({"id": id, "position": {"x": 0, "y": 0}, "data": {"label": id, "componentId": component, "properties": props}})
+        };
+        let nodes = if component.starts_with("src.") {
+            [node("a", component, props), node("b", "snk.csv", json!({ "path": "/tmp/b.csv" }))]
+        } else {
+            [node("a", "src.csv", json!({ "path": "/tmp/a.csv" })), node("b", component, props)]
+        };
+        let doc: PipelineDoc = serde_json::from_value(json!({
+            "nodes": nodes,
+            "edges": [{"id": "e", "source": "a", "target": "b", "data": {"connectionType": "main"}}]
+        }))
+        .unwrap();
+        Ok(compile(&doc)?.stages.into_iter().filter_map(|s| s.runtime).collect())
+    }
+
+    fn base(extra: serde_json::Value) -> serde_json::Value {
+        let mut props = json!({ "url": "http://influx.example.com:8181/", "token": " t0k ", "database": "telemetry" });
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            props[k] = v;
+        }
+        props
+    }
+
+    fn source(extra: serde_json::Value) -> Result<InfluxSourceSpec, crate::EngineError> {
+        Ok(compiled("src.influxdb", base(extra))?.into_iter().find_map(|s| match s {
+            RuntimeSpec::InfluxSource(i) => Some(i),
+            _ => None,
+        }).expect("an InfluxDB read"))
+    }
+
+    fn sink(extra: serde_json::Value) -> Result<InfluxSinkSpec, crate::EngineError> {
+        Ok(compiled("snk.influxdb", base(extra))?.into_iter().find_map(|s| match s {
+            RuntimeSpec::InfluxSink(i) => Some(i),
+            _ => None,
+        }).expect("an InfluxDB write"))
+    }
+
+    #[test]
+    fn a_read_takes_sql_unless_it_asks_for_influxql() {
+        let s = source(json!({ "query": "SELECT 1" })).unwrap();
+        assert_eq!((s.base_url.as_str(), s.token.as_deref(), s.database.as_str(), s.influxql), ("http://influx.example.com:8181", Some(" t0k "), "telemetry", false));
+        assert!(source(json!({ "query": "SELECT 1", "language": "InfluxQL" })).unwrap().influxql);
+        for bad in [json!({ "query": "" }), json!({ "query": "q", "language": "flux" }), json!({ "query": "q", "url": "influx:8181" }), json!({ "query": "q", "database": "" })] {
+            assert!(source(bad.clone()).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_write_names_its_measurement_once_and_each_column_once() {
+        let s = sink(json!({ "measurement": "cpu", "tags": "host, region", "timeColumn": "t" })).unwrap();
+        assert_eq!((s.measurement.as_deref(), s.tags.clone(), s.fields.is_empty(), s.time_column.as_deref(), s.precision.as_str()), (Some("cpu"), vec!["host".to_string(), "region".to_string()], true, Some("t"), "ns"));
+        let s = sink(json!({ "measurementColumn": "m", "fields": ["used"], "precision": "MS", "org": "acme" })).unwrap();
+        assert_eq!((s.measurement_column.as_deref(), s.fields.clone(), s.precision.as_str(), s.org.as_deref()), (Some("m"), vec!["used".to_string()], "ms", Some("acme")));
+        for bad in [json!({}), json!({ "measurement": "a", "measurementColumn": "m" }), json!({ "measurement": "a", "tags": "host", "fields": "host" }), json!({ "measurement": "a", "precision": "h" })] {
+            assert!(sink(bad.clone()).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn no_token_prints() {
+        let printed = format!("{:?}{:?}", source(json!({ "query": "q", "token": "s3cr3t-t" })).unwrap(), sink(json!({ "measurement": "a", "token": "s3cr3t-t" })).unwrap());
+        assert!(!printed.contains("s3cr3t"), "{printed}");
+    }
+}

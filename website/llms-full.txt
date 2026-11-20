@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 441 components, 436 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 231 connectors (144 sources / 87 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 443 components, 438 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 233 connectors (145 sources / 88 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 30 checks, plus 24 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -81,7 +81,7 @@ Every component, by id. `src.*` reads, `snk.*` writes, `xf.*` transforms,
 `qa.*` checks, `ctl.*` controls flow, `code.*` runs your own code. Entries
 marked [planned] or [preview] are not usable yet.
 
-### Sources (read) (145)
+### Sources (read) (146)
 
 - `src.access` Microsoft Access: Read an Access database (.accdb / .mdb): a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver, Linux and macOS through mdbtools. Text, currency, yes/no and dates keep their types
 - `src.adbc` ADBC (Arrow): Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options
@@ -138,6 +138,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.hubspot` HubSpot: HubSpot REST. Bearer auth via a Private App access token. Cursor pagination on `paging.next.after` (cursorNextPath /paging/next/after, cursorParam `after`). responsePath /results
 - `src.huggingface` Hugging Face dataset: Read a Hugging Face Hub dataset directly via DuckDB hf:// (httpfs). Give the repo id and a file/glob; CSV / JSON / Parquet auto-detected. Token for private or gated datasets
 - `src.iceberg` Apache Iceberg: Read Iceberg tables via DuckDB iceberg_scan
+- `src.influxdb` InfluxDB: Query InfluxDB over its HTTP API: SQL on InfluxDB 3, answered as Parquet so every column keeps the type InfluxDB has for it, or InfluxQL on InfluxDB 1.x, 2.x and 3. Signed with an API token. A result the server cut short is refused rather than read partly
 - `src.inline` Inline Rows: Rows you write here rather than read from anywhere: a control row, an audit stamp, a fixed lookup. Give each column a name and a value; rowCount repeats the row. Every other source names an external system, so this was previously a throwaway file
 - `src.intercom` Intercom: Intercom REST. Bearer auth. Cursor pagination via `pages.next.starting_after` + `starting_after` param. responsePath /data
 - `src.jdbc` Generic JDBC [planned]: Reads data from Generic JDBC
@@ -229,7 +230,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.yaml` YAML: Read a YAML file as a table. Top-level YAML arrays become one row per element; non-array docs become a single row. Suits config-data ETL (Helm values, GitHub Actions matrices) not bulk logs
 - `src.zendesk` Zendesk: Zendesk Support REST. Basic auth (email/token + API token). Cursor pagination via `meta.after_cursor` + `page[after]` param. responsePath /tickets (or whatever resource)
 
-### Destinations (write) (88)
+### Destinations (write) (89)
 
 - `snk.access` Microsoft Access: Write a table into an Access database (.accdb / .mdb), creating the file and the table when missing. Append or overwrite in one transaction; an empty upstream leaves the table alone. Windows only, through the Microsoft Access ODBC driver
 - `snk.arrow` Arrow IPC / Feather: Write rows as one Arrow IPC file (Feather version 2) or stream, for pandas, Polars, R or Spark to read, uncompressed or with LZ4 or ZSTD. Types stay typed, lists and structs included; a HUGEINT goes as a 38-digit decimal rather than a DOUBLE, and a UUID as its text. The file replaces the old one only once it is complete
@@ -260,6 +261,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.gsheets` Google Sheets: Write the upstream rows into a Google Sheet through the Sheets API: replace a range (cleared, then a header and the rows) or append below what is there. Values are written as they are, so one that looks like a formula stays text. Signs in with a service account key, the sheet shared with its email as an editor
 - `snk.huggingface` Hugging Face dataset: Push the pipeline output to a Hugging Face Hub dataset repo. The engine materializes a Parquet and commits it over the Hub API (create-repo -> preupload -> git-LFS -> commit). Needs a write-scoped token; the repo is created if it does not exist
 - `snk.iceberg` Apache Iceberg: Write a full Iceberg table (data/ + metadata/) via DuckDB v1.5
+- `snk.influxdb` InfluxDB: Write each upstream row to InfluxDB 2, 3 or 1.8+ as one line of line protocol: a fixed measurement or one from a column, tag columns, field columns typed from theirs (integers, unsigned, floats, booleans, text), and a time column in ns, us, ms or s. Every line is built before the first write, so a row that cannot be one sends nothing; a busy server is asked again
 - `snk.jdbc` Generic JDBC [planned]: Writes data to Generic JDBC
 - `snk.json` JSON: Writes data to JSON
 - `snk.jsonl` JSONL / NDJSON: Writes data to JSONL / NDJSON

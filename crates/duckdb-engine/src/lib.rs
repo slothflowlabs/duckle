@@ -110,6 +110,7 @@ mod mongo_cdc;
 mod mysql_cdc;
 mod arrow_file;
 mod edi;
+mod influxdb;
 mod servicebus;
 mod mqtt;
 mod ldap;
@@ -2939,6 +2940,8 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::ArrowSource(spec)) => self.run_arrow_source(&db_path, spec),
                     Some(RuntimeSpec::ArrowSink(spec)) => self.run_arrow_sink(&db_path, spec),
                     Some(RuntimeSpec::EdiSource(spec)) => self.run_edi_source(&db_path, spec),
+                    Some(RuntimeSpec::InfluxSource(spec)) => self.run_influxdb_source(&db_path, spec),
+                    Some(RuntimeSpec::InfluxSink(spec)) => self.run_influxdb_sink(&db_path, spec),
                     Some(RuntimeSpec::GizmoSqlSource(spec)) => {
                         self.run_gizmosql_source(&db_path, spec)
                     }

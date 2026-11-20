@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 441,
+  "componentCount": 443,
   "components": [
     {
       "id": "src.csv",
@@ -11749,6 +11749,101 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "The most messages one run will take. This is a batch connector, not a streaming pump."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.influxdb",
+      "label": "InfluxDB",
+      "kind": "source",
+      "availability": "available",
+      "summary": "Query InfluxDB over its HTTP API: SQL on InfluxDB 3, answered as Parquet so every column keeps the type InfluxDB has for it, or InfluxQL on InfluxDB 1.x, 2.x and 3. Signed with an API token. A result the server cut short is refused rather than read partly.",
+      "category": "Sources",
+      "group": "Streaming",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.influxdb",
+        "kind": "source",
+        "label": "InfluxDB",
+        "description": "Query InfluxDB over its HTTP API: SQL on InfluxDB 3, answered as Parquet so every column keeps the type InfluxDB has for it, or InfluxQL on InfluxDB 1.x, 2.x and 3. Signed with an API token. A result the server cut short is refused rather than read partly.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "InfluxDB",
+            "fields": [
+              {
+                "key": "url",
+                "label": "URL",
+                "kind": "text",
+                "required": true,
+                "placeholder": "http://localhost:8181",
+                "description": "InfluxDB 3 listens on 8181, InfluxDB 1.x and 2.x on 8086."
+              },
+              {
+                "key": "token",
+                "label": "Token",
+                "kind": "text",
+                "secret": true,
+                "description": "Its API token. Left empty for a server that asks for none."
+              },
+              {
+                "key": "database",
+                "label": "Database",
+                "kind": "text",
+                "required": true,
+                "placeholder": "telemetry",
+                "description": "The database, or on InfluxDB 2 the bucket, with a DBRP mapping for InfluxQL."
+              }
+            ]
+          },
+          {
+            "label": "Query",
+            "fields": [
+              {
+                "key": "language",
+                "label": "Language",
+                "kind": "select",
+                "defaultValue": "sql",
+                "options": [
+                  {
+                    "label": "SQL (InfluxDB 3)",
+                    "value": "sql"
+                  },
+                  {
+                    "label": "InfluxQL (InfluxDB 1.x, 2.x and 3)",
+                    "value": "influxql"
+                  }
+                ],
+                "description": "SQL answers with every column typed as InfluxDB keeps it. InfluxQL answers in JSON, so its numbers arrive as DOUBLE, with a measurement column and one for each tag a GROUP BY names."
+              },
+              {
+                "key": "query",
+                "label": "Query",
+                "kind": "textarea",
+                "required": true,
+                "placeholder": "SELECT * FROM cpu WHERE time > now() - INTERVAL '1 hour'"
               }
             ]
           }
@@ -41706,6 +41801,138 @@
                 "label": "Deduplication id column",
                 "kind": "column",
                 "description": "For a FIFO queue without content-based deduplication: a message whose id was sent in the last five minutes is dropped."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
+      "id": "snk.influxdb",
+      "label": "InfluxDB",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "Write each upstream row to InfluxDB 2, 3 or 1.8+ as one line of line protocol: a fixed measurement or one from a column, tag columns, field columns typed from theirs (integers, unsigned, floats, booleans, text), and a time column in ns, us, ms or s. Every line is built before the first write, so a row that cannot be one sends nothing; a busy server is asked again.",
+      "category": "Sinks",
+      "group": "Streaming",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.influxdb",
+        "kind": "sink",
+        "label": "InfluxDB",
+        "description": "Write each upstream row to InfluxDB 2, 3 or 1.8+ as one line of line protocol: a fixed measurement or one from a column, tag columns, field columns typed from theirs (integers, unsigned, floats, booleans, text), and a time column in ns, us, ms or s. Every line is built before the first write, so a row that cannot be one sends nothing; a busy server is asked again.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "InfluxDB",
+            "fields": [
+              {
+                "key": "url",
+                "label": "URL",
+                "kind": "text",
+                "required": true,
+                "placeholder": "http://localhost:8181",
+                "description": "InfluxDB 3 listens on 8181, InfluxDB 1.x and 2.x on 8086."
+              },
+              {
+                "key": "token",
+                "label": "Token",
+                "kind": "text",
+                "secret": true,
+                "description": "Its API token. Left empty for a server that asks for none."
+              },
+              {
+                "key": "database",
+                "label": "Database",
+                "kind": "text",
+                "required": true,
+                "placeholder": "telemetry",
+                "description": "The database, or on InfluxDB 2 the bucket. InfluxDB 3 makes it on first write."
+              },
+              {
+                "key": "org",
+                "label": "Organization",
+                "kind": "text",
+                "description": "InfluxDB 2 only, when the token does not imply it."
+              }
+            ]
+          },
+          {
+            "label": "Lines",
+            "fields": [
+              {
+                "key": "measurement",
+                "label": "Measurement",
+                "kind": "text",
+                "placeholder": "cpu",
+                "description": "Every row goes to this measurement. Or name a Measurement column instead."
+              },
+              {
+                "key": "measurementColumn",
+                "label": "Measurement column",
+                "kind": "column",
+                "description": "Each row goes to the measurement in this column."
+              },
+              {
+                "key": "tags",
+                "label": "Tag columns",
+                "kind": "columns",
+                "description": "Indexed, as text. An empty value leaves the tag out of that line."
+              },
+              {
+                "key": "fields",
+                "label": "Field columns",
+                "kind": "columns",
+                "description": "Left empty, every column that is not a tag, the measurement or the time. Integers go as integers, unsigned ones as unsigned, decimals and floats as floats, booleans as booleans, anything else as text."
+              },
+              {
+                "key": "timeColumn",
+                "label": "Time column",
+                "kind": "column",
+                "description": "A timestamp, a date, or a whole number already in the precision below. Left empty, the server stamps each line as it arrives."
+              },
+              {
+                "key": "precision",
+                "label": "Precision",
+                "kind": "select",
+                "defaultValue": "ns",
+                "options": [
+                  {
+                    "label": "Nanoseconds",
+                    "value": "ns"
+                  },
+                  {
+                    "label": "Microseconds",
+                    "value": "us"
+                  },
+                  {
+                    "label": "Milliseconds",
+                    "value": "ms"
+                  },
+                  {
+                    "label": "Seconds",
+                    "value": "s"
+                  }
+                ]
               }
             ]
           }

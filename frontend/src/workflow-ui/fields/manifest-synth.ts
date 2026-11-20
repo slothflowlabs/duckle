@@ -2954,6 +2954,35 @@ function synthWrongFamilyForm(comp: ComponentDef): ComponentManifest | null {
             },
         ]);
     }
+    if (id === 'src.influxdb') {
+        return base(comp, [
+            {
+                label: 'InfluxDB',
+                fields: [
+                    { key: 'url', label: 'URL', kind: 'text', required: true, placeholder: 'http://localhost:8181', description: 'InfluxDB 3 listens on 8181, InfluxDB 1.x and 2.x on 8086.' },
+                    { key: 'token', label: 'Token', kind: 'text', secret: true, description: 'Its API token. Left empty for a server that asks for none.' },
+                    { key: 'database', label: 'Database', kind: 'text', required: true, placeholder: 'telemetry', description: 'The database, or on InfluxDB 2 the bucket, with a DBRP mapping for InfluxQL.' },
+                ],
+            },
+            {
+                label: 'Query',
+                fields: [
+                    {
+                        key: 'language',
+                        label: 'Language',
+                        kind: 'select',
+                        defaultValue: 'sql',
+                        options: [
+                            { label: 'SQL (InfluxDB 3)', value: 'sql' },
+                            { label: 'InfluxQL (InfluxDB 1.x, 2.x and 3)', value: 'influxql' },
+                        ],
+                        description: 'SQL answers with every column typed as InfluxDB keeps it. InfluxQL answers in JSON, so its numbers arrive as DOUBLE, with a measurement column and one for each tag a GROUP BY names.',
+                    },
+                    { key: 'query', label: 'Query', kind: 'textarea', required: true, placeholder: "SELECT * FROM cpu WHERE time > now() - INTERVAL '1 hour'" },
+                ],
+            },
+        ]);
+    }
     if (id === 'src.mqtt') {
         return base(comp, [
             {
@@ -5704,6 +5733,45 @@ function synthStreamingSink(comp: ComponentDef): ComponentManifest {
                         { key: 'bodyColumn', label: 'Body column', kind: 'column', description: 'The column sent as each message body. Left empty, the whole row is sent as JSON.' },
                         { key: 'groupIdColumn', label: 'Message group column', kind: 'column', description: 'For a FIFO queue, whose URL ends in .fifo, and needed there: messages of one group are delivered in order.' },
                         { key: 'deduplicationIdColumn', label: 'Deduplication id column', kind: 'column', description: 'For a FIFO queue without content-based deduplication: a message whose id was sent in the last five minutes is dropped.' },
+                    ],
+                },
+            ],
+            'upstream',
+        );
+    }
+    if (comp.id === 'snk.influxdb') {
+        return base(
+            comp,
+            [
+                {
+                    label: 'InfluxDB',
+                    fields: [
+                        { key: 'url', label: 'URL', kind: 'text', required: true, placeholder: 'http://localhost:8181', description: 'InfluxDB 3 listens on 8181, InfluxDB 1.x and 2.x on 8086.' },
+                        { key: 'token', label: 'Token', kind: 'text', secret: true, description: 'Its API token. Left empty for a server that asks for none.' },
+                        { key: 'database', label: 'Database', kind: 'text', required: true, placeholder: 'telemetry', description: 'The database, or on InfluxDB 2 the bucket. InfluxDB 3 makes it on first write.' },
+                        { key: 'org', label: 'Organization', kind: 'text', description: 'InfluxDB 2 only, when the token does not imply it.' },
+                    ],
+                },
+                {
+                    label: 'Lines',
+                    fields: [
+                        { key: 'measurement', label: 'Measurement', kind: 'text', placeholder: 'cpu', description: 'Every row goes to this measurement. Or name a Measurement column instead.' },
+                        { key: 'measurementColumn', label: 'Measurement column', kind: 'column', description: 'Each row goes to the measurement in this column.' },
+                        { key: 'tags', label: 'Tag columns', kind: 'columns', description: 'Indexed, as text. An empty value leaves the tag out of that line.' },
+                        { key: 'fields', label: 'Field columns', kind: 'columns', description: 'Left empty, every column that is not a tag, the measurement or the time. Integers go as integers, unsigned ones as unsigned, decimals and floats as floats, booleans as booleans, anything else as text.' },
+                        { key: 'timeColumn', label: 'Time column', kind: 'column', description: 'A timestamp, a date, or a whole number already in the precision below. Left empty, the server stamps each line as it arrives.' },
+                        {
+                            key: 'precision',
+                            label: 'Precision',
+                            kind: 'select',
+                            defaultValue: 'ns',
+                            options: [
+                                { label: 'Nanoseconds', value: 'ns' },
+                                { label: 'Microseconds', value: 'us' },
+                                { label: 'Milliseconds', value: 'ms' },
+                                { label: 'Seconds', value: 's' },
+                            ],
+                        },
                     ],
                 },
             ],

@@ -1244,6 +1244,73 @@ pub struct EdiSourceSpec {
     pub path: String,
 }
 
+/// src.influxdb: a SQL query to InfluxDB 3, or an InfluxQL one to any InfluxDB.
+#[derive(Clone)]
+pub struct InfluxSourceSpec {
+    pub node_id: String,
+    /// http(s)://host:port, no trailing slash.
+    pub base_url: String,
+    pub token: Option<String>,
+    pub database: String,
+    /// InfluxQL through /query, rather than SQL through /api/v3/query_sql.
+    pub influxql: bool,
+    pub query: String,
+    /// The node's declared columns, to type a result with no rows.
+    pub declared_schema: Option<Vec<duckle_metadata::Column>>,
+}
+
+impl std::fmt::Debug for InfluxSourceSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InfluxSourceSpec")
+            .field("node_id", &self.node_id)
+            .field("base_url", &self.base_url)
+            .field("token", &self.token.as_ref().map(|_| "***"))
+            .field("database", &self.database)
+            .field("influxql", &self.influxql)
+            .field("query", &self.query)
+            .finish()
+    }
+}
+
+/// snk.influxdb: each upstream row as one line of line protocol.
+#[derive(Clone)]
+pub struct InfluxSinkSpec {
+    pub from_view: String,
+    pub base_url: String,
+    pub token: Option<String>,
+    /// The database, or the bucket of InfluxDB 2.
+    pub database: String,
+    /// InfluxDB 2's organization, when the token does not imply it.
+    pub org: Option<String>,
+    /// One of the two names the measurement.
+    pub measurement: Option<String>,
+    pub measurement_column: Option<String>,
+    pub tags: Vec<String>,
+    /// Empty: every column that is not a tag, the measurement or the time.
+    pub fields: Vec<String>,
+    pub time_column: Option<String>,
+    /// ns, us, ms or s.
+    pub precision: String,
+}
+
+impl std::fmt::Debug for InfluxSinkSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InfluxSinkSpec")
+            .field("from_view", &self.from_view)
+            .field("base_url", &self.base_url)
+            .field("token", &self.token.as_ref().map(|_| "***"))
+            .field("database", &self.database)
+            .field("org", &self.org)
+            .field("measurement", &self.measurement)
+            .field("measurement_column", &self.measurement_column)
+            .field("tags", &self.tags)
+            .field("fields", &self.fields)
+            .field("time_column", &self.time_column)
+            .field("precision", &self.precision)
+            .finish()
+    }
+}
+
 /// src.mongodb.cdc: the changes a MongoDB change stream reports for one
 /// collection, from where the last successful run stopped.
 #[derive(Clone)]

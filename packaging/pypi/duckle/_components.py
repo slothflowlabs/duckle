@@ -453,6 +453,11 @@ COMPONENTS = {
         'summary': 'Write a full Iceberg table (data/ + metadata/) via DuckDB v1.5',
         'params': ['catalog', 'path', 'catalogUri', 'warehouse', 'namespace', 'table', 'mode', 'authType', 'clientId', 'clientSecret', 'oauth2ServerUri', 'oauth2Scope', 'token', 'connectionRef', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl'],
     },
+    'snk.influxdb': {
+        'kind': 'sink',
+        'summary': 'Write each upstream row to InfluxDB 2, 3 or 1.8+ as one line of line protocol: a fixed measurement or one from a column, tag columns, field columns typed from theirs (integers, unsigned, floats, booleans, text), and a time column in ns, us, ms or s. Every line is built before the first write, so ...',
+        'params': ['url', 'token', 'database', 'org', 'measurement', 'measurementColumn', 'tags', 'fields', 'timeColumn', 'precision'],
+    },
     'snk.json': {
         'kind': 'sink',
         'summary': '',
@@ -1017,6 +1022,11 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'Read Iceberg tables via DuckDB iceberg_scan',
         'params': ['catalog', 'path', 'catalogUri', 'warehouse', 'namespace', 'table', 'authType', 'clientId', 'clientSecret', 'oauth2ServerUri', 'oauth2Scope', 'token', 'connectionRef', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl'],
+    },
+    'src.influxdb': {
+        'kind': 'source',
+        'summary': 'Query InfluxDB over its HTTP API: SQL on InfluxDB 3, answered as Parquet so every column keeps the type InfluxDB has for it, or InfluxQL on InfluxDB 1.x, 2.x and 3. Signed with an API token. A result the server cut short is refused rather than read partly.',
+        'params': ['url', 'token', 'database', 'language', 'query'],
     },
     'src.inline': {
         'kind': 'source',
