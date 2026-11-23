@@ -23976,6 +23976,255 @@ fn a_run_that_cannot_record_its_state_does_not_report_ok() {
     );
 }
 
+/// What a #406 test needs: an incremental load appending to a CSV, run under
+/// one name in a workspace of its own.
+struct CarryCase {
+    ws: tempfile::TempDir,
+    name: &'static str,
+}
+
+impl CarryCase {
+    fn new(name: &'static str) -> Self {
+        let ws = tempfile::tempdir().unwrap();
+        std::env::set_var("DUCKLE_WORKSPACE", ws.path());
+        CarryCase { ws, name }
+    }
+    fn input(&self) -> String {
+        out_path(self.ws.path(), "in.csv")
+    }
+    fn output(&self) -> String {
+        out_path(self.ws.path(), "out.csv")
+    }
+    fn pipeline(&self) -> PipelineDoc {
+        doc(
+            json!([
+                node("s", "src.csv", json!({ "path": self.input(), "hasHeader": true })),
+                node("inc", "xf.incremental", json!({ "column": "sequence" })),
+                node("k", "snk.csv", json!({ "path": self.output(), "hasHeader": true, "mode": "append" })),
+            ]),
+            json!([main_edge("e1", "s", "inc"), main_edge("e2", "inc", "k")]),
+        )
+    }
+    fn state_dir(&self) -> std::path::PathBuf {
+        self.ws.path().join("state").join(self.name)
+    }
+    fn state(&self) -> String {
+        std::fs::read_to_string(self.state_dir().join("inc.json")).unwrap_or_default()
+    }
+    fn kept(&self) -> std::path::PathBuf {
+        self.state_dir().join("inc.json.unrecorded")
+    }
+    fn rows(&self, upto: i64) {
+        let mut csv = String::from("sequence,id\n");
+        for s in 1..=upto {
+            csv.push_str(&format!("{},{}\n", s, 100 + s));
+        }
+        std::fs::write(self.input(), csv).unwrap();
+    }
+    /// Every id in the output, in order, duplicates included.
+    fn ids(&self) -> String {
+        scalar_string(&format!(
+            "SELECT string_agg(id::VARCHAR, ',' ORDER BY id) FROM read_csv_auto('{}')",
+            self.output()
+        ))
+    }
+    fn run(&self, engine: &DuckdbEngine) -> duckle_duckdb_engine::RunResult {
+        engine.execute_pipeline_named(&self.pipeline(), self.name)
+    }
+    /// Runs A and B of the report: three rows saved at mark 3, then two more
+    /// whose mark cannot be saved because a DIRECTORY sits where the flush puts
+    /// its temp file. That fails on every platform without permission games and
+    /// leaves the state file readable, as the reporter's lock did.
+    fn run_until_the_save_fails(&self, engine: &DuckdbEngine) -> (duckle_duckdb_engine::RunResult, std::path::PathBuf) {
+        self.rows(3);
+        let a = self.run(engine);
+        assert_eq!(a.status, "ok", "run A: {:?}", a.error);
+        self.rows(5);
+        let blocker = self.state_dir().join("inc.json.tmp");
+        std::fs::create_dir(&blocker).unwrap();
+        let b = self.run(engine);
+        assert_eq!(b.status, "error", "a run whose mark was not saved must not report ok");
+        assert_eq!(self.ids(), "101,102,103,104,105", "run B wrote its rows before the save failed");
+        assert!(self.state().contains("\"3\""), "the saved mark is still 3: {}", self.state());
+        (b, blocker)
+    }
+}
+
+/// #406: a run whose rows were written but whose watermark could not be saved
+/// must not make the next run write those rows again.
+///
+/// The deferred flush saves the mark after every sink has written, so when that
+/// save fails the output already holds the rows. The next run started from the
+/// old mark and appended them a second time, and the error left the reader to
+/// assume a re-run was safe. Now the position the run reached is kept beside
+/// the state file and put in place before the next run reads anything; while
+/// it still cannot be put in place, a run refuses to start rather than read
+/// those rows again.
+#[test]
+fn a_position_that_could_not_be_saved_is_carried_to_the_next_run() {
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let case = CarryCase::new("carry");
+    let (b, blocker) = case.run_until_the_save_fails(&engine);
+    let err = b.error.unwrap_or_default();
+    assert!(err.contains("wrote its output"), "the error must say the rows are written: {err}");
+    assert!(err.contains("inc.json.unrecorded"), "the error must say where the position waits: {err}");
+    assert!(case.kept().exists(), "the position run B reached is kept");
+
+    // Still blocked. Starting from mark 3 would append 104 and 105 again.
+    let c = case.run(&engine);
+    let err = c.error.unwrap_or_default();
+    assert_eq!(c.status, "error", "a run that cannot put the kept position in place must not run");
+    assert!(err.contains("still not recorded"), "{err}");
+    assert_eq!(case.ids(), "101,102,103,104,105", "the refused run read and wrote nothing");
+    assert!(case.kept().exists(), "the kept position waits for a run that can use it");
+
+    // The cause is gone, and nothing else changed.
+    std::fs::remove_dir(&blocker).unwrap();
+    let d = case.run(&engine);
+    std::env::remove_var("DUCKLE_WORKSPACE");
+    assert_eq!(d.status, "ok", "run D: {:?}", d.error);
+    assert_eq!(case.ids(), "101,102,103,104,105", "104 and 105 were appended a second time");
+    assert!(case.state().contains("\"5\""), "the mark run B reached is in place: {}", case.state());
+    assert!(!case.kept().exists(), "a kept position is used once");
+}
+
+/// #406: a change made to a position after a run failed to save its own wins
+/// over the position that run kept, as an edit made during a run wins over
+/// that run's flush. Made here by writing the file, not through the backfill
+/// tools, which drop a kept position themselves.
+#[test]
+fn a_change_made_after_the_failed_save_wins_over_the_kept_position() {
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let case = CarryCase::new("carry_edit");
+    let (_, blocker) = case.run_until_the_save_fails(&engine);
+    std::fs::remove_dir(&blocker).unwrap();
+    std::fs::write(
+        case.state_dir().join("inc.json"),
+        r#"{"column":"sequence","value":"3","type":"BIGINT","note":"moved by hand"}"#,
+    )
+    .unwrap();
+
+    let c = case.run(&engine);
+    std::env::remove_var("DUCKLE_WORKSPACE");
+    assert_eq!(c.status, "ok", "run C: {:?}", c.error);
+    assert_eq!(
+        case.ids(),
+        "101,102,103,104,104,105,105",
+        "the run resumes from the position set after the failure, not from the kept one"
+    );
+    assert!(!case.kept().exists(), "a kept position that lost to a change is dropped, not left to apply later");
+}
+
+/// #406: when not even the side file can be written - a full disk, a folder
+/// that refuses every write - nothing can stop the next run reading the rows
+/// again, so the error has to say so rather than leave a re-run looking safe.
+#[test]
+fn when_the_position_cannot_be_kept_the_error_says_the_rows_will_be_read_again() {
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let case = CarryCase::new("carry_none");
+    std::fs::create_dir_all(case.state_dir().join("inc.json.unrecorded.tmp")).unwrap();
+    let (b, _) = case.run_until_the_save_fails(&engine);
+    std::env::remove_var("DUCKLE_WORKSPACE");
+    let err = b.error.unwrap_or_default();
+    assert!(err.contains("wrote its output"), "{err}");
+    assert!(
+        err.contains("reads these rows again") && err.contains("twice"),
+        "the error must say the next run repeats these rows: {err}"
+    );
+    assert!(!case.kept().exists());
+}
+
+/// #406: a "Run from here" records no state, so it neither puts a kept position
+/// in place nor fails because it cannot. The next full run does that.
+#[test]
+fn a_partial_run_leaves_a_kept_position_for_the_next_full_run() {
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let case = CarryCase::new("carry_partial");
+    let (_, _blocker) = case.run_until_the_save_fails(&engine);
+    let partial = engine.execute_pipeline_with_events(&case.pipeline(), Some("inc"), Some(case.name), |_| {});
+    std::env::remove_var("DUCKLE_WORKSPACE");
+    assert_eq!(
+        partial.status, "ok",
+        "a partial run failed over a position it does not record: {:?}",
+        partial.error
+    );
+    assert!(case.kept().exists(), "a partial run must leave the kept position for a full run");
+    assert!(case.state().contains("\"3\""), "a partial run must not put it in place: {}", case.state());
+}
+
+/// #406 as reported: the state file held open for reading by another process,
+/// sharing read access only, so it reads but cannot be replaced - the .NET
+/// `FileShare.Read` handle the report used. Windows only, because elsewhere an
+/// open file does not stop a rename.
+#[cfg(windows)]
+#[test]
+fn issue_406_a_locked_watermark_file_does_not_lead_to_duplicate_rows() {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 0x1;
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let case = CarryCase::new("lab_csv_pilot");
+    case.rows(3);
+    let a = case.run(&engine);
+    assert_eq!(a.status, "ok", "run A: {:?}", a.error);
+
+    case.rows(5);
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(case.state_dir().join("inc.json"))
+        .unwrap();
+    let b = case.run(&engine);
+    let err = b.error.unwrap_or_default();
+    assert_eq!(b.status, "error");
+    assert!(err.contains("rename into place"), "{err}");
+    assert_eq!(case.ids(), "101,102,103,104,105");
+    drop(lock);
+
+    let c = case.run(&engine);
+    std::env::remove_var("DUCKLE_WORKSPACE");
+    assert_eq!(c.status, "ok", "run C: {:?}", c.error);
+    assert_eq!(case.ids(), "101,102,103,104,105", "the retry appended 104 and 105 again");
+    assert!(case.state().contains("\"5\""), "{}", case.state());
+}
+
+/// #406: a state file that exists but cannot be READ is not a changed one. Read
+/// as missing, it would drop the kept position as overruled, and the node,
+/// unable to read its mark either, would read every row again. The run stops.
+/// Windows only, for the lock that refuses even a read.
+#[cfg(windows)]
+#[test]
+fn an_unreadable_state_file_stops_the_run_rather_than_drop_the_kept_position() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let _env = env_guard();
+    let engine = engine_or_skip!();
+    let case = CarryCase::new("carry_unreadable");
+    let (_, blocker) = case.run_until_the_save_fails(&engine);
+    std::fs::remove_dir(&blocker).unwrap();
+
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(case.state_dir().join("inc.json"))
+        .unwrap();
+    let c = case.run(&engine);
+    drop(lock);
+    let err = c.error.unwrap_or_default();
+    assert_eq!(c.status, "error", "a run that could not check the kept position must not run");
+    assert!(err.contains("still not recorded"), "{err}");
+    assert_eq!(case.ids(), "101,102,103,104,105", "the run read the rows again");
+    assert!(case.kept().exists(), "the kept position was dropped as though it had been overruled");
+
+    let d = case.run(&engine);
+    std::env::remove_var("DUCKLE_WORKSPACE");
+    assert_eq!(d.status, "ok", "run D: {:?}", d.error);
+    assert_eq!(case.ids(), "101,102,103,104,105");
+}
+
 /// #10 follow-up: a declared date format is part of the source contract, so
 /// compiling, running, saving, reloading and compiling again must produce the
 /// same parsing expression. If execution or autodetect could rewrite it, two

@@ -1843,6 +1843,29 @@ impl DuckdbEngine {
         }
         let compiled = compiled;
 
+        // #406: a position an earlier run reached but could not record goes in
+        // place before any node reads state. That run's sinks had written, so
+        // starting from the position before it would read those rows again, and
+        // a sink that appends would hold them twice. Full runs only: a probe or
+        // a "Run from here" records no state, so it has nothing to put right and
+        // must not fail over something it cannot fix.
+        if target.is_none() && !self.probing {
+            if let Some(dir) = crate::connectors::state_folder(pipeline_name) {
+                match settle_unrecorded(&dir) {
+                    Ok(notes) => {
+                        for message in notes {
+                            user_on_event(PipelineEvent::Log {
+                                node_id: String::new(),
+                                level: "warn".into(),
+                                message,
+                            });
+                        }
+                    }
+                    Err(e) => return RunResult::failed(total_start, e),
+                }
+            }
+        }
+
         // Component-level run log (Splunk / Dynatrace), gated on
         // DUCKLE_LOG_DIR. We tee every event through it so BOTH the fast
         // batched path and the per-stage path log uniformly, for every run
@@ -3474,14 +3497,14 @@ impl DuckdbEngine {
             // A failure here is NOT ignorable, which is what it used to be.
             // "ok" from a pipeline that registered a model means the card is on
             // disk; if the write failed, saying ok is a lie a later run acts on -
-            // src.model would read a stale `latest`, or nothing at all. A
-            // watermark or Kafka offset that did not land is milder, since the
-            // next run simply redoes that window, but it still has to be visible
-            // rather than silent.
+            // src.model would read a stale `latest`, or nothing at all.
             //
             // The rows are already written by this point, so this reports a run
-            // whose OUTPUT succeeded and whose recorded STATE did not. That is
-            // precisely what happened, and re-running is safe.
+            // whose OUTPUT succeeded and whose recorded STATE did not. A position
+            // left where it was is NOT harmless (#406): the next run would read
+            // these rows again and an appending sink would hold them twice. So a
+            // position that cannot be put in place is kept beside its file, and
+            // the next run puts it in place before it reads anything.
             let mut failures: Vec<String> = Vec::new();
             for PendingWrite { path, value, prior } in &pending_writes {
                 // Somebody changed this while the run was in flight. Their
@@ -3497,34 +3520,24 @@ impl DuckdbEngine {
                         continue;
                     }
                 }
-                if let Some(parent) = path.parent() {
-                    if let Err(e) = std::fs::create_dir_all(parent) {
-                        failures.push(format!("{}: create {}: {}", path.display(), parent.display(), e));
-                        continue;
-                    }
-                }
-                let text = match serde_json::to_string_pretty(value) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        failures.push(format!("{}: serialize: {}", path.display(), e));
-                        continue;
-                    }
-                };
-                // Write to a temp file and rename over the target, so a reader
-                // never sees a half-written file. A model pointer is read by
-                // other pipelines while this one is running, and a torn read
-                // there is a wrong answer rather than an error. On Windows
-                // rename replaces the destination, so removing it first would
-                // only open a window where it does not exist.
-                let tmp = path.with_extension("json.tmp");
-                if let Err(e) = std::fs::write(&tmp, text) {
-                    failures.push(format!("{}: write: {}", path.display(), e));
+                let Err(failure) = write_state_file(path, value) else {
                     continue;
-                }
-                if let Err(e) = std::fs::rename(&tmp, path) {
-                    let _ = std::fs::remove_file(&tmp);
-                    failures.push(format!("{}: rename into place: {}", path.display(), e));
-                }
+                };
+                failures.push(match prior {
+                    // A model card is not a position: the next run registers its own.
+                    PriorState::Unchecked => failure,
+                    PriorState::Was(read) => match keep_unrecorded(path, value, read) {
+                        Some(side) => format!(
+                            "{failure}. The position it reached is kept in {} and goes in place before the next run \
+                             reads anything, so these rows are not read again; delete that file first to read them again",
+                            side.display()
+                        ),
+                        None => format!(
+                            "{failure}. The next run starts from the earlier position and reads these rows again, \
+                             so a sink that appends holds them twice"
+                        ),
+                    },
+                });
             }
             // Received messages are deleted only now, the run known to have
             // succeeded. One left undeleted comes back, which the run says.
@@ -3539,7 +3552,7 @@ impl DuckdbEngine {
             }
             if !failures.is_empty() {
                 overall_error.get_or_insert(format!(
-                    "the pipeline ran, but {} could not be recorded: {}",
+                    "the pipeline ran and wrote its output, but {} could not be recorded: {}",
                     if failures.len() == 1 {
                         "its state".to_string()
                     } else {
@@ -8247,6 +8260,117 @@ impl PendingWrite {
 /// `None`, which is a real prior state: "there was nothing here when I looked".
 pub(crate) fn read_state_snapshot(path: &std::path::Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
+}
+
+/// Where a position waits when the run that reached it could not put it in
+/// place (#406): beside the node's state file, as `<node>.json.unrecorded`.
+/// Not a `.json`, so nothing that lists state reads it as a node of its own.
+pub(crate) fn unrecorded_path(state: &std::path::Path) -> std::path::PathBuf {
+    let mut name = state.as_os_str().to_owned();
+    name.push(".unrecorded");
+    std::path::PathBuf::from(name)
+}
+
+/// Put `value` at `path` through a temp file renamed over it, so a reader never
+/// sees half a file: a model pointer is read by other pipelines while this one
+/// runs, and a torn read there is a wrong answer rather than an error. On
+/// Windows rename replaces the destination, so removing it first would only
+/// open a window where it does not exist. The error names the path and the step.
+fn write_state_file(path: &std::path::Path, value: &JsonValue) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("{}: create {}: {}", path.display(), parent.display(), e))?;
+    }
+    let text = serde_json::to_string_pretty(value).map_err(|e| format!("{}: serialize: {}", path.display(), e))?;
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+    std::fs::write(&tmp, text).map_err(|e| format!("{}: write: {}", path.display(), e))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("{}: rename into place: {}", path.display(), e)
+    })
+}
+
+/// Keep the position a run reached beside its state file, for the next run to
+/// put in place (#406). `prior` is what the run read, so that run can tell
+/// whether anybody moved the position in between. `None` when not even this
+/// file can be written.
+fn keep_unrecorded(path: &std::path::Path, value: &JsonValue, prior: &Option<String>) -> Option<std::path::PathBuf> {
+    let side = unrecorded_path(path);
+    write_state_file(&side, &serde_json::json!({ "prior": prior, "value": value }))
+        .ok()
+        .map(|()| side)
+}
+
+/// Put in place every position an earlier run of this pipeline reached but
+/// could not record, before anything reads state (#406).
+///
+/// That run's sinks had written, so starting from the position before it reads
+/// those rows again, and an appending sink holds them twice. A position changed
+/// since then - through the backfill tools or by hand - wins, as a change made
+/// during a run wins over its flush, and the kept one is dropped with a note.
+/// One that still cannot be put in place, or whose state cannot be read to
+/// check, is an error: the run must not start.
+pub(crate) fn settle_unrecorded(dir: &std::path::Path) -> Result<Vec<String>, String> {
+    let mut notes = Vec::new();
+    // qa.baseline keeps its state a folder down, in `baselines/`.
+    let mut folders = vec![dir.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let side = entry.path();
+            if side.is_dir() {
+                folders.push(side);
+                continue;
+            }
+            let file_name = entry.file_name();
+            let Some(state_name) = file_name
+                .to_str()
+                .and_then(|n| n.strip_suffix(".unrecorded"))
+                .filter(|n| n.ends_with(".json"))
+            else {
+                continue;
+            };
+            let state = side.with_file_name(state_name);
+            let still = |why: String| {
+                format!(
+                    "the position the last run reached is still not recorded: {why}. This run did not start, \
+                     so nothing was read twice. The position is kept in {}; delete that file to read those rows again instead.",
+                    side.display()
+                )
+            };
+            let kept = std::fs::read_to_string(&side)
+                .ok()
+                .and_then(|t| serde_json::from_str::<JsonValue>(&t).ok())
+                .and_then(|v| {
+                    let prior = v.get("prior").and_then(JsonValue::as_str).map(String::from);
+                    v.get("value").cloned().map(|value| (prior, value))
+                });
+            let Some((prior, value)) = kept else {
+                return Err(still(format!("{} cannot be read", side.display())));
+            };
+            let current = match std::fs::read_to_string(&state) {
+                Ok(text) => Some(text),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => return Err(still(format!("{}: read: {}", state.display(), e))),
+            };
+            if current != prior {
+                let _ = std::fs::remove_file(&side);
+                notes.push(format!(
+                    "{} changed after the run that reached the position kept in {} failed to record it, so that position was dropped and the change stands",
+                    state.display(),
+                    side.display()
+                ));
+                continue;
+            }
+            write_state_file(&state, &value).map_err(still)?;
+            let _ = std::fs::remove_file(&side);
+        }
+    }
+    Ok(notes)
 }
 
 /// One artifact a run read or wrote, as the provenance manifest needs it.

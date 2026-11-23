@@ -22023,16 +22023,16 @@ fn inherited_incremental_state(
     Some(state)
 }
 
-pub(crate) fn incremental_state_path(pipeline_name: Option<&str>, node_id: &str) -> Option<std::path::PathBuf> {
+/// The folder a pipeline's node state lives in, `<workspace>/state/<pipeline>`.
+pub(crate) fn state_folder(pipeline_name: Option<&str>) -> Option<std::path::PathBuf> {
     let ws = std::env::var("DUCKLE_WORKSPACE").ok().filter(|s| !s.is_empty())?;
     let folder = sanitize_path_segment(pipeline_name.unwrap_or(UNNAMED_RUN_FOLDER));
+    Some(std::path::Path::new(&ws).join("state").join(folder))
+}
+
+pub(crate) fn incremental_state_path(pipeline_name: Option<&str>, node_id: &str) -> Option<std::path::PathBuf> {
     let file = format!("{}.json", sanitize_path_segment(node_id));
-    Some(
-        std::path::Path::new(&ws)
-            .join("state")
-            .join(folder)
-            .join(file),
-    )
+    Some(state_folder(pipeline_name)?.join(file))
 }
 
 /// Read a saved watermark as (value, type). Missing / unreadable / malformed

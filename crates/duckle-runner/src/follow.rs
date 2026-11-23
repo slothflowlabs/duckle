@@ -27,6 +27,13 @@
 //! keeps the loop alive but still does not advance the position past a batch
 //! that failed.
 //!
+//! One failure comes AFTER the sinks: the position itself not saving. Those
+//! records are written, so re-reading them would send them twice. The engine
+//! keeps the position the batch reached beside the state file and puts it in
+//! place before the next pass reads (#406), so neither a restart nor
+//! `--on-error continue` repeats them - unless not even that file could be
+//! written, which the batch's error says.
+//!
 //! ## What it deliberately does not do
 //!
 //! No windowing, no cross-batch state beyond what the pipeline itself persists,
@@ -332,8 +339,8 @@ pub fn run(opts: FollowOptions) -> Result<u64, String> {
         if !keep_going {
             if !outcome.ok && opts.on_error == OnError::Stop {
                 eprintln!(
-                    "follow: stopping on a failed batch. The saved position did not advance, \
-                     so restarting re-reads the same records."
+                    "follow: stopping on a failed batch. Unless its error says otherwise, the saved \
+                     position did not advance, so restarting re-reads the same records."
                 );
                 // Stopped deliberately, even though on a failure: the process is
                 // about to exit cleanly, and leaving the session `running` would

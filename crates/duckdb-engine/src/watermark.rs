@@ -404,10 +404,12 @@ pub fn clear(workspace: &Path, pipeline: &str, node_id: &str) -> std::io::Result
         let _ = std::fs::remove_dir_all(&buffers);
     }
     match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
     }
+    drop_unrecorded(&path);
+    Ok(())
 }
 
 fn write_state(
@@ -422,7 +424,17 @@ fn write_state(
     }
     let text = serde_json::to_string_pretty(value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(&path, text)
+    std::fs::write(&path, text)?;
+    drop_unrecorded(&path);
+    Ok(())
+}
+
+/// A position a run kept because it could not record it (#406) waits for the
+/// next run to put it in place. Setting or clearing the position decides where
+/// the node resumes, so the kept one goes - only once that change has landed,
+/// so a set that failed leaves it waiting.
+fn drop_unrecorded(path: &Path) {
+    let _ = std::fs::remove_file(crate::unrecorded_path(path));
 }
 
 /// Filesystem-safe single path segment - keep alphanumerics, space, dash,
@@ -481,6 +493,34 @@ mod tests {
         let p = state_path(ws.path(), "My Pipe", "node/1");
         // pipeline + node sanitized; under <ws>/state/.
         assert!(p.ends_with("state/My Pipe/node_1.json") || p.ends_with("state\\My Pipe\\node_1.json"));
+    }
+
+    /// #406: a position a run kept because it could not record it would be put
+    /// in place by the next run, on top of what the operator just chose. Setting
+    /// or clearing the position drops it, and listing does not mistake it for a
+    /// node.
+    #[test]
+    fn setting_or_clearing_a_position_drops_one_a_failed_run_kept() {
+        let ws = tempfile::tempdir().unwrap();
+        let kept = crate::unrecorded_path(&state_path(ws.path(), "orders", "inc1"));
+        let keep = || {
+            std::fs::create_dir_all(kept.parent().unwrap()).unwrap();
+            std::fs::write(&kept, r#"{"prior":null,"value":{"value":"5","type":"BIGINT"}}"#).unwrap();
+        };
+
+        keep();
+        assert!(list(ws.path(), "orders").is_empty(), "the kept file is not a node");
+        set_incremental(ws.path(), "orders", "inc1", "1", Some("BIGINT")).unwrap();
+        assert!(!kept.exists(), "a set must drop the kept position");
+
+        set_snapshot(ws.path(), "orders", "cdc1", 7).unwrap();
+        keep();
+        clear(ws.path(), "orders", "inc1").unwrap();
+        assert!(!kept.exists(), "a clear must drop the kept position");
+
+        keep();
+        clear(ws.path(), "orders", "inc1").unwrap();
+        assert!(!kept.exists(), "even when there was no position left to clear");
     }
 }
 

@@ -2312,6 +2312,30 @@ operator. All four surfaces - desktop panel, CLI, API, MCP - call the same
 engine functions, so the kind guard cannot be bypassed by picking a different
 one.
 
+### When the rows land and the position does not
+
+A node's position is saved after every sink has written, so a run that fails
+before that point leaves it where it was and the next run reads the same rows
+again: nothing is lost. A failure in the save itself comes after the rows have
+landed. A locked or read-only state file, or a full disk, fails the run with
+`the pipeline ran and wrote its output, but its state could not be recorded`,
+and starting the next run from the old position would read those rows a second
+time, so an appending sink would hold them twice.
+
+So the position that run reached is kept beside the state file, as
+`state/<pipeline>/<node>.json.unrecorded`, and goes in place before the next
+run reads anything. A retry by hand, the next scheduled run and the next
+`follow` pass all carry on from where the rows stopped. While the position
+still cannot be put in place, a run refuses to start rather than read them
+again. A change made to the position since then - through Backfill,
+`backfill set` or `backfill clear`, or by hand - wins, and the kept position
+is dropped. To read those rows again on purpose, delete the `.unrecorded` file
+first.
+
+When not even that file can be written, nothing stops the next run reading the
+rows again, and the error says so. A sink that upserts or merges on a key takes
+the repeat without duplicating it; one that appends does not.
+
 ### Push sources that do not lose what arrives (`listen` + `src.spool`)
 
 `src.webhook` and `src.websocket` collect INSIDE a pipeline run: they bind or
