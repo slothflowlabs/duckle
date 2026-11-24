@@ -95,7 +95,7 @@ oracle = { version = "0.6", optional = true }
 # manager at build time (odbc32 on Windows - always present; unixODBC on
 # Linux/macOS). Off by default so a plain engine build/test needs no ODBC; the
 # shipped binaries (desktop, runner, mcp) turn it on.
-odbc-api = { version = "29", optional = true }
+odbc-api = { version = "30", optional = true }
 # Direct (optional) handle on odbc-api's ODBC FFI crate so the `teradata-static`
 # feature can flip it to static linking. Base entry carries no static features;
 # the Linux override below adds them (see that table + build.rs + issue #131).
@@ -122,13 +122,13 @@ rskafka = { version = "0.6", features = ["transport-tls"] }
 # Apache Avro container-file reader/writer. Pure Rust. Pairs with
 # Kafka topics that publish Avro-encoded payloads, and reads the
 # .avro / .ocf files that exporters drop on object storage.
-apache-avro = "0.22"
+apache-avro = "0.23"
 # Apache ORC reader/writer for src.orc and snk.orc. Pure Rust, on the same
 # arrow major as the engine, so batches go straight to and from Parquet.
 # Without default features: the async reader is not used.
 orc-rust = { version = "0.9", default-features = false }
 # NATS / JetStream. Pure-Rust client by the NATS team.
-async-nats = "0.50"
+async-nats = "0.53"
 # XML reader/writer. Used by src.xml (walks a row path, emits each
 # match as a JSON object) and snk.xml (wraps rows in row elements).
 # Pure Rust.
@@ -137,7 +137,7 @@ quick-xml = "0.42"
 # cssparser + selectors), no native toolchain, and already resolved in this
 # workspace's lockfile via tauri-utils and wry, so it adds no new dependency
 # tree - only the compile of those crates in the headless runner build.
-dom_query = "0.28"
+dom_query = "0.30"
 # PDF page text + geometry for src.pdf (#248). Both pure Rust - pdf-extract is
 # the font-encoding and character-mapping work, lopdf the page tree, MediaBox
 # and Info dictionary - so no native toolchain and no rendering engine. OCR is
@@ -168,7 +168,7 @@ lapin = { version = "4", default-features = false, features = ["rustls", "defaul
 # FTP / FTPS client. Pure Rust, synchronous API (fits the per-stage
 # blocking model - no block_on dance). Rustls-backed TLS keeps the
 # build self-contained on every OS.
-suppaftp = { version = "12", default-features = false, features = ["rustls-ring"] }
+suppaftp = { version = "13", default-features = false, features = ["rustls-ring"] }
 # SFTP (SSH-based) source, src.sftp. russh + russh-sftp on the `ring`
 # crypto backend (default-features=false drops aws-lc-rs, so NO NASM and
 # NO C toolchain - the same ring 0.17 stack the rest of our TLS already
@@ -219,7 +219,7 @@ glob = "0.3"
 # trust store. The accompanying mail-parser decodes RFC 822 envelopes + MIME
 # bodies.
 imap = { version = "=3.0.0-alpha.15", default-features = false }
-mail-parser = "0.11"
+mail-parser = "1.0"
 rustls-connector = { version = "0.23", default-features = false, features = ["rustls--ring"] }
 # SMTP client for snk.email. Pure Rust with rustls-tls. Symmetric
 # to src.email (the IMAP reader). Builder + smtp-transport features;
@@ -232,8 +232,8 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "s
 # workspace arrow/parquet pins so the driver's RecordBatch and the parquet
 # writer share one arrow version. The driver .dll/.so/.dylib is bundled
 # per-OS (conda-forge) and located at runtime; absent driver -> clear error.
-adbc_core = "0.24"
-adbc_driver_manager = "0.24"
+adbc_core = "0.25"
+adbc_driver_manager = "0.25"
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 parquet = { workspace = true }
@@ -247,7 +247,7 @@ parquet = { workspace = true }
 arrow-flight = "59"
 # src.arrow / snk.arrow: Arrow IPC files (Feather v2) and streams. Already in the
 # lock through arrow-flight, its lz4 and zstd codecs with it.
-arrow-ipc = { version = "59", features = ["lz4", "zstd"] }
+arrow-ipc = { version = "60", features = ["lz4", "zstd"] }
 tonic = { version = "0.14", features = ["transport", "tls-ring", "tls-native-roots"] }
 prost = "0.14"
 # src.grpc: the reflection protocol's client (no server side), and messages
@@ -302,7 +302,7 @@ tar = "0.4"
 # Re-imported as a dev-dep so the integration tests can call its
 # Writer to build a small .avro file inline before reading it back
 # through src.avro. Same version as the lib dep above.
-apache-avro = "0.22"
+apache-avro = "0.23"
 # Re-imported so src.clipboard tests can write a known payload to the
 # system clipboard before running the pipeline. Same backend as the
 # lib dep -> writer and reader agree on the OS clipboard format.
