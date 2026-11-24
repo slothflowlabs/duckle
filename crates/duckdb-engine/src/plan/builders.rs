@@ -6029,12 +6029,14 @@ fn parse_extension_names(v: Option<&JsonValue>) -> Vec<String> {
 /// a bare `INSTALL h3` asks the core repository, which has no h3, and the run
 /// failed before the SQL started. Held to the pinned DuckDB by
 /// `every_extension_the_pinned_duckdb_knows_installs_from_the_core_repository`.
+/// sirius is served from the core repository but not listed there, so it is
+/// held by `attach_prelude_loads_user_extensions_for_sql_template` instead.
 const CORE_EXTENSIONS: &[&str] = &[
     "autocomplete", "avro", "aws", "azure", "core_functions", "delta", "ducklake", "encodings", "excel",
-    "fts", "http", "https", "httpfs", "iceberg", "icu", "inet", "jemalloc", "json", "lance", "md",
-    "motherduck", "mysql", "mysql_scanner", "odbc", "odbc_scanner", "parquet", "postgres",
-    "postgres_scanner", "quack", "s3", "shell", "spatial", "sqlite", "sqlite3", "sqlite_scanner",
-    "tpcds", "tpch", "uc_catalog", "ui", "unity_catalog", "vortex", "vss",
+    "fts", "glue", "http", "https", "httpfs", "iceberg", "icu", "inet", "jemalloc", "json", "lance",
+    "legacy_parser", "md", "motherduck", "mysql", "mysql_scanner", "odbc", "odbc_scanner", "parquet",
+    "postgres", "postgres_scanner", "quack", "s3", "shell", "sirius", "spatial", "sqlite", "sqlite3",
+    "sqlite_scanner", "tpcds", "tpch", "uc_catalog", "ui", "unity_catalog", "vortex", "vss",
 ];
 
 pub(crate) fn references_spatial(sql: &str) -> bool {

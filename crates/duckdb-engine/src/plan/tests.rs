@@ -3503,6 +3503,10 @@
         // bare INSTALL asked the core repository and the run failed there.
         let s = attach_prelude("code.sql", &serde_json::json!({ "loadExtensions": "h3, a5" }));
         assert!(s.contains("INSTALL h3 FROM community; LOAD h3;"), "h3: {}", s);
+        // DuckDB 2.0.1's core repository serves sirius, which its
+        // duckdb_extensions() does not list, so the test below cannot see it.
+        let gpu = attach_prelude("code.sql", &serde_json::json!({ "loadExtensions": "sirius" }));
+        assert_eq!(gpu, "INSTALL sirius; LOAD sirius; ", "sirius is a core extension");
         assert!(s.contains("INSTALL a5 FROM community; LOAD a5;"), "a5: {}", s);
         let arr = attach_prelude("code.sqltemplate", &serde_json::json!({ "loadExtensions": ["h3", "h3", "INET!"] }));
         // Dedup + sanitize: "INET!" -> "inet", duplicate h3 collapsed.
