@@ -1,95 +1,95 @@
-//! The swarm: six specialist agents that turn a goal into a tested pipeline.
+//! The swarm: any number of agents, in six stages, turn a goal into a tested
+//! pipeline.
 //!
 //! `duckle-mcp swarm` reads one request line on stdin and writes one event per
 //! line on stdout until the run ends. Every agent works only through this
 //! server's own tools, called in this process exactly as an MCP client's call
 //! would be, so the swarm can do nothing an agent connected over MCP could not.
 //! The desktop app and the web editor start this process and relay its events
-//! to the swarm view. Closing its stdin stops it at the next step.
+//! to the swarm view. A "stop" line on stdin, or stdin closing, stops it at the
+//! next step.
 //!
-//! The agents run in turn, each starting from the notes of the ones before:
-//! Scout reads the data, Architect designs the pipeline and the quality gates
-//! that will prove it, Builder writes it, Tester runs it, Fixer repairs what
-//! the Tester found (up to two rounds), and Reviewer reports to the person.
+//! The stages run in order: Discover reads the data, Design plans the pipeline
+//! and the quality gates that will prove it, Build writes it, Test runs it,
+//! Repair fixes what the tests found (and Test runs again, up to two rounds),
+//! and Review reports to the person. A stage holds any number of agents.
+//! Discover and Review only read, so their agents work side by side; in the
+//! other stages they take turns, each starting from the notes of every agent
+//! before it.
 
 use crate::llm::{self, Delta, Model, Stop, ToolOutput, ToolSpec};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 pub const DEFAULT_CLAUDE: &str = "claude-opus-5-5";
 /// Model calls one agent may make before it must hand off.
 const MAX_TURNS: usize = 16;
-/// Times the Fixer may repair before the run is reported as failing.
+/// Times the Repair stage may run before the run is reported as failing.
 const FIX_ROUNDS: usize = 2;
+/// Agents of a side-by-side stage working at the same moment. A stage may
+/// hold any number; the rest start as the ones before them finish.
+const AT_ONCE: usize = 6;
 /// The longest tool answer an agent reads. A catalog listing can run far
 /// past this; the agent is told to narrow it.
 const RESULT_LIMIT: usize = 24_000;
 const HAND_OFF: &str = "hand_off";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Role {
-    Scout,
-    Architect,
-    Builder,
-    Tester,
-    Fixer,
-    Reviewer,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Stage {
+    Discover,
+    Design,
+    Build,
+    Test,
+    Repair,
+    Review,
 }
 
-impl Role {
-    pub const ALL: [Role; 6] = [
-        Role::Scout,
-        Role::Architect,
-        Role::Builder,
-        Role::Tester,
-        Role::Fixer,
-        Role::Reviewer,
-    ];
-
+impl Stage {
     pub fn id(self) -> &'static str {
         match self {
-            Role::Scout => "scout",
-            Role::Architect => "architect",
-            Role::Builder => "builder",
-            Role::Tester => "tester",
-            Role::Fixer => "fixer",
-            Role::Reviewer => "reviewer",
+            Stage::Discover => "discover",
+            Stage::Design => "design",
+            Stage::Build => "build",
+            Stage::Test => "test",
+            Stage::Repair => "repair",
+            Stage::Review => "review",
         }
     }
 
     fn title(self) -> &'static str {
         match self {
-            Role::Scout => "Scout",
-            Role::Architect => "Architect",
-            Role::Builder => "Builder",
-            Role::Tester => "Tester",
-            Role::Fixer => "Fixer",
-            Role::Reviewer => "Reviewer",
+            Stage::Discover => "Discover",
+            Stage::Design => "Design",
+            Stage::Build => "Build",
+            Stage::Test => "Test",
+            Stage::Repair => "Repair",
+            Stage::Review => "Review",
         }
     }
 
-    /// The Duckle tools this role may call, besides hand_off.
+    /// The Duckle tools this stage's agents may call, besides hand_off.
     fn tools(self) -> &'static [&'static str] {
         match self {
-            Role::Scout => &[
+            Stage::Discover => &[
                 "list_workspace_files",
                 "inspect_source",
                 "list_connections",
                 "list_pipelines",
                 "read_pipeline",
             ],
-            Role::Architect => &[
+            Stage::Design => &[
                 "list_components",
                 "component_capabilities",
                 "get_component_schema",
                 "inspect_source",
             ],
-            Role::Builder => &[
+            Stage::Build => &[
                 "get_component_schema",
                 "list_components",
                 "create_pipeline",
@@ -98,14 +98,14 @@ impl Role {
                 "check_node_sql",
                 "read_pipeline",
             ],
-            Role::Tester => &[
+            Stage::Test => &[
                 "run_pipeline",
                 "inspect_source",
                 "read_pipeline",
                 "read_run_logs",
                 "verify_pipeline",
             ],
-            Role::Fixer => &[
+            Stage::Repair => &[
                 "read_pipeline",
                 "get_component_schema",
                 "update_pipeline",
@@ -115,7 +115,7 @@ impl Role {
                 "inspect_source",
                 "read_run_logs",
             ],
-            Role::Reviewer => &[
+            Stage::Review => &[
                 "read_pipeline",
                 "verify_pipeline",
                 "pipeline_lineage",
@@ -125,65 +125,151 @@ impl Role {
         }
     }
 
+    /// Its agents give a pass or fail verdict.
     fn judges(self) -> bool {
-        matches!(self, Role::Tester | Role::Reviewer)
+        matches!(self, Stage::Test | Stage::Review)
     }
 
-    fn brief(self) -> &'static str {
+    /// Its agents only read, so they can work at the same time.
+    fn side_by_side(self) -> bool {
+        matches!(self, Stage::Discover | Stage::Review)
+    }
+
+    fn duty(self) -> &'static str {
         match self {
-            Role::Scout => {
-                "Find the data the goal needs and describe it exactly. Start with list_workspace_files, \
-                 then inspect each file the goal could use with inspect_source. For every file you \
-                 report, give its ${workspace} path, its format, each column with its type, a sample \
-                 value or two, and what a builder must watch for: nulls, date formats, numbers stored \
-                 as text, duplicate keys. If the data the goal names is not there, say so plainly."
+            Stage::Discover => {
+                "Find the data the goal needs and describe it exactly. Start with \
+                 list_workspace_files, then inspect each file the goal could use with \
+                 inspect_source. For every file you report, give its ${workspace} path, its \
+                 format, each column with its type, a sample value or two, and what a builder \
+                 must watch for: nulls, date formats, numbers stored as text, duplicate keys. If \
+                 the data the goal names is not there, say so plainly."
             }
-            Role::Architect => {
-                "Design the pipeline from the Scout's findings. Find components with list_components \
-                 and read the schema of every one you use with get_component_schema; use only the \
-                 property keys and ports it lists. Then hand off:\n\
-                 1. The nodes in flow order, each with an id, its component id, a short label, and \
-                 every property with its exact key and value.\n\
+            Stage::Design => {
+                "Design the pipeline from the notes before you. Find components with \
+                 list_components and read the schema of every one you use with \
+                 get_component_schema; use only the property keys and ports it lists. Then hand \
+                 off:\n\
+                 1. The nodes in flow order, each with an id, its component id, a short label, \
+                 and every property with its exact key and value.\n\
                  2. The edges, naming the port each one leaves from and arrives at.\n\
-                 3. Two to four quality gates built into the pipeline, so the proof runs every time \
-                 it does: for example qa.unique or qa.notnull on the output key, qa.expect or \
-                 qa.assert for a rule the result must meet, qa.reconcile to prove a total matches \
-                 the input. Set each to fail the run when it does not hold.\n\
+                 3. Two to four quality gates built into the pipeline, so the proof runs every \
+                 time it does: for example qa.unique or qa.notnull on the output key, qa.expect \
+                 or qa.assert for a rule the result must meet, qa.reconcile to prove a total \
+                 matches the input. Set each to fail the run when it does not hold.\n\
                  Do not write files."
             }
-            Role::Builder => {
-                "Build the Architect's design with create_pipeline, named for the goal in a few words. \
-                 Lay it out left to right in flow order: x = 80, 380, 680 and so on, y = 200; a \
+            Stage::Build => {
+                "Build the design with create_pipeline, named for the goal in a few words. Lay \
+                 it out left to right in flow order: x = 80, 380, 680 and so on, y = 200; a \
                  second input sits above at y = 40, and a gate that branches off sits below at \
                  y = 360. When create_pipeline reports an error, correct the design and call it \
-                 again. Finish with validate_pipeline passing, then hand off what you built and \
-                 anything you changed from the design, and why."
+                 again. If an agent before you already wrote the pipeline, change it with \
+                 update_pipeline instead of writing it again. Finish with validate_pipeline \
+                 passing, then hand off what you built and anything you changed from the \
+                 design, and why."
             }
-            Role::Tester => {
-                "Prove the pipeline works. Run it with run_pipeline. If the run fails, report the \
-                 failing node and its error. If it succeeds, check every quality gate's result and \
-                 the row counts, then read the output file it wrote with inspect_source and confirm \
-                 it holds what the goal asked for. Hand off with verdict \"pass\" only if the run \
-                 succeeded, every gate held and the output is right. Otherwise give verdict \"fail\" \
-                 and list each failure: the check, what was expected, what came back, and the node \
-                 most likely at fault."
+            Stage::Test => {
+                "Prove the pipeline works. Run it with run_pipeline. If the run fails, report \
+                 the failing node and its error. If it succeeds, check every quality gate's \
+                 result and the row counts, then read the output file it wrote with \
+                 inspect_source and confirm it holds what the goal asked for. Hand off with \
+                 verdict \"pass\" only if the run succeeded, every gate held and the output is \
+                 right. Otherwise give verdict \"fail\" and list each failure: the check, what \
+                 was expected, what came back, and the node most likely at fault."
             }
-            Role::Fixer => {
-                "The Tester reported failures. Read the pipeline, find each cause, and fix it with the \
-                 smallest update_pipeline patch (nodes merge by id, so one property can change \
-                 alone). Use check_node_sql on SQL, and run_pipeline with target to look at one \
-                 node's rows. Do not weaken or remove a quality gate to make it pass: fix the data \
-                 flow it guards. Hand off exactly what you changed and why."
+            Stage::Repair => {
+                "The tests reported failures. Read the pipeline, find each cause, and fix it \
+                 with the smallest update_pipeline patch (nodes merge by id, so one property can \
+                 change alone). Use check_node_sql on SQL, and run_pipeline with target to look \
+                 at one node's rows. Do not weaken or remove a quality gate to make it pass: fix \
+                 the data flow it guards. Hand off exactly what you changed and why."
             }
-            Role::Reviewer => {
-                "Review the finished pipeline for the person who set the goal. Use verify_pipeline \
-                 and pipeline_lineage, and trust_report for anything that looks like personal data. \
-                 Hand off a short verdict addressed to them: what the pipeline does, where its \
-                 output is, the evidence that it works (rows, gates that held), and any risk worth \
-                 knowing. Verdict \"pass\" if it meets the goal."
+            Stage::Review => {
+                "Review the finished pipeline for the person who set the goal. Use \
+                 verify_pipeline and pipeline_lineage, and trust_report for anything that looks \
+                 like personal data. Hand off a short verdict addressed to them: what the \
+                 pipeline does, where its output is, the evidence that it works (rows, gates \
+                 that held), and any risk worth knowing. Verdict \"pass\" if it meets the goal."
             }
         }
     }
+}
+
+/// One member of the crew.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSpec {
+    pub id: String,
+    pub name: String,
+    pub stage: Stage,
+    /// Instructions of its own, on top of its stage's duty.
+    #[serde(default)]
+    pub brief: String,
+}
+
+/// The crew when the request names none: one agent per stage.
+pub fn default_roster() -> Vec<AgentSpec> {
+    [
+        ("scout", "Scout", Stage::Discover),
+        ("architect", "Architect", Stage::Design),
+        ("builder", "Builder", Stage::Build),
+        ("tester", "Tester", Stage::Test),
+        ("fixer", "Fixer", Stage::Repair),
+        ("reviewer", "Reviewer", Stage::Review),
+    ]
+    .into_iter()
+    .map(|(id, name, stage)| AgentSpec {
+        id: id.into(),
+        name: name.into(),
+        stage,
+        brief: String::new(),
+    })
+    .collect()
+}
+
+/// The crew a request names, tidied, or why it cannot run. Any number of
+/// agents, but one must be in the Build stage: nobody else writes the
+/// pipeline.
+pub fn checked_roster(agents: &[AgentSpec]) -> Result<Vec<AgentSpec>, String> {
+    if agents.is_empty() {
+        return Ok(default_roster());
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(agents.len());
+    for a in agents {
+        let id = a.id.trim();
+        if id.is_empty()
+            || id.len() > 40
+            || !id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(format!(
+                "Agent id '{}' must be 1 to 40 letters, digits, - or _.",
+                a.id
+            ));
+        }
+        if !seen.insert(id.to_string()) {
+            return Err(format!("Two agents share the id '{id}'."));
+        }
+        let name = a.name.trim();
+        if name.is_empty() {
+            return Err(format!("Agent '{id}' has no name."));
+        }
+        out.push(AgentSpec {
+            id: id.to_string(),
+            name: name.chars().take(60).collect(),
+            stage: a.stage,
+            brief: a.brief.trim().chars().take(4000).collect(),
+        });
+    }
+    if !out.iter().any(|a| a.stage == Stage::Build) {
+        return Err(
+            "The crew needs an agent in the Build stage: nobody else writes the pipeline.".into(),
+        );
+    }
+    Ok(out)
 }
 
 /// What the swarm view sends to start a run.
@@ -195,6 +281,9 @@ pub struct Request {
     #[serde(default)]
     pub duckdb: Option<String>,
     pub provider: Provider,
+    /// The crew. Empty: one agent per stage.
+    #[serde(default)]
+    pub agents: Vec<AgentSpec>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -253,8 +342,8 @@ fn env_key_for(base_url: &str) -> Option<String> {
         .and_then(|(name, _)| env_value(name))
 }
 
-/// The model a request asks for, and how to name it in the swarm view.
-pub fn model_for(p: &Provider) -> Result<(Box<dyn Model>, String), String> {
+/// A model for one agent's conversation, and how to name it in the swarm view.
+pub fn model_for(p: &Provider) -> Result<(Box<dyn Model + Send>, String), String> {
     let typed = clean(&p.api_key);
     let model = clean(&p.model);
     let base = clean(&p.base_url).map(|b| b.trim_end_matches('/').to_string());
@@ -339,8 +428,12 @@ pub fn status() -> Value {
     })
 }
 
-/// A tool call the swarm makes: (answer text, is an error).
-pub type ToolFn<'a> = dyn FnMut(&str, Value) -> (String, bool) + 'a;
+/// A tool call: (answer text, is an error). Agents working at once share it.
+pub type ToolFn<'a> = dyn Fn(&str, Value) -> (String, bool) + Sync + 'a;
+/// Where events go. Agents working at once share it.
+pub type Emit<'a> = dyn Fn(Value) + Sync + 'a;
+/// A fresh conversation with the model: one per agent.
+pub type MakeModel<'a> = dyn Fn() -> Result<Box<dyn Model + Send>, String> + Sync + 'a;
 
 /// Call one of this server's tools in-process, as tools/call does.
 pub fn call_tool(name: &str, args: Value) -> (String, bool) {
@@ -356,15 +449,38 @@ pub fn call_tool(name: &str, args: Value) -> (String, bool) {
     }
 }
 
-struct Ctx {
+/// Everything one run shares between its agents.
+struct Ctx<'a> {
+    goal: &'a str,
     workspace: PathBuf,
     duckdb: Option<String>,
     pipeline_id: String,
     pipeline_file: PathBuf,
     catalog: Vec<Value>,
-    tool_calls: u64,
-    input_tokens: u64,
-    output_tokens: u64,
+    roster: Vec<AgentSpec>,
+    tools: &'a ToolFn<'a>,
+    emit: &'a Emit<'a>,
+    make_model: &'a MakeModel<'a>,
+    cancel: &'a AtomicBool,
+    /// Tools change process-wide settings (run_pipeline puts the workspace
+    /// and the DuckDB binary in the environment), so one runs at a time.
+    tool_lock: Mutex<()>,
+    tool_calls: AtomicU64,
+    input_tokens: AtomicU64,
+    output_tokens: AtomicU64,
+}
+
+impl Ctx<'_> {
+    fn crew(&self, stage: Stage) -> Vec<&AgentSpec> {
+        self.roster.iter().filter(|a| a.stage == stage).collect()
+    }
+}
+
+#[derive(Clone)]
+struct Note {
+    name: String,
+    stage: Stage,
+    summary: String,
 }
 
 struct AgentOut {
@@ -408,28 +524,34 @@ pub fn pipeline_id_for(goal: &str, pipelines_dir: &std::path::Path) -> String {
 /// Run the whole swarm. Returns the `finished` event, also emitted.
 pub fn run(
     req: &Request,
-    model: &mut dyn Model,
+    make_model: &MakeModel,
     label: &str,
-    tools: &mut ToolFn,
-    emit: &mut dyn FnMut(Value),
+    tools: &ToolFn,
+    emit: &Emit,
     cancel: &AtomicBool,
 ) -> Value {
     let started = Instant::now();
-    let workspace = PathBuf::from(req.workspace.trim());
-    if req.goal.trim().is_empty() || !workspace.is_dir() {
-        let message = if req.goal.trim().is_empty() {
-            "Describe what the pipeline should do.".to_string()
-        } else {
-            format!("No workspace folder at {}.", workspace.display())
-        };
+    let refuse = |message: String| {
         emit(json!({ "type": "error", "message": message }));
         let done = json!({ "type": "finished", "ok": false, "summary": message });
         emit(done.clone());
-        return done;
+        done
+    };
+    let workspace = PathBuf::from(req.workspace.trim());
+    if req.goal.trim().is_empty() {
+        return refuse("Describe what the pipeline should do.".into());
     }
+    if !workspace.is_dir() {
+        return refuse(format!("No workspace folder at {}.", workspace.display()));
+    }
+    let roster = match checked_roster(&req.agents) {
+        Ok(r) => r,
+        Err(e) => return refuse(e),
+    };
     let pipelines = workspace.join("pipelines");
     let pipeline_id = pipeline_id_for(&req.goal, &pipelines);
-    let mut ctx = Ctx {
+    let ctx = Ctx {
+        goal: req.goal.trim(),
         pipeline_file: pipelines.join(format!("{pipeline_id}.json")),
         workspace,
         duckdb: clean(&req.duckdb),
@@ -438,167 +560,245 @@ pub fn run(
             .as_array()
             .cloned()
             .unwrap_or_default(),
-        tool_calls: 0,
-        input_tokens: 0,
-        output_tokens: 0,
+        roster,
+        tools,
+        emit,
+        make_model,
+        cancel,
+        tool_lock: Mutex::new(()),
+        tool_calls: AtomicU64::new(0),
+        input_tokens: AtomicU64::new(0),
+        output_tokens: AtomicU64::new(0),
     };
     emit(json!({
         "type": "started",
-        "goal": req.goal.trim(),
+        "goal": ctx.goal,
         "pipelineId": ctx.pipeline_id,
         "model": label,
-        "roles": Role::ALL.iter().map(|r| r.id()).collect::<Vec<_>>(),
+        "agents": ctx.roster.iter().map(|a| json!({ "id": a.id, "name": a.name, "stage": a.stage.id() })).collect::<Vec<_>>(),
     }));
 
-    let mut notes: Vec<(Role, String)> = Vec::new();
-    let mut previous: Option<Role> = None;
+    let mut notes: Vec<Note> = Vec::new();
+    let mut last: Vec<String> = Vec::new();
     let mut failure: Option<String> = None;
-    let mut tested = false;
-    let mut review: Option<AgentOut> = None;
 
-    let mut step = |role: Role,
-                    ctx: &mut Ctx,
-                    notes: &mut Vec<(Role, String)>,
-                    previous: &mut Option<Role>,
-                    tools: &mut ToolFn,
-                    emit: &mut dyn FnMut(Value)|
-     -> Result<AgentOut, String> {
-        if let Some(from) = previous.replace(role) {
-            emit(json!({ "type": "handoff", "from": from.id(), "to": role.id() }));
+    for stage in [Stage::Discover, Stage::Design, Stage::Build] {
+        let crew = ctx.crew(stage);
+        if crew.is_empty() {
+            continue;
         }
-        let out = agent(role, &req.goal, ctx, notes, model, tools, emit, cancel)?;
-        notes.push((role, out.summary.clone()));
-        Ok(AgentOut {
-            summary: out.summary,
-            verdict: out.verdict,
-        })
-    };
-
-    for role in [Role::Scout, Role::Architect, Role::Builder] {
-        if let Err(e) = step(role, &mut ctx, &mut notes, &mut previous, tools, emit) {
+        if let Err(e) = run_stage(&ctx, stage, &crew, &mut notes, &mut last) {
             failure = Some(e);
             break;
         }
     }
     if failure.is_none() && !ctx.pipeline_file.is_file() {
-        failure = Some("The Builder finished without writing the pipeline.".into());
+        failure = Some("The Build stage finished without writing the pipeline.".into());
     }
-    if failure.is_none() {
+
+    let testers = ctx.crew(Stage::Test);
+    let fixers = ctx.crew(Stage::Repair);
+    let mut tested = false;
+    let mut test_summary = String::new();
+    if failure.is_none() && !testers.is_empty() {
         let mut rounds = 0;
         loop {
-            match step(
-                Role::Tester,
-                &mut ctx,
-                &mut notes,
-                &mut previous,
-                tools,
-                emit,
-            ) {
-                Ok(out) => tested = out.verdict == Some(true),
+            match run_stage(&ctx, Stage::Test, &testers, &mut notes, &mut last) {
+                Ok(outs) => {
+                    tested = outs.iter().all(|o| o.verdict == Some(true));
+                    test_summary = outs.last().map(|o| o.summary.clone()).unwrap_or_default();
+                }
                 Err(e) => {
                     failure = Some(e);
                     break;
                 }
             }
-            if tested || rounds == FIX_ROUNDS {
+            if tested || rounds == FIX_ROUNDS || fixers.is_empty() {
                 break;
             }
             rounds += 1;
-            if let Err(e) = step(
-                Role::Fixer,
-                &mut ctx,
-                &mut notes,
-                &mut previous,
-                tools,
-                emit,
-            ) {
+            if let Err(e) = run_stage(&ctx, Stage::Repair, &fixers, &mut notes, &mut last) {
                 failure = Some(e);
                 break;
             }
         }
     }
-    if failure.is_none() {
-        match step(
-            Role::Reviewer,
-            &mut ctx,
-            &mut notes,
-            &mut previous,
-            tools,
-            emit,
-        ) {
-            Ok(out) => review = Some(out),
+
+    let reviewers = ctx.crew(Stage::Review);
+    let mut reviewed = true;
+    let mut review_summary = String::new();
+    if failure.is_none() && !reviewers.is_empty() {
+        match run_stage(&ctx, Stage::Review, &reviewers, &mut notes, &mut last) {
+            Ok(outs) => {
+                reviewed = outs.iter().all(|o| o.verdict == Some(true));
+                review_summary = if outs.len() == 1 {
+                    outs[0].summary.clone()
+                } else {
+                    reviewers
+                        .iter()
+                        .zip(&outs)
+                        .map(|(a, o)| format!("{}: {}", a.name, o.summary))
+                        .collect::<Vec<_>>()
+                        .join("\n\n")
+                };
+            }
             Err(e) => failure = Some(e),
         }
     }
 
-    let ok = failure.is_none() && tested;
-    let summary = match (&failure, &review) {
-        (Some(e), _) => e.clone(),
-        (None, Some(r)) => r.summary.clone(),
-        (None, None) => String::new(),
+    let ok = failure.is_none() && tested && reviewed;
+    let summary = match &failure {
+        Some(e) => e.clone(),
+        None if !review_summary.is_empty() => review_summary,
+        None if testers.is_empty() => "Built, but not tested: the crew has no Test agent.".into(),
+        None => test_summary,
     };
     let done = json!({
         "type": "finished",
         "ok": ok,
         "tested": tested,
+        "reviewed": failure.is_none() && reviewed && !reviewers.is_empty(),
         "stopped": failure.as_deref() == Some(llm::CANCELLED),
         "summary": summary,
         "pipelineId": ctx.pipeline_id,
         "pipelineWritten": ctx.pipeline_file.is_file(),
+        "agents": ctx.roster.len(),
         "durationMs": started.elapsed().as_millis() as u64,
-        "toolCalls": ctx.tool_calls,
-        "inputTokens": ctx.input_tokens,
-        "outputTokens": ctx.output_tokens,
+        "toolCalls": ctx.tool_calls.load(Ordering::Relaxed),
+        "inputTokens": ctx.input_tokens.load(Ordering::Relaxed),
+        "outputTokens": ctx.output_tokens.load(Ordering::Relaxed),
     });
     emit(done.clone());
     done
 }
 
-#[allow(clippy::too_many_arguments)]
-fn agent(
-    role: Role,
-    goal: &str,
-    ctx: &mut Ctx,
-    notes: &[(Role, String)],
-    model: &mut dyn Model,
-    tools: &mut ToolFn,
-    emit: &mut dyn FnMut(Value),
-    cancel: &AtomicBool,
-) -> Result<AgentOut, String> {
-    emit(json!({ "type": "agent", "role": role.id(), "state": "working" }));
-    let out = work(role, goal, ctx, notes, model, tools, emit, cancel);
+/// One stage: its agents side by side or in turn, their results in crew
+/// order. Every agent's notes join `notes`; `last` becomes the agents a
+/// hand-off to the next stage leaves from.
+fn run_stage(
+    ctx: &Ctx,
+    stage: Stage,
+    crew: &[&AgentSpec],
+    notes: &mut Vec<Note>,
+    last: &mut Vec<String>,
+) -> Result<Vec<AgentOut>, String> {
+    (ctx.emit)(json!({
+        "type": "stage",
+        "stage": stage.id(),
+        "agents": crew.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+    }));
+    let handoff = |from: &str, to: &str| {
+        (ctx.emit)(json!({ "type": "handoff", "from": from, "to": to }));
+    };
+    let mut outs = Vec::with_capacity(crew.len());
+    if stage.side_by_side() && crew.len() > 1 {
+        for a in crew {
+            for from in last.iter() {
+                handoff(from, &a.id);
+            }
+        }
+        // Each starts from what was known before the stage, not from its
+        // neighbours' notes: they work at the same time.
+        let before = notes.clone();
+        let mut results: Vec<Result<AgentOut, String>> = Vec::with_capacity(crew.len());
+        for wave in crew.chunks(AT_ONCE) {
+            if ctx.cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let done: Vec<Result<AgentOut, String>> = std::thread::scope(|s| {
+                let running: Vec<_> = wave
+                    .iter()
+                    .map(|a| {
+                        let before = &before;
+                        s.spawn(move || agent(ctx, a, before))
+                    })
+                    .collect();
+                running
+                    .into_iter()
+                    .map(|h| {
+                        h.join()
+                            .unwrap_or_else(|_| Err("An agent stopped unexpectedly.".into()))
+                    })
+                    .collect()
+            });
+            results.extend(done);
+        }
+        if results.len() < crew.len() {
+            return Err(llm::CANCELLED.to_string());
+        }
+        let mut first_error = None;
+        for (a, result) in crew.iter().zip(results) {
+            match result {
+                Ok(o) => {
+                    notes.push(Note {
+                        name: a.name.clone(),
+                        stage,
+                        summary: o.summary.clone(),
+                    });
+                    outs.push(o);
+                }
+                Err(e) => {
+                    first_error.get_or_insert(e);
+                }
+            }
+        }
+        if let Some(e) = first_error {
+            return Err(e);
+        }
+        *last = crew.iter().map(|a| a.id.clone()).collect();
+    } else {
+        for a in crew {
+            for from in last.iter() {
+                handoff(from, &a.id);
+            }
+            let o = agent(ctx, a, notes)?;
+            notes.push(Note {
+                name: a.name.clone(),
+                stage,
+                summary: o.summary.clone(),
+            });
+            *last = vec![a.id.clone()];
+            outs.push(o);
+        }
+    }
+    Ok(outs)
+}
+
+fn agent(ctx: &Ctx, a: &AgentSpec, notes: &[Note]) -> Result<AgentOut, String> {
+    (ctx.emit)(json!({ "type": "agent", "agent": a.id, "state": "working" }));
+    let out = if ctx.cancel.load(Ordering::Relaxed) {
+        Err(llm::CANCELLED.to_string())
+    } else {
+        (ctx.make_model)().and_then(|mut model| work(ctx, a, notes, model.as_mut()))
+    };
     match &out {
-        Ok(o) => emit(json!({
+        Ok(o) => (ctx.emit)(json!({
             "type": "agent",
-            "role": role.id(),
+            "agent": a.id,
             "state": "done",
             "summary": o.summary,
             "verdict": o.verdict.map(|pass| if pass { "pass" } else { "fail" }),
         })),
         Err(e) => {
-            emit(json!({ "type": "agent", "role": role.id(), "state": "failed", "summary": e }))
+            (ctx.emit)(json!({ "type": "agent", "agent": a.id, "state": "failed", "summary": e }))
         }
     }
     out
 }
 
-#[allow(clippy::too_many_arguments)]
 fn work(
-    role: Role,
-    goal: &str,
-    ctx: &mut Ctx,
-    notes: &[(Role, String)],
+    ctx: &Ctx,
+    a: &AgentSpec,
+    notes: &[Note],
     model: &mut dyn Model,
-    tools: &mut ToolFn,
-    emit: &mut dyn FnMut(Value),
-    cancel: &AtomicBool,
 ) -> Result<AgentOut, String> {
-    let system = system_prompt(role, &ctx.pipeline_id);
-    let specs = specs_for(role, &ctx.catalog);
-    let mut history = vec![llm::user_message(&kickoff(goal, notes))];
+    let system = system_prompt(a, &ctx.roster, &ctx.pipeline_id);
+    let specs = specs_for(a.stage, &ctx.catalog);
+    let mut history = vec![llm::user_message(&kickoff(ctx.goal, notes))];
     let mut last_text = String::new();
+    let emit = ctx.emit;
     for _ in 0..MAX_TURNS {
-        if cancel.load(Ordering::Relaxed) {
+        if ctx.cancel.load(Ordering::Relaxed) {
             return Err(llm::CANCELLED.to_string());
         }
         let turn = {
@@ -608,17 +808,23 @@ fn work(
                     Delta::Thinking(t) => ("thinking", "text", t),
                     Delta::Retry(why) => ("retry", "reason", why),
                 };
-                emit(json!({ "type": kind, "role": role.id(), key: text }));
+                emit(json!({ "type": kind, "agent": a.id, key: text }));
             };
-            model.turn(&system, &specs, &mut history, &mut on, cancel)?
+            model.turn(&system, &specs, &mut history, &mut on, ctx.cancel)?
         };
-        ctx.input_tokens += turn.input_tokens;
-        ctx.output_tokens += turn.output_tokens;
+        let input = ctx
+            .input_tokens
+            .fetch_add(turn.input_tokens, Ordering::Relaxed)
+            + turn.input_tokens;
+        let output = ctx
+            .output_tokens
+            .fetch_add(turn.output_tokens, Ordering::Relaxed)
+            + turn.output_tokens;
         emit(json!({
             "type": "usage",
-            "role": role.id(),
-            "inputTokens": ctx.input_tokens,
-            "outputTokens": ctx.output_tokens,
+            "agent": a.id,
+            "inputTokens": input,
+            "outputTokens": output,
         }));
         if !turn.text.trim().is_empty() {
             last_text = turn.text.trim().to_string();
@@ -679,14 +885,19 @@ fn work(
                     ),
                     true,
                 ),
-                Ok(_) if !role.tools().contains(&call.name.as_str()) => {
-                    (format!("{} is not one of your tools.", call.name), true)
-                }
+                Ok(_) if !a.stage.tools().contains(&call.name.as_str()) => (
+                    format!(
+                        "{} is not one of your tools in the {} stage.",
+                        call.name,
+                        a.stage.title()
+                    ),
+                    true,
+                ),
                 Ok(input) => {
-                    if cancel.load(Ordering::Relaxed) {
+                    if ctx.cancel.load(Ordering::Relaxed) {
                         return Err(llm::CANCELLED.to_string());
                     }
-                    run_tool(role, &call.id, &call.name, input, ctx, tools, emit)
+                    run_tool(ctx, a, &call.id, &call.name, input)
                 }
             };
             outputs.push(ToolOutput {
@@ -696,7 +907,7 @@ fn work(
             });
         }
         if let Some(out) = handed {
-            if role.judges() && out.verdict.is_none() {
+            if a.stage.judges() && out.verdict.is_none() {
                 // A judge that gives no verdict has not passed anything.
                 return Ok(AgentOut {
                     verdict: Some(false),
@@ -708,30 +919,25 @@ fn work(
         model.tool_results(&mut history, &outputs);
     }
     Err(format!(
-        "The {} used all {MAX_TURNS} turns without finishing.",
-        role.title()
+        "{} used all {MAX_TURNS} turns without finishing.",
+        a.name
     ))
 }
 
-fn run_tool(
-    role: Role,
-    id: &str,
-    name: &str,
-    input: &Value,
-    ctx: &mut Ctx,
-    tools: &mut ToolFn,
-    emit: &mut dyn FnMut(Value),
-) -> (String, bool) {
+fn run_tool(ctx: &Ctx, a: &AgentSpec, id: &str, name: &str, input: &Value) -> (String, bool) {
     let args = scoped_args(name, input.clone(), ctx);
-    ctx.tool_calls += 1;
+    ctx.tool_calls.fetch_add(1, Ordering::Relaxed);
     // What the agent asked for, not the paths filled in for it: the view (and
     // a screen recording of it) should not show the folder layout.
-    emit(json!({ "type": "tool", "role": role.id(), "id": id, "name": name, "input": input }));
+    (ctx.emit)(json!({ "type": "tool", "agent": a.id, "id": id, "name": name, "input": input }));
     let started = Instant::now();
-    let (text, is_error) = tools(name, args);
-    emit(json!({
+    let (text, is_error) = {
+        let _one_at_a_time = ctx.tool_lock.lock().unwrap_or_else(|p| p.into_inner());
+        (ctx.tools)(name, args)
+    };
+    (ctx.emit)(json!({
         "type": "toolResult",
-        "role": role.id(),
+        "agent": a.id,
         "id": id,
         "name": name,
         "ok": !is_error,
@@ -745,15 +951,17 @@ fn run_tool(
                 .and_then(Value::as_str)
                 .unwrap_or(&ctx.pipeline_id)
                 .to_string();
-            emit(json!({ "type": "pipeline", "id": ctx.pipeline_id, "name": title, "doc": doc }));
+            (ctx.emit)(
+                json!({ "type": "pipeline", "id": ctx.pipeline_id, "name": title, "doc": doc }),
+            );
         }
     }
     if name == "run_pipeline" {
         let result: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
         if is_error || !result.is_object() {
-            emit(json!({ "type": "run", "status": "error", "error": preview(&text) }));
+            (ctx.emit)(json!({ "type": "run", "status": "error", "error": preview(&text) }));
         } else {
-            emit(json!({
+            (ctx.emit)(json!({
                 "type": "run",
                 "status": result.get("status").cloned().unwrap_or(Value::Null),
                 "durationMs": result.get("duration_ms").cloned().unwrap_or(Value::Null),
@@ -866,8 +1074,8 @@ fn visible_schema(name: &str, schema: &Value) -> Value {
     schema
 }
 
-fn specs_for(role: Role, catalog: &[Value]) -> Vec<ToolSpec> {
-    let mut specs: Vec<ToolSpec> = role
+fn specs_for(stage: Stage, catalog: &[Value]) -> Vec<ToolSpec> {
+    let mut specs: Vec<ToolSpec> = stage
         .tools()
         .iter()
         .filter_map(|name| {
@@ -892,7 +1100,7 @@ fn specs_for(role: Role, catalog: &[Value]) -> Vec<ToolSpec> {
         }
     });
     let mut required = vec!["summary"];
-    if role.judges() {
+    if stage.judges() {
         props["verdict"] = json!({ "type": "string", "enum": ["pass", "fail"] });
         required.push("verdict");
     }
@@ -904,9 +1112,12 @@ fn specs_for(role: Role, catalog: &[Value]) -> Vec<ToolSpec> {
     specs
 }
 
-fn system_prompt(role: Role, pipeline_id: &str) -> String {
-    let format = match role {
-        Role::Architect | Role::Builder | Role::Fixer => {
+/// Up to this many crew members are named to each agent; past it, a count.
+const CREW_NAMED: usize = 40;
+
+fn system_prompt(a: &AgentSpec, roster: &[AgentSpec], pipeline_id: &str) -> String {
+    let format = match a.stage {
+        Stage::Design | Stage::Build | Stage::Repair => {
             "\n\nPipeline format: {\"name\": \"...\", \"nodes\": [...], \"edges\": [...]}.\n\
              - node: {\"id\": \"n1\", \"type\": \"source\", \"position\": {\"x\": 80, \"y\": 200}, \"data\": \
              {\"label\": \"Orders\", \"componentId\": \"src.csv\", \"properties\": {...}}}. The type is \
@@ -918,11 +1129,41 @@ fn system_prompt(role: Role, pipeline_id: &str) -> String {
         }
         _ => "",
     };
+    let mut crew: Vec<String> = roster
+        .iter()
+        .take(CREW_NAMED)
+        .map(|m| format!("{} ({})", m.name, m.stage.title()))
+        .collect();
+    if roster.len() > CREW_NAMED {
+        crew.push(format!("and {} more", roster.len() - CREW_NAMED));
+    }
+    let beside = roster
+        .iter()
+        .filter(|m| m.stage == a.stage && m.id != a.id)
+        .count();
+    let beside = if beside == 0 {
+        String::new()
+    } else if a.stage.side_by_side() {
+        format!(
+            "\n{beside} other agent(s) work this stage beside you, each with its own brief: cover yours."
+        )
+    } else {
+        format!(
+            "\n{beside} other agent(s) share this stage and take turns with you: build on their notes."
+        )
+    };
+    let brief = if a.brief.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nYour own brief, on top of that:\n{}", a.brief)
+    };
     format!(
-        "You are the {title} in Duckle's agent swarm. Six specialists, the Scout, Architect, Builder, \
-         Tester, Fixer and Reviewer, turn one goal into a tested data pipeline, each handing its \
-         findings to the next. Duckle pipelines are JSON graphs of components that compile to DuckDB \
-         SQL.\n\n\
+        "You are {name}, one of {count} agents in Duckle's agent swarm. The swarm turns one goal \
+         into a tested data pipeline in six stages, each agent handing its findings on: Discover \
+         reads the data, Design plans the pipeline and its quality gates, Build writes it, Test \
+         runs it, Repair fixes what the tests found, and Review reports to the person. Duckle \
+         pipelines are JSON graphs of components that compile to DuckDB SQL.\n\n\
+         The crew: {crew}.\n\n\
          This run:\n\
          - The pipeline is \"{pipeline_id}\". Every tool that reads, writes, checks or runs a pipeline \
          works on it, so you never pass its path.\n\
@@ -936,18 +1177,26 @@ fn system_prompt(role: Role, pipeline_id: &str) -> String {
          - Keep secrets out of pipelines; reference them as ${{ENV:NAME}}.\n\
          - Be brief between tool calls: a sentence on what you are doing is enough.\n\
          - When your part is done, call hand_off once, with notes the next agent can act on.\n\n\
-         Your part, as the {title}:\n{brief}{format}",
-        title = role.title(),
-        brief = role.brief(),
+         Your stage, {stage}:\n{duty}{beside}{brief}{format}",
+        name = a.name,
+        count = roster.len(),
+        crew = crew.join(", "),
+        stage = a.stage.title(),
+        duty = a.stage.duty(),
     )
 }
 
-fn kickoff(goal: &str, notes: &[(Role, String)]) -> String {
+fn kickoff(goal: &str, notes: &[Note]) -> String {
     let mut text = format!("Goal: {}\n", goal.trim());
     if !notes.is_empty() {
         text.push_str("\nNotes from the agents before you, oldest first:\n");
-        for (role, note) in notes {
-            text.push_str(&format!("\n[{}]\n{}\n", role.title(), note));
+        for note in notes {
+            text.push_str(&format!(
+                "\n[{}, {}]\n{}\n",
+                note.name,
+                note.stage.title(),
+                note.summary
+            ));
         }
     }
     text.push_str("\nDo your part now.");
@@ -993,7 +1242,9 @@ pub fn main(args: &[String]) -> std::process::ExitCode {
         eprintln!("duckle-mcp swarm: expected one JSON request line on stdin");
         return std::process::ExitCode::from(2);
     }
-    let emit_line = |v: Value| {
+    // Agents working at once write events from their own threads; each line
+    // goes out whole.
+    let emit = |v: Value| {
         let mut out = stdout.lock();
         let _ = writeln!(out, "{v}");
         let _ = out.flush();
@@ -1001,8 +1252,8 @@ pub fn main(args: &[String]) -> std::process::ExitCode {
     let req: Request = match serde_json::from_str(&line) {
         Ok(r) => r,
         Err(e) => {
-            emit_line(json!({ "type": "error", "message": format!("bad request: {e}") }));
-            emit_line(
+            emit(json!({ "type": "error", "message": format!("bad request: {e}") }));
+            emit(
                 json!({ "type": "finished", "ok": false, "summary": format!("bad request: {e}") }),
             );
             return std::process::ExitCode::from(2);
@@ -1029,17 +1280,18 @@ pub fn main(args: &[String]) -> std::process::ExitCode {
     if let Some(d) = clean(&req.duckdb) {
         std::env::set_var("DUCKLE_DUCKDB_BIN", d);
     }
-    let (mut model, label) = match model_for(&req.provider) {
-        Ok(m) => m,
+    // Checked once up front, so a missing key is one clear error rather than
+    // one per agent.
+    let label = match model_for(&req.provider) {
+        Ok((_, label)) => label,
         Err(message) => {
-            emit_line(json!({ "type": "error", "message": message }));
-            emit_line(json!({ "type": "finished", "ok": false, "summary": message }));
+            emit(json!({ "type": "error", "message": message }));
+            emit(json!({ "type": "finished", "ok": false, "summary": message }));
             return std::process::ExitCode::from(1);
         }
     };
-    let mut tools = call_tool;
-    let mut emit = emit_line;
-    let done = run(&req, model.as_mut(), &label, &mut tools, &mut emit, &cancel);
+    let make = || model_for(&req.provider).map(|(m, _)| m);
+    let done = run(&req, &make, &label, &call_tool, &emit, &cancel);
     if done.get("ok").and_then(Value::as_bool) == Some(true) {
         std::process::ExitCode::SUCCESS
     } else {
@@ -1051,31 +1303,68 @@ pub fn main(args: &[String]) -> std::process::ExitCode {
 mod tests {
     use super::*;
     use crate::llm::{ToolCall, Turn};
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::atomic::AtomicUsize;
 
-    /// A model that plays back a script: each turn is (role, text, calls).
-    /// It records the system prompt, tools and conversation it was given.
-    struct Scripted {
-        turns: VecDeque<(String, Vec<(String, Value)>)>,
-        seen: Vec<(String, Vec<String>, Vec<Value>)>,
+    type Calls = Vec<(String, Value)>;
+
+    /// A model that plays back a script per agent (found by the name its
+    /// system prompt gives it), and records what each agent was given. It
+    /// can pause in each turn, so agents meant to work at once overlap.
+    struct Script {
+        turns: Mutex<HashMap<String, VecDeque<(String, Calls)>>>,
+        seen: Mutex<Vec<Seen>>,
+        in_flight: AtomicUsize,
+        most_at_once: AtomicUsize,
+        pause_ms: u64,
+        /// The run's stop flag, which the script can press itself...
+        cancel: AtomicBool,
+        /// ...during this turn of the whole run (counting from 1).
+        stop_at_turn: AtomicUsize,
+        turn_count: AtomicUsize,
     }
 
-    impl Scripted {
-        fn new(turns: Vec<(&str, Vec<(&str, Value)>)>) -> Self {
-            Scripted {
-                turns: turns
-                    .into_iter()
-                    .map(|(t, calls)| {
-                        (
-                            t.to_string(),
-                            calls.into_iter().map(|(n, a)| (n.to_string(), a)).collect(),
-                        )
-                    })
-                    .collect(),
-                seen: Vec::new(),
-            }
+    #[derive(Clone)]
+    struct Seen {
+        agent: String,
+        system: String,
+        tools: Vec<String>,
+        history: Vec<Value>,
+    }
+
+    fn script(turns: Vec<(&str, &str, Vec<(&str, Value)>)>, pause_ms: u64) -> Arc<Script> {
+        let mut by_agent: HashMap<String, VecDeque<(String, Calls)>> = HashMap::new();
+        for (agent, text, calls) in turns {
+            by_agent.entry(agent.to_string()).or_default().push_back((
+                text.to_string(),
+                calls.into_iter().map(|(n, a)| (n.to_string(), a)).collect(),
+            ));
+        }
+        Arc::new(Script {
+            turns: Mutex::new(by_agent),
+            seen: Mutex::new(Vec::new()),
+            in_flight: AtomicUsize::new(0),
+            most_at_once: AtomicUsize::new(0),
+            pause_ms,
+            cancel: AtomicBool::new(false),
+            stop_at_turn: AtomicUsize::new(0),
+            turn_count: AtomicUsize::new(0),
+        })
+    }
+
+    impl Script {
+        fn seen(&self) -> Vec<Seen> {
+            self.seen.lock().unwrap().clone()
+        }
+        fn seen_by(&self, agent: &str) -> Vec<Seen> {
+            self.seen()
+                .into_iter()
+                .filter(|s| s.agent == agent)
+                .collect()
         }
     }
+
+    struct Scripted(Arc<Script>);
 
     impl Model for Scripted {
         fn turn(
@@ -1086,18 +1375,39 @@ mod tests {
             on: &mut dyn FnMut(Delta),
             _cancel: &AtomicBool,
         ) -> Result<Turn, String> {
-            self.seen.push((
-                system.to_string(),
-                tools.iter().map(|t| t.name.clone()).collect(),
-                history.clone(),
-            ));
-            let (text, calls) = self.turns.pop_front().ok_or("the script ran out")?;
+            let s = &self.0;
+            let agent = system
+                .strip_prefix("You are ")
+                .and_then(|r| r.split(", one of").next())
+                .unwrap_or("?")
+                .to_string();
+            s.seen.lock().unwrap().push(Seen {
+                agent: agent.clone(),
+                system: system.to_string(),
+                tools: tools.iter().map(|t| t.name.clone()).collect(),
+                history: history.clone(),
+            });
+            let turn = s.turn_count.fetch_add(1, Ordering::SeqCst) + 1;
+            if turn == s.stop_at_turn.load(Ordering::SeqCst) {
+                s.cancel.store(true, Ordering::SeqCst);
+            }
+            let now = s.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            s.most_at_once.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(s.pause_ms));
+            s.in_flight.fetch_sub(1, Ordering::SeqCst);
+            let (text, calls) = s
+                .turns
+                .lock()
+                .unwrap()
+                .get_mut(&agent)
+                .and_then(VecDeque::pop_front)
+                .ok_or_else(|| format!("the script has no turn left for {agent}"))?;
             on(Delta::Text(&text));
             let calls: Vec<ToolCall> = calls
                 .into_iter()
                 .enumerate()
                 .map(|(i, (name, input))| ToolCall {
-                    id: format!("c{}_{i}", self.seen.len()),
+                    id: format!("{agent}_{}_{i}", history.len()),
                     name,
                     input: Ok(input),
                 })
@@ -1149,12 +1459,12 @@ mod tests {
         dir
     }
 
-    fn request(ws: &std::path::Path) -> Request {
-        Request {
-            goal: "Total revenue per customer from orders.csv".into(),
-            workspace: ws.to_string_lossy().into(),
-            duckdb: Some("/opt/duckdb".into()),
-            provider: Provider::default(),
+    fn custom(id: &str, name: &str, stage: Stage, brief: &str) -> AgentSpec {
+        AgentSpec {
+            id: id.into(),
+            name: name.into(),
+            stage,
+            brief: brief.into(),
         }
     }
 
@@ -1163,69 +1473,139 @@ mod tests {
     /// records every call with the arguments it really received.
     fn play(
         ws: &std::path::Path,
-        model: &mut Scripted,
-        answer: impl Fn(&str, &Value) -> (String, bool),
-    ) -> (Value, Vec<Value>, Vec<(String, Value)>) {
-        let req = request(ws);
-        let mut events = Vec::new();
-        let mut calls = Vec::new();
-        let file = ws.join("pipelines");
-        let mut tools = |name: &str, args: Value| {
-            calls.push((name.to_string(), args.clone()));
+        script: &Arc<Script>,
+        agents: Vec<AgentSpec>,
+        cancel: bool,
+        answer: impl Fn(&str, &Value) -> (String, bool) + Sync,
+    ) -> (Value, Vec<Value>, Calls) {
+        let req = Request {
+            goal: "Total revenue per customer from orders.csv".into(),
+            workspace: ws.to_string_lossy().into(),
+            duckdb: Some("/opt/duckdb".into()),
+            provider: Provider::default(),
+            agents,
+        };
+        let events = Mutex::new(Vec::new());
+        let calls = Mutex::new(Vec::new());
+        let dir = ws.join("pipelines");
+        let tools = |name: &str, args: Value| {
+            calls.lock().unwrap().push((name.to_string(), args.clone()));
             if name == "create_pipeline" {
                 let id = args["id"].as_str().unwrap().to_string();
-                std::fs::write(
-                    file.join(format!("{id}.json")),
-                    args["pipeline"].to_string(),
-                )
-                .unwrap();
+                std::fs::write(dir.join(format!("{id}.json")), args["pipeline"].to_string())
+                    .unwrap();
             }
             answer(name, &args)
         };
-        let done = run(
-            &req,
-            model,
-            "test model",
-            &mut tools,
-            &mut |e| events.push(e),
-            &AtomicBool::new(false),
-        );
-        (done, events, calls)
+        let make = || -> Result<Box<dyn Model + Send>, String> {
+            Ok(Box::new(Scripted(Arc::clone(script))))
+        };
+        let emit = |e: Value| events.lock().unwrap().push(e);
+        if cancel {
+            script.cancel.store(true, Ordering::SeqCst);
+        }
+        let done = run(&req, &make, "test model", &tools, &emit, &script.cancel);
+        (
+            done,
+            events.into_inner().unwrap(),
+            calls.into_inner().unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_stop_between_waves_of_a_big_review_stage_does_not_pass_the_mission() {
+        let ws = workspace();
+        // Seven reviewers: the first wave holds six, the seventh waits for a
+        // free slot. The stop lands as the first wave's last turn is taken,
+        // so that wave finishes and the seventh never starts.
+        let mut crew = default_roster();
+        let critics: Vec<String> = (0..6).map(|i| format!("Critic {i}")).collect();
+        for (i, name) in critics.iter().enumerate() {
+            crew.push(custom(&format!("c{i}"), name, Stage::Review, ""));
+        }
+        let mut turns = vec![
+            ("Scout", "", vec![hand("data")]),
+            ("Architect", "", vec![hand("design")]),
+            (
+                "Builder",
+                "",
+                vec![(
+                    "create_pipeline",
+                    json!({ "name": "R", "pipeline": pipeline() }),
+                )],
+            ),
+            ("Builder", "", vec![hand("built")]),
+            ("Tester", "", vec![verdict("ok", "pass")]),
+            ("Reviewer", "", vec![verdict("ok", "pass")]),
+        ];
+        for name in &critics {
+            turns.push((name.as_str(), "", vec![verdict("ok", "pass")]));
+        }
+        let s = script(turns, 30);
+        // Scout, Architect, two Builder turns, Tester, then six reviewers.
+        s.stop_at_turn.store(11, Ordering::SeqCst);
+        let (done, _, _) = play(&ws, &s, crew, false, ok);
+        assert_eq!(done["ok"], json!(false), "{done}");
+        assert_eq!(done["stopped"], json!(true));
+        assert_eq!(s.seen().len(), 11, "the seventh reviewer must not start");
+        let _ = std::fs::remove_dir_all(ws);
     }
 
     fn pipeline() -> Value {
         json!({ "name": "Revenue", "nodes": [{ "id": "n1" }], "edges": [] })
     }
 
+    fn working(events: &[Value]) -> Vec<String> {
+        events
+            .iter()
+            .filter(|e| e["type"] == "agent" && e["state"] == "working")
+            .map(|e| e["agent"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn ok(_: &str, _: &Value) -> (String, bool) {
+        ("{}".into(), false)
+    }
+
     #[test]
-    fn the_swarm_runs_each_specialist_in_turn_and_reports_a_passing_pipeline() {
+    fn the_default_crew_runs_each_stage_in_order_and_reports_a_passing_pipeline() {
         let ws = workspace();
-        let mut model = Scripted::new(vec![
-            ("Looking.", vec![("list_workspace_files", json!({}))]),
-            ("", vec![hand("orders.csv: customer_id, amount")]),
-            (
-                "",
-                vec![hand("src.csv -> xf.groupby -> qa.unique -> snk.parquet")],
-            ),
-            (
-                "Building.",
-                vec![(
-                    "create_pipeline",
-                    json!({ "name": "Revenue", "pipeline": pipeline() }),
-                )],
-            ),
-            ("", vec![hand("built as designed")]),
-            ("", vec![("run_pipeline", json!({}))]),
-            ("", vec![verdict("ran, 3 gates held", "pass")]),
-            (
-                "",
-                vec![verdict(
-                    "Writes output/revenue.parquet; 412 customers.",
-                    "pass",
-                )],
-            ),
-        ]);
-        let (done, events, calls) = play(&ws, &mut model, |name, _| match name {
+        let s = script(
+            vec![
+                (
+                    "Scout",
+                    "Looking.",
+                    vec![("list_workspace_files", json!({}))],
+                ),
+                ("Scout", "", vec![hand("orders.csv: customer_id, amount")]),
+                (
+                    "Architect",
+                    "",
+                    vec![hand("src.csv -> xf.groupby -> qa.unique -> snk.parquet")],
+                ),
+                (
+                    "Builder",
+                    "Building.",
+                    vec![(
+                        "create_pipeline",
+                        json!({ "name": "Revenue", "pipeline": pipeline() }),
+                    )],
+                ),
+                ("Builder", "", vec![hand("built as designed")]),
+                ("Tester", "", vec![("run_pipeline", json!({}))]),
+                ("Tester", "", vec![verdict("ran, 3 gates held", "pass")]),
+                (
+                    "Reviewer",
+                    "",
+                    vec![verdict(
+                        "Writes output/revenue.parquet; 412 customers.",
+                        "pass",
+                    )],
+                ),
+            ],
+            0,
+        );
+        let (done, events, calls) = play(&ws, &s, vec![], false, |name, _| match name {
             "run_pipeline" => (
                 json!({ "status": "ok", "duration_ms": 12, "nodes": { "n1": { "rows": 412 } } })
                     .to_string(),
@@ -1240,29 +1620,29 @@ mod tests {
             json!("Writes output/revenue.parquet; 412 customers.")
         );
         assert_eq!(done["toolCalls"], json!(3));
-        let order: Vec<&str> = events
-            .iter()
-            .filter(|e| e["type"] == "agent" && e["state"] == "working")
-            .map(|e| e["role"].as_str().unwrap())
-            .collect();
+        assert_eq!(done["agents"], json!(6));
         assert_eq!(
-            order,
+            working(&events),
             ["scout", "architect", "builder", "tester", "reviewer"],
-            "no Fixer when the Tester passes"
+            "no Repair when the tests pass"
         );
+        let stages: Vec<&str> = events
+            .iter()
+            .filter(|e| e["type"] == "stage")
+            .map(|e| e["stage"].as_str().unwrap())
+            .collect();
+        assert_eq!(stages, ["discover", "design", "build", "test", "review"]);
 
-        // Each agent starts from the notes of the ones before it.
-        let tester_prompt = &model.seen[5].2[0]["content"];
+        // Each agent starts from the notes of the ones before it...
+        let tester = &s.seen_by("Tester")[0];
+        let kickoff = tester.history[0]["content"].as_str().unwrap();
         assert!(
-            tester_prompt
-                .as_str()
-                .unwrap()
-                .contains("[Architect]\nsrc.csv -> xf.groupby"),
-            "{tester_prompt}"
+            kickoff.contains("[Architect, Design]\nsrc.csv -> xf.groupby"),
+            "{kickoff}"
         );
-        // ...and sees only its own tools, plus hand_off.
+        // ...and sees only its stage's tools, plus hand_off.
         assert_eq!(
-            model.seen[5].1,
+            tester.tools,
             [
                 "run_pipeline",
                 "inspect_source",
@@ -1289,43 +1669,291 @@ mod tests {
     }
 
     #[test]
-    fn a_failing_test_sends_the_fixer_in_and_the_tester_back() {
+    fn any_number_of_agents_can_join_and_the_reading_stages_work_side_by_side() {
         let ws = workspace();
-        let mut model = Scripted::new(vec![
-            ("", vec![hand("data")]),
-            ("", vec![hand("design")]),
-            (
-                "",
-                vec![(
-                    "create_pipeline",
-                    json!({ "name": "R", "pipeline": pipeline() }),
-                )],
-            ),
-            ("", vec![hand("built")]),
-            (
-                "",
-                vec![verdict("qa.unique failed: 3 duplicate customer_id", "fail")],
-            ),
-            (
-                "",
-                vec![(
-                    "update_pipeline",
-                    json!({ "patch": { "nodes": [{ "id": "n2" }] } }),
-                )],
-            ),
-            ("", vec![hand("grouped by customer_id before the gate")]),
-            ("", vec![verdict("all gates hold", "pass")]),
-            ("", vec![verdict("good", "pass")]),
-        ]);
-        let (done, events, _) = play(&ws, &mut model, |_, _| ("{}".into(), false));
-        assert_eq!(done["ok"], json!(true));
-        let order: Vec<&str> = events
-            .iter()
-            .filter(|e| e["type"] == "agent" && e["state"] == "working")
-            .map(|e| e["role"].as_str().unwrap())
-            .collect();
+        let mut crew = default_roster();
+        crew.push(custom(
+            "profiler",
+            "Profiler",
+            Stage::Discover,
+            "Profile nulls and ranges.",
+        ));
+        crew.push(custom(
+            "pii",
+            "PII Guardian",
+            Stage::Review,
+            "Fail if raw personal data reaches the sink.",
+        ));
+        crew.push(custom(
+            "perf",
+            "Performance Critic",
+            Stage::Review,
+            "Look for expensive steps.",
+        ));
+        let s = script(
+            vec![
+                (
+                    "Scout",
+                    "",
+                    vec![hand("orders.csv has customer_id, amount")],
+                ),
+                ("Profiler", "", vec![hand("amount: 0 nulls, 3..480")]),
+                ("Architect", "", vec![hand("design")]),
+                (
+                    "Builder",
+                    "",
+                    vec![(
+                        "create_pipeline",
+                        json!({ "name": "R", "pipeline": pipeline() }),
+                    )],
+                ),
+                ("Builder", "", vec![hand("built")]),
+                ("Tester", "", vec![verdict("gates held", "pass")]),
+                ("Reviewer", "", vec![verdict("meets the goal", "pass")]),
+                (
+                    "PII Guardian",
+                    "",
+                    vec![verdict("no personal data", "pass")],
+                ),
+                (
+                    "Performance Critic",
+                    "",
+                    vec![verdict("one pass over the file", "pass")],
+                ),
+            ],
+            80,
+        );
+        let (done, events, _) = play(&ws, &s, crew, false, ok);
+        assert_eq!(done["ok"], json!(true), "{done}");
+        assert_eq!(done["agents"], json!(9));
+        let mut ran = working(&events);
+        ran.sort();
         assert_eq!(
-            order,
+            ran,
+            [
+                "architect",
+                "builder",
+                "perf",
+                "pii",
+                "profiler",
+                "reviewer",
+                "scout",
+                "tester"
+            ]
+        );
+        assert!(
+            s.most_at_once.load(Ordering::SeqCst) >= 3,
+            "the three reviewers should overlap, most at once: {}",
+            s.most_at_once.load(Ordering::SeqCst)
+        );
+
+        // A custom agent's own brief, and its stage's duty, reach its prompt.
+        let profiler = &s.seen_by("Profiler")[0];
+        assert!(profiler.system.contains("Profile nulls and ranges."));
+        assert!(profiler.system.contains("Your stage, Discover"));
+        assert!(profiler
+            .system
+            .contains("1 other agent(s) work this stage beside you"));
+        assert!(profiler.system.contains("one of 9 agents"));
+        // Working side by side, the Scout and the Profiler start from the same
+        // notes; the Architect after them reads both.
+        let architect = &s.seen_by("Architect")[0];
+        let notes = architect.history[0]["content"].as_str().unwrap();
+        assert!(
+            notes.contains("[Scout, Discover]") && notes.contains("[Profiler, Discover]"),
+            "{notes}"
+        );
+        // The Tester's hand-off fans out to every reviewer.
+        for to in ["reviewer", "pii", "perf"] {
+            assert!(
+                events
+                    .iter()
+                    .any(|e| e["type"] == "handoff" && e["from"] == "tester" && e["to"] == to),
+                "no hand-off to {to}"
+            );
+        }
+        // Every reviewer's words reach the person.
+        let summary = done["summary"].as_str().unwrap();
+        assert!(
+            summary.contains("PII Guardian: no personal data"),
+            "{summary}"
+        );
+        let _ = std::fs::remove_dir_all(ws);
+    }
+
+    #[test]
+    fn every_tester_must_pass_before_the_repair_stage_is_skipped() {
+        let ws = workspace();
+        let mut crew = default_roster();
+        crew.push(custom(
+            "edge",
+            "Edge-case Tester",
+            Stage::Test,
+            "Try null keys and duplicates.",
+        ));
+        let s = script(
+            vec![
+                ("Scout", "", vec![hand("data")]),
+                ("Architect", "", vec![hand("design")]),
+                (
+                    "Builder",
+                    "",
+                    vec![(
+                        "create_pipeline",
+                        json!({ "name": "R", "pipeline": pipeline() }),
+                    )],
+                ),
+                ("Builder", "", vec![hand("built")]),
+                ("Tester", "", vec![verdict("main path ok", "pass")]),
+                (
+                    "Edge-case Tester",
+                    "",
+                    vec![verdict("a null key slips through", "fail")],
+                ),
+                ("Fixer", "", vec![hand("added qa.notnull on the key")]),
+                ("Tester", "", vec![verdict("main path ok", "pass")]),
+                (
+                    "Edge-case Tester",
+                    "",
+                    vec![verdict("null keys refused", "pass")],
+                ),
+                ("Reviewer", "", vec![verdict("good", "pass")]),
+            ],
+            0,
+        );
+        let (done, events, _) = play(&ws, &s, crew, false, ok);
+        assert_eq!(done["ok"], json!(true), "{done}");
+        assert_eq!(
+            working(&events),
+            [
+                "scout",
+                "architect",
+                "builder",
+                "tester",
+                "edge",
+                "fixer",
+                "tester",
+                "edge",
+                "reviewer"
+            ],
+            "one failing tester must send the Repair stage in"
+        );
+        let _ = std::fs::remove_dir_all(ws);
+    }
+
+    #[test]
+    fn one_failing_reviewer_fails_the_run() {
+        let ws = workspace();
+        let mut crew = default_roster();
+        crew.push(custom(
+            "pii",
+            "PII Guardian",
+            Stage::Review,
+            "Fail if raw personal data reaches the sink.",
+        ));
+        let s = script(
+            vec![
+                ("Scout", "", vec![hand("data")]),
+                ("Architect", "", vec![hand("design")]),
+                (
+                    "Builder",
+                    "",
+                    vec![(
+                        "create_pipeline",
+                        json!({ "name": "R", "pipeline": pipeline() }),
+                    )],
+                ),
+                ("Builder", "", vec![hand("built")]),
+                ("Tester", "", vec![verdict("gates held", "pass")]),
+                ("Reviewer", "", vec![verdict("meets the goal", "pass")]),
+                (
+                    "PII Guardian",
+                    "",
+                    vec![verdict("email reaches the sink unmasked", "fail")],
+                ),
+            ],
+            0,
+        );
+        let (done, _, _) = play(&ws, &s, crew, false, ok);
+        assert_eq!(done["ok"], json!(false));
+        assert_eq!(done["tested"], json!(true));
+        assert_eq!(done["reviewed"], json!(false));
+        let _ = std::fs::remove_dir_all(ws);
+    }
+
+    #[test]
+    fn a_crew_is_refused_without_a_builder_or_with_two_agents_of_one_id() {
+        let ws = workspace();
+        let s = script(vec![], 0);
+        let no_builder = default_roster()
+            .into_iter()
+            .filter(|a| a.stage != Stage::Build)
+            .collect();
+        let (done, events, _) = play(&ws, &s, no_builder, false, ok);
+        assert_eq!(done["ok"], json!(false));
+        assert!(
+            done["summary"].as_str().unwrap().contains("Build stage"),
+            "{done}"
+        );
+        assert!(events.iter().any(|e| e["type"] == "error"));
+        assert!(s.seen().is_empty(), "nothing ran");
+
+        let mut twice = default_roster();
+        twice.push(custom("scout", "Second Scout", Stage::Discover, ""));
+        let (done, _, _) = play(&ws, &s, twice, false, ok);
+        assert!(
+            done["summary"]
+                .as_str()
+                .unwrap()
+                .contains("share the id 'scout'"),
+            "{done}"
+        );
+        let _ = std::fs::remove_dir_all(ws);
+    }
+
+    #[test]
+    fn a_failing_test_sends_the_repair_stage_in_and_the_tests_back() {
+        let ws = workspace();
+        let s = script(
+            vec![
+                ("Scout", "", vec![hand("data")]),
+                ("Architect", "", vec![hand("design")]),
+                (
+                    "Builder",
+                    "",
+                    vec![(
+                        "create_pipeline",
+                        json!({ "name": "R", "pipeline": pipeline() }),
+                    )],
+                ),
+                ("Builder", "", vec![hand("built")]),
+                (
+                    "Tester",
+                    "",
+                    vec![verdict("qa.unique failed: 3 duplicate customer_id", "fail")],
+                ),
+                (
+                    "Fixer",
+                    "",
+                    vec![(
+                        "update_pipeline",
+                        json!({ "patch": { "nodes": [{ "id": "n2" }] } }),
+                    )],
+                ),
+                (
+                    "Fixer",
+                    "",
+                    vec![hand("grouped by customer_id before the gate")],
+                ),
+                ("Tester", "", vec![verdict("all gates hold", "pass")]),
+                ("Reviewer", "", vec![verdict("good", "pass")]),
+            ],
+            0,
+        );
+        let (done, events, _) = play(&ws, &s, vec![], false, ok);
+        assert_eq!(done["ok"], json!(true));
+        assert_eq!(
+            working(&events),
             [
                 "scout",
                 "architect",
@@ -1336,17 +1964,9 @@ mod tests {
                 "reviewer"
             ]
         );
-        let handoffs: Vec<(String, String)> = events
+        assert!(events
             .iter()
-            .filter(|e| e["type"] == "handoff")
-            .map(|e| {
-                (
-                    e["from"].as_str().unwrap().into(),
-                    e["to"].as_str().unwrap().into(),
-                )
-            })
-            .collect();
-        assert!(handoffs.contains(&("fixer".into(), "tester".into())));
+            .any(|e| e["type"] == "handoff" && e["from"] == "fixer" && e["to"] == "tester"));
         let _ = std::fs::remove_dir_all(ws);
     }
 
@@ -1354,31 +1974,36 @@ mod tests {
     fn a_pipeline_that_never_passes_is_reported_as_failing_after_two_repairs() {
         let ws = workspace();
         let fail = || verdict("still wrong", "fail");
-        let mut model = Scripted::new(vec![
-            ("", vec![hand("data")]),
-            ("", vec![hand("design")]),
-            (
-                "",
-                vec![(
-                    "create_pipeline",
-                    json!({ "name": "R", "pipeline": pipeline() }),
-                )],
-            ),
-            ("", vec![hand("built")]),
-            ("", vec![fail()]),
-            ("", vec![hand("fix 1")]),
-            ("", vec![fail()]),
-            ("", vec![hand("fix 2")]),
-            ("", vec![fail()]),
-            ("", vec![verdict("does not meet the goal", "fail")]),
-        ]);
-        let (done, events, _) = play(&ws, &mut model, |_, _| ("{}".into(), false));
+        let s = script(
+            vec![
+                ("Scout", "", vec![hand("data")]),
+                ("Architect", "", vec![hand("design")]),
+                (
+                    "Builder",
+                    "",
+                    vec![(
+                        "create_pipeline",
+                        json!({ "name": "R", "pipeline": pipeline() }),
+                    )],
+                ),
+                ("Builder", "", vec![hand("built")]),
+                ("Tester", "", vec![fail()]),
+                ("Fixer", "", vec![hand("fix 1")]),
+                ("Tester", "", vec![fail()]),
+                ("Fixer", "", vec![hand("fix 2")]),
+                ("Tester", "", vec![fail()]),
+                (
+                    "Reviewer",
+                    "",
+                    vec![verdict("does not meet the goal", "fail")],
+                ),
+            ],
+            0,
+        );
+        let (done, events, _) = play(&ws, &s, vec![], false, ok);
         assert_eq!(done["ok"], json!(false));
         assert_eq!(done["tested"], json!(false));
-        let fixers = events
-            .iter()
-            .filter(|e| e["type"] == "agent" && e["role"] == "fixer" && e["state"] == "working")
-            .count();
+        let fixers = working(&events).iter().filter(|a| *a == "fixer").count();
         assert_eq!(fixers, FIX_ROUNDS);
         let _ = std::fs::remove_dir_all(ws);
     }
@@ -1386,41 +2011,48 @@ mod tests {
     #[test]
     fn tools_act_on_the_swarms_own_pipeline_whatever_the_agent_names() {
         let ws = workspace();
-        let mut model = Scripted::new(vec![
-            (
-                "",
-                vec![
-                    ("read_pipeline", json!({ "path": "elsewhere.json" })),
-                    hand("data"),
-                ],
-            ),
-            ("", vec![hand("design")]),
-            (
-                "",
-                vec![(
-                    "create_pipeline",
-                    json!({ "name": "R", "id": "payroll", "directory": "C:/Windows", "workspace": "D:/other", "pipeline": pipeline() }),
-                )],
-            ),
-            (
-                "",
-                vec![(
-                    "update_pipeline",
-                    json!({ "path": "D:/other/pipelines/payroll.json", "patch": {} }),
-                )],
-            ),
-            ("", vec![hand("built")]),
-            (
-                "",
-                vec![(
-                    "run_pipeline",
-                    json!({ "pipeline": { "nodes": [] }, "duckdb": "evil.exe" }),
-                )],
-            ),
-            ("", vec![verdict("ok", "pass")]),
-            ("", vec![verdict("ok", "pass")]),
-        ]);
-        let (_, events, calls) = play(&ws, &mut model, |_, _| ("{}".into(), false));
+        let s = script(
+            vec![
+                (
+                    "Scout",
+                    "",
+                    vec![
+                        ("read_pipeline", json!({ "path": "elsewhere.json" })),
+                        hand("data"),
+                    ],
+                ),
+                ("Architect", "", vec![hand("design")]),
+                (
+                    "Builder",
+                    "",
+                    vec![(
+                        "create_pipeline",
+                        json!({ "name": "R", "id": "payroll", "directory": "C:/Windows", "workspace": "D:/other", "pipeline": pipeline() }),
+                    )],
+                ),
+                (
+                    "Builder",
+                    "",
+                    vec![(
+                        "update_pipeline",
+                        json!({ "path": "D:/other/pipelines/payroll.json", "patch": {} }),
+                    )],
+                ),
+                ("Builder", "", vec![hand("built")]),
+                (
+                    "Tester",
+                    "",
+                    vec![(
+                        "run_pipeline",
+                        json!({ "pipeline": { "nodes": [] }, "duckdb": "evil.exe" }),
+                    )],
+                ),
+                ("Tester", "", vec![verdict("ok", "pass")]),
+                ("Reviewer", "", vec![verdict("ok", "pass")]),
+            ],
+            0,
+        );
+        let (_, events, calls) = play(&ws, &s, vec![], false, ok);
         let id = events[0]["pipelineId"].as_str().unwrap().to_string();
         assert_eq!(id, "swarm_total_revenue_customer_orders");
         let file = ws
@@ -1437,7 +2069,7 @@ mod tests {
                 .unwrap()
         };
 
-        // The Scout may read another pipeline for reference: that is a read.
+        // Reading another pipeline for reference is allowed: that is a read.
         assert_eq!(args("read_pipeline")["path"], json!("elsewhere.json"));
         let create = args("create_pipeline");
         assert_eq!(create["id"], json!(id));
@@ -1454,21 +2086,24 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_cannot_call_a_tool_outside_its_role() {
+    fn an_agent_cannot_call_a_tool_outside_its_stage() {
         let ws = workspace();
-        let mut model = Scripted::new(vec![
-            ("", vec![("run_pipeline", json!({}))]),
-            ("", vec![hand("data")]),
-            ("", vec![hand("design")]),
-            ("", vec![hand("forgot to build")]),
-        ]);
-        let (done, _, calls) = play(&ws, &mut model, |_, _| ("{}".into(), false));
+        let s = script(
+            vec![
+                ("Scout", "", vec![("run_pipeline", json!({}))]),
+                ("Scout", "", vec![hand("data")]),
+                ("Architect", "", vec![hand("design")]),
+                ("Builder", "", vec![hand("forgot to build")]),
+            ],
+            0,
+        );
+        let (done, _, calls) = play(&ws, &s, vec![], false, ok);
         assert!(
             calls.is_empty(),
             "the Scout may not run pipelines: {calls:?}"
         );
         // The refusal went back to the model as an error it can read.
-        let reply = model.seen[1].2.last().unwrap();
+        let reply = s.seen_by("Scout")[1].history.last().unwrap().clone();
         assert_eq!(reply["error"], json!(true));
         assert!(reply["text"]
             .as_str()
@@ -1477,7 +2112,7 @@ mod tests {
         assert_eq!(done["ok"], json!(false));
         assert_eq!(
             done["summary"],
-            json!("The Builder finished without writing the pipeline.")
+            json!("The Build stage finished without writing the pipeline.")
         );
         let _ = std::fs::remove_dir_all(ws);
     }
@@ -1485,27 +2120,31 @@ mod tests {
     #[test]
     fn a_judge_that_hands_off_without_a_verdict_has_not_passed() {
         let ws = workspace();
-        let mut model = Scripted::new(vec![
-            ("", vec![hand("data")]),
-            ("", vec![hand("design")]),
-            (
-                "",
-                vec![(
-                    "create_pipeline",
-                    json!({ "name": "R", "pipeline": pipeline() }),
-                )],
-            ),
-            ("", vec![hand("built")]),
-            ("", vec![hand("looks fine")]),
-            ("", vec![hand("fixed nothing")]),
-            ("", vec![verdict("ok", "pass")]),
-            ("", vec![verdict("ok", "pass")]),
-        ]);
-        let (done, events, _) = play(&ws, &mut model, |_, _| ("{}".into(), false));
+        let s = script(
+            vec![
+                ("Scout", "", vec![hand("data")]),
+                ("Architect", "", vec![hand("design")]),
+                (
+                    "Builder",
+                    "",
+                    vec![(
+                        "create_pipeline",
+                        json!({ "name": "R", "pipeline": pipeline() }),
+                    )],
+                ),
+                ("Builder", "", vec![hand("built")]),
+                ("Tester", "", vec![hand("looks fine")]),
+                ("Fixer", "", vec![hand("fixed nothing")]),
+                ("Tester", "", vec![verdict("ok", "pass")]),
+                ("Reviewer", "", vec![verdict("ok", "pass")]),
+            ],
+            0,
+        );
+        let (done, events, _) = play(&ws, &s, vec![], false, ok);
         assert_eq!(done["ok"], json!(true));
         let first_test = events
             .iter()
-            .find(|e| e["type"] == "agent" && e["role"] == "tester" && e["state"] == "done")
+            .find(|e| e["type"] == "agent" && e["agent"] == "tester" && e["state"] == "done")
             .unwrap();
         assert_eq!(first_test["verdict"], json!("fail"));
         let _ = std::fs::remove_dir_all(ws);
@@ -1514,16 +2153,19 @@ mod tests {
     #[test]
     fn a_turn_cut_off_at_the_output_limit_runs_none_of_its_calls_and_is_asked_again() {
         let ws = workspace();
-        let mut model = Scripted::new(vec![
-            ("<cut>", vec![("list_workspace_files", json!({}))]),
-            ("", vec![hand("data")]),
-            ("", vec![hand("design")]),
-            ("", vec![hand("no build")]),
-        ]);
-        let (_, _, calls) = play(&ws, &mut model, |_, _| ("{}".into(), false));
+        let s = script(
+            vec![
+                ("Scout", "<cut>", vec![("list_workspace_files", json!({}))]),
+                ("Scout", "", vec![hand("data")]),
+                ("Architect", "", vec![hand("design")]),
+                ("Builder", "", vec![hand("no build")]),
+            ],
+            0,
+        );
+        let (_, _, calls) = play(&ws, &s, vec![], false, ok);
         assert!(calls.is_empty(), "a cut-off call ran: {calls:?}");
         // The cut-off turn is gone from the conversation, and the agent is told why.
-        let retried = &model.seen[1].2;
+        let retried = &s.seen_by("Scout")[1].history;
         assert_eq!(retried.len(), 2, "{retried:?}");
         assert!(retried[1]["content"]
             .as_str()
@@ -1535,8 +2177,8 @@ mod tests {
     #[test]
     fn a_declined_turn_fails_the_agent_and_ends_the_run() {
         let ws = workspace();
-        let mut model = Scripted::new(vec![("<declined>", vec![])]);
-        let (done, events, _) = play(&ws, &mut model, |_, _| ("{}".into(), false));
+        let s = script(vec![("Scout", "<declined>", vec![])], 0);
+        let (done, events, _) = play(&ws, &s, vec![], false, ok);
         assert_eq!(done["ok"], json!(false));
         assert_eq!(
             done["summary"],
@@ -1544,30 +2186,25 @@ mod tests {
         );
         assert!(events
             .iter()
-            .any(|e| e["type"] == "agent" && e["role"] == "scout" && e["state"] == "failed"));
-        assert_eq!(model.seen.len(), 1, "nothing ran after the decline");
+            .any(|e| e["type"] == "agent" && e["agent"] == "scout" && e["state"] == "failed"));
+        assert_eq!(s.seen().len(), 1, "nothing ran after the decline");
         let _ = std::fs::remove_dir_all(ws);
     }
 
     #[test]
     fn stopping_ends_the_run_before_the_next_step() {
         let ws = workspace();
-        let mut model = Scripted::new(vec![("", vec![hand("data")])]);
-        let req = request(&ws);
-        let mut events = Vec::new();
-        let cancel = AtomicBool::new(true);
-        let mut tools = |_: &str, _: Value| ("{}".to_string(), false);
-        let done = run(
-            &req,
-            &mut model,
-            "m",
-            &mut tools,
-            &mut |e| events.push(e),
-            &cancel,
-        );
+        let s = script(vec![("Scout", "", vec![hand("data")])], 0);
+        let (done, _, _) = play(&ws, &s, vec![], true, ok);
         assert_eq!(done["ok"], json!(false));
         assert_eq!(done["stopped"], json!(true));
-        assert!(model.seen.is_empty(), "no model call after a stop");
+        assert!(s.seen().is_empty(), "no model call after a stop");
+
+        // A side-by-side stage stops too, and says so rather than passing.
+        let mut crew = default_roster();
+        crew.push(custom("profiler", "Profiler", Stage::Discover, ""));
+        let (done, _, _) = play(&ws, &s, crew, true, ok);
+        assert_eq!(done["stopped"], json!(true));
         let _ = std::fs::remove_dir_all(ws);
     }
 
@@ -1634,20 +2271,27 @@ mod tests {
     #[test]
     fn hidden_arguments_are_not_offered_to_the_model() {
         let catalog = crate::tools::list_tools().as_array().cloned().unwrap();
-        let specs = specs_for(Role::Builder, &catalog);
+        let specs = specs_for(Stage::Build, &catalog);
         let create = specs.iter().find(|s| s.name == "create_pipeline").unwrap();
         let props = create.schema["properties"].as_object().unwrap();
         assert!(props.contains_key("pipeline") && props.contains_key("name"));
         for gone in ["workspace", "directory", "id", "overwrite"] {
             assert!(!props.contains_key(gone), "{gone} offered");
         }
-        // Every tool a role names exists in the catalog.
-        for role in Role::ALL {
-            let specs = specs_for(role, &catalog);
+        // Every tool a stage names exists in the catalog.
+        for stage in [
+            Stage::Discover,
+            Stage::Design,
+            Stage::Build,
+            Stage::Test,
+            Stage::Repair,
+            Stage::Review,
+        ] {
+            let specs = specs_for(stage, &catalog);
             assert_eq!(
                 specs.len(),
-                role.tools().len() + 1,
-                "{role:?} names a tool that does not exist"
+                stage.tools().len() + 1,
+                "{stage:?} names a tool that does not exist"
             );
         }
     }

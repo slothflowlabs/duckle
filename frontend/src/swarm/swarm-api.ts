@@ -5,7 +5,7 @@
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { isWebBackend } from '../web-fs';
-import type { SwarmEvent } from './swarm-state';
+import type { StageId, SwarmEvent } from './swarm-state';
 
 export type ProviderKind = 'anthropic-account' | 'anthropic-key' | 'openai-compatible';
 
@@ -22,6 +22,8 @@ export type SwarmRequest = {
     /** The open workspace. The web editor's server uses its own. */
     workspace: string;
     provider: SwarmProvider;
+    /** The crew: any number of agents, at least one in Build. */
+    agents: { id: string; name: string; stage: StageId; brief: string }[];
 };
 
 export type SwarmStatus = {

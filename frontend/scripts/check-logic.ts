@@ -27,7 +27,8 @@ import { previewColumns, resolveOutputSchema, schemaAfterRun } from '../src/sche
 import { placeTip } from '../src/tour-place';
 import { pipelinesUsingConnections } from '../src/connection-usage';
 import { arrange } from '../src/canvas/arrange';
-import { aboutCall, applySwarmEvent, initialSwarmState, type SwarmEvent } from '../src/swarm/swarm-state';
+import { DEFAULT_CREW, aboutCall, applySwarmEvent, crewProblem, initialSwarmState, newAgentId, working, type SwarmEvent } from '../src/swarm/swarm-state';
+import { seats } from '../src/swarm/SwarmConstellation';
 import { pipelineDocument } from '../src/pipeline-doc';
 import { parseWkt } from '../src/geo/wkt';
 import { linkPort, linkRows, withBreakpoint } from '../src/link-rows';
@@ -2525,17 +2526,27 @@ function context(name: string, vars: Record<string, string>): RepoItem {
 // The swarm view is a fold over the events duckle-mcp prints: replay a run.
 {
     const play = (events: SwarmEvent[]) => events.reduce(applySwarmEvent, initialSwarmState());
-    const start: SwarmEvent = { type: 'started', goal: 'g', pipelineId: 'swarm_g', model: 'm', roles: [] };
+    const crew = [
+        { id: 'scout', name: 'Scout', stage: 'discover' as const },
+        { id: 'profiler', name: 'Profiler', stage: 'discover' as const },
+        { id: 'builder', name: 'Builder', stage: 'build' as const },
+        { id: 'tester', name: 'Tester', stage: 'test' as const },
+        { id: 'fixer', name: 'Fixer', stage: 'repair' as const },
+    ];
+    const start: SwarmEvent = { type: 'started', goal: 'g', pipelineId: 'swarm_g', model: 'm', agents: crew };
     const run = play([
         start,
-        { type: 'agent', role: 'tester', state: 'working' },
-        { type: 'tool', role: 'tester', id: 't1', name: 'run_pipeline', input: {} },
-        { type: 'toolResult', role: 'tester', id: 't1', name: 'run_pipeline', ok: true, ms: 40, preview: '' },
-        { type: 'agent', role: 'tester', state: 'done', summary: 'gate failed', verdict: 'fail' },
-        { type: 'agent', role: 'fixer', state: 'working' },
-        { type: 'agent', role: 'fixer', state: 'done', summary: 'fixed' },
-        { type: 'agent', role: 'tester', state: 'working' },
-        { type: 'tool', role: 'tester', id: 't2', name: 'run_pipeline', input: { target: 'n2' } },
+        { type: 'stage', stage: 'test', agents: ['tester'] },
+        { type: 'agent', agent: 'tester', state: 'working' },
+        { type: 'tool', agent: 'tester', id: 't1', name: 'run_pipeline', input: {} },
+        { type: 'toolResult', agent: 'tester', id: 't1', name: 'run_pipeline', ok: true, ms: 40, preview: '' },
+        { type: 'agent', agent: 'tester', state: 'done', summary: 'gate failed', verdict: 'fail' },
+        { type: 'stage', stage: 'repair', agents: ['fixer'] },
+        { type: 'agent', agent: 'fixer', state: 'working' },
+        { type: 'agent', agent: 'fixer', state: 'done', summary: 'fixed' },
+        { type: 'stage', stage: 'test', agents: ['tester'] },
+        { type: 'agent', agent: 'tester', state: 'working' },
+        { type: 'tool', agent: 'tester', id: 't2', name: 'run_pipeline', input: { target: 'n2' } },
     ]);
     check(
         'swarm: a tester called back after a fix gets a second stint, and its call lands there',
@@ -2543,26 +2554,37 @@ function context(name: string, vars: Record<string, string>): RepoItem {
             run.stints[0].verdict === 'fail' &&
             run.stints[0].tools.length === 1 &&
             run.stints[0].tools[0].state === 'ok' &&
-            run.stints[2].role === 'tester' &&
+            run.stints[2].agent === 'tester' &&
             run.stints[2].tools.length === 1 &&
             run.stints[2].tools[0].about === 'to n2' &&
             run.toolCalls === 2,
         JSON.stringify(run.stints),
     );
-
-    const said = play([
-        start,
-        { type: 'agent', role: 'scout', state: 'working' },
-        { type: 'thinking', role: 'scout', text: 'look at ' },
-        { type: 'text', role: 'scout', text: 'Lost' },
-        { type: 'retry', role: 'scout', reason: 'overloaded' },
-        { type: 'thinking', role: 'scout', text: 'files' },
-        { type: 'text', role: 'scout', text: 'Reading.' },
-    ]);
     check(
-        'swarm: a retried turn drops what had arrived of it',
-        said.stream?.thinking === 'files' && said.stream?.text === 'Reading.',
-        JSON.stringify(said.stream),
+        'swarm: a stage that runs again is active again, and the one it follows is done',
+        run.stage === 'test' && run.stages.test === 'active' && run.stages.repair === 'done',
+        JSON.stringify(run.stages),
+    );
+
+    // Two agents of one stage work at once: each keeps its own stream.
+    const side = play([
+        start,
+        { type: 'stage', stage: 'discover', agents: ['scout', 'profiler'] },
+        { type: 'agent', agent: 'scout', state: 'working' },
+        { type: 'agent', agent: 'profiler', state: 'working' },
+        { type: 'thinking', agent: 'scout', text: 'look at ' },
+        { type: 'text', agent: 'profiler', text: 'Profiling.' },
+        { type: 'text', agent: 'scout', text: 'Lost' },
+        { type: 'retry', agent: 'scout', reason: 'overloaded' },
+        { type: 'thinking', agent: 'scout', text: 'files' },
+        { type: 'text', agent: 'scout', text: 'Reading.' },
+    ]);
+    const scout = side.stints.find(s => s.agent === 'scout');
+    const profiler = side.stints.find(s => s.agent === 'profiler');
+    check(
+        'swarm: agents working side by side keep their own streams, and a retry clears only its own',
+        scout?.thinking === 'files' && scout?.text === 'Reading.' && profiler?.text === 'Profiling.' && working(side).length === 2,
+        JSON.stringify(side.stints),
     );
 
     const built = play([
@@ -2590,11 +2612,16 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         JSON.stringify({ n: built.nodeCount, g: built.gateCount, rows: built.rows, runs: built.runs, last: built.lastRun }),
     );
 
-    const done = play([start, { type: 'agent', role: 'reviewer', state: 'working' }, { type: 'finished', ok: true, summary: 's' }]);
+    const done = play([
+        start,
+        { type: 'stage', stage: 'build', agents: ['builder'] },
+        { type: 'agent', agent: 'builder', state: 'working' },
+        { type: 'finished', ok: true, summary: 's' },
+    ]);
     check(
-        'swarm: finishing clears the live stream and the active agent',
-        done.phase === 'finished' && done.active === null && done.stream === null && done.finished?.ok === true,
-        JSON.stringify({ phase: done.phase, active: done.active }),
+        'swarm: finishing marks the last stage done',
+        done.phase === 'finished' && done.stages.build === 'done' && done.finished?.ok === true,
+        JSON.stringify({ phase: done.phase, stages: done.stages }),
     );
 
     check(
@@ -2604,6 +2631,34 @@ function context(name: string, vars: Record<string, string>): RepoItem {
             aboutCall('get_component_schema', { componentId: 'qa.unique' }) === 'qa.unique' &&
             aboutCall('list_components', {}) === 'all',
         aboutCall('inspect_source', { path: '${workspace}/data/raw/orders.csv' }),
+    );
+
+    // The crew: any number, but somebody must build, and ids stay unique.
+    const noBuilder = DEFAULT_CREW.filter(a => a.stage !== 'build');
+    check(
+        'swarm: a crew with no Build agent is refused before launch',
+        crewProblem(noBuilder) !== null && crewProblem(DEFAULT_CREW) === null,
+        String(crewProblem(noBuilder)),
+    );
+    const grown = [...DEFAULT_CREW, { id: 'pii-guardian', name: 'PII Guardian', stage: 'review' as const, brief: '' }];
+    check(
+        'swarm: a new agent gets an id the crew does not have yet',
+        newAgentId(grown, 'PII Guardian') === 'pii-guardian-2' && newAgentId(grown, '!!!') === 'agent',
+        newAgentId(grown, 'PII Guardian'),
+    );
+
+    // Seating: a big stage shrinks its agents and spills onto an inner ring.
+    const many = Array.from({ length: 12 }, (_, i) => ({ id: `r${i}`, name: `Reviewer ${i}`, stage: 'review' as const }));
+    const placed = seats([{ id: 'b', name: 'Builder', stage: 'build' }, ...many]);
+    const reviewSeats = placed.filter(p => p.stage === 'review');
+    const builder = placed.find(p => p.id === 'b');
+    check(
+        'swarm: twelve reviewers sit on two rings, smaller than a lone builder, unlabelled',
+        reviewSeats.length === 12 &&
+            new Set(reviewSeats.map(p => p.ring)).size === 2 &&
+            reviewSeats.every(p => p.r < (builder?.r ?? 0) && !p.label && p.deg >= 90 && p.deg <= 150) &&
+            builder?.label === true,
+        JSON.stringify(reviewSeats.slice(0, 3)),
     );
 }
 

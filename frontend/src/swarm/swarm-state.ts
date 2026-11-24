@@ -1,44 +1,133 @@
-// The swarm view's state, folded from the events `duckle-mcp swarm` prints.
+// The swarm view's state, folded from the events `duckle-mcp swarm` prints,
+// and the crew the view sends with a run.
 //
 // Pure: the panel keeps one SwarmState and replaces it with
 // applySwarmEvent(state, event) for every event, so what the view shows is a
-// function of the events alone (and checks/check-logic.ts can replay them).
+// function of the events alone (and scripts/check-logic.ts can replay them).
 
-export type RoleId = 'scout' | 'architect' | 'builder' | 'tester' | 'fixer' | 'reviewer';
+export type StageId = 'discover' | 'design' | 'build' | 'test' | 'repair' | 'review';
 
-export const ROLES: { id: RoleId; title: string; job: string }[] = [
-    { id: 'scout', title: 'Scout', job: 'reads the data' },
-    { id: 'architect', title: 'Architect', job: 'designs the pipeline and its gates' },
-    { id: 'builder', title: 'Builder', job: 'writes it onto the canvas' },
-    { id: 'tester', title: 'Tester', job: 'runs it and checks every gate' },
-    { id: 'fixer', title: 'Fixer', job: 'repairs what failed' },
-    { id: 'reviewer', title: 'Reviewer', job: 'reports back to you' },
+export const STAGES: { id: StageId; title: string; job: string; sideBySide: boolean }[] = [
+    { id: 'discover', title: 'Discover', job: 'reads the data', sideBySide: true },
+    { id: 'design', title: 'Design', job: 'plans the pipeline and its gates', sideBySide: false },
+    { id: 'build', title: 'Build', job: 'writes it onto the canvas', sideBySide: false },
+    { id: 'test', title: 'Test', job: 'runs it and checks every gate', sideBySide: false },
+    { id: 'repair', title: 'Repair', job: 'fixes what the tests found', sideBySide: false },
+    { id: 'review', title: 'Review', job: 'reports back to you', sideBySide: true },
 ];
 
+/** One member of the crew, as the view keeps it and the run receives it. */
+export type CrewAgent = {
+    id: string;
+    name: string;
+    stage: StageId;
+    /** Its own instructions, on top of its stage's. Empty for a built-in. */
+    brief: string;
+    builtIn?: boolean;
+};
+
+export const DEFAULT_CREW: CrewAgent[] = [
+    { id: 'scout', name: 'Scout', stage: 'discover', brief: '', builtIn: true },
+    { id: 'architect', name: 'Architect', stage: 'design', brief: '', builtIn: true },
+    { id: 'builder', name: 'Builder', stage: 'build', brief: '', builtIn: true },
+    { id: 'tester', name: 'Tester', stage: 'test', brief: '', builtIn: true },
+    { id: 'fixer', name: 'Fixer', stage: 'repair', brief: '', builtIn: true },
+    { id: 'reviewer', name: 'Reviewer', stage: 'review', brief: '', builtIn: true },
+];
+
+/** Specialists one click adds to the crew. */
+export const TEMPLATES: Omit<CrewAgent, 'id'>[] = [
+    {
+        name: 'Data Profiler',
+        stage: 'discover',
+        brief: 'Profile every column the goal touches: nulls, distinct counts, ranges, and values that look wrong.',
+    },
+    {
+        name: 'Join Scout',
+        stage: 'discover',
+        brief: 'Find how the files relate: candidate join keys, their match rate, and keys present on one side only.',
+    },
+    {
+        name: 'Edge-case Tester',
+        stage: 'test',
+        brief: 'Try to break it: null keys, duplicates, empty input, extreme values. Run with target to inspect steps.',
+    },
+    {
+        name: 'PII Guardian',
+        stage: 'review',
+        brief: 'Find columns that hold personal data. Fail if raw personal data reaches a sink unmasked.',
+    },
+    {
+        name: 'Performance Critic',
+        stage: 'review',
+        brief: 'Look for expensive steps: reading a file twice, wide sorts, joins that multiply rows. Suggest cheaper shapes.',
+    },
+    {
+        name: 'Docs Writer',
+        stage: 'review',
+        brief: 'Write a short README for the pipeline in your summary: purpose, inputs, outputs, gates, how to rerun it.',
+    },
+];
+
+/** A crew the run accepts: one Build agent at least, ids unique. */
+export function crewProblem(crew: CrewAgent[]): string | null {
+    if (!crew.some(a => a.stage === 'build')) return 'The crew needs a Build agent: nobody else writes the pipeline.';
+    const ids = new Set<string>();
+    for (const a of crew) {
+        if (!a.name.trim()) return 'Every agent needs a name.';
+        if (ids.has(a.id)) return `Two agents share the id ${a.id}.`;
+        ids.add(a.id);
+    }
+    return null;
+}
+
+/** A fresh id for a new agent, never one the crew has. */
+export function newAgentId(crew: CrewAgent[], name: string): string {
+    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'agent';
+    let id = base;
+    for (let n = 2; crew.some(a => a.id === id); n++) id = `${base}-${n}`;
+    return id;
+}
+
 export type SwarmEvent =
-    | { type: 'started'; goal: string; pipelineId: string; model: string; roles: RoleId[] }
+    | {
+          type: 'started';
+          goal: string;
+          pipelineId: string;
+          model: string;
+          agents: { id: string; name: string; stage: StageId }[];
+      }
+    | { type: 'stage'; stage: StageId; agents: string[] }
     | {
           type: 'agent';
-          role: RoleId;
+          agent: string;
           state: 'working' | 'done' | 'failed';
           summary?: string;
           verdict?: 'pass' | 'fail' | null;
       }
-    | { type: 'text' | 'thinking'; role: RoleId; text: string }
-    | { type: 'retry'; role: RoleId; reason: string }
-    | { type: 'tool'; role: RoleId; id: string; name: string; input: unknown }
-    | { type: 'toolResult'; role: RoleId; id: string; name: string; ok: boolean; ms: number; preview: string }
+    | { type: 'text' | 'thinking'; agent: string; text: string }
+    | { type: 'retry'; agent: string; reason: string }
+    | { type: 'tool'; agent: string; id: string; name: string; input: unknown }
+    | { type: 'toolResult'; agent: string; id: string; name: string; ok: boolean; ms: number; preview: string }
     | { type: 'pipeline'; id: string; name: string; doc: { nodes?: unknown[]; edges?: unknown[] } & Record<string, unknown> }
-    | { type: 'run'; status: string; durationMs?: number; nodes?: Record<string, { status?: string; rows?: number; error?: string }>; error?: unknown }
-    | { type: 'usage'; role: RoleId; inputTokens: number; outputTokens: number }
-    | { type: 'handoff'; from: RoleId; to: RoleId }
+    | {
+          type: 'run';
+          status: string;
+          durationMs?: number;
+          nodes?: Record<string, { status?: string; rows?: number; error?: string }>;
+          error?: unknown;
+      }
+    | { type: 'usage'; agent: string; inputTokens: number; outputTokens: number }
+    | { type: 'handoff'; from: string; to: string }
     | {
           type: 'finished';
           ok: boolean;
           tested?: boolean;
+          reviewed?: boolean;
           stopped?: boolean;
           summary: string;
           pipelineId?: string;
+          agents?: number;
           durationMs?: number;
           toolCalls?: number;
           inputTokens?: number;
@@ -47,6 +136,7 @@ export type SwarmEvent =
     | { type: 'error'; message: string };
 
 export type AgentState = 'idle' | 'working' | 'done' | 'failed';
+export type StageState = 'pending' | 'active' | 'done' | 'failed';
 
 export type ToolChip = {
     id: string;
@@ -58,11 +148,14 @@ export type ToolChip = {
     preview?: string;
 };
 
-/** One agent's turn on stage. The Tester and Fixer can each have several. */
+/** One agent's turn on stage. Test and Repair agents can have several. */
 export type Stint = {
-    role: RoleId;
+    agent: string;
     state: AgentState;
     tools: ToolChip[];
+    /** What it is saying right now, thinking kept apart. Cleared when done. */
+    thinking: string;
+    text: string;
     summary?: string;
     verdict?: 'pass' | 'fail' | null;
 };
@@ -72,11 +165,12 @@ export type SwarmState = {
     goal: string;
     model: string;
     pipelineId: string | null;
-    agents: Record<RoleId, AgentState>;
-    active: RoleId | null;
+    /** The crew of this run, from its started event. */
+    crew: { id: string; name: string; stage: StageId }[];
+    agents: Record<string, AgentState>;
+    stages: Record<StageId, StageState>;
+    stage: StageId | null;
     stints: Stint[];
-    /** What the active agent is saying right now, thinking marked apart. */
-    stream: { role: RoleId; thinking: string; text: string } | null;
     toolCalls: number;
     inputTokens: number;
     outputTokens: number;
@@ -89,13 +183,13 @@ export type SwarmState = {
     finished: Extract<SwarmEvent, { type: 'finished' }> | null;
 };
 
-const IDLE_AGENTS: Record<RoleId, AgentState> = {
-    scout: 'idle',
-    architect: 'idle',
-    builder: 'idle',
-    tester: 'idle',
-    fixer: 'idle',
-    reviewer: 'idle',
+const PENDING_STAGES: Record<StageId, StageState> = {
+    discover: 'pending',
+    design: 'pending',
+    build: 'pending',
+    test: 'pending',
+    repair: 'pending',
+    review: 'pending',
 };
 
 export function initialSwarmState(): SwarmState {
@@ -104,10 +198,11 @@ export function initialSwarmState(): SwarmState {
         goal: '',
         model: '',
         pipelineId: null,
-        agents: { ...IDLE_AGENTS },
-        active: null,
+        crew: [],
+        agents: {},
+        stages: { ...PENDING_STAGES },
+        stage: null,
         stints: [],
-        stream: null,
         toolCalls: 0,
         inputTokens: 0,
         outputTokens: 0,
@@ -121,8 +216,15 @@ export function initialSwarmState(): SwarmState {
     };
 }
 
-/** The stream keeps the tail an eye can follow, not the whole turn. */
-const STREAM_KEEP = 900;
+/** The agents working right now. */
+export function working(s: SwarmState): string[] {
+    return Object.entries(s.agents)
+        .filter(([, st]) => st === 'working')
+        .map(([id]) => id);
+}
+
+/** A stream keeps the tail an eye can follow, not the whole turn. */
+const STREAM_KEEP = 700;
 
 function tail(s: string): string {
     return s.length > STREAM_KEEP ? s.slice(s.length - STREAM_KEEP) : s;
@@ -167,6 +269,21 @@ function countGates(nodes: unknown[]): number {
     }).length;
 }
 
+/** The agent's open stint, else its latest. */
+function stintIndex(stints: Stint[], agent: string): number {
+    for (let i = stints.length - 1; i >= 0; i--) if (stints[i].agent === agent && stints[i].state === 'working') return i;
+    for (let i = stints.length - 1; i >= 0; i--) if (stints[i].agent === agent) return i;
+    return -1;
+}
+
+function withStint(stints: Stint[], agent: string, f: (s: Stint) => Stint): Stint[] {
+    const i = stintIndex(stints, agent);
+    if (i < 0) return stints;
+    const next = stints.slice();
+    next[i] = f(stints[i]);
+    return next;
+}
+
 export function applySwarmEvent(s: SwarmState, e: SwarmEvent): SwarmState {
     switch (e.type) {
         case 'started':
@@ -176,49 +293,62 @@ export function applySwarmEvent(s: SwarmState, e: SwarmEvent): SwarmState {
                 goal: e.goal,
                 model: e.model,
                 pipelineId: e.pipelineId,
+                crew: e.agents ?? [],
+                agents: Object.fromEntries((e.agents ?? []).map(a => [a.id, 'idle' as AgentState])),
             };
+        case 'stage': {
+            // A stage that starts again (Test after a repair) is active again;
+            // the one before it is done.
+            const stages = { ...s.stages };
+            if (s.stage && s.stage !== e.stage && stages[s.stage] === 'active') stages[s.stage] = 'done';
+            stages[e.stage] = 'active';
+            return { ...s, stage: e.stage, stages };
+        }
         case 'agent': {
-            const agents = { ...s.agents, [e.role]: e.state };
+            const agents = { ...s.agents, [e.agent]: e.state };
             if (e.state === 'working') {
                 return {
                     ...s,
                     agents,
-                    active: e.role,
-                    stream: { role: e.role, thinking: '', text: '' },
-                    stints: [...s.stints, { role: e.role, state: 'working', tools: [] }],
+                    stints: [...s.stints, { agent: e.agent, state: 'working', tools: [], thinking: '', text: '' }],
                 };
             }
-            const stints = s.stints.slice();
-            for (let i = stints.length - 1; i >= 0; i--) {
-                if (stints[i].role === e.role && stints[i].state === 'working') {
-                    stints[i] = { ...stints[i], state: e.state, summary: e.summary, verdict: e.verdict ?? null };
-                    break;
-                }
-            }
-            return { ...s, agents, stints, active: s.active === e.role ? null : s.active };
+            const stints = withStint(s.stints, e.agent, st => ({
+                ...st,
+                state: e.state,
+                summary: e.summary,
+                verdict: e.verdict ?? null,
+                thinking: '',
+                text: '',
+            }));
+            const stages = { ...s.stages };
+            const stage = s.crew.find(a => a.id === e.agent)?.stage;
+            if (stage && e.state === 'failed') stages[stage] = 'failed';
+            return { ...s, agents, stints, stages };
         }
         case 'text':
-        case 'thinking': {
-            const cur = s.stream && s.stream.role === e.role ? s.stream : { role: e.role, thinking: '', text: '' };
+        case 'thinking':
             return {
                 ...s,
-                stream:
-                    e.type === 'text'
-                        ? { ...cur, text: tail(cur.text + e.text) }
-                        : { ...cur, thinking: tail(cur.thinking + e.text) },
+                stints: withStint(s.stints, e.agent, st =>
+                    e.type === 'text' ? { ...st, text: tail(st.text + e.text) } : { ...st, thinking: tail(st.thinking + e.text) },
+                ),
             };
-        }
         case 'retry':
             // The turn is being asked for again: what arrived of it is void.
-            return { ...s, stream: { role: e.role, thinking: '', text: '' } };
+            return { ...s, stints: withStint(s.stints, e.agent, st => ({ ...st, thinking: '', text: '' })) };
         case 'tool': {
             const chip: ToolChip = { id: e.id, name: e.name, about: aboutCall(e.name, e.input), state: 'running' };
-            return { ...s, toolCalls: s.toolCalls + 1, stints: withLastStint(s.stints, e.role, st => ({ ...st, tools: [...st.tools, chip] })) };
+            return {
+                ...s,
+                toolCalls: s.toolCalls + 1,
+                stints: withStint(s.stints, e.agent, st => ({ ...st, tools: [...st.tools, chip] })),
+            };
         }
         case 'toolResult':
             return {
                 ...s,
-                stints: withLastStint(s.stints, e.role, st => ({
+                stints: withStint(s.stints, e.agent, st => ({
                     ...st,
                     tools: st.tools.map(t =>
                         t.id === e.id ? { ...t, state: e.ok ? 'ok' : 'error', ms: e.ms, preview: e.preview } : t,
@@ -245,22 +375,14 @@ export function applySwarmEvent(s: SwarmState, e: SwarmEvent): SwarmState {
             return { ...s, inputTokens: e.inputTokens, outputTokens: e.outputTokens };
         case 'handoff':
             return s;
-        case 'finished':
-            return { ...s, phase: 'finished', active: null, stream: null, finished: e };
+        case 'finished': {
+            const stages = { ...s.stages };
+            if (s.stage && stages[s.stage] === 'active') stages[s.stage] = e.ok || !e.stopped ? 'done' : 'failed';
+            return { ...s, phase: 'finished', stages, finished: e };
+        }
         case 'error':
             return { ...s, error: e.message };
     }
-}
-
-function withLastStint(stints: Stint[], role: RoleId, f: (s: Stint) => Stint): Stint[] {
-    for (let i = stints.length - 1; i >= 0; i--) {
-        if (stints[i].role === role) {
-            const next = stints.slice();
-            next[i] = f(stints[i]);
-            return next;
-        }
-    }
-    return stints;
 }
 
 /** "12.4k" for a token count. */

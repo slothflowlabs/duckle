@@ -244,16 +244,18 @@ Nothing to install first. The agent fetches Duckle and the DuckDB engine on dema
 
 ### Swarm mode: a goal in, a tested pipeline out
 
-Press **Swarm** in the top bar, say what the pipeline should do, and six agents build it in front of you:
+Press **Swarm** in the top bar, give it a mission, and a crew of agents builds the pipeline in front of you, in six stages:
 
-| Agent | What it does |
-|---|---|
-| **Scout** | Reads the workspace's data: files, columns, types, sample values. |
-| **Architect** | Designs the pipeline, and the quality gates that will prove it right. |
-| **Builder** | Writes it. It appears on the canvas step by step. |
-| **Tester** | Runs it, and checks every gate and the output it wrote. |
-| **Fixer** | Repairs what the Tester found, for up to two rounds. |
-| **Reviewer** | Reports back: what it does, where the output is, and the evidence. |
+| Stage | Built-in agent | What it does |
+|---|---|---|
+| **Discover** | Scout | Reads the workspace's data: files, columns, types, sample values. |
+| **Design** | Architect | Plans the pipeline, and the quality gates that will prove it right. |
+| **Build** | Builder | Writes it. It appears on the canvas step by step. |
+| **Test** | Tester | Runs it, and checks every gate and the output it wrote. |
+| **Repair** | Fixer | Fixes what the tests found; Test runs again, up to two rounds. |
+| **Review** | Reviewer | Reports back: what it does, where the output is, and the evidence. |
+
+The crew has no fixed size. In the **Crew** tab, add as many agents as you like to any stage, each with its own name and brief, or one click from the specialists offered (Data Profiler, Join Scout, Edge-case Tester, PII Guardian, Performance Critic, Docs Writer). Discover and Review only read, so their agents work side by side, six at a time; in the other stages they take turns, each starting from the notes of every agent before it. Every Test and Review agent must pass for the mission to pass. The one rule: somebody has to be in Build.
 
 Every step is a call to Duckle's own MCP tools, so a swarm can do nothing an agent connected over MCP could not. It writes one new pipeline of its own (`pipelines/swarm_*.json`) and never one you made, and its tools read only the workspace. Its checks are Duckle quality gates (`qa.unique`, `qa.notnull`, `qa.reconcile` and the like), so they stay in the pipeline and run every time it does. The canvas follows along: steps appear as they are written, and each run lights them up with their row counts.
 
@@ -4883,13 +4885,15 @@ Linux, and fixes for a run that could write its rows twice (#406), REST APIs
 that take their page in a POST body (#407), and editors that blanked the app
 (#408). Read *Before you upgrade* first.
 
-- **Swarm mode.** Say what a pipeline should do, and six agents build it on
-  the canvas in front of you: the Scout reads the data, the Architect designs
-  the pipeline and the quality gates that will prove it, the Builder writes
-  it, the Tester runs it and checks every gate, the Fixer repairs what failed,
-  and the Reviewer reports back. Claude through your Anthropic account or an
-  API key, OpenAI, Hugging Face, OpenRouter, any OpenAI-compatible endpoint,
-  or a local model through Ollama or LM Studio. Desktop and web editor. See
+- **Swarm mode.** Give it a mission, and a crew of agents builds the pipeline
+  on the canvas in front of you, in six stages: Discover reads the data,
+  Design plans the pipeline and the quality gates that will prove it, Build
+  writes it, Test runs it and checks every gate, Repair fixes what failed, and
+  Review reports back. The crew has no fixed size: add any number of agents
+  to any stage, and the reading stages run theirs side by side. Claude
+  through your Anthropic account or an API key, Hugging Face, OpenAI,
+  OpenRouter, any OpenAI-compatible endpoint, or a local model through Ollama
+  or LM Studio. Desktop and web editor. See
   [Swarm mode](#swarm-mode-a-goal-in-a-tested-pipeline-out). MCP gains the two
   tools it reads data with: `list_workspace_files` and `inspect_source`.
 - **Before you upgrade.** Duckle now runs DuckDB 2.0.1, and so does the pip
