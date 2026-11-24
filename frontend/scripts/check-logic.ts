@@ -28,7 +28,7 @@ import { placeTip } from '../src/tour-place';
 import { pipelinesUsingConnections } from '../src/connection-usage';
 import { arrange } from '../src/canvas/arrange';
 import { DEFAULT_CREW, aboutCall, applySwarmEvent, crewProblem, initialSwarmState, newAgentId, working, type SwarmEvent } from '../src/swarm/swarm-state';
-import { layout } from '../src/swarm/SwarmField';
+import { seatsOf } from '../src/swarm/SwarmConstellation';
 import { pipelineDocument } from '../src/pipeline-doc';
 import { parseWkt } from '../src/geo/wkt';
 import { linkPort, linkRows, withBreakpoint } from '../src/link-rows';
@@ -2647,23 +2647,22 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         newAgentId(grown, 'PII Guardian'),
     );
 
-    // Seating: a big stage's clouds are smaller and spill onto an inner ring,
-    // all of them in the stage's own part of the field (Review: lower left).
-    const many = Array.from({ length: 12 }, (_, i) => ({ id: `r${i}`, name: `Reviewer ${i}`, stage: 'review' as const }));
-    const W = 460;
-    const H = 236;
-    const placed = layout([{ id: 'b', name: 'Builder', stage: 'build' }, ...many], W, H);
-    const reviewSeats = placed.filter(p => p.stage === 'review');
-    const builder = placed.find(p => p.id === 'b');
-    const reach = (p: { x: number; y: number }) => Math.round(Math.hypot((p.x - W / 2) / (W * 0.36), (p.y - H / 2) / (H * 0.33)) * 100);
+    // Seating: the default six sit where the first swarm view had them; a big
+    // crew shares the orbit in stage order with smaller orbs, unnamed at rest.
+    const six = seatsOf(DEFAULT_CREW);
     check(
-        'swarm: twelve reviewers sit lower left on two rings, smaller than a lone builder',
-        reviewSeats.length === 12 &&
-            new Set(reviewSeats.map(reach)).size === 2 &&
-            reviewSeats.every(p => p.scale < (builder?.scale ?? 0) && p.y > H / 2 && p.x < W / 2 + 1) &&
-            !!builder &&
-            builder.y < H / 2,
-        JSON.stringify(reviewSeats.slice(0, 3)),
+        'swarm: the default crew sits at the first view’s six places, full size and named',
+        JSON.stringify(six.map(s => [s.id, s.deg])) ===
+            JSON.stringify([['scout', 180], ['architect', 240], ['builder', 300], ['tester', 0], ['fixer', 60], ['reviewer', 120]]) &&
+            six.every(s => s.scale === 1 && s.named),
+        JSON.stringify(six.map(s => [s.id, s.deg, s.scale])),
+    );
+    const many = Array.from({ length: 12 }, (_, i) => ({ id: `r${i}`, name: `Reviewer ${i}`, stage: 'review' as const }));
+    const big = seatsOf([...many, { id: 'b', name: 'Builder', stage: 'build' }]);
+    check(
+        'swarm: thirteen agents share the orbit in stage order, smaller and unnamed at rest',
+        big.length === 13 && big[0].id === 'b' && big.every(s => s.scale < 1 && !s.named) && new Set(big.map(s => s.deg)).size === 13,
+        JSON.stringify(big.slice(0, 3)),
     );
 }
 

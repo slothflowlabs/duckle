@@ -132,76 +132,141 @@
     color: var(--text-1);
 }
 
-/* The swarm field ------------------------------------------------------- */
+/* The constellation: the first swarm view's, as it was --------------- */
 .sw-hero {
-    padding: 0 12px 10px;
+    padding: 0 12px 8px;
 }
-.sw-stagebox {
-    position: relative;
-    border-radius: 14px;
-    overflow: hidden;
-    border: 1px solid var(--border-strong);
-    background: var(--bg-0);
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25);
-}
-/* A soft vignette, and scanlines faint enough to feel rather than see: the
-   field is the pixel logo's world. */
-.sw-stagebox::before,
-.sw-stagebox::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    z-index: 1;
-}
-.sw-stagebox::before {
-    background: radial-gradient(ellipse at center, transparent 55%, color-mix(in srgb, var(--bg-0) 75%, transparent));
-}
-.sw-stagebox::after {
-    background: repeating-linear-gradient(180deg, transparent 0 3px, color-mix(in srgb, var(--text-1) 2%, transparent) 3px 4px);
-}
-.sw-field {
-    position: relative;
-    height: 236px;
-    cursor: crosshair;
-}
-.sw-field canvas {
+.sw-sky {
+    width: 100%;
+    height: auto;
     display: block;
+    border-radius: 14px;
+    box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.06),
+        0 18px 40px rgba(0, 0, 0, 0.45);
 }
-.sw-probe {
-    position: absolute;
-    width: 0;
-    height: 0;
-    overflow: hidden;
+.sw-star {
+    fill: #c9d4ff;
+    opacity: 0.35;
+    animation: sw-twinkle 3.6s ease-in-out infinite;
 }
-.sw-hud {
-    position: absolute;
-    inset: 10px 12px auto 12px;
-    z-index: 2;
-    display: flex;
-    justify-content: space-between;
-    pointer-events: none;
-    font: 700 9.5px ui-monospace, 'JetBrains Mono', Consolas, monospace;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--text-2);
+@keyframes sw-twinkle {
+    50% {
+        opacity: 0.08;
+    }
 }
-.sw-hud-stage {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
+.sw-orbit-line {
+    fill: none;
+    stroke: rgba(200, 210, 255, 0.14);
+    stroke-width: 1;
+    stroke-dasharray: 3 7;
 }
-.sw-hud-stage i {
-    width: 7px;
-    height: 7px;
-    background: var(--c);
-    box-shadow: 0 0 10px var(--c);
+.sw-spoke {
+    stroke: rgba(200, 210, 255, 0.07);
+    stroke-width: 1;
 }
-.is-running .sw-hud-stage i {
-    animation: sw-blink 1s ease-in-out infinite;
+.sw-spoke-live {
+    stroke-width: 1.6;
+    stroke-dasharray: 5 6;
+    opacity: 0.8;
+    animation: sw-dash 0.7s linear infinite;
 }
-.sw-hud-count {
-    color: var(--text-3);
+.sw-core-halo {
+    fill: rgba(255, 122, 69, 0.08);
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: sw-breathe 3.2s ease-in-out infinite;
+}
+.sw-core-busy .sw-core-halo {
+    fill: rgba(255, 122, 69, 0.2);
+    animation-duration: 0.9s;
+}
+.sw-core-ring {
+    fill: none;
+    stroke: rgba(255, 176, 138, 0.55);
+    stroke-width: 1.2;
+    stroke-dasharray: 2 5;
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: sw-spin 9s linear infinite;
+}
+.sw-core-busy .sw-core-ring {
+    animation-duration: 2.2s;
+}
+.sw-core-name {
+    fill: #fff4ec;
+    font-size: 8.5px;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    text-anchor: middle;
+}
+.sw-core-sub {
+    fill: rgba(255, 244, 236, 0.75);
+    font-size: 6.5px;
+    font-family: ui-monospace, 'JetBrains Mono', Consolas, monospace;
+    text-anchor: middle;
+}
+@keyframes sw-breathe {
+    50% {
+        transform: scale(1.12);
+    }
+}
+.sw-agent {
+    transition: opacity 400ms;
+}
+.sw-agent.sw-idle {
+    opacity: 0.42;
+}
+.sw-halo {
+    opacity: 0;
+    transform-box: fill-box;
+    transform-origin: center;
+    transition: opacity 300ms;
+}
+.sw-working .sw-halo {
+    opacity: 1;
+    animation: sw-pulse 1.5s ease-in-out infinite;
+}
+@keyframes sw-pulse {
+    50% {
+        transform: scale(1.22);
+        opacity: 0.55;
+    }
+}
+.sw-ring {
+    fill: none;
+    stroke-width: 1.2;
+    stroke-dasharray: 3 6;
+    opacity: 0.25;
+    transform-box: fill-box;
+    transform-origin: center;
+}
+.sw-working .sw-ring {
+    opacity: 0.95;
+    animation: sw-spin 2.6s linear infinite;
+}
+.sw-done .sw-ring {
+    opacity: 0.6;
+    stroke-dasharray: none;
+}
+.sw-failed .sw-ring {
+    opacity: 0.9;
+    stroke: #ff4d6d !important;
+    stroke-dasharray: none;
+}
+.sw-name {
+    fill: #dfe5f3;
+    font-size: 9.5px;
+    font-weight: 600;
+    text-anchor: middle;
+    letter-spacing: 0.03em;
+}
+.sw-tick {
+    fill: none;
+    stroke: #06080f;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 .sw-status {
@@ -1197,9 +1262,11 @@ body.swarm-live .react-flow__edge-path {
 
 /* A short window keeps room for the tabs: the constellation gives way. */
 @media (max-height: 860px) {
-    .sw-field {
-        height: 26vh;
-        min-height: 150px;
+    .sw-sky {
+        width: auto;
+        height: 30vh;
+        max-width: 100%;
+        margin: 0 auto;
     }
     .sw-head {
         padding-bottom: 4px;
