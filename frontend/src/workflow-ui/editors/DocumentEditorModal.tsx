@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Eye, FileText, Pencil, Save, X } from 'lucide-react';
-import Editor from 'react-simple-code-editor';
+import Editor from './code-editor';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-markdown';
 import ReactMarkdown from 'react-markdown';

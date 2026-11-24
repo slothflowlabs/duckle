@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Code2, Save, X } from 'lucide-react';
-import Editor from 'react-simple-code-editor';
+import Editor from './code-editor';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-python';
 import 'prismjs/components/prism-rust';
