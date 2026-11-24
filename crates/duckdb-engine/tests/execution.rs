@@ -11060,6 +11060,122 @@ fn src_rest_more_pages_flag_that_is_not_a_boolean_fails() {
     assert!(err.contains("/data/pagination/hasMore") && err.contains("missing"), "{err}");
 }
 
+/// #407: one page of a POST API that answers `{"data": [...], "hasMore": ...}`.
+fn post_page(ids: &[u32], has_more: &str) -> String {
+    let rows: Vec<String> = ids.iter().map(|i| format!(r#"{{"id":{i}}}"#)).collect();
+    http_reply("200 OK", "", &format!(r#"{{"data":[{}],"hasMore":{has_more}}}"#, rows.join(",")))
+}
+
+/// #407: a POST to `/query` with `body`, reading `data` and following
+/// `hasMore`, into a JSONL sink.
+fn post_paged_doc(port: u16, body: &str, pagination: Value, out: &str) -> PipelineDoc {
+    let mut props = json!({
+        "url": format!("http://127.0.0.1:{port}/query"),
+        "method": "POST",
+        "body": body,
+        "responsePath": "data",
+        "hasMorePath": "hasMore",
+    });
+    props.as_object_mut().unwrap().extend(pagination.as_object().unwrap().clone());
+    doc(
+        json!([node("q", "src.rest", props), node("k", "snk.jsonl", json!({ "path": out }))]),
+        json!([main_edge("e1", "q", "k")]),
+    )
+}
+
+/// #407: an API that takes the page in its POST body could not be paged: the
+/// next page only ever went out as `?offset=` on the URL, with the first page's
+/// body again. `{offset}` and `{page_size}` in the body now carry it there.
+#[test]
+fn src_rest_offset_paging_travels_in_a_post_body() {
+    let engine = engine_or_skip!();
+    let (port, rx) = serve_script(vec![post_page(&[1, 2], "true"), post_page(&[3], "false")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "items.jsonl");
+    let body = r#"{"report": "x", "start": {offset}, "size": {page_size}}"#;
+    let r = engine.execute_pipeline(&post_paged_doc(
+        port,
+        body,
+        json!({ "paginationType": "offset", "pageSize": 2 }),
+        &out,
+    ));
+    let sent: Vec<String> = rx.try_iter().collect();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(std::fs::read_to_string(&out).unwrap().lines().count(), 3, "every page was read");
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert!(sent.iter().all(|s| s.starts_with("POST /query ")), "the page is not on the URL: {sent:?}");
+    assert!(sent[0].contains(r#""start": 0, "size": 2"#), "{}", sent[0]);
+    assert!(sent[1].contains(r#""start": 2, "size": 2"#), "{}", sent[1]);
+}
+
+/// #407: the same with page numbers, which start where Start page says.
+#[test]
+fn src_rest_page_paging_travels_in_a_post_body() {
+    let engine = engine_or_skip!();
+    let (port, rx) = serve_script(vec![post_page(&[1, 2], "true"), post_page(&[3], "false")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "items.jsonl");
+    let r = engine.execute_pipeline(&post_paged_doc(
+        port,
+        r#"{"page": {page}}"#,
+        json!({ "paginationType": "page", "startPage": 0 }),
+        &out,
+    ));
+    let sent: Vec<String> = rx.try_iter().collect();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(std::fs::read_to_string(&out).unwrap().lines().count(), 3);
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert!(sent.iter().all(|s| s.starts_with("POST /query ")), "{sent:?}");
+    assert!(sent[0].contains(r#"{"page": 0}"#) && sent[1].contains(r#"{"page": 1}"#), "{sent:?}");
+}
+
+/// #407: the response checked against the path was the first, and the one
+/// that failed was a later page that came back without the flag. The error now
+/// names the page and the request, and shows what came back.
+#[test]
+fn src_rest_a_later_page_without_the_flag_names_the_page_and_its_answer() {
+    let engine = engine_or_skip!();
+    let (port, _rx) = serve_script(vec![
+        post_page(&[1, 2], "true"),
+        http_reply("200 OK", "", r#"{"error":"unknown parameter: offset"}"#),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "never.jsonl");
+    let r = engine.execute_pipeline(&post_paged_doc(
+        port,
+        r#"{"report": "x"}"#,
+        json!({ "paginationType": "offset", "pageSize": 2 }),
+        &out,
+    ));
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("page 2") && err.contains("/query?offset=2"), "{err}");
+    assert!(err.contains("unknown parameter: offset"), "shows what came back: {err}");
+}
+
+/// #405: with no records pointer the whole response is one row, which looked
+/// like "every record on one long line". The node now says so, and where the
+/// records are.
+#[test]
+fn src_rest_says_why_a_response_became_one_long_row() {
+    let engine = engine_or_skip!();
+    let (port, _rx) = serve_script(vec![post_page(&[1, 2, 3], "false")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "one.jsonl");
+    let d = doc(
+        json!([
+            node("q", "src.rest", json!({ "url": format!("http://127.0.0.1:{port}/query") })),
+            node("k", "snk.jsonl", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "q", "k")]),
+    );
+    let r = engine.execute_pipeline(&d);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(std::fs::read_to_string(&out).unwrap().lines().count(), 1, "one row, as before");
+    let note = r.nodes.get("q").and_then(|n| n.note.clone()).unwrap_or_default();
+    assert!(note.contains("no records pointer is set") && note.contains("/data"), "{note}");
+}
+
 #[test]
 fn src_dhis2_alias_routes_through_rest_path() {
     // DHIS2 is a thin engine alias of src.rest. This exercises the exact

@@ -17088,6 +17088,8 @@ impl DuckdbEngine {
         // #256: one session for the node, shared by every parent's walk and every
         // worker, so the pace and the cookies are the node's, not one thread's.
         let session = std::sync::Mutex::new(crate::http_walk::HttpWalk::new(&spec.pacing));
+        // What the first page said about the records pointer, for the node's note.
+        let records_heads_up: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
         let fetch_parent = |parent: &JsonValue| -> Result<(Vec<JsonValue>, u64), EngineError> {
             let mut out: Vec<JsonValue> = Vec::new();
             self.check_cancelled()?;
@@ -17107,12 +17109,30 @@ impl DuckdbEngine {
                 _ => 1,
             };
             let mut parent_pages = 0_u64;
+            // An API that takes the page in a POST body gets it there: `{offset}`,
+            // `{page}` and `{page_size}` in the body are filled in for every
+            // request, and the query parameter they stand for is left off. Offset
+            // and page styles only: a GraphQL body is all braces, and its pages
+            // already travel in its variables.
+            let body_template = match &spec.pagination {
+                RestPagination::Offset { .. } | RestPagination::Page { .. } => {
+                    spec.body.clone().filter(|b| PAGE_PLACEHOLDERS.iter().any(|p| b.contains(p)))
+                }
+                _ => None,
+            };
+            let paged_in_body =
+                |placeholder: &str| body_template.as_deref().is_some_and(|b| b.contains(placeholder));
+            if let Some(t) = &body_template {
+                body = Some(body_for_page(t, offset, page_no, spec.page_size));
+            }
             // Seed the FIRST request with the start page; the loop only appends the
             // page param on subsequent requests, so without this the first call hit
             // the server's default page and a non-default start_page was skipped.
             if let RestPagination::Page { page_param, start_page, .. } = &spec.pagination {
-                let sep = if url.contains('?') { '&' } else { '?' };
-                url = format!("{}{}{}={}", url, sep, page_param, start_page);
+                if !paged_in_body("{page}") {
+                    let sep = if url.contains('?') { '&' } else { '?' };
+                    url = format!("{}{}{}={}", url, sep, page_param, start_page);
+                }
             }
             loop {
                 self.check_cancelled()?;
@@ -17286,6 +17306,14 @@ impl DuckdbEngine {
                             .iter()
                             .flat_map(|d| rest_located_rows(d, &spec.response_path))
                             .collect();
+                        // The first page says whether the records pointer found
+                        // records, so one long row or no rows at all comes with
+                        // its reason instead of having to be worked out.
+                        if parent_pages == 0 && spec.response_format == RestResponseFormat::Json {
+                            if let Some(n) = documents.first().and_then(|d| records_note(d, &spec.response_path)) {
+                                records_heads_up.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert(n);
+                            }
+                        }
                         // Pagination reads the last document, which for a single
                         // JSON response is that response.
                         (rows, documents.into_iter().last().unwrap_or(JsonValue::Null))
@@ -17421,7 +17449,7 @@ impl DuckdbEngine {
                         // end (an API may cap its page below Page size), so the
                         // next offset counts the rows that came back.
                         let more = match has_more_path {
-                            Some(p) => Some(more_pages(&response, p)?),
+                            Some(p) => Some(more_pages(&response, p, parent_pages, &format!("{} {page_url}", spec.method))?),
                             None => None,
                         };
                         // A short page means we have reached the end.
@@ -17450,8 +17478,14 @@ impl DuckdbEngine {
                                 false
                             } else {
                                 offset = next_offset;
-                                let sep = if spec.url.contains('?') { '&' } else { '?' };
-                                url = format!("{}{}{}={}", spec.url, sep, offset_param, offset);
+                                page_no = page_no.saturating_add(1);
+                                if let Some(t) = &body_template {
+                                    body = Some(body_for_page(t, offset, page_no, spec.page_size));
+                                }
+                                if !paged_in_body("{offset}") {
+                                    let sep = if spec.url.contains('?') { '&' } else { '?' };
+                                    url = format!("{}{}{}={}", spec.url, sep, offset_param, offset);
+                                }
                                 true
                             }
                         }
@@ -17460,15 +17494,21 @@ impl DuckdbEngine {
                         // #399: the API's own word where it gives one, else an
                         // empty page.
                         let more = match has_more_path {
-                            Some(p) => more_pages(&response, p)?,
+                            Some(p) => more_pages(&response, p, parent_pages, &format!("{} {page_url}", spec.method))?,
                             None => row_count > 0,
                         };
                         if !more {
                             false
                         } else {
                             page_no = page_no.saturating_add(1);
-                            let sep = if spec.url.contains('?') { '&' } else { '?' };
-                            url = format!("{}{}{}={}", spec.url, sep, page_param, page_no);
+                            offset = offset.saturating_add(row_count as u64);
+                            if let Some(t) = &body_template {
+                                body = Some(body_for_page(t, offset, page_no, spec.page_size));
+                            }
+                            if !paged_in_body("{page}") {
+                                let sep = if spec.url.contains('?') { '&' } else { '?' };
+                                url = format!("{}{}{}={}", spec.url, sep, page_param, page_no);
+                            }
                             true
                         }
                     }
@@ -17498,7 +17538,7 @@ impl DuckdbEngine {
                     RestPagination::GraphqlCursor { cursor_path, has_next_path, variable } => {
                         // The API's own word decides where it gives one, as for #399.
                         let more = match has_next_path {
-                            Some(p) => Some(more_pages(&response, p)?),
+                            Some(p) => Some(more_pages(&response, p, parent_pages, &format!("{} {page_url}", spec.method))?),
                             None => None,
                         };
                         // A string or a number: what the API hands out is what it takes back.
@@ -17819,8 +17859,14 @@ impl DuckdbEngine {
                 ));
             }
         }
+        let heads_up = records_heads_up
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .map(|n| format!("; heads up: {n}"))
+            .unwrap_or_default();
         Ok(format!(
-            "rest: materialized {} rows ({} page(s)) into {}{}{}",
+            "rest: materialized {} rows ({} page(s)) into {}{}{}{heads_up}",
             written,
             pages,
             spec.node_id,
@@ -21060,14 +21106,104 @@ fn odbc_type_to_duckdb(dt: &odbc_api::DataType) -> Option<String> {
 /// #399: the API's own word on whether another page exists, the true or false
 /// at `path`. Anything else fails the node rather than guessing, because a
 /// guess either stops early, losing pages, or never stops.
-fn more_pages(response: &JsonValue, path: &str) -> Result<bool, EngineError> {
+fn more_pages(response: &JsonValue, path: &str, page: u64, request: &str) -> Result<bool, EngineError> {
     match response.pointer(path) {
         Some(JsonValue::Bool(b)) => Ok(*b),
+        // #407: the response someone checks the path against is usually the
+        // first, and the one that failed may be a later page that came back
+        // different. Name the page and show what came back.
         found => Err(EngineError::Query(format!(
-            "rest: the more-pages flag at {path} is {}, where true or false was expected. \
-             Check the path against a response.",
-            found.map_or("missing".to_string(), |v| v.to_string())
+            "rest: the more-pages flag at {path} is {} in the answer to page {page} ({request}), \
+             where true or false was expected. That answer begins: {}",
+            found.map_or("missing".to_string(), |v| v.to_string()),
+            answer_excerpt(response)
         ))),
+    }
+}
+
+/// #407: the placeholders that put the page in a request body.
+const PAGE_PLACEHOLDERS: [&str; 3] = ["{offset}", "{page}", "{page_size}"];
+
+/// A body template with the page filled in, as text, like `{incremental}`.
+fn body_for_page(template: &str, offset: u64, page: u64, page_size: u64) -> String {
+    template
+        .replace("{offset}", &offset.to_string())
+        .replace("{page}", &page.to_string())
+        .replace("{page_size}", &page_size.to_string())
+}
+
+/// The start of a response, for a message about it. A JSON string that is
+/// itself JSON is said to be one: the API quoted its own JSON, so nothing
+/// inside it can be addressed by a pointer.
+fn answer_excerpt(response: &JsonValue) -> String {
+    let clip = |s: &str, n: usize| {
+        if s.chars().count() <= n {
+            s.to_string()
+        } else {
+            format!("{}...", s.chars().take(n).collect::<String>())
+        }
+    };
+    if let JsonValue::String(s) = response {
+        if serde_json::from_str::<JsonValue>(s).is_ok_and(|v| v.is_object() || v.is_array()) {
+            return format!("a JSON string holding JSON, so the API quoted its own JSON: {}", clip(s, 200));
+        }
+    }
+    clip(&response.to_string(), 300)
+}
+
+/// A key as a JSON pointer segment (RFC 6901: `~` and `/` escaped).
+fn pointer_segment(key: &str) -> String {
+    key.replace('~', "~0").replace('/', "~1")
+}
+
+/// The first key of `map` whose value is a non-empty list of objects: what a
+/// list of records looks like.
+fn records_key(map: &serde_json::Map<String, JsonValue>) -> Option<&String> {
+    map.iter()
+        .find(|(_, v)| v.as_array().and_then(|a| a.first()).is_some_and(JsonValue::is_object))
+        .map(|(k, _)| k)
+}
+
+/// #405: what the records pointer found in a first response, when that is not
+/// a list of rows, so one long row or no rows at all comes with its reason.
+/// `None` when the rows are what the pointer promised.
+fn records_note(doc: &JsonValue, response_path: &str) -> Option<String> {
+    if let JsonValue::String(s) = doc {
+        return serde_json::from_str::<JsonValue>(s)
+            .is_ok_and(|v| v.is_object() || v.is_array())
+            .then(|| "the response is JSON inside a JSON string (the API quoted its own JSON), so no rows were read from it".into());
+    }
+    if response_path.is_empty() {
+        let key = doc.as_object().and_then(records_key)?;
+        return Some(format!(
+            "no records pointer is set, so each response became one row; the records look to be the list at /{}, which Records JSON pointer can name",
+            pointer_segment(key)
+        ));
+    }
+    match doc.pointer(response_path) {
+        None => {
+            let top = match doc {
+                JsonValue::Object(map) => format!(
+                    "an object with {}",
+                    map.keys().take(8).map(|k| format!("/{}", pointer_segment(k))).collect::<Vec<_>>().join(", ")
+                ),
+                JsonValue::Array(a) => format!("a list of {} item(s), which an empty records pointer reads", a.len()),
+                other => format!("{other}"),
+            };
+            Some(format!(
+                "the records pointer {response_path} is not in the first response, so it gave no rows; that response is {top}"
+            ))
+        }
+        Some(JsonValue::Object(map)) => records_key(map).map(|key| {
+            format!(
+                "{response_path} holds an object rather than a list, so each response became one row; the records look to be the list at {response_path}/{}",
+                pointer_segment(key)
+            )
+        }),
+        Some(JsonValue::Array(a)) if a.first().is_some_and(JsonValue::is_array) => Some(format!(
+            "the records at {response_path} are lists rather than objects, so each became a single json value"
+        )),
+        _ => None,
     }
 }
 
@@ -21337,6 +21473,61 @@ mod sse_tests {
     fn data_that_is_not_json_is_named() {
         let err = sse_documents("data: {}\n\ndata: [DONE]\n\n").unwrap_err().to_string();
         assert!(err.contains("event 2") && err.contains("[DONE]"), "{err}");
+    }
+}
+
+/// #405 / #407: what a REST page says about itself when it is not the shape
+/// the node's settings expect.
+#[cfg(test)]
+mod rest_page_tests {
+    use super::{answer_excerpt, body_for_page, records_note};
+    use serde_json::json;
+
+    #[test]
+    fn a_body_carries_the_page_as_text() {
+        let t = r#"{"page": {page}, "pageSize": {page_size}, "start": {offset}, "q": "x"}"#;
+        assert_eq!(body_for_page(t, 200, 3, 100), r#"{"page": 3, "pageSize": 100, "start": 200, "q": "x"}"#);
+    }
+
+    #[test]
+    fn an_answer_is_shown_short_and_quoted_json_is_named() {
+        assert_eq!(answer_excerpt(&json!({"error": "bad offset"})), r#"{"error":"bad offset"}"#);
+        let long = answer_excerpt(&json!({"data": "x".repeat(500)}));
+        assert!(long.ends_with("...") && long.chars().count() == 303, "{long}");
+        let quoted = answer_excerpt(&json!(r#"{"data":[{"id":1}],"hasMore":true}"#));
+        assert!(quoted.starts_with("a JSON string holding JSON"), "{quoted}");
+        // A plain string is just a string.
+        assert_eq!(answer_excerpt(&json!("rate limited")), r#""rate limited""#);
+    }
+
+    #[test]
+    fn the_first_page_says_why_the_records_are_one_row_or_none() {
+        let page = json!({"data": [{"id": 1}, {"id": 2}], "hasMore": true});
+        // What the settings promised: nothing to say.
+        assert_eq!(records_note(&page, "/data"), None);
+        // No pointer: the whole response is one row, and the list is named.
+        let none = records_note(&page, "").unwrap();
+        assert!(none.contains("one row") && none.contains("/data"), "{none}");
+        // A pointer that is not there names what is.
+        let missing = records_note(&page, "/results").unwrap();
+        assert!(missing.contains("/results") && missing.contains("/data, /hasMore"), "{missing}");
+        // The response is a list, not an object: the reporter's other shape.
+        let wrapped = records_note(&json!([page]), "/data").unwrap();
+        assert!(wrapped.contains("a list of 1 item"), "{wrapped}");
+        // A pointer at an object holding the list.
+        let nested = json!({"data": {"rows": [{"id": 1}], "total": 1}});
+        let object = records_note(&nested, "/data").unwrap();
+        assert!(object.contains("one row") && object.contains("/data/rows"), "{object}");
+        // A single record is one row by design (#13): nothing to say.
+        assert_eq!(records_note(&json!({"current": {"temp": 3.5}}), "/current"), None);
+        // Rows that are lists, and JSON the API quoted.
+        let lists = records_note(&json!({"data": [[1, "a"], [2, "b"]]}), "/data").unwrap();
+        assert!(lists.contains("lists rather than objects"), "{lists}");
+        let quoted = records_note(&json!(r#"{"data":[{"id":1}]}"#), "/data").unwrap();
+        assert!(quoted.contains("quoted its own JSON"), "{quoted}");
+        // A key with a slash is escaped as a pointer segment.
+        let slashed = records_note(&json!({"a/b": [{"id": 1}]}), "").unwrap();
+        assert!(slashed.contains("/a~1b"), "{slashed}");
     }
 }
 

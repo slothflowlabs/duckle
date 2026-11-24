@@ -7616,6 +7616,8 @@ fn build_stage(
             method: "POST".into(),
             headers,
             body: Some(serde_json::to_string(&body).unwrap_or_else(|_| "{}".into())),
+            // A GraphQL page travels in its variables, never as `{page_size}`.
+            page_size: 0,
             response_path,
             response_format: RestResponseFormat::Json,
             pagination,
@@ -7853,6 +7855,7 @@ fn build_stage(
             method,
             headers,
             body,
+            page_size: props.get("pageSize").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(100),
             response_path,
             response_format,
             pagination,

@@ -2843,6 +2843,9 @@ pub struct RestSourceSpec {
     pub method: String,
     pub headers: Vec<(String, String)>,
     pub body: Option<String>,
+    /// Page size, for a body that carries `{page_size}`. Offset paging steps by
+    /// its own copy in [`RestPagination::Offset`]; this is the same setting.
+    pub page_size: u64,
     /// JSON pointer (RFC 6901) for JSON responses, or slash-separated
     /// element-name walk for XML responses. Empty string = the
     /// response root IS the row container.

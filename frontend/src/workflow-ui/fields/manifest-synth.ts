@@ -688,7 +688,7 @@ const restMethodAndBodyFields = (): Field[] => [
         // #398: the method starts on GET, and a body sent with GET reached the
         // server as an empty request.
         description:
-            'Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one.',
+            'Sent with the method above, as application/json unless a Content-Type header says otherwise. Most servers ignore a body on GET, so choose POST (or PUT) when the API expects one. For an API that takes the page in the body, write {offset}, {page} or {page_size} where the value goes, for example {"page": {page}, "pageSize": {page_size}}: Offset and Page number paging then fill them in for each request instead of adding a query parameter.',
     },
 ];
 
