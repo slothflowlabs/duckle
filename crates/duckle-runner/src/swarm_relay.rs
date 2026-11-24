@@ -133,9 +133,14 @@ fn stream_with(
     let _ = reader.join();
     let _ = child.wait();
     if gone.is_none() {
+        // With the page still here, only a crash ends without a finished event (a stop
+        // is the page going away): a failure with its reason, sent as an event the
+        // page shows, like the server's own.
         let last = finished.unwrap_or_else(|| {
-            json!({ "type": "finished", "ok": false, "stopped": true, "summary": "The swarm ended without finishing." })
-                .to_string()
+            let ended = json!({ "type": "finished", "ok": false, "stopped": false, "summary": "The swarm ended without finishing." })
+                .to_string();
+            let _ = frame(out, None, &ended);
+            ended
         });
         let _ = frame(out, Some("result"), &last);
     }
@@ -203,6 +208,40 @@ mod tests {
             "data: {\"type\":\"started\"}\n\n\
              data: {\"type\":\"finished\",\"ok\":true}\n\n\
              event: result\ndata: {\"type\":\"finished\",\"ok\":true}\n\n"
+        );
+    }
+
+    #[test]
+    fn a_swarm_that_dies_without_finishing_ends_as_a_failure_the_page_shows() {
+        // Only a crash gets here (a stop is the browser going away), so it is not a stop,
+        // and the page only shows what arrives as a data frame.
+        let mut cmd = script(&[r#"{"type":"started"}"#], false);
+        let mut out = Vec::new();
+        stream_with(
+            &mut cmd,
+            &mut out,
+            &json!({ "goal": "g" }),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        let frames: Vec<(Option<&str>, Value)> = text
+            .split("\n\n")
+            .filter(|f| !f.is_empty() && !f.starts_with(':'))
+            .map(|f| {
+                let event = f.lines().find_map(|l| l.strip_prefix("event: "));
+                let data = f.lines().find_map(|l| l.strip_prefix("data: ")).unwrap();
+                (event, serde_json::from_str(data).unwrap())
+            })
+            .collect();
+        let ended = json!({ "type": "finished", "ok": false, "stopped": false, "summary": "The swarm ended without finishing." });
+        assert_eq!(
+            frames,
+            vec![
+                (None, json!({ "type": "started" })),
+                (None, ended.clone()),
+                (Some("result"), ended),
+            ]
         );
     }
 

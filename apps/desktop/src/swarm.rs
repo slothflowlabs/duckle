@@ -138,12 +138,24 @@ fn run(server: &Path, request: &Value, on_event: &Channel<Value>) -> Result<Valu
         let _ = on_event.send(event);
     }
     let _ = child.lock().unwrap_or_else(|p| p.into_inner()).wait();
-    *RUNNING.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    let ended = {
+        let mut slot = RUNNING.lock().unwrap_or_else(|p| p.into_inner());
+        let ended = unfinished(&slot);
+        *slot = None;
+        ended
+    };
     Ok(finished.unwrap_or_else(|| {
-        let done = json!({ "type": "finished", "ok": false, "stopped": true, "summary": "The swarm ended without finishing." });
-        let _ = on_event.send(done.clone());
-        done
+        let _ = on_event.send(ended.clone());
+        ended
     }))
+}
+
+/// The finished event of a swarm whose process ended without sending one.
+/// swarm_stop takes the child's input, so a swarm that still has it was not
+/// stopped: it died, and the panel shows that as a failure with this reason.
+fn unfinished(slot: &Option<Running>) -> Value {
+    let stopped = slot.as_ref().is_some_and(|r| r.stdin.is_none());
+    json!({ "type": "finished", "ok": false, "stopped": stopped, "summary": "The swarm ended without finishing." })
 }
 
 /// Stop the running swarm, if there is one.
@@ -163,4 +175,47 @@ pub fn swarm_stop() {
             let _ = child.kill();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A process that is already on its way out, with its input still open.
+    fn short_lived() -> Child {
+        let mut c = if cfg!(windows) {
+            Command::new("cmd")
+        } else {
+            Command::new("sh")
+        };
+        c.args(if cfg!(windows) {
+            ["/C", "exit 0"]
+        } else {
+            ["-c", "exit 0"]
+        });
+        c.stdin(Stdio::piped()).spawn().unwrap()
+    }
+
+    #[test]
+    fn a_swarm_that_ends_without_finishing_is_a_stop_only_when_one_was_asked() {
+        // swarm_stop takes the child's input: a swarm that still has it died on its own,
+        // and the panel shows that as a failure, not as a stop.
+        let mut child = short_lived();
+        let stdin = child.stdin.take();
+        let crashed = Some(Running {
+            child: Arc::new(Mutex::new(child)),
+            stdin,
+        });
+        let ended = unfinished(&crashed);
+        assert_eq!(ended["stopped"], json!(false), "{ended}");
+        assert_eq!(ended["ok"], json!(false));
+
+        let mut child = short_lived();
+        drop(child.stdin.take());
+        let stopped = Some(Running {
+            child: Arc::new(Mutex::new(child)),
+            stdin: None,
+        });
+        assert_eq!(unfinished(&stopped)["stopped"], json!(true));
+    }
 }

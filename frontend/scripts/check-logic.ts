@@ -2624,6 +2624,22 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         JSON.stringify({ phase: done.phase, stages: done.stages }),
     );
 
+    // A swarm process that dies mid-turn sends no agent event: the run's end must
+    // still settle the agent it cut off, or the view shows it working forever.
+    const died = play([
+        start,
+        { type: 'stage', stage: 'build', agents: ['builder'] },
+        { type: 'agent', agent: 'builder', state: 'working' },
+        { type: 'finished', ok: false, stopped: false, summary: 'The swarm ended without finishing.' },
+    ]);
+    check(
+        'swarm: a run that ends while an agent works leaves nobody working',
+        working(died).length === 0 &&
+            died.agents.builder === 'failed' &&
+            died.stints.every(t => t.state !== 'working'),
+        JSON.stringify({ agents: died.agents, stints: died.stints.map(t => [t.agent, t.state]) }),
+    );
+
     check(
         'swarm: a chip names what the call was about, without the folder',
         aboutCall('inspect_source', { path: '${workspace}/data/raw/orders.csv' }) === 'raw/orders.csv' &&

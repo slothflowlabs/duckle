@@ -378,7 +378,13 @@ export function applySwarmEvent(s: SwarmState, e: SwarmEvent): SwarmState {
         case 'finished': {
             const stages = { ...s.stages };
             if (s.stage && stages[s.stage] === 'active') stages[s.stage] = e.ok || !e.stopped ? 'done' : 'failed';
-            return { ...s, phase: 'finished', stages, finished: e };
+            // A swarm that died mid-turn sent no agent event: once it is over, nobody is working.
+            const settled = e.ok ? ('done' as const) : ('failed' as const);
+            const agents = Object.fromEntries(
+                Object.entries(s.agents).map(([id, st]) => [id, st === 'working' ? settled : st]),
+            );
+            const stints = s.stints.map(t => (t.state === 'working' ? { ...t, state: settled } : t));
+            return { ...s, phase: 'finished', stages, agents, stints, finished: e };
         }
         case 'error':
             return { ...s, error: e.message };
