@@ -2390,7 +2390,9 @@ The flags set the same variables the engine reads (`DUCKLE_MEMORY_LIMIT`,
 workspace-wide export and a per-stage setting all land in one place, with the
 most specific winning. Two more have no flag and need DuckDB 2.0:
 `DUCKLE_ASYNC_THREADS` and `DUCKLE_READ_AHEAD_DEPTH`, which bound the pool
-DuckDB reads object storage on and how far ahead it reads.
+DuckDB reads object storage on and how far ahead it reads. `--gpu
+auto|on|off` (`DUCKLE_GPU`) chooses GPU acceleration for the run; see
+[GPU acceleration (NVIDIA Sirius)](#gpu-acceleration-nvidia-sirius).
 
 ### Poll a remote source without downloading it (`src.changed`)
 
@@ -4178,6 +4180,21 @@ When the installer downloads the DuckDB CLI it also pre-fetches the extensions D
 Everything the installer downloads to run is pinned to a SHA-256 by its exact URL: the DuckDB CLI for each platform, SlothDB, llama.cpp, uv, dbt Fusion and every Duckie model. A download that does not match its pin is deleted and refused, and so is one with no pin at all. A test walks every URL each supported platform can request, so a version bump without its checksums fails in CI rather than on your machine. Each URL names a fixed version or revision (uv 0.13.8, dbt Fusion v2.0.11, a Hugging Face commit per model), since a checksum against `latest` would only turn a swapped file into a failed install.
 
 For a machine with no internet, put the files in a folder and point `DUCKLE_ARTIFACT_DIR` at it. Each is found by the name it is published under, checked against the same pin, and nothing is fetched. `DUCKLE_OFFLINE=1` forbids downloads outright, including the extension pre-fetch above: an install that needs a file the folder does not have says which one, and where it is published.
+
+### GPU acceleration (NVIDIA Sirius)
+
+DuckDB 2.0.1 ships Sirius, the GPU engine NVIDIA builds for DuckDB, as a core extension. With GPU acceleration on, every DuckDB process a run starts loads it, and Sirius runs the queries it supports on the GPU and leaves the rest on DuckDB's CPU engine.
+
+| | |
+|---|---|
+| **Where** | Linux on x86-64 or arm64 (glibc) with a Turing or newer NVIDIA GPU and a driver for CUDA 12.8 or newer. DuckDB builds no Sirius for Windows, macOS or musl, so runs there use the CPU, and Settings says why. |
+| **Setting** | **Auto** (the default) loads Sirius wherever it starts; **On** fails a run that cannot use the GPU; **Off** never loads it. On the desktop it is in Settings, Power mode; for the runner `--gpu auto\|on\|off`; for MCP, `run_pipeline`'s `gpu`; everywhere, `DUCKLE_GPU`. The web editor does not offer it, and `duckle-runner web` starts with it off. |
+| **First use** | Before a process's first run on a machine with an NVIDIA driver, Duckle checks once that Sirius starts, which downloads its GPU backend the first time: about 0.7 GB for a CUDA 13 driver, 1.2 GB for CUDA 12. Where it cannot start, runs use the CPU (under On they fail) and the run log says why. `DUCKLE_OFFLINE=1` or a network policy stops the download, so install the backend beforehand on such a machine: `duckle-runner gpu` makes the check, downloads what it needs, and prints what it found. |
+| **Cost** | Loading Sirius adds about 1.2 s to each DuckDB process that loads it (0.04 s without), measured on an RTX 4050 Laptop. A run that executes stage by stage pays it once per stage. |
+| **Memory** | Sirius claims most of the GPU when it starts, so one run at a time has it, machine-wide: a run that starts while another has it uses the CPU, or under On fails saying so. Duckle gives Sirius a config of its own with fixed sizes, 80% of the GPU's memory and a quarter of RAM for pinned buffers, because Sirius sizes its defaults from the NUMA node and does not start at all on WSL2 and many VMs and containers. A `sirius.yaml` of your own (`SIRIUS_CONFIG_FILE`, the working folder, or `~/.sirius/`) replaces it. |
+| **Containers** | Start the container with the GPU (`--gpus all`) and allow `io_uring`, which Sirius needs and Docker's default seccomp profile blocks (`io_uring_setup`, `io_uring_enter`, `io_uring_register`). |
+
+**Today Sirius runs nothing on the GPU through the DuckDB CLI.** Measured with DuckDB 2.0.1 and the Sirius backend DuckDB distributes for it (RTX 4050 Laptop, CUDA 13.1): it starts, but declines every scan, of DuckDB tables and Parquet alike ("Table function 'seq_scan' is not supported in Sirius (unverified callbacks, overload or bind data)"), so each query falls back to the CPU and a run pays only the start-up cost. Sirius checks DuckDB's scan functions against the symbols of the program it is loaded into, and its fix for the official CLI ([sirius-db/sirius#2174](https://github.com/sirius-db/sirius/issues/2174)) does not yet cover the 2.0.1 CLI Duckle runs. Duckle's check includes a trial query that has to run on the GPU, and the run log and Settings report its refusal, so they show the day an update fixes it. Until then, Off skips the start-up cost.
 
 ### Moving to DuckDB 2.0
 

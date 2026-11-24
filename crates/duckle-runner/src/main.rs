@@ -73,6 +73,7 @@ USAGE:
     duckle-runner deliveries <status|retry>  (#325 subscription pump ledger)
     duckle-runner python <check|prepare>   (the workspace's Python environment)
     duckle-runner xsd <list|accept>       (accepted XML parser contracts)
+    duckle-runner gpu [--recheck] [--duckdb <path>]  (whether runs can use the GPU)
 
 TEST:
     Run a pipeline against a fixed input and assert the rows out of one node.
@@ -124,6 +125,10 @@ OPTIONS:
     --max-temp-size <sz> e.g. 300GB. DuckDB's own default is 90% of the disk,
                          so without this one large join can fill the volume
                          the OS is on.
+    --gpu <auto|on|off>  GPU acceleration through NVIDIA Sirius, on Linux with
+                         an NVIDIA GPU. auto (the default) uses it wherever it
+                         loads, on fails a run that cannot have it, off never
+                         loads it. Sets DUCKLE_GPU; `gpu` shows what a run finds.
     --no-cache           Ignore any reused stage output for this run (see
                          `cache`). Nothing is read from or written to it, so a
                          run taken to check the cache does not overwrite it.
@@ -265,6 +270,13 @@ fn parse_args() -> Result<Args, String> {
             // pipeline or dropping what is stored. Neither reads nor writes,
             // so a run taken to settle whether the cache is lying does not
             // then overwrite the evidence.
+            // GPU acceleration for this run, checked here so a typo fails
+            // before anything runs rather than as the run starts.
+            "--gpu" => {
+                let mode = take("--gpu")?;
+                duckle_duckdb_engine::gpu::parse_mode(&mode)?;
+                std::env::set_var("DUCKLE_GPU", mode.trim());
+            }
             "--no-cache" => std::env::set_var("DUCKLE_NO_CACHE", "1"),
             "--name" => name = Some(take("--name")?),
             "--target" => target = Some(take("--target")?),
@@ -2392,6 +2404,47 @@ mod tests {
     }
 }
 
+/// `duckle-runner gpu`: the GPU status a run would find, as text or `--json`.
+fn run_gpu_status() -> ExitCode {
+    let mut recheck = false;
+    let mut json = false;
+    let mut duckdb = None;
+    let mut it = std::env::args().skip(2);
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--recheck" => recheck = true,
+            "--json" => json = true,
+            "--duckdb" => duckdb = it.next().map(PathBuf::from),
+            other => {
+                eprintln!("duckle-runner gpu: unknown argument: {other}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let bin = match resolve_duckdb(duckdb) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("duckle-runner gpu: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let s = duckle_duckdb_engine::gpu::status(&bin, recheck);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default());
+    } else {
+        println!("mode   : {}", s.mode);
+        println!("state  : {}", s.state);
+        if let (Some(b), Some(c)) = (&s.backend, &s.cuda_version) {
+            println!("sirius : {b} on CUDA {c}");
+        }
+        if let Some(r) = &s.reason {
+            println!("reason : {r}");
+        }
+    }
+    // Exit 1 when `on` would fail a run, so a provisioning script can stop.
+    ExitCode::from(if s.mode == "on" && s.state != "ready" { 1 } else { 0 })
+}
+
 fn main() -> ExitCode {
     // Artifact probe FIRST: if this executable carries a self-extracting
     // payload trailer, run the embedded pipeline and exit. A plain runner
@@ -2484,6 +2537,12 @@ fn main() -> ExitCode {
     // `cache` -> see and drop the stage outputs kept for reuse. Separate from
     // `checkpoint` because the two hold different things: a cached output can
     // be recomputed, a checkpointed item was paid for.
+    // `gpu` -> what a run on this machine would find: whether Sirius loads,
+    // and why not. Loads it once, which downloads its backend the first time,
+    // so it is also how a server is readied before its first scheduled run.
+    if std::env::args().nth(1).as_deref() == Some("gpu") {
+        return run_gpu_status();
+    }
     if std::env::args().nth(1).as_deref() == Some("cache") {
         return match cache::run() {
             Ok(code) => ExitCode::from(code as u8),
@@ -2670,6 +2729,11 @@ fn main() -> ExitCode {
     }
     // `web` -> serve the full Duckle editor as a web app (#75 phase 2 spike).
     if std::env::args().nth(1).as_deref() == Some("web") {
+        // The web editor does not offer GPU acceleration, so its runs leave
+        // it off unless whoever starts the server says otherwise.
+        if std::env::var_os("DUCKLE_GPU").is_none() {
+            std::env::set_var("DUCKLE_GPU", "off");
+        }
         return match serve::run_web() {
             Ok(()) => ExitCode::from(0),
             Err(e) => {

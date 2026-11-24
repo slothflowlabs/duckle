@@ -392,6 +392,12 @@ pub fn try_acquire_reason(workspace: &Path, key: &str) -> AcquireOutcome {
     acquire_at_reason(lock_path(workspace, key), key)
 }
 
+/// Take a lock at an exact path, saying why not. For a lock that guards a
+/// machine resource rather than anything in a workspace: the GPU (`gpu.rs`).
+pub(crate) fn try_acquire_path(path: PathBuf, key: &str) -> AcquireOutcome {
+    acquire_at_reason(path, key)
+}
+
 fn acquire_at_reason(path: PathBuf, key: &str) -> AcquireOutcome {
     if let Some(dir) = path.parent() {
         if let Err(e) = fs::create_dir_all(dir) {

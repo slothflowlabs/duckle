@@ -308,6 +308,7 @@ pub fn run() {
             app_settings::settings_set_allow_unsigned,
             app_settings::settings_get_power,
             app_settings::settings_set_power,
+            gpu_status,
             app_settings::settings_get_context_file,
             app_settings::settings_set_context_file,
             app_settings::settings_load_context_vars,
@@ -383,6 +384,20 @@ fn engine() -> Result<DuckdbEngine, String> {
     Ok(DUCKDB_ENGINE
         .get_or_init(|| DuckdbEngine::new(bin))
         .clone())
+}
+
+/// Whether runs on this machine can use the GPU (NVIDIA Sirius), and why not.
+/// Off the async runtime: on Linux with an NVIDIA driver the first check loads
+/// Sirius, which downloads its GPU backend once.
+#[tauri::command]
+async fn gpu_status(recheck: bool) -> Result<duckle_duckdb_engine::gpu::GpuStatus, String> {
+    let bin = DUCKDB_BIN
+        .get()
+        .cloned()
+        .ok_or_else(|| "Engine path not resolved yet".to_string())?;
+    tokio::task::spawn_blocking(move || duckle_duckdb_engine::gpu::status(&bin, recheck))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Inspect a source's schema. The frontend hands us a format string

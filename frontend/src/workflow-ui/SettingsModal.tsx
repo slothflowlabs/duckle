@@ -15,7 +15,11 @@ import {
     settingsSetAllowUnsigned,
     settingsGetContextFile,
     settingsSetContextFile,
+    gpuStatus,
+    type GpuMode,
+    type GpuStatus,
 } from '../tauri-bridge';
+import { isWebBackend } from '../web-fs';
 import { loadPersisted, savePersisted } from '../persistence';
 import { readMapTiles, saveMapTiles, type MapTiles } from '../geo/map-tiles';
 import { usableTileUrl } from '../geo/map-view';
@@ -99,6 +103,19 @@ export function SettingsModal({
     const [maxRuns, setMaxRuns] = useState('');
     const [spillDir, setSpillDir] = useState('');
     const [cpuCount, setCpuCount] = useState(1);
+    // GPU acceleration through NVIDIA Sirius. Not offered by the web editor:
+    // the server's GPU is its operator's to set, with --gpu or DUCKLE_GPU.
+    const [gpu, setGpu] = useState<GpuMode>('auto');
+    const [gpuState, setGpuState] = useState<GpuStatus | null>(null);
+    const [gpuChecking, setGpuChecking] = useState(false);
+    const checkGpu = (recheck: boolean) => {
+        if (isWebBackend()) return;
+        setGpuChecking(true);
+        gpuStatus(recheck)
+            .then(setGpuState)
+            .catch(e => setGpuState({ mode: gpu, state: 'unavailable', reason: String(e), backend: null, cudaVersion: null }))
+            .finally(() => setGpuChecking(false));
+    };
     // Global context file: a key/value file auto-merged into the global context.
     const [contextFile, setContextFile] = useState('');
     // Local UI pref: show/hide the top-bar Dives button.
@@ -144,7 +161,9 @@ export function SettingsModal({
                 setMaxRuns(power.maxConcurrentRuns != null ? String(power.maxConcurrentRuns) : '');
                 setSpillDir(power.spillDir ?? '');
                 setCpuCount(power.cpuCount || 1);
+                setGpu(power.gpu ?? 'auto');
                 setLoaded(true);
+                checkGpu(false);
             })
             .catch(e => {
                 if (alive) {
@@ -176,9 +195,11 @@ export function SettingsModal({
                 maxConcurrentRuns: Number.isFinite(runs) && runs > 0 ? runs : null,
                 memoryLimitMb: memMb,
                 spillDir: spillDir.trim() || null,
+                gpu: gpu === 'auto' ? null : gpu,
             });
             await settingsSetAllowUnsigned(workspace, allowUnsigned);
             await settingsSetContextFile(workspace, contextFile.trim() || null);
+            checkGpu(false);
             setSaved(true);
             setTimeout(() => setSaved(false), 1500);
         } catch (e) {
@@ -417,6 +438,51 @@ export function SettingsModal({
                             faster disk. Every run gets a private subfolder, so concurrent runs cannot
                             collide here.
                         </p>
+                        {!isWebBackend() ? (
+                            <>
+                                <label htmlFor="settings-gpu" style={{ fontSize: '0.9231rem', opacity: 0.8 }}>
+                                    GPU acceleration (NVIDIA Sirius)
+                                </label>
+                                <select
+                                    id="settings-gpu"
+                                    value={gpu}
+                                    onChange={e => setGpu(e.target.value as GpuMode)}
+                                    disabled={!loaded || !workspace}
+                                    style={aiInput}
+                                >
+                                    <option value="auto">Auto: use the GPU wherever Sirius loads</option>
+                                    <option value="on">On: a run that cannot use the GPU fails</option>
+                                    <option value="off">Off</option>
+                                </select>
+                                <p style={help}>
+                                    Runs queries on an NVIDIA GPU through DuckDB&apos;s Sirius extension. It
+                                    needs Linux (x86-64 or arm64) with a Turing or newer GPU and a driver for
+                                    CUDA 12.8 or newer; on Windows and macOS runs use the CPU. The first use
+                                    downloads Sirius&apos;s GPU backend once (about 0.7 GB, or 1.2 GB for a CUDA 12
+                                    driver). Loading it adds about a second to each DuckDB process a run starts,
+                                    and a query Sirius cannot run on the GPU runs on the CPU.
+                                </p>
+                                <p style={help}>
+                                    {gpuChecking
+                                        ? 'Checking the GPU...'
+                                        : gpuState == null
+                                          ? ''
+                                          : gpuState.state === 'ready'
+                                            ? `Ready: Sirius ${gpuState.backend ?? ''} on CUDA ${gpuState.cudaVersion ?? '?'}.${gpuState.reason ? ` But ${gpuState.reason}` : ''}`
+                                            : gpuState.state === 'off'
+                                              ? 'Off: runs use the CPU.'
+                                              : `Not in use: ${gpuState.reason ?? 'no reason given'}`}{' '}
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary"
+                                        onClick={() => checkGpu(true)}
+                                        disabled={gpuChecking}
+                                    >
+                                        Check again
+                                    </button>
+                                </p>
+                            </>
+                        ) : null}
                     </Section>
 
                     <Section expanded={expanded} onToggle={toggleSection} id="unsigned" title="Unsigned extensions">

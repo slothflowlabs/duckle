@@ -51,6 +51,9 @@ struct AppSettings {
     /// gets a private subdirectory beneath it, so concurrent runs cannot
     /// collide over spill cleanup.
     spill_dir: Option<String>,
+    /// GPU acceleration through NVIDIA Sirius: `on` or `off`. None is the
+    /// default, auto. Applied as DUCKLE_GPU.
+    gpu: Option<String>,
 }
 
 /// The power-mode settings returned to the UI. camelCase for JS.
@@ -60,6 +63,7 @@ pub struct PowerConfig {
     pub max_concurrent_runs: Option<u32>,
     pub memory_limit_mb: Option<u32>,
     pub spill_dir: Option<String>,
+    pub gpu: Option<String>,
     /// Logical cores, so the UI can suggest a ceiling instead of guessing.
     pub cpu_count: u32,
 }
@@ -138,6 +142,7 @@ fn apply_power(s: &AppSettings) {
     duckle_duckdb_engine::launch_env::set_or_restore("DUCKLE_MAX_CONCURRENT_RUNS", runs.as_deref());
     let spill = s.spill_dir.as_deref().map(str::trim).filter(|d| !d.is_empty());
     duckle_duckdb_engine::launch_env::set_or_restore("DUCKLE_TEMP_DIR", spill);
+    duckle_duckdb_engine::launch_env::set_or_restore("DUCKLE_GPU", s.gpu.as_deref());
 }
 
 #[tauri::command]
@@ -156,6 +161,7 @@ pub fn settings_get_power(workspace: String) -> PowerConfig {
             .spill_dir
             .map(|d| d.trim().to_string())
             .filter(|d| !d.is_empty()),
+        gpu: s.gpu,
         cpu_count,
     }
 }
@@ -166,10 +172,16 @@ pub fn settings_set_power(
     max_concurrent_runs: Option<u32>,
     memory_limit_mb: Option<u32>,
     spill_dir: Option<String>,
+    gpu: Option<String>,
 ) -> Result<(), String> {
     if workspace.is_empty() {
         return Err("no workspace is open".into());
     }
+    // Auto is the default, so it is stored as nothing set.
+    let gpu = match gpu.as_deref().map(duckle_duckdb_engine::gpu::parse_mode).transpose()? {
+        None | Some(duckle_duckdb_engine::gpu::GpuMode::Auto) => None,
+        Some(m) => Some(m.as_str().to_string()),
+    };
     let spill = spill_dir
         .map(|d| d.trim().to_string())
         .filter(|d| !d.is_empty());
@@ -181,6 +193,7 @@ pub fn settings_set_power(
     s.max_concurrent_runs = max_concurrent_runs.filter(|n| *n > 0);
     s.memory_limit_mb = memory_limit_mb.filter(|m| *m > 0);
     s.spill_dir = spill;
+    s.gpu = gpu;
     store(Path::new(&workspace), &s)?;
     // Apply immediately so the current session picks it up without a relaunch.
     apply_power(&s);
@@ -335,12 +348,17 @@ pub fn ai_config(workspace: &str) -> (Option<String>, Option<String>, Option<Str
 mod tests {
     use super::*;
 
+    /// Both tests set and restore the same process variables through
+    /// `apply_for_workspace`, and tests run on parallel threads.
+    static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Opening a workspace applied only the settings it HAD, so one with none
     /// inherited the previous workspace's memory cap and, worse, its opt-in to
     /// unsigned DuckDB extensions. No other desktop test touches these
     /// variables, and the cap is generous so a run elsewhere is unaffected.
     #[test]
     fn opening_a_workspace_without_settings_does_not_inherit_the_last_ones() {
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
         let opted_in = tempfile::tempdir().unwrap();
         let settings = AppSettings {
             memory_limit_mb: Some(4096),
@@ -367,5 +385,32 @@ mod tests {
             before,
             "a workspace with no settings kept the previous one's cap and unsigned-extension opt-in"
         );
+    }
+
+    /// GPU acceleration is kept per workspace like the rest of power mode:
+    /// saved as asked, auto stored as the default it is, a typo refused before
+    /// anything is saved, and a workspace that never set it not inheriting the
+    /// last one's.
+    #[test]
+    fn the_gpu_setting_is_saved_applied_and_not_inherited() {
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let ws = tempfile::tempdir().unwrap();
+        let w = ws.path().to_str().unwrap().to_string();
+        let before = std::env::var_os("DUCKLE_GPU");
+
+        settings_set_power(w.clone(), None, None, None, Some("ON".into())).unwrap();
+        assert_eq!(settings_get_power(w.clone()).gpu.as_deref(), Some("on"));
+        assert_eq!(std::env::var("DUCKLE_GPU").as_deref(), Ok("on"), "applied as it is saved");
+
+        settings_set_power(w.clone(), None, None, None, Some("auto".into())).unwrap();
+        assert_eq!(settings_get_power(w.clone()).gpu, None, "auto is the default, stored as unset");
+
+        let err = settings_set_power(w.clone(), None, None, None, Some("yes".into())).unwrap_err();
+        assert!(err.contains("auto, on or off"), "{err}");
+
+        settings_set_power(w.clone(), None, None, None, Some("off".into())).unwrap();
+        let plain = tempfile::tempdir().unwrap();
+        apply_for_workspace(plain.path().to_str().unwrap());
+        assert_eq!(std::env::var_os("DUCKLE_GPU"), before, "a workspace that never set it");
     }
 }

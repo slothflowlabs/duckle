@@ -102,7 +102,8 @@ pub fn list_tools() -> Value {
                 "path": { "type": "string" },
                 "duckdb": { "type": "string", "description": "Path to the DuckDB CLI. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb' on PATH." },
                 "workspace": { "type": "string", "description": "Workspace root for run logs + child-job resolution." },
-                "target": { "type": "string", "description": "Node id to stop at. Only this node and what feeds it run, so nothing downstream executes and no sink past it writes. Its rows come back in 'preview'." }
+                "target": { "type": "string", "description": "Node id to stop at. Only this node and what feeds it run, so nothing downstream executes and no sink past it writes. Its rows come back in 'preview'." },
+                "gpu": { "type": "string", "enum": ["auto", "on", "off"], "description": "GPU acceleration through NVIDIA Sirius for this run, on Linux with an NVIDIA GPU: auto uses it wherever it loads, on fails the run without it, off never loads it. Defaults to the server's DUCKLE_GPU, which defaults to auto." }
             }})),
         tool("run_tests",
             "Run the workspace's pipeline tests and return each case's result. A test asserts the rows out of one node against a fixture, so this catches a transform that compiles and computes the wrong thing - which validate_pipeline cannot. Runs every *.test.json under the workspace's tests/ directory, or just the files named. Needs a DuckDB binary.",
@@ -1332,6 +1333,13 @@ fn t_run_pipeline(args: &Value) -> Result<Value, String> {
         std::env::remove_var("DUCKLE_WORKSPACE");
         std::env::remove_var("DUCKLE_LOG_DIR");
     }
+
+    // GPU for this call only: a mode an earlier call asked for must not stay
+    // behind for the next one, so an unset one goes back to the launch value.
+    if let Some(mode) = arg_str(args, "gpu") {
+        duckle_duckdb_engine::gpu::parse_mode(mode)?;
+    }
+    duckle_duckdb_engine::launch_env::set_or_restore("DUCKLE_GPU", arg_str(args, "gpu"));
 
     // Prepared after the workspace is set, so every tier sees the same
     // environment the run itself will see.

@@ -393,16 +393,21 @@ mod tests {
         .unwrap();
         std::env::set_var("DUCKLE_MEMORY_LIMIT", "4GB");
         std::env::set_var("DUCKLE_THREADS", "2");
+        std::env::set_var("DUCKLE_GPU", "on");
         std::env::remove_var("DUCKLE_TEMP_DIR");
         let path =
             write_manifest(ws, "demo", &doc, "ok", 5, 1_700_000_000_003, None, &[], &[], &[], false)
                 .unwrap();
         std::env::remove_var("DUCKLE_MEMORY_LIMIT");
         std::env::remove_var("DUCKLE_THREADS");
+        std::env::remove_var("DUCKLE_GPU");
 
         let m: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(m["body"]["resourceLimits"]["memoryLimit"], json!("4GB"));
         assert_eq!(m["body"]["resourceLimits"]["threads"], json!("2"));
+        // A GPU sums in another order than the CPU, so whether one was asked
+        // for is part of what a run was given.
+        assert_eq!(m["body"]["resourceLimits"]["gpu"], json!("on"));
         assert!(
             m["body"]["resourceLimits"].get("tempDirectory").is_none(),
             "an unset limit is DuckDB's default, not a value we chose"

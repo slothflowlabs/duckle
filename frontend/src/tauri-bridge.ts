@@ -1570,11 +1570,15 @@ export async function settingsSetMemoryLimit(workspace: string, mb: number | nul
 
 // ---- Power mode ---------------------------------------------------------
 
+/** GPU acceleration through NVIDIA Sirius: `null` is the default, auto. */
+export type GpuMode = 'auto' | 'on' | 'off';
+
 /** Throughput settings for a workspace. `cpuCount` is reported, not settable. */
 export type PowerConfig = {
     maxConcurrentRuns: number | null;
     memoryLimitMb: number | null;
     spillDir: string | null;
+    gpu: GpuMode | null;
     cpuCount: number;
 };
 
@@ -1584,6 +1588,7 @@ export async function settingsGetPower(workspace: string): Promise<PowerConfig> 
         maxConcurrentRuns: null,
         memoryLimitMb: null,
         spillDir: null,
+        gpu: null,
         cpuCount: 1,
     };
     if (!workspace) return empty;
@@ -1606,7 +1611,31 @@ export async function settingsSetPower(workspace: string, cfg: Omit<PowerConfig,
         maxConcurrentRuns: cfg.maxConcurrentRuns,
         memoryLimitMb: cfg.memoryLimitMb,
         spillDir: cfg.spillDir,
+        gpu: cfg.gpu,
     });
+}
+
+/**
+ * Whether runs on this machine can use the GPU, and why not when they cannot.
+ * `state` is `ready` when NVIDIA Sirius loaded and took over execution,
+ * `unavailable` when something stops it (`reason` says what), and `off` when
+ * the setting is off.
+ */
+export type GpuStatus = {
+    mode: GpuMode;
+    state: 'ready' | 'unavailable' | 'off';
+    reason: string | null;
+    backend: string | null;
+    cudaVersion: string | null;
+};
+
+/**
+ * Check the GPU as the next run would. On Linux with an NVIDIA driver this
+ * loads Sirius once, which downloads its GPU backend the first time; `recheck`
+ * discards the answer this process remembered and looks again.
+ */
+export async function gpuStatus(recheck = false): Promise<GpuStatus> {
+    return await invoke<GpuStatus>('gpu_status', { recheck });
 }
 
 /** #143: read whether this workspace allows loading unsigned DuckDB extensions. */

@@ -63,6 +63,7 @@ pub mod format;
 pub mod fromsql;
 pub mod connection_test;
 pub mod catalog;
+pub mod gpu;
 pub mod runlock;
 pub mod testsuite;
 pub mod s3;
@@ -741,6 +742,11 @@ impl DuckdbEngine {
         // behind a banner, and the banner was all a run reported. The variable
         // rather than `-no-agent`, which a 1.5 CLI refuses as an unknown option.
         cmd.env("DUCKDB_AGENT_MODE", "0");
+        // A run with the GPU loads Sirius, which reads the config Duckle wrote
+        // for it, if it wrote one (`gpu.rs`).
+        if let Some(cfg) = crate::gpu::config_for_children() {
+            cmd.env("SIRIUS_CONFIG_FILE", cfg);
+        }
         if json {
             cmd.arg("-json");
         }
@@ -1866,6 +1872,28 @@ impl DuckdbEngine {
             }
         }
 
+        // GPU acceleration (NVIDIA Sirius): decided once for the whole run, and
+        // held until it ends, so every DuckDB process the run starts agrees and a
+        // second run waits its turn on the CPU. Never for an autodetect probe:
+        // a sample read would pay Sirius's start-up for nothing.
+        let gpu_run = if self.probing {
+            None
+        } else {
+            match crate::gpu::for_run(&self.bin) {
+                Ok(crate::gpu::RunGpu::Gpu(run, note)) => {
+                    user_on_event(PipelineEvent::Log { node_id: String::new(), level: "info".into(), message: note });
+                    Some(run)
+                }
+                Ok(crate::gpu::RunGpu::Cpu(note)) => {
+                    if let Some(message) = note {
+                        user_on_event(PipelineEvent::Log { node_id: String::new(), level: "info".into(), message });
+                    }
+                    None
+                }
+                Err(e) => return RunResult::failed(total_start, e),
+            }
+        };
+
         // Component-level run log (Splunk / Dynatrace), gated on
         // DUCKLE_LOG_DIR. We tee every event through it so BOTH the fast
         // batched path and the per-stage path log uniformly, for every run
@@ -2098,6 +2126,7 @@ impl DuckdbEngine {
                 counts_need_every_column,
                 &EndOfRun::from_doc(doc),
                 &mut on_event,
+                gpu_run.as_ref(),
             );
             let mut r = r;
             r.link_previews = self.link_previews(&db_path, doc, &r.nodes);
@@ -2322,7 +2351,7 @@ impl DuckdbEngine {
             // settings once, and tests can set them ad-hoc.
             // Same builder the batched path uses, so a setting added to one
             // cannot go missing from the other.
-            let memory_pragma = resource_pragmas(Some(&db_path), stage.memory_limit_mb);
+            let memory_pragma = resource_pragmas(Some(&db_path), stage.memory_limit_mb, gpu_run.as_ref());
             // Enforce "error if exists" before writing a local file sink.
             // A legacy job routinely branches on how many rows or files an earlier
             // component saw. Those figures are already recorded per node, so expose them
@@ -3645,6 +3674,8 @@ impl DuckdbEngine {
         // What the end of the run reports from the document. Same reason again.
         end: &EndOfRun,
         on_event: &mut dyn FnMut(PipelineEvent),
+        // The run's GPU, decided by the caller for every path alike.
+        gpu: Option<&crate::gpu::GpuRun>,
     ) -> RunResult {
         use std::io::Write;
         use std::process::Stdio;
@@ -3717,7 +3748,7 @@ impl DuckdbEngine {
             batched_sql.push_str(secret_prefix);
             batched_sql.push('\n');
         }
-        batched_sql.push_str(&resource_pragmas(Some(&db_path), None));
+        batched_sql.push_str(&resource_pragmas(Some(&db_path), None, gpu));
 
         // Relations this batch has already emitted a COUNT(*) for. A sink
         // counts its UPSTREAM relation, which is normally the view the
@@ -3938,6 +3969,11 @@ impl DuckdbEngine {
         cmd.arg("-no-init");
         // Agent mode off, as in run(): this path passes no output mode either.
         cmd.env("DUCKDB_AGENT_MODE", "0");
+        // A run with the GPU loads Sirius, which reads the config Duckle wrote
+        // for it, if it wrote one (`gpu.rs`).
+        if let Some(cfg) = crate::gpu::config_for_children() {
+            cmd.env("SIRIUS_CONFIG_FILE", cfg);
+        }
         if allow_unsigned_extensions() {
             cmd.arg("-unsigned");
         }
@@ -8123,6 +8159,8 @@ pub fn effective_resource_limits() -> std::collections::BTreeMap<String, String>
         ("DUCKLE_MAX_TEMP_DIR_SIZE", "maxTempDirectorySize"),
         ("DUCKLE_ASYNC_THREADS", "asyncThreads"),
         ("DUCKLE_READ_AHEAD_DEPTH", "readAheadDepth"),
+        // GPU acceleration as asked for: a GPU sums floats in another order.
+        ("DUCKLE_GPU", "gpu"),
     ] {
         if let Some(v) = std::env::var(env).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
             out.insert(key.to_string(), v);
@@ -8134,6 +8172,8 @@ pub fn effective_resource_limits() -> std::collections::BTreeMap<String, String>
 pub(crate) fn resource_pragmas(
     run_db: Option<&std::path::Path>,
     stage_memory_mb: Option<u32>,
+    // The run has the GPU: every DuckDB process it starts loads Sirius.
+    gpu: Option<&crate::gpu::GpuRun>,
 ) -> String {
     // Always on. These flip DuckDB defaults that cost ETL throughput.
     //
@@ -8206,6 +8246,11 @@ pub(crate) fn resource_pragmas(
             "SET temp_directory='{}';\n",
             target.replace('\'', "''").replace('\\', "/")
         ));
+    }
+    // Last, after every setting above: Sirius reads its own config when it
+    // starts, and nothing it does depends on these being set first.
+    if let Some(run) = gpu {
+        p.push_str(&crate::gpu::session_sql(run));
     }
     p
 }
@@ -9964,7 +10009,7 @@ network:
         // module's mutex does not help, because the other two thousand tests
         // are not holding it. One failing assertion here would turn into
         // unrelated failures elsewhere, which is a bad way to find out.
-        let pragmas = resource_pragmas(None, None);
+        let pragmas = resource_pragmas(None, None, None);
         let prelude = crate::policy::duckdb_extension_prelude("httpfs", false);
         let refusal = DuckdbEngine::new("missing-duckdb".into())
             .run(None, "INSTALL httpfs;", false)
@@ -9994,7 +10039,7 @@ network:
         let _g = guard();
         std::env::remove_var("DUCKLE_POLICY_FILE");
         std::env::remove_var("DUCKLE_WORKSPACE");
-        assert!(!resource_pragmas(None, None).contains("disabled_filesystems"));
+        assert!(!resource_pragmas(None, None, None).contains("disabled_filesystems"));
     }
 
     /// DuckDB 2.0 deprecates the `PRAGMA x=...` form of a setting and says so on
@@ -10022,7 +10067,7 @@ network:
             std::env::set_var(k, v);
         }
         std::env::set_var("DUCKLE_TEMP_DIR", tmp.path());
-        let preset = resource_pragmas(Some(&tmp.path().join("run.duckdb")), None);
+        let preset = resource_pragmas(Some(&tmp.path().join("run.duckdb")), None, None);
         for (k, _) in knobs {
             std::env::remove_var(k);
         }
@@ -10049,7 +10094,7 @@ network:
     #[test]
     fn async_io_is_bounded_only_when_asked() {
         let _g = guard();
-        let p = resource_pragmas(None, None);
+        let p = resource_pragmas(None, None, None);
         assert!(
             !p.contains("async_threads") && !p.contains("read_ahead_depth"),
             "sent unasked, which a 1.5 engine refuses: {p}"
@@ -10057,7 +10102,7 @@ network:
 
         std::env::set_var("DUCKLE_ASYNC_THREADS", "6");
         std::env::set_var("DUCKLE_READ_AHEAD_DEPTH", "0");
-        let p = resource_pragmas(None, None);
+        let p = resource_pragmas(None, None, None);
         let limits = super::effective_resource_limits();
         std::env::remove_var("DUCKLE_ASYNC_THREADS");
         std::env::remove_var("DUCKLE_READ_AHEAD_DEPTH");
@@ -10099,7 +10144,7 @@ network:
     #[test]
     fn the_performance_preset_is_always_present() {
         let _g = guard();
-        let p = resource_pragmas(None, None);
+        let p = resource_pragmas(None, None, None);
         assert!(p.contains("preserve_insertion_order=false"));
         assert!(p.contains("enable_progress_bar=false"));
         // Nothing configured means nothing capped - DuckDB's own defaults.
@@ -10114,7 +10159,7 @@ network:
     fn the_temp_size_cap_is_emitted_when_set() {
         let _g = guard();
         std::env::set_var("DUCKLE_MAX_TEMP_DIR_SIZE", "300GB");
-        let p = resource_pragmas(None, None);
+        let p = resource_pragmas(None, None, None);
         assert!(
             p.contains("SET max_temp_directory_size='300GB'"),
             "spill would be capped at 90% of the disk instead: {p}"
@@ -10126,9 +10171,9 @@ network:
     fn a_per_stage_memory_limit_beats_the_environment() {
         let _g = guard();
         std::env::set_var("DUCKLE_MEMORY_LIMIT", "16GB");
-        assert!(resource_pragmas(None, None).contains("memory_limit='16GB'"));
+        assert!(resource_pragmas(None, None, None).contains("memory_limit='16GB'"));
         assert!(
-            resource_pragmas(None, Some(512)).contains("memory_limit='512MB'"),
+            resource_pragmas(None, Some(512), None).contains("memory_limit='512MB'"),
             "a stage that asked for a limit must get the one it asked for"
         );
         std::env::remove_var("DUCKLE_MEMORY_LIMIT");
@@ -10143,8 +10188,8 @@ network:
         let _g = guard();
         let tmp = tempfile::tempdir().unwrap();
         std::env::set_var("DUCKLE_TEMP_DIR", tmp.path());
-        let a = resource_pragmas(Some(std::path::Path::new("/x/duckle_run_1.duckdb")), None);
-        let b = resource_pragmas(Some(std::path::Path::new("/x/duckle_run_2.duckdb")), None);
+        let a = resource_pragmas(Some(std::path::Path::new("/x/duckle_run_1.duckdb")), None, None);
+        let b = resource_pragmas(Some(std::path::Path::new("/x/duckle_run_2.duckdb")), None, None);
         assert!(a.contains("duckle_run_1.duckdb"), "{a}");
         assert!(b.contains("duckle_run_2.duckdb"), "{b}");
         assert_ne!(a, b, "two runs must not be pointed at the same spill directory");
@@ -10159,7 +10204,7 @@ network:
             std::env::var("DUCKLE_MEMORY_LIMIT").is_ok(),
             "the value did not survive set_var"
         );
-        let p = resource_pragmas(None, None);
+        let p = resource_pragmas(None, None, None);
         let line = p
             .lines()
             .find(|l| l.contains("memory_limit"))
