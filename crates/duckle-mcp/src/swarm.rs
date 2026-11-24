@@ -29,6 +29,9 @@ use std::time::Instant;
 pub const DEFAULT_CLAUDE: &str = "claude-opus-5-5";
 /// Model calls one agent may make before it must hand off.
 const MAX_TURNS: usize = 16;
+/// Empty turns (no text, no tool call) an agent is asked to redo before its work
+/// ends anyway.
+const SILENT_RETRIES: usize = 2;
 /// Times the Repair stage may run before the run is reported as failing.
 const FIX_ROUNDS: usize = 2;
 /// Agents of a side-by-side stage working at the same moment. A stage may
@@ -797,6 +800,7 @@ fn work(
     let specs = specs_for(a.stage, &ctx.catalog);
     let mut history = vec![llm::user_message(&kickoff(ctx.goal, notes))];
     let mut last_text = String::new();
+    let mut silent = 0;
     let emit = ctx.emit;
     for _ in 0..MAX_TURNS {
         if ctx.cancel.load(Ordering::Relaxed) {
@@ -847,6 +851,18 @@ fn work(
                 continue;
             }
             Stop::Done | Stop::Tools => {}
+        }
+        if turn.calls.is_empty() && turn.text.trim().is_empty() && silent < SILENT_RETRIES {
+            // Nothing at all is not a hand-off: a local model can spend a turn on
+            // reasoning alone, or write a call its server could not parse and dropped.
+            silent += 1;
+            history.pop();
+            history.push(llm::user_message(
+                "Your last reply had no text and no tool call, so nothing happened. If you \
+                 meant to call a tool, the call did not arrive: send it again, with arguments \
+                 that are valid JSON. If your part is done, call hand_off.",
+            ));
+            continue;
         }
         if turn.calls.is_empty() {
             // Finished without handing off: what it said is its hand-off.
@@ -2172,6 +2188,61 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("cut off at the output limit"));
+        let _ = std::fs::remove_dir_all(ws);
+    }
+
+    #[test]
+    fn an_empty_turn_is_not_a_hand_off_and_the_agent_is_asked_again() {
+        // A local model can end a turn with nothing at all: its reasoning spent, or a
+        // tool call its server could not parse and dropped.
+        let ws = workspace();
+        let s = script(
+            vec![
+                ("Scout", "", vec![hand("data")]),
+                ("Architect", "", vec![]),
+                ("Architect", "", vec![hand("design")]),
+                ("Builder", "", vec![hand("no build")]),
+            ],
+            0,
+        );
+        let (_, events, _) = play(&ws, &s, vec![], false, ok);
+        // The empty turn is gone from the conversation, and the agent is told what happened.
+        let retried = &s.seen_by("Architect")[1].history;
+        assert_eq!(retried.len(), 2, "{retried:?}");
+        assert!(retried[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("no text and no tool call"));
+        assert!(events.iter().any(|e| e["type"] == "agent"
+            && e["agent"] == "architect"
+            && e["state"] == "done"
+            && e["summary"] == "design"));
+        let _ = std::fs::remove_dir_all(ws);
+    }
+
+    #[test]
+    fn an_agent_that_stays_silent_is_asked_twice_then_let_go() {
+        let ws = workspace();
+        let s = script(
+            vec![
+                ("Scout", "", vec![hand("data")]),
+                ("Architect", "", vec![]),
+                ("Architect", "", vec![]),
+                ("Architect", "", vec![]),
+                ("Builder", "", vec![hand("no build")]),
+            ],
+            0,
+        );
+        let (done, _, _) = play(&ws, &s, vec![], false, ok);
+        assert_eq!(
+            s.seen_by("Architect").len(),
+            3,
+            "asked twice more, then let go"
+        );
+        assert_eq!(
+            done["summary"],
+            json!("The Build stage finished without writing the pipeline.")
+        );
         let _ = std::fs::remove_dir_all(ws);
     }
 
