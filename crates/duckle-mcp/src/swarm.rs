@@ -29,8 +29,8 @@ use std::time::Instant;
 pub const DEFAULT_CLAUDE: &str = "claude-opus-5-5";
 /// Model calls one agent may make before it must hand off.
 const MAX_TURNS: usize = 16;
-/// Empty turns (no text, no tool call) an agent is asked to redo before its work
-/// ends anyway.
+/// Empty turns (no text, no tool call) in a row an agent is asked to redo before
+/// its work ends anyway.
 const SILENT_RETRIES: usize = 2;
 /// Times the Repair stage may run before the run is reported as failing.
 const FIX_ROUNDS: usize = 2;
@@ -855,12 +855,15 @@ fn work(
         if turn.calls.is_empty() && turn.text.trim().is_empty() && silent < SILENT_RETRIES {
             // Nothing at all is not a hand-off: a local model can spend a turn on
             // reasoning alone, or write a call its server could not parse and dropped.
+            // The dropped ones are long (a whole pipeline), so ask for smaller steps.
             silent += 1;
             history.pop();
             history.push(llm::user_message(
                 "Your last reply had no text and no tool call, so nothing happened. If you \
-                 meant to call a tool, the call did not arrive: send it again, with arguments \
-                 that are valid JSON. If your part is done, call hand_off.",
+                 meant to call a tool, the call did not arrive; long calls are the ones that \
+                 get lost. Send it again as valid JSON, in smaller steps: a pipeline's first \
+                 nodes with create_pipeline, the rest with update_pipeline. If your part is \
+                 done, call hand_off.",
             ));
             continue;
         }
@@ -871,6 +874,7 @@ fn work(
                 verdict: None,
             });
         }
+        silent = 0;
         let mut outputs = Vec::new();
         let mut handed: Option<AgentOut> = None;
         for call in &turn.calls {
@@ -2206,13 +2210,13 @@ mod tests {
             0,
         );
         let (_, events, _) = play(&ws, &s, vec![], false, ok);
-        // The empty turn is gone from the conversation, and the agent is told what happened.
+        // The empty turn is gone from the conversation, and the agent is told what happened,
+        // and that a long call is the kind that gets lost.
         let retried = &s.seen_by("Architect")[1].history;
         assert_eq!(retried.len(), 2, "{retried:?}");
-        assert!(retried[1]["content"]
-            .as_str()
-            .unwrap()
-            .contains("no text and no tool call"));
+        let told = retried[1]["content"].as_str().unwrap();
+        assert!(told.contains("no text and no tool call"), "{told}");
+        assert!(told.contains("smaller steps"), "{told}");
         assert!(events.iter().any(|e| e["type"] == "agent"
             && e["agent"] == "architect"
             && e["state"] == "done"
@@ -2243,6 +2247,33 @@ mod tests {
             done["summary"],
             json!("The Build stage finished without writing the pipeline.")
         );
+        let _ = std::fs::remove_dir_all(ws);
+    }
+
+    #[test]
+    fn only_silence_in_a_row_runs_out_of_retries() {
+        // A builder working in small steps can lose a call now and then; a turn that does
+        // something in between starts the count again.
+        let ws = workspace();
+        let s = script(
+            vec![
+                ("Scout", "", vec![hand("data")]),
+                ("Architect", "", vec![]),
+                ("Architect", "", vec![]),
+                ("Architect", "", vec![("list_components", json!({}))]),
+                ("Architect", "", vec![]),
+                ("Architect", "", vec![]),
+                ("Architect", "", vec![hand("design")]),
+                ("Builder", "", vec![hand("no build")]),
+            ],
+            0,
+        );
+        let (_, events, _) = play(&ws, &s, vec![], false, ok);
+        assert_eq!(s.seen_by("Architect").len(), 6);
+        assert!(events.iter().any(|e| e["type"] == "agent"
+            && e["agent"] == "architect"
+            && e["state"] == "done"
+            && e["summary"] == "design"));
         let _ = std::fs::remove_dir_all(ws);
     }
 
