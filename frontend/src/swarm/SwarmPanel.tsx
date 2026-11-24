@@ -20,7 +20,8 @@ import {
     UserRound,
     X,
 } from 'lucide-react';
-import SwarmConstellation, { STAGE_COLOR, STAGE_ICON, type Flight } from './SwarmConstellation';
+import SwarmField, { type Flight } from './SwarmField';
+import { STAGE_COLOR, STAGE_ICON } from './swarm-look';
 import {
     DEFAULT_CREW,
     STAGES,
@@ -309,15 +310,32 @@ export default function SwarmPanel({
             </header>
 
             <div className="sw-hero">
-                <SwarmConstellation
-                    crew={shownCrew}
-                    agents={state.agents}
-                    stages={state.stages}
-                    running={running}
-                    busyTool={busyTool}
-                    flights={flights}
-                    outcome={outcome}
-                />
+                <div className="sw-stagebox">
+                    <SwarmField
+                        crew={shownCrew}
+                        agents={state.agents}
+                        stages={state.stages}
+                        running={running}
+                        busyTool={busyTool}
+                        flights={flights}
+                        outcome={outcome}
+                    />
+                    <div className="sw-hud" aria-hidden="true">
+                        <span className="sw-hud-stage" style={{ ['--c' as string]: activeStage ? STAGE_COLOR[activeStage.id] : 'var(--accent)' }}>
+                            <i />
+                            {running && activeStage
+                                ? `${activeStage.title} · stage ${STAGES.indexOf(activeStage) + 1} of ${STAGES.length}`
+                                : finished
+                                  ? finished.stopped
+                                      ? 'Stopped'
+                                      : finished.ok
+                                        ? 'Mission complete'
+                                        : 'Mission ended'
+                                  : 'Standing by'}
+                        </span>
+                        <span className="sw-hud-count">{shownCrew.length} agents</span>
+                    </div>
+                </div>
                 <div className="sw-status">
                     {running ? (
                         <>
