@@ -78,6 +78,8 @@ Add to the client's `mcpServers` config:
 |---|---|
 | `list_components` | List components, optionally filtered by `kind` (source/transform/sink/control/quality/custom) or a `query` substring. |
 | `get_component_schema` | Full property schema (form fields + input/output ports) for one `componentId`. |
+| `list_workspace_files` | The data files in a workspace (CSV, Parquet, JSON, Excel, Avro, ORC, Arrow, XML, DuckDB, SQLite, compressed ones too) with their sizes. Duckle's own folders are skipped. |
+| `inspect_source` | A data file's columns, their types and a few sample rows, through the same engine read as the editor's Autodetect. Takes `${workspace}/...` paths as a pipeline writes them; a SQLite or DuckDB file needs `table`. |
 | `create_pipeline` | Validate a pipeline and write `<name>.json` into a chosen `directory`. Fails without writing if it does not compile (unless `validate:false`). |
 | `validate_pipeline` | Compile a pipeline to SQL without running it. Returns per-stage SQL or a structured error. |
 | `run_pipeline` | Run a pipeline headlessly. Returns per-node status, row counts, errors and a small result preview. |

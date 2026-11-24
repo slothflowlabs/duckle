@@ -18,13 +18,26 @@ use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 
 mod catalog;
+mod llm;
+mod swarm;
 mod tools;
 
 /// MCP protocol revision this server implements. 2024-11-05 is broadly
 /// supported by current clients.
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
-fn main() {
+fn main() -> std::process::ExitCode {
+    // `duckle-mcp swarm`: the agent swarm, driven by the desktop app and the
+    // web editor (see swarm.rs). Anything else is the MCP server.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("swarm") {
+        return swarm::main(&args[1..]);
+    }
+    serve();
+    std::process::ExitCode::SUCCESS
+}
+
+fn serve() {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut out = stdout.lock();

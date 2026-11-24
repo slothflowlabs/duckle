@@ -12,7 +12,7 @@ import {
     type OnSelectionChangeParams,
 } from '@xyflow/react';
 import type { ConnectionType } from './canvas/connection-types';
-import { BarChart3, Braces, FolderOpen, GitBranch, LayoutDashboard, Loader2, Moon, RotateCw, ShieldCheck, Sparkles, Sun, Waypoints } from 'lucide-react';
+import { BarChart3, Braces, FolderOpen, GitBranch, LayoutDashboard, Loader2, Moon, Orbit, RotateCw, ShieldCheck, Sparkles, Sun, Waypoints } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import LanguageSelector from './i18n/LanguageSelector';
 import { UpdateBanner } from './UpdateBanner';
@@ -48,6 +48,7 @@ import { DuckleLogo } from './workflow-ui/DuckleLogo';
 import EngineSetupModal from './workflow-ui/EngineSetupModal';
 import SetupWizard from './workflow-ui/SetupWizard';
 import ChatPanel from './workflow-ui/ChatPanel';
+import SwarmPanel, { type SwarmRunNodes } from './swarm/SwarmPanel';
 import GitPanel from './workflow-ui/GitPanel';
 import WindowControls from './workflow-ui/WindowControls';
 import WindowResizeHandles from './workflow-ui/WindowResizeHandles';
@@ -405,6 +406,7 @@ export default function App() {
         () => (isInTauri() ? 'checking' : 'ready'),
     );
     const [showChatPanel, setShowChatPanel] = useState(false);
+    const [showSwarm, setShowSwarm] = useState(false);
     const [showGitPanel, setShowGitPanel] = useState(false);
 
     useEffect(() => {
@@ -2438,6 +2440,35 @@ export default function App() {
     // content. Auto-lays nodes out left-to-right since the model
     // doesn't ship coordinates. Falls back to a no-op if the JSON
     // doesn't validate.
+    // Swarm mode: the pipeline the Builder writes opens in its own tab and
+    // follows every change; the Tester's runs badge its steps like a run of
+    // your own. The file is already on disk, so the tab is not dirty.
+    const handleSwarmPipeline = useCallback((id: string, name: string, doc: Record<string, unknown>) => {
+        setRepo(r => (r.some(i => i.id === id) ? r : [...r, { id, name, type: 'pipeline', parentId: 'pipelines' }]));
+        setPipelineData(d => ({ ...d, [id]: doc as unknown as PipelineState }));
+        setJobs(js =>
+            js.some(j => j.id === id) ? js.map(j => (j.id === id ? { ...j, name } : j)) : [...js, { id, name, dirty: false }],
+        );
+        setActiveJobId(id);
+        window.setTimeout(() => window.dispatchEvent(new Event('duckle:swarm-fit')), 180);
+    }, []);
+
+    const handleSwarmRun = useCallback((id: string, status: string, durationMs: number, nodes: SwarmRunNodes) => {
+        setRunResult({
+            status: status === 'ok' ? 'ok' : 'error',
+            duration_ms: durationMs,
+            nodes: nodes as RunResult['nodes'],
+            preview: [],
+        });
+        setRunResultFor(id);
+        // A run opens the Output panel, which takes height from the canvas.
+        window.setTimeout(() => window.dispatchEvent(new Event('duckle:swarm-fit')), 260);
+    }, []);
+
+    const handleSwarmLive = useCallback((live: boolean) => {
+        document.body.classList.toggle('swarm-live', live);
+    }, []);
+
     const handleInsertAiPipeline = useCallback(
         (raw: unknown) => {
             if (!raw || typeof raw !== 'object') return;
@@ -2808,9 +2839,26 @@ export default function App() {
                 </button>
                 <button
                     type="button"
+                    className={`topbar-theme-toggle topbar-swarm${showSwarm ? ' is-on' : ''}`}
+                    data-tour="swarm"
+                    onClick={() => {
+                        setShowSwarm(s => !s);
+                        setShowChatPanel(false);
+                    }}
+                    title="Agent swarm - six agents turn a goal into a tested pipeline"
+                    aria-label="Toggle the agent swarm"
+                    aria-pressed={showSwarm}
+                >
+                    <Orbit size={14} />
+                </button>
+                <button
+                    type="button"
                     className="topbar-theme-toggle"
                     data-tour="duckie"
-                    onClick={() => setShowChatPanel(s => !s)}
+                    onClick={() => {
+                        setShowChatPanel(s => !s);
+                        setShowSwarm(false);
+                    }}
                     title={t('topbar.duckieAssistant')}
                     aria-label={t('topbar.duckieAssistantAriaToggle')}
                     aria-pressed={showChatPanel}
@@ -3110,6 +3158,16 @@ export default function App() {
                 <ChatPanel
                     onClose={() => setShowChatPanel(false)}
                     onInsertPipeline={handleInsertAiPipeline}
+                />
+            ) : null}
+
+            {showSwarm ? (
+                <SwarmPanel
+                    workspacePath={workspacePathState}
+                    onClose={() => setShowSwarm(false)}
+                    onPipeline={handleSwarmPipeline}
+                    onRun={handleSwarmRun}
+                    onLive={handleSwarmLive}
                 />
             ) : null}
 

@@ -4540,6 +4540,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "ureq",
 ]
 
 [[package]]

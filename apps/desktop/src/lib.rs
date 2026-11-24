@@ -29,6 +29,7 @@ mod llama_chat;
 mod samples;
 mod secrets;
 mod self_update;
+mod swarm;
 mod update_check;
 mod workspace_git;
 use engine_manager::{EngineStatus, InstallProgress};
@@ -309,6 +310,9 @@ pub fn run() {
             app_settings::settings_get_power,
             app_settings::settings_set_power,
             gpu_status,
+            swarm::swarm_status,
+            swarm::swarm_run,
+            swarm::swarm_stop,
             app_settings::settings_get_context_file,
             app_settings::settings_set_context_file,
             app_settings::settings_load_context_vars,

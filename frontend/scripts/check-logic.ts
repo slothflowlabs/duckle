@@ -27,6 +27,7 @@ import { previewColumns, resolveOutputSchema, schemaAfterRun } from '../src/sche
 import { placeTip } from '../src/tour-place';
 import { pipelinesUsingConnections } from '../src/connection-usage';
 import { arrange } from '../src/canvas/arrange';
+import { aboutCall, applySwarmEvent, initialSwarmState, type SwarmEvent } from '../src/swarm/swarm-state';
 import { pipelineDocument } from '../src/pipeline-doc';
 import { parseWkt } from '../src/geo/wkt';
 import { linkPort, linkRows, withBreakpoint } from '../src/link-rows';
@@ -2518,6 +2519,91 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'audit: no report fails the gate, never passes it',
         noReport.every(r => failed(r).length === 1),
         `failures: ${JSON.stringify(noReport.map(failed))}`,
+    );
+}
+
+// The swarm view is a fold over the events duckle-mcp prints: replay a run.
+{
+    const play = (events: SwarmEvent[]) => events.reduce(applySwarmEvent, initialSwarmState());
+    const start: SwarmEvent = { type: 'started', goal: 'g', pipelineId: 'swarm_g', model: 'm', roles: [] };
+    const run = play([
+        start,
+        { type: 'agent', role: 'tester', state: 'working' },
+        { type: 'tool', role: 'tester', id: 't1', name: 'run_pipeline', input: {} },
+        { type: 'toolResult', role: 'tester', id: 't1', name: 'run_pipeline', ok: true, ms: 40, preview: '' },
+        { type: 'agent', role: 'tester', state: 'done', summary: 'gate failed', verdict: 'fail' },
+        { type: 'agent', role: 'fixer', state: 'working' },
+        { type: 'agent', role: 'fixer', state: 'done', summary: 'fixed' },
+        { type: 'agent', role: 'tester', state: 'working' },
+        { type: 'tool', role: 'tester', id: 't2', name: 'run_pipeline', input: { target: 'n2' } },
+    ]);
+    check(
+        'swarm: a tester called back after a fix gets a second stint, and its call lands there',
+        run.stints.length === 3 &&
+            run.stints[0].verdict === 'fail' &&
+            run.stints[0].tools.length === 1 &&
+            run.stints[0].tools[0].state === 'ok' &&
+            run.stints[2].role === 'tester' &&
+            run.stints[2].tools.length === 1 &&
+            run.stints[2].tools[0].about === 'to n2' &&
+            run.toolCalls === 2,
+        JSON.stringify(run.stints),
+    );
+
+    const said = play([
+        start,
+        { type: 'agent', role: 'scout', state: 'working' },
+        { type: 'thinking', role: 'scout', text: 'look at ' },
+        { type: 'text', role: 'scout', text: 'Lost' },
+        { type: 'retry', role: 'scout', reason: 'overloaded' },
+        { type: 'thinking', role: 'scout', text: 'files' },
+        { type: 'text', role: 'scout', text: 'Reading.' },
+    ]);
+    check(
+        'swarm: a retried turn drops what had arrived of it',
+        said.stream?.thinking === 'files' && said.stream?.text === 'Reading.',
+        JSON.stringify(said.stream),
+    );
+
+    const built = play([
+        start,
+        {
+            type: 'pipeline',
+            id: 'swarm_g',
+            name: 'G',
+            doc: {
+                nodes: [
+                    { id: 'a', data: { componentId: 'src.csv' } },
+                    { id: 'b', data: { componentId: 'qa.unique' } },
+                    { id: 'c', data: { componentId: 'qa.notnull' } },
+                    { id: 'd', data: { componentId: 'snk.parquet' } },
+                ],
+                edges: [],
+            },
+        },
+        { type: 'run', status: 'ok', nodes: { a: { rows: 1200 }, b: { rows: 412 }, d: { rows: 412 } } },
+        { type: 'run', status: 'error', nodes: { a: { status: 'error' } } },
+    ]);
+    check(
+        'swarm: steps and gates are counted from the document, rows from the last good run',
+        built.nodeCount === 4 && built.gateCount === 2 && built.rows === 1200 && built.runs === 2 && built.lastRun === 'error',
+        JSON.stringify({ n: built.nodeCount, g: built.gateCount, rows: built.rows, runs: built.runs, last: built.lastRun }),
+    );
+
+    const done = play([start, { type: 'agent', role: 'reviewer', state: 'working' }, { type: 'finished', ok: true, summary: 's' }]);
+    check(
+        'swarm: finishing clears the live stream and the active agent',
+        done.phase === 'finished' && done.active === null && done.stream === null && done.finished?.ok === true,
+        JSON.stringify({ phase: done.phase, active: done.active }),
+    );
+
+    check(
+        'swarm: a chip names what the call was about, without the folder',
+        aboutCall('inspect_source', { path: '${workspace}/data/raw/orders.csv' }) === 'raw/orders.csv' &&
+            aboutCall('create_pipeline', { pipeline: { nodes: [1, 2, 3] } }) === '3 nodes' &&
+            aboutCall('get_component_schema', { componentId: 'qa.unique' }) === 'qa.unique' &&
+            aboutCall('list_components', {}) === 'all',
+        aboutCall('inspect_source', { path: '${workspace}/data/raw/orders.csv' }),
     );
 }
 

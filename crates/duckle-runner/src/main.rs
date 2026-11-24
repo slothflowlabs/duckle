@@ -56,6 +56,7 @@ mod python;
 mod selfextract;
 mod work;
 mod sequence_cmd;
+mod swarm_relay;
 mod xsd_cmd;
 mod serve;
 

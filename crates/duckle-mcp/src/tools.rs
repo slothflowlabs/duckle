@@ -210,6 +210,22 @@ pub fn list_tools() -> Value {
                 "workspace": { "type": "string", "description": "Workspace root to resolve ${workspace}/${date} placeholders in source paths." },
                 "duckdb": { "type": "string", "description": "Path to the DuckDB CLI. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb' on PATH." }
             }})),
+        tool("list_workspace_files",
+            "List the data files in a workspace (CSV, TSV, Parquet, JSON, Excel, Avro, ORC, Arrow, XML, DuckDB and SQLite files), with their sizes, so you know what there is to build on. Call this first when a goal names data without saying where it is. Duckle's own folders are skipped.",
+            json!({ "type": "object", "properties": {
+                "workspace": { "type": "string", "description": "Workspace root. Defaults to DUCKLE_WORKSPACE." },
+                "limit": { "type": "integer", "description": "Most files to return. Default 200." }
+            } })),
+        tool("inspect_source",
+            "Read a data file's columns, their types and a few sample rows, the way Autodetect does in the editor. Call this before building on a file, so the pipeline's properties name columns that really exist.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "The file, absolute or relative to the workspace." },
+                "format": { "type": "string", "description": "File type, such as csv, tsv, parquet, json or xlsx. Defaults to the file's extension." },
+                "workspace": { "type": "string", "description": "Workspace root a relative path is read against. Defaults to DUCKLE_WORKSPACE." },
+                "sampleRows": { "type": "integer", "description": "Sample rows to return, 1 to 20. Default 5." },
+                "table": { "type": "string", "description": "For a SQLite or DuckDB file: the table to read." },
+                "duckdb": { "type": "string", "description": "Path to the DuckDB CLI. Defaults to DUCKLE_DUCKDB_BIN or 'duckdb' on PATH." }
+            }, "required": ["path"] })),
         tool("list_pipelines",
             "List pipeline .json files in a directory with their node/edge counts.",
             json!({ "type": "object", "properties": {
@@ -353,6 +369,8 @@ pub fn call_tool(params: Value) -> Result<Value, (i64, String)> {
         "diff_pipelines" => t_diff_pipelines(&args),
         "trust_report" => t_trust_report(&args),
         "schema_drift" => t_schema_drift(&args),
+        "list_workspace_files" => t_list_workspace_files(&args),
+        "inspect_source" => t_inspect_source(&args),
         "list_pipelines" => t_list_pipelines(&args),
         "read_pipeline" => t_read_pipeline(&args),
         "backfill_list" => t_backfill_list(&args),
@@ -1453,6 +1471,137 @@ fn t_workspace_impact(args: &Value) -> Result<Value, String> {
         // sees the "press Rescan" notice a screen shows and cannot act on it.
         None => Ok(json!(catalog::view_of(&workspace, &cat))),
     }
+}
+
+/// The workspace a tool works in: its `workspace` argument, else DUCKLE_WORKSPACE.
+fn workspace_arg(args: &Value) -> Result<PathBuf, String> {
+    let ws = arg_str(args, "workspace")
+        .map(str::to_string)
+        .or_else(|| std::env::var("DUCKLE_WORKSPACE").ok().filter(|s| !s.is_empty()))
+        .ok_or("no workspace: pass 'workspace' or set DUCKLE_WORKSPACE")?;
+    let path = PathBuf::from(ws);
+    if !path.is_dir() {
+        return Err(format!("workspace {} is not a folder", path.display()));
+    }
+    Ok(path)
+}
+
+/// File types a Duckle source reads, by extension.
+const DATA_EXTENSIONS: &[&str] = &[
+    "csv", "tsv", "txt", "parquet", "json", "jsonl", "ndjson", "xlsx", "xls", "avro", "orc", "arrow",
+    "feather", "ipc", "xml", "duckdb", "sqlite", "sqlite3", "db",
+];
+
+/// Folders of Duckle's own, or of tooling, which never hold source data. The
+/// pipelines' own JSON in particular would read as data files.
+const NOT_DATA_DIRS: &[&str] = &[
+    "pipelines", "logs", "state", "baselines", "tests", "routines", "connections", "contexts", "docs",
+    "node_modules", "target", "venv", "__pycache__",
+];
+
+/// A file's data extension, looking through a `.gz` or `.zst`, which DuckDB
+/// reads compressed as it is.
+fn data_extension(name: &str) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    let base = lower
+        .strip_suffix(".gz")
+        .or_else(|| lower.strip_suffix(".zst"))
+        .unwrap_or(&lower);
+    let ext = std::path::Path::new(base).extension()?.to_str()?.to_string();
+    DATA_EXTENSIONS.contains(&ext.as_str()).then_some(ext)
+}
+
+/// The data files in a workspace, nearest first.
+fn t_list_workspace_files(args: &Value) -> Result<Value, String> {
+    let ws = workspace_arg(args)?;
+    let limit = args.get("limit").and_then(Value::as_u64).filter(|n| *n > 0).unwrap_or(200) as usize;
+    let mut files = Vec::new();
+    let mut truncated = false;
+    let mut queue = std::collections::VecDeque::from([(ws.clone(), 0usize)]);
+    'walk: while let Some((dir, depth)) = queue.pop_front() {
+        let Ok(read) = std::fs::read_dir(&dir) else { continue };
+        let mut entries: Vec<_> = read.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                if depth < 8 && !name.starts_with('.') && !NOT_DATA_DIRS.contains(&name.as_str()) {
+                    queue.push_back((entry.path(), depth + 1));
+                }
+                continue;
+            }
+            // The workspace's own description, not data.
+            if depth == 0 && matches!(name.as_str(), "duckle.json" | "repository.json" | "workspace.json") {
+                continue;
+            }
+            let Some(format) = data_extension(&name) else { continue };
+            if files.len() == limit {
+                truncated = true;
+                break 'walk;
+            }
+            let path = entry.path();
+            let rel = path.strip_prefix(&ws).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+            files.push(json!({ "path": rel, "format": format, "bytes": meta.len() }));
+        }
+    }
+    Ok(json!({
+        "workspace": ws.to_string_lossy(),
+        "count": files.len(),
+        "truncated": truncated,
+        "files": files,
+    }))
+}
+
+/// A data file's columns and sample rows, through the engine's own Autodetect.
+fn t_inspect_source(args: &Value) -> Result<Value, String> {
+    let raw = arg_str(args, "path").ok_or("missing 'path'")?;
+    // A path as a pipeline writes it: ${workspace}/data/orders.csv.
+    let mut path = match raw.strip_prefix("${workspace}") {
+        Some(rest) => workspace_arg(args)?.join(rest.trim_start_matches(['/', '\\'])),
+        None => PathBuf::from(raw),
+    };
+    if path.is_relative() {
+        path = workspace_arg(args)?.join(path);
+    }
+    if !path.is_file() {
+        return Err(format!("no file at {}", path.display()));
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = match arg_str(args, "format") {
+        Some(f) => f.trim().trim_start_matches('.').to_ascii_lowercase(),
+        None => data_extension(&name)
+            .ok_or_else(|| format!("cannot tell what kind of file {name} is: pass 'format'"))?,
+    };
+    // The extension, as the source the engine reads it with.
+    let format = match ext.as_str() {
+        "xlsx" | "xls" => "excel",
+        "jsonl" | "ndjson" => "json",
+        "txt" => "csv",
+        "feather" | "ipc" => "arrow",
+        "sqlite3" | "db" => "sqlite",
+        other => other,
+    }
+    .to_string();
+    let file = path.to_string_lossy().replace('\\', "/");
+    let options = if matches!(format.as_str(), "sqlite" | "duckdb") {
+        let table = arg_str(args, "table")
+            .ok_or_else(|| format!("{name} is a database: pass 'table' to read one of its tables"))?;
+        json!({ "database": file, "tableName": table })
+    } else {
+        json!({ "path": file })
+    };
+    let duckdb = resolve_duckdb(arg_str(args, "duckdb")).ok_or("no DuckDB binary found")?;
+    let inspection = DuckdbEngine::new(duckdb)
+        .inspect(&format, options)
+        .map_err(|e| format!("{name}: {e}"))?;
+    let rows = args.get("sampleRows").and_then(Value::as_u64).unwrap_or(5).clamp(1, 20) as usize;
+    Ok(json!({
+        "path": file,
+        "format": format,
+        "columns": serde_json::to_value(&inspection.schema).map_err(|e| e.to_string())?,
+        "sampleRows": inspection.sample_rows.into_iter().take(rows).collect::<Vec<_>>(),
+    }))
 }
 
 fn t_list_pipelines(args: &Value) -> Result<Value, String> {
@@ -3161,5 +3310,84 @@ mod subflow_workspace_tests {
         assert!(updated.is_ok(), "update_pipeline: {updated:?}");
 
         assert_eq!(std::env::var_os("DUCKLE_WORKSPACE"), before, "a call's workspace outlived it");
+    }
+}
+
+#[cfg(test)]
+mod workspace_data_tools {
+    use super::*;
+
+    fn workspace() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "duckle-mcp-data-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        for sub in ["data/raw", "pipelines", ".duckle", "logs"] {
+            std::fs::create_dir_all(dir.join(sub)).unwrap();
+        }
+        std::fs::write(dir.join("data/orders.csv"), "id,customer,amount\n1,ann,10.5\n2,bo,3\n3,ann,4\n").unwrap();
+        std::fs::write(dir.join("data/raw/events.jsonl.gz"), "not really gzip").unwrap();
+        std::fs::write(dir.join("notes.md"), "# notes").unwrap();
+        std::fs::write(dir.join("pipelines/p1.json"), "{}").unwrap();
+        std::fs::write(dir.join(".duckle/settings.json"), "{}").unwrap();
+        std::fs::write(dir.join("logs/run.json"), "{}").unwrap();
+        std::fs::write(dir.join("repository.json"), "{}").unwrap();
+        dir
+    }
+
+    #[test]
+    fn workspace_files_lists_data_and_skips_duckles_own_folders() {
+        let ws = workspace();
+        let out = t_list_workspace_files(&json!({ "workspace": ws.to_string_lossy() })).unwrap();
+        let paths: Vec<&str> = out["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap()).collect();
+        assert_eq!(paths, ["data/orders.csv", "data/raw/events.jsonl.gz"], "{out}");
+        assert_eq!(out["files"][1]["format"], json!("jsonl"), "a compressed file is listed by what it holds");
+        assert_eq!(out["files"][0]["bytes"], json!(45));
+        assert_eq!(out["truncated"], json!(false));
+
+        let one = t_list_workspace_files(&json!({ "workspace": ws.to_string_lossy(), "limit": 1 })).unwrap();
+        assert_eq!(one["count"], json!(1));
+        assert_eq!(one["truncated"], json!(true));
+        let _ = std::fs::remove_dir_all(ws);
+    }
+
+    #[test]
+    fn inspect_source_needs_a_real_file_and_says_what_it_cannot_read() {
+        let ws = workspace();
+        let w = ws.to_string_lossy().to_string();
+        let missing = t_inspect_source(&json!({ "workspace": w, "path": "data/nope.csv" })).unwrap_err();
+        assert!(missing.starts_with("no file at"), "{missing}");
+        let unknown = t_inspect_source(&json!({ "workspace": w, "path": "notes.md" })).unwrap_err();
+        assert!(unknown.contains("pass 'format'"), "{unknown}");
+        let _ = std::fs::remove_dir_all(ws);
+    }
+
+    #[test]
+    fn inspect_source_reads_columns_and_rows_through_the_engine() {
+        let Ok(duckdb) = std::env::var("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipped: DUCKLE_DUCKDB_BIN is not set");
+            return;
+        };
+        let ws = workspace();
+        // Named as a pipeline names it, ${workspace} and all.
+        let out = t_inspect_source(&json!({
+            "workspace": ws.to_string_lossy(),
+            "path": "${workspace}/data/orders.csv",
+            "sampleRows": 2,
+            "duckdb": duckdb,
+        }))
+        .unwrap();
+        assert_eq!(out["format"], json!("csv"));
+        let names: Vec<&str> = out["columns"]["columns"]
+            .as_array()
+            .or_else(|| out["columns"].as_array())
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["id", "customer", "amount"], "{out}");
+        assert_eq!(out["sampleRows"].as_array().unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(ws);
     }
 }

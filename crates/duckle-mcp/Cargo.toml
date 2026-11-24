@@ -20,6 +20,9 @@ duckle-duckdb-engine = { workspace = true }
 duckle-secrets = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The swarm's model calls (swarm.rs, llm.rs). The engine's own version and
+# features, so the build gains no new crate.
+ureq = { version = "2.10", default-features = false, features = ["tls", "json", "gzip"] }
 
 # Teradata and DB2 (ODBC via odbc-api) are enabled everywhere except macOS, whose
 # cross-arch ODBC driver manager is awkward to link in the release build. On

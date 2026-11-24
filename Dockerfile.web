@@ -84,7 +84,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     cargo build --release -p duckle-lance \
     && cargo build --release -p duckle-runner \
+    && cargo build --release -p duckle-mcp \
     && cp /app/target/release/duckle-runner /usr/local/bin/duckle-runner \
+    && cp /app/target/release/duckle-mcp /usr/local/bin/duckle-mcp \
     && cp /app/target/release/duckle-lance /usr/local/bin/duckle-lance
 
 # duckle-delta, the Delta Lake sidecar behind snk.delta's upsert / update / delete
@@ -134,6 +136,8 @@ RUN apt-get update \
 # desktop omits it from its own pre-fetch for the same reason.
 RUN duckdb :memory: -c "INSTALL httpfs; INSTALL azure; INSTALL sqlite; INSTALL postgres; INSTALL mysql; INSTALL excel; INSTALL iceberg; INSTALL delta; INSTALL ducklake; INSTALL vss; INSTALL fts; INSTALL inet;"
 COPY --from=runner /usr/local/bin/duckle-runner /usr/local/bin/duckle-runner
+# The agent swarm runs in duckle-mcp, which the editor finds beside the runner.
+COPY --from=runner /usr/local/bin/duckle-mcp /usr/local/bin/duckle-mcp
 COPY --from=runner /usr/local/bin/duckle-lance /usr/local/bin/duckle-lance
 COPY --from=runner /usr/local/bin/duckle-delta /usr/local/bin/duckle-delta
 COPY --from=frontend /app/frontend/dist-web /app/dist-web

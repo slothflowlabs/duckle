@@ -682,6 +682,16 @@ fn handle_web(mut stream: TcpStream, state: &WebState) -> Result<(), String> {
         let body = req.body.clone();
         return run_stream(&mut stream, state, &who, &body);
     }
+    // The agent swarm streams the same way, under the same gate: its agents
+    // build and run pipelines in this workspace.
+    if req.method == "POST" && req.path == "/api/swarm_stream" {
+        let who = match web_gate(&req, state, console_auth::Role::Operator, "editor.api") {
+            Ok(w) => w,
+            Err(reply) => return write_reply(&mut stream, &reply),
+        };
+        audit::record(&state.workspace, Some(&who), "editor.api", &req.path, audit::Outcome::Allowed);
+        return swarm_stream(&mut stream, state, &req.body);
+    }
     let reply = route_web(&req, state);
     write_reply(&mut stream, &reply)
 }
@@ -896,6 +906,12 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
     match cmd {
         // Drives the editor's runtime indicator offline -> ready.
         "ping" => respond_json(&Value::String("pong".into())),
+        // What the swarm view can offer: the Anthropic sign-in on this server,
+        // and which API keys its environment holds (never the keys).
+        "swarm_status" => match crate::swarm_relay::status() {
+            Ok(v) => respond_json(&v),
+            Err(e) => respond_err("503 Service Unavailable", &e),
+        },
         // The Schedules dialog. These had no web implementation, and the shim
         // turns a missing command into an empty answer, so the list always read
         // "No schedules yet" and a save was dropped as if it had worked. They
@@ -1604,6 +1620,26 @@ fn run_stream(
         .map_err(|e| e.to_string())?;
     stream.flush().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Run the agent swarm in this workspace and stream its events.
+///
+/// The workspace and the DuckDB binary are this server's, whatever the request
+/// says: an editor user points the swarm at a goal, not at a folder.
+fn swarm_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(), String> {
+    let mut request: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    if !request.is_object() {
+        return write_reply(stream, &respond_err("400 Bad Request", "expected a JSON request"));
+    }
+    request["workspace"] = json!(state.workspace.to_string_lossy());
+    request["duckdb"] = json!(state.duckdb.to_string_lossy());
+    if let Err(e) = crate::swarm_relay::server() {
+        return write_reply(stream, &respond_err("503 Service Unavailable", &e));
+    }
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
+    stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
+    stream.flush().map_err(|e| e.to_string())?;
+    crate::swarm_relay::stream(stream, &request)
 }
 
 fn catalog_reply(view: Result<duckle_duckdb_engine::catalog::CatalogView, String>) -> Reply {

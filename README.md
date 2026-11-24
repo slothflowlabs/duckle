@@ -64,6 +64,7 @@ https://github.com/user-attachments/assets/8bfac3fa-3f91-4b43-b5d8-a526716c8ef1
 - [Download / Install](#download--install)
 - [Build from source](#build-from-source)
 - [Run your first pipeline](#run-your-first-pipeline)
+- [Swarm mode](#swarm-mode-a-goal-in-a-tested-pipeline-out)
 
 </td>
 <td valign="top" width="25%">
@@ -240,6 +241,31 @@ Paste this into Claude Code, Cursor, or Codex:
 > Run `uvx duckle quickstart` to build my first pipeline and run it
 
 Nothing to install first. The agent fetches Duckle and the DuckDB engine on demand, runs a real pipeline, and shows you the rows.
+
+### Swarm mode: a goal in, a tested pipeline out
+
+Press **Swarm** in the top bar, say what the pipeline should do, and six agents build it in front of you:
+
+| Agent | What it does |
+|---|---|
+| **Scout** | Reads the workspace's data: files, columns, types, sample values. |
+| **Architect** | Designs the pipeline, and the quality gates that will prove it right. |
+| **Builder** | Writes it. It appears on the canvas step by step. |
+| **Tester** | Runs it, and checks every gate and the output it wrote. |
+| **Fixer** | Repairs what the Tester found, for up to two rounds. |
+| **Reviewer** | Reports back: what it does, where the output is, and the evidence. |
+
+Every step is a call to Duckle's own MCP tools, so a swarm can do nothing an agent connected over MCP could not. It writes one new pipeline of its own (`pipelines/swarm_*.json`) and never one you made, and its tools read only the workspace. Its checks are Duckle quality gates (`qa.unique`, `qa.notnull`, `qa.reconcile` and the like), so they stay in the pipeline and run every time it does. The canvas follows along: steps appear as they are written, and each run lights them up with their row counts.
+
+Any model that can call tools:
+
+- **Claude**, through **your Anthropic account** or an **API key**. The account route uses Anthropic's own sign-in, [`ant auth login`](https://platform.claude.com/docs/en/cli-sdks-libraries/cli/quickstart) (Windows builds on [the releases page](https://github.com/anthropics/anthropic-cli/releases)): no key to paste, and Duckle never sees or stores a credential. Use is billed to your Claude Console organization; Max, Ultra and Team plans include monthly API credits you can claim for it. Claude runs with adaptive thinking, whose summaries stream into the swarm view, and with Anthropic's server-side fallback for a declined turn.
+- **OpenAI, Hugging Face** (its router), **OpenRouter**, or **any OpenAI-compatible endpoint**.
+- **A local model** through **Ollama** or **LM Studio**: no key, and nothing leaves the machine.
+
+A key you paste is used for that run only and never saved. A key in the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `HF_TOKEN`, `OPENROUTER_API_KEY` and others) is only ever sent to its own provider, so a custom endpoint needs a key of its own.
+
+The desktop app and the web editor both have it; the work runs in `duckle-mcp swarm`, which the Docker image now ships beside the runner. `ant` is found on `PATH`, in `%LOCALAPPDATA%\Programs\anthropic-cli`, `~/go/bin`, `~/.local/bin` or Homebrew, or wherever `DUCKLE_ANT_BIN` points.
 
 ### CLI only (CI, cron, containers)
 
@@ -4475,7 +4501,8 @@ For Claude Desktop and other clients, add it to `mcpServers`:
 }
 ```
 
-Tools: `list_components`, `get_component_schema`, `create_pipeline`,
+Tools: `list_components`, `get_component_schema`, `list_workspace_files`,
+`inspect_source`, `create_pipeline`,
 `validate_pipeline`, `run_pipeline`, `list_pipelines`, `read_pipeline`,
 `read_run_logs`, `build_pipeline`, `list_connections`, `create_connection`, `backfill_list`, `backfill_set`, `backfill_clear`.
 `run_pipeline` / `build_pipeline` need a DuckDB binary (`DUCKLE_DUCKDB_BIN`);
@@ -4851,11 +4878,20 @@ gh release edit vX.Y.Z --draft=false --latest
 
 ## What's new in v0.9.1
 
-13 commits. **DuckDB 2.0.1**, **GPU acceleration through NVIDIA Sirius** on
+**Swarm mode**, **DuckDB 2.0.1**, **GPU acceleration through NVIDIA Sirius** on
 Linux, and fixes for a run that could write its rows twice (#406), REST APIs
 that take their page in a POST body (#407), and editors that blanked the app
 (#408). Read *Before you upgrade* first.
 
+- **Swarm mode.** Say what a pipeline should do, and six agents build it on
+  the canvas in front of you: the Scout reads the data, the Architect designs
+  the pipeline and the quality gates that will prove it, the Builder writes
+  it, the Tester runs it and checks every gate, the Fixer repairs what failed,
+  and the Reviewer reports back. Claude through your Anthropic account or an
+  API key, OpenAI, Hugging Face, OpenRouter, any OpenAI-compatible endpoint,
+  or a local model through Ollama or LM Studio. Desktop and web editor. See
+  [Swarm mode](#swarm-mode-a-goal-in-a-tested-pipeline-out). MCP gains the two
+  tools it reads data with: `list_workspace_files` and `inspect_source`.
 - **Before you upgrade.** Duckle now runs DuckDB 2.0.1, and so does the pip
   package, which had stayed on 1.5.5 (its macOS wheels need macOS 12 or
   newer). The merge write mode refuses two input rows for one key, now also

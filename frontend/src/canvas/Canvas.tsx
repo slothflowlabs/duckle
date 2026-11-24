@@ -5,6 +5,7 @@ import {
     Background,
     Controls,
     MiniMap,
+    getNodesBounds,
     useReactFlow,
     type Connection,
     type Edge,
@@ -196,7 +197,7 @@ function CanvasInner({
     nodeAutodetectAvailable,
     pipelineId,
 }: Props) {
-    const { screenToFlowPosition, setViewport, fitView } = useReactFlow();
+    const { screenToFlowPosition, setViewport, fitView, getNodes } = useReactFlow();
     const { theme } = useTheme();
 
     // Remember pan/zoom per pipeline (per user = localStorage on this machine),
@@ -478,6 +479,31 @@ function CanvasInner({
     const [pickerPos, setPickerPos] = useState<{ x: number; y: number } | null>(null);
     const [pickerAllowed, setPickerAllowed] = useState<Set<ConnectionType> | null>(null);
     const wrapperRef = useRef<HTMLDivElement>(null);
+
+    // Swarm mode builds a pipeline while its panel covers the right of the
+    // screen: each time it asks, fit the steps into the part still in view.
+    useEffect(() => {
+        const onFit = () => {
+            const el = wrapperRef.current;
+            const steps = getNodes();
+            if (!el || !steps.length) return;
+            const rect = el.getBoundingClientRect();
+            const panel = document.querySelector('.swarm-panel')?.getBoundingClientRect();
+            const w = rect.width - (panel ? Math.max(0, rect.right - panel.left) : 0);
+            const h = rect.height;
+            const b = getNodesBounds(steps);
+            if (w < 160 || h < 160 || !b.width || !b.height) return;
+            const pad = 56;
+            const zoom = Math.min(1.1, Math.max(0.2, Math.min((w - 2 * pad) / b.width, (h - 2 * pad) / b.height)));
+            setViewport(
+                { x: (w - b.width * zoom) / 2 - b.x * zoom, y: (h - b.height * zoom) / 2 - b.y * zoom, zoom },
+                { duration: 650 },
+            );
+        };
+        window.addEventListener('duckle:swarm-fit', onFit);
+        return () => window.removeEventListener('duckle:swarm-fit', onFit);
+    }, [getNodes, setViewport]);
+
     // Quick-add: null = closed; a string = open, seeded with the first typed char.
     const [quickAddSeed, setQuickAddSeed] = useState<string | null>(null);
 
