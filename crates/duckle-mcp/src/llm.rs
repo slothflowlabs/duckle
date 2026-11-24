@@ -452,6 +452,8 @@ pub struct OpenAiCompatible {
     pub base_url: String,
     pub model: String,
     pub api_key: Option<String>,
+    /// Set once the server refused `stream_options`: token counts are not asked for again.
+    pub usage_refused: bool,
 }
 
 impl OpenAiCompatible {
@@ -467,7 +469,13 @@ impl OpenAiCompatible {
                 })
             })
             .collect();
-        json!({ "model": self.model, "stream": true, "messages": messages, "tools": tools })
+        let mut body =
+            json!({ "model": self.model, "stream": true, "messages": messages, "tools": tools });
+        // Token counts stream only when asked for.
+        if !self.usage_refused {
+            body["stream_options"] = json!({ "include_usage": true });
+        }
+        body
     }
 }
 
@@ -481,18 +489,28 @@ impl Model for OpenAiCompatible {
         cancel: &AtomicBool,
     ) -> Result<Turn, String> {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let body = self.body(system, tools, history).to_string();
         let mut headers = vec![("content-type".to_string(), "application/json".to_string())];
         if let Some(key) = &self.api_key {
             headers.push(("authorization".to_string(), format!("Bearer {key}")));
         }
-        let (turn, message) = with_retries(cancel, on, |on| {
-            let mut stream = OpenAiStream::default();
-            post_sse(&url, &headers, &body, cancel, &mut |_, data| {
-                stream.feed(data, on)
-            })?;
-            Ok(stream.finish())
-        })?;
+        let (turn, message) = loop {
+            let body = self.body(system, tools, history).to_string();
+            let answer = with_retries(cancel, on, |on| {
+                let mut stream = OpenAiStream::default();
+                post_sse(&url, &headers, &body, cancel, &mut |_, data| {
+                    stream.feed(data, on)
+                })?;
+                Ok(stream.finish())
+            });
+            // A server that forbids fields it does not know names this one: token
+            // counts are not worth a failed turn, so it is asked again without them.
+            match answer {
+                Err(e) if !self.usage_refused && e.contains("stream_options") => {
+                    self.usage_refused = true
+                }
+                answer => break answer?,
+            }
+        };
         history.push(message);
         Ok(turn)
     }
@@ -1217,6 +1235,7 @@ mod tests {
             base_url: String::new(),
             model: "m".into(),
             api_key: None,
+            usage_refused: false,
         };
         let mut history = Vec::new();
         open.tool_results(&mut history, &results);
@@ -1225,6 +1244,89 @@ mod tests {
             history[1],
             json!({"role":"tool","tool_call_id":"b","content":"Error: no such file"})
         );
+    }
+
+    #[test]
+    fn chat_completions_requests_ask_for_token_usage_and_read_it_from_the_last_chunk() {
+        // The counts stream only when asked for, in a chunk of their own after the finish
+        // reason, with no choices (the shape Ollama and OpenAI send).
+        let open = OpenAiCompatible {
+            base_url: String::new(),
+            model: "m".into(),
+            api_key: None,
+            usage_refused: false,
+        };
+        assert_eq!(
+            open.body("s", &[], &[])["stream_options"],
+            json!({ "include_usage": true })
+        );
+        let (turn, _, _) = openai(&[
+            r#"{"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}"#,
+            r#"{"choices":[],"usage":{"prompt_tokens":31,"completion_tokens":3}}"#,
+            "[DONE]",
+        ]);
+        assert_eq!((turn.input_tokens, turn.output_tokens), (31, 3));
+    }
+
+    #[test]
+    fn a_server_that_refuses_stream_options_is_asked_without_it_from_then_on() {
+        // Some servers forbid fields they do not know (Mistral answers 422 and names it).
+        use std::io::{BufRead, BufReader, Read, Write};
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = server.local_addr().unwrap().port();
+        let bodies = std::thread::spawn(move || {
+            let mut bodies = Vec::new();
+            for answer in 0..3 {
+                let (mut stream, _) = server.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = v.trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                bodies.push(serde_json::from_slice::<Value>(&body).unwrap());
+                let reply = if answer == 0 {
+                    let refusal = r#"{"detail":[{"type":"extra_forbidden","loc":["body","stream_options"],"msg":"Extra inputs are not permitted"}]}"#;
+                    format!("HTTP/1.1 422 Unprocessable Entity\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{refusal}", refusal.len())
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_string()
+                };
+                stream.write_all(reply.as_bytes()).unwrap();
+            }
+            bodies
+        });
+        let mut open = OpenAiCompatible {
+            base_url: format!("http://127.0.0.1:{port}/v1"),
+            model: "m".into(),
+            api_key: None,
+            usage_refused: false,
+        };
+        let cancel = AtomicBool::new(false);
+        let mut history = vec![json!({"role": "user", "content": "go"})];
+        for _ in 0..2 {
+            let turn = open
+                .turn("s", &[], &mut history, &mut |_| {}, &cancel)
+                .unwrap();
+            assert_eq!(turn.text, "hi");
+        }
+        let bodies = bodies.join().unwrap();
+        assert_eq!(
+            bodies[0]["stream_options"],
+            json!({ "include_usage": true })
+        );
+        assert!(
+            bodies[1].get("stream_options").is_none(),
+            "asked again without it"
+        );
+        assert!(bodies[2].get("stream_options").is_none(), "and never again");
     }
 
     #[test]

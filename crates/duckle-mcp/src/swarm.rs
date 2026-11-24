@@ -401,6 +401,7 @@ pub fn model_for(p: &Provider) -> Result<(Box<dyn Model + Send>, String), String
                     base_url,
                     model,
                     api_key,
+                    usage_refused: false,
                 }),
                 label,
             ))
