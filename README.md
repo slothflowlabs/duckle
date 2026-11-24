@@ -50,6 +50,7 @@ https://github.com/user-attachments/assets/8bfac3fa-3f91-4b43-b5d8-a526716c8ef1
 
 - [Where Duckle runs](#where-duckle-runs)
 - [What is Duckle?](#what-is-duckle)
+- [What's new in v0.9.1](#whats-new-in-v091)
 - [What's new in v0.9.0](#whats-new-in-v090)
 - [What's new in v0.8.0](#whats-new-in-v080)
 - [What's new in v0.7.4](#whats-new-in-v074)
@@ -214,7 +215,7 @@ That's a real, native ETL pipeline built and run in under a minute. CSV is just 
 
 ## Download / Install
 
-Pick the binary for your OS from the [latest release](https://github.com/slothflowlabs/duckle/releases/tag/v0.9.0):
+Pick the binary for your OS from the [latest release](https://github.com/slothflowlabs/duckle/releases/tag/v0.9.1):
 
 | OS | Asset | How to run |
 |---|---|---|
@@ -4845,6 +4846,50 @@ git push origin main vX.Y.Z
 # GitHub gets the binaries uploaded; un-draft + mark Latest with:
 gh release edit vX.Y.Z --draft=false --latest
 ```
+
+---
+
+## What's new in v0.9.1
+
+13 commits. **DuckDB 2.0.1**, **GPU acceleration through NVIDIA Sirius** on
+Linux, and fixes for a run that could write its rows twice (#406), REST APIs
+that take their page in a POST body (#407), and editors that blanked the app
+(#408). Read *Before you upgrade* first.
+
+- **Before you upgrade.** Duckle now runs DuckDB 2.0.1, and so does the pip
+  package, which had stayed on 1.5.5 (its macOS wheels need macOS 12 or
+  newer). The merge write mode refuses two input rows for one key, now also
+  when the key is new to the table: DuckDB 2.0.1 stopped refusing them, and
+  which row's values landed was not defined. A `MERGE` or `UPDATE ... FROM` in
+  your own SQL changed the same way, so deduplicate its source. GPU
+  acceleration is on by default where it can be: on Linux with an NVIDIA
+  driver, the first run downloads Sirius's GPU backend (0.7 to 1.2 GB), and
+  each DuckDB process a run starts takes about 1.2 s longer. Set it to Off in
+  Settings, with `--gpu off`, or with `DUCKLE_GPU=off` to skip both.
+- **GPU acceleration (NVIDIA Sirius).** DuckDB 2.0.1 ships Sirius, NVIDIA's GPU
+  engine for DuckDB, and on Linux (x86-64 or arm64) with an NVIDIA GPU a run
+  can load it: Auto wherever it starts, On fails a run that cannot use the
+  GPU, Off never. It is in Settings (Power mode), `duckle-runner --gpu`, MCP
+  `run_pipeline` and `DUCKLE_GPU`, and `duckle-runner gpu` shows what a run
+  would find. DuckDB builds no Sirius for Windows or macOS, where runs use the
+  CPU and Settings says why. **Today it runs nothing on the GPU through the
+  DuckDB CLI**: measured on an RTX 4050 with DuckDB 2.0.1, Sirius declines
+  every scan and each query falls back to the CPU, and the run log and
+  Settings say so until an update fixes it. See
+  [GPU acceleration (NVIDIA Sirius)](#gpu-acceleration-nvidia-sirius).
+- **A failed save no longer means rows twice (#406).** A run that wrote its
+  output but could not save its position left the next run to read those rows
+  again, and a sink that appends held them twice. The position it reached is
+  now kept beside the state file and put in place before the next run reads
+  anything; while that cannot be done, the run does not start.
+- **REST.** An API that takes its page in the POST body is paged there: write
+  `{offset}`, `{page}` or `{page_size}` in Request body (#407). A missing
+  more-pages flag names the page, the request and the start of what came
+  back, and a records pointer that finds no list says what it found (#405).
+- **Also fixed.** Opening a routine or a document no longer blanks the app
+  (#408). A SQL node loads DuckDB 2.0.1's new core extensions (`glue`,
+  `legacy_parser`, `sirius`) from the core repository. `url` moves to 2.5.9
+  (RUSTSEC-2026-0592) and `cookie` to 0.18.3 (RUSTSEC-2026-0594).
 
 ---
 
