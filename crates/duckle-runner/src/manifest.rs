@@ -24,7 +24,7 @@ use sha2::{Digest, Sha256};
 type Lineage = HashMap<String, Vec<(String, Vec<RootColumn>)>>;
 
 const SCHEMA_VERSION: u32 = 1;
-const DUCKDB_VERSION: &str = "2.0.0";
+const DUCKDB_VERSION: &str = "2.0.1";
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();

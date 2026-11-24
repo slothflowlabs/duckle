@@ -20,8 +20,8 @@
 <text x="276" y="19.5" class="m dim" font-size="11.5">pip install duckle</text>
 <text x="18" y="65" class="m"><tspan class="p">$</tspan> <tspan class="c">pip install duckle</tspan></text>
 <text x="18" y="86" class="m dim">Downloading&#160;duckle-0.5.9-py3-none-win_amd64.whl&#160;(23.0&#160;MB)</text>
-<text x="18" y="107" class="m dim">Downloading&#160;duckdb_cli-1.5.5-py3-none-win_amd64.whl&#160;(12.9&#160;MB)</text>
-<text x="18" y="128" class="m ok">Successfully&#160;installed&#160;duckdb-cli-1.5.5&#160;duckle-0.5.9</text>
+<text x="18" y="107" class="m dim">Downloading&#160;duckdb_cli-2.0.1-py3-none-win_amd64.whl&#160;(19.9&#160;MB)</text>
+<text x="18" y="128" class="m ok">Successfully&#160;installed&#160;duckdb-cli-2.0.1&#160;duckle-0.5.9</text>
 <text x="18" y="170" class="m dim">#&#160;three&#160;commands,&#160;and&#160;the&#160;engine,&#160;on&#160;your&#160;PATH:</text>
 <text x="18" y="191" class="m dim">#&#160;&#160;&#160;duckle&#160;&#160;&#160;duckle-mcp&#160;&#160;&#160;duckdb</text>
 <text x="18" y="233" class="m"><tspan class="p">$</tspan> <tspan class="c">cat job.py</tspan></text>

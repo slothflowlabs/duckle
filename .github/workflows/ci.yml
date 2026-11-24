@@ -125,7 +125,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          ver=2.0.0
+          ver=2.0.1
           case "$RUNNER_OS" in
             Linux)   asset=duckdb-cli-linux-amd64.tar.gz;  exe=duckdb ;;
             Windows) asset=duckdb-cli-windows-amd64.tar.gz; exe=duckdb.exe ;;
@@ -361,7 +361,7 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
           tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
@@ -410,7 +410,7 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
           tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
@@ -467,7 +467,7 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
           tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
@@ -568,7 +568,7 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
           tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
@@ -607,7 +607,7 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
           tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
@@ -641,7 +641,7 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
           tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
@@ -687,7 +687,7 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
           tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
@@ -729,7 +729,7 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
           tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
@@ -777,7 +777,7 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
           tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
@@ -830,7 +830,7 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
           tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
@@ -886,7 +886,7 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
           tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"

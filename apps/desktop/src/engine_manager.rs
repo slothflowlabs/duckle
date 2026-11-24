@@ -10,7 +10,7 @@ use serde::Serialize;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-pub const DUCKDB_VERSION: &str = "2.0.0";
+pub const DUCKDB_VERSION: &str = "2.0.1";
 pub const SLOTHDB_VERSION: &str = "0.2.7";
 /// Pinned llama.cpp build. Bump periodically; the GGUF wire format
 /// is stable so newer server binaries keep working with older models.
@@ -272,11 +272,11 @@ pub(crate) const UNPINNED: &str = "UNPINNED";
 /// release-asset digest, the `.sha256` dbt puts beside each archive, and the
 /// sha256 Hugging Face reports for each file.
 const PINS: &[(&str, &str)] = &[
-    ("https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-windows-amd64.tar.gz", "91663c2f36c2a334b0e5e639006d8c29c29e013af0c477d80bb931df68870312"),
-    ("https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-windows-arm64.tar.gz", "4b5d1e4611debf676a693a8a6896dc29b352a9c3b11b706e7421d1d6082e05fd"),
-    ("https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz", "c6507206baf7793c6013dbd82368469a45f20dc0e17a6f92f204602f652ed2bc"),
-    ("https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-arm64.tar.gz", "859e1875d2a9515fbb4bf8871061437a14af82320da68c753f094c4b776348fe"),
-    ("https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-osx-universal.tar.gz", "8a8f67e7c7f7d1392fa63ba3971948391392fe2a25fca63e7008e33c50beb4c2"),
+    ("https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-windows-amd64.tar.gz", "8e40d1e9c53dfd70dd671c1f886506211bd054272e7eed35e8aa979ad7bcc9b7"),
+    ("https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-windows-arm64.tar.gz", "7187649c2f9c17a3a555c177a65b98bfda5298bb75bd5302501899146346ea67"),
+    ("https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-amd64.tar.gz", "b676268be4d39e4e41a904442c9796c9914e645cc085c7505f048f2c992b5eca"),
+    ("https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-arm64.tar.gz", "84e37891fcc45c887e30220f51a4914995cd8174139e87f8efd311ac83c956a7"),
+    ("https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-osx-universal.tar.gz", "9d6ea079e8c3b5698f559fc64e7e5e43dd21a51e8a618b29b18de4716299ca40"),
     ("https://github.com/SouravRoy-ETL/slothdb/releases/download/v0.2.7/slothdb.exe", "4e82163a38a281abc5a4c8acedcacf5d8e27b473eb37b3f2c4f5f7de9fc8cfad"),
     ("https://github.com/SouravRoy-ETL/slothdb/releases/download/v0.2.7/slothdb-linux-x64", "6976509996e486aa3b2044dde222e759e02b7a2f13b1a068b6eefdf59bfbd3f0"),
     ("https://github.com/SouravRoy-ETL/slothdb/releases/download/v0.2.7/slothdb-macos", "85738d640d10ce4a2f373a721481424c5651ed44db97620ab407a9abde112940"),

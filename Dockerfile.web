@@ -98,7 +98,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # 3) Runtime: runner + the built frontend + the DuckDB CLI.
 FROM debian:bookworm-slim
-ARG DUCKDB_VERSION=2.0.0
+ARG DUCKDB_VERSION=2.0.1
 # python3 powers the code.python UDF (per-row Python transform); curl stays for
 # the container healthcheck; libodbc2 is the unixODBC runtime the teradata
 # (ODBC) engine feature dynamically links against.

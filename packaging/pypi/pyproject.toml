@@ -29,9 +29,9 @@ classifiers = [
 # real `duckdb` executable on PATH, which is what the runner shells out to.
 # Pinned so a pip install is reproducible and needs no first-run download -
 # which is what keeps it usable on a machine with no outbound network at run
-# time. Duckle pins DuckDB 2.0.0, but duckdb-cli has no 2.0.0 wheel on PyPI yet
-# (checked 2026-10-23), so this stays on 1.5.5, which Duckle still runs on.
-dependencies = ["duckdb-cli==1.5.5"]
+# time. The same DuckDB the app pins, so a pip install runs the engine the
+# rest of Duckle was tested on.
+dependencies = ["duckdb-cli==2.0.1"]
 
 [project.urls]
 Homepage = "https://duckle.org"

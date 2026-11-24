@@ -62,7 +62,7 @@ test:linux:
   <<: *rust_defaults
   stage: test
   variables:
-    DUCKDB_VERSION: "2.0.0"
+    DUCKDB_VERSION: "2.0.1"
   before_script:
     - rustc --version
     - apt-get update -qq && apt-get install -y -qq unzip curl ca-certificates
@@ -185,7 +185,7 @@ integration:postgres:
     POSTGRES_HOST_AUTH_METHOD: trust
   before_script:
     - apt-get update -qq && apt-get install -y -qq unzip curl ca-certificates
-    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz" -o duckdb.tar.gz
+    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-amd64.tar.gz" -o duckdb.tar.gz
     - mkdir -p /tmp/duckdb && tar -xzf duckdb.tar.gz -C /tmp/duckdb
     - export DUCKLE_DUCKDB_BIN=/tmp/duckdb/duckdb
     - $DUCKLE_DUCKDB_BIN :memory: -c "INSTALL postgres;"
@@ -209,7 +209,7 @@ integration:mysql:
         MYSQL_DATABASE: ducktest
   before_script:
     - apt-get update -qq && apt-get install -y -qq unzip curl ca-certificates default-mysql-client
-    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz" -o duckdb.tar.gz
+    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-amd64.tar.gz" -o duckdb.tar.gz
     - mkdir -p /tmp/duckdb && tar -xzf duckdb.tar.gz -C /tmp/duckdb
     - export DUCKLE_DUCKDB_BIN=/tmp/duckdb/duckdb
     - $DUCKLE_DUCKDB_BIN :memory: -c "INSTALL mysql;"
@@ -241,7 +241,7 @@ integration:minio:
         MINIO_ROOT_PASSWORD: minioadmin
   before_script:
     - apt-get update -qq && apt-get install -y -qq unzip curl ca-certificates
-    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz" -o duckdb.tar.gz
+    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-cli-linux-amd64.tar.gz" -o duckdb.tar.gz
     - mkdir -p /tmp/duckdb && tar -xzf duckdb.tar.gz -C /tmp/duckdb
     - export DUCKLE_DUCKDB_BIN=/tmp/duckdb/duckdb
     # Wait for MinIO to be ready.

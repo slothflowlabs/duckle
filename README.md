@@ -4162,7 +4162,7 @@ Duckle ships a thin shell and installs its engines on first launch.
 
 | Engine | Role | Status |
 |---|---|---|
-| **DuckDB** | Default execution engine: analytics, file formats, cloud reads, SQL pushdown. Tracking **v2.0.0** (LTS, latest stable). A lock-free single-SELECT read (`Engine::query`) powers dives. | Working |
+| **DuckDB** | Default execution engine: analytics, file formats, cloud reads, SQL pushdown. Tracking **v2.0.1** (LTS, latest stable). A lock-free single-SELECT read (`Engine::query`) powers dives. | Working |
 | **Duckie AI Assistant** | Local chat assistant via **llama.cpp** + **Qwen 2.5 Coder 1.5B GGUF**. Downloads ~1.1 GB and needs no network once installed, or point it at your own OpenAI-compatible endpoint and skip the download entirely. Managed as a `llama-server` subprocess exposing an OpenAI-compatible API on `127.0.0.1`. | Installable |
 | **SlothDB** | Alternate embedded analytical engine ([SouravRoy-ETL/slothdb](https://github.com/SouravRoy-ETL/slothdb)), installed the same way and selectable per pipeline. | Installable |
 | **Native** | In-process Rust streaming / incremental engine. | Planned |
@@ -4181,7 +4181,7 @@ For a machine with no internet, put the files in a folder and point `DUCKLE_ARTI
 
 ### Moving to DuckDB 2.0
 
-Duckle pins DuckDB 2.0.0 (LTS). Most of what changes is invisible, but these you may notice, each measured against 1.5.5:
+Duckle pins DuckDB 2.0.1 (LTS). Most of what changes is invisible, but these you may notice, each measured against 1.5.5:
 
 | What | On DuckDB 2.0 |
 |---|---|
@@ -4191,7 +4191,7 @@ Duckle pins DuckDB 2.0.0 (LTS). Most of what changes is invisible, but these you
 | A **Quack** server still on DuckDB 1.5 | Not reachable: the protocol changed in both directions (a 2.0 client gets HTTP 500 from a 1.5 server, and a 1.5 client cannot read a 2.0 server's reply). Upgrade the server along with Duckle. Against a 2.0 server, reading, writing and token checks work as before. |
 | A **PostgreSQL** server that does not answer | The extension tries to connect twice before it gives up, so a failure takes two connect timeouts. |
 | An **Intel Mac** | DuckDB 2.0 builds no community extensions for Intel Macs, where 1.5.5 did. The SQL Server sink's Bulk write loads one (`mssql`), so on an Intel Mac untick Bulk write, which writes through Duckle's own SQL Server driver instead; a SQL node's `loadExtensions` cannot name one there either. Every core extension is still published for it. |
-| **Your own SQL** (SQL nodes, custom SQL) | `x -> x + 1` lambdas are refused: write `lambda x: x + 1`. `~` and `!~` match anywhere in the string; use `regexp_full_match` for a whole-string match. `//` and `%` by zero raise an error. An untyped `NULL` column keeps the `"NULL"` type. A `NEAREST` join in a SQL node needs Materialize set to Memory (or another option that reads once): Duckle keeps its run database in the 1.5 format, where DuckDB 2.0 cannot store one as a view (the Nearest Join node does this itself). |
+| **Your own SQL** (SQL nodes, custom SQL) | `x -> x + 1` lambdas are refused: write `lambda x: x + 1`. `~` and `!~` match anywhere in the string; use `regexp_full_match` for a whole-string match. `//` and `%` by zero raise an error. An untyped `NULL` column keeps the `"NULL"` type. A `NEAREST` join in a SQL node needs Materialize set to Memory (or another option that reads once): Duckle keeps its run database in the 1.5 format, where DuckDB 2.0 cannot store one as a view (the Nearest Join node does this itself). On 2.0.1, a `MERGE` or `UPDATE ... FROM` whose target row matches several source rows runs again where 2.0.0 refused the `MERGE`, and which source row's values land is not defined: deduplicate the source. |
 
 The CLI's new "agent mode", which changes its output when an AI agent runs it, is turned off for Duckle's own runs, so nothing changes when Duckle itself runs under one.
 

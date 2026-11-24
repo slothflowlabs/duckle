@@ -473,7 +473,7 @@ chmod +x /usr/local/bin/duckle-runner
 
 # The runner does NOT bundle DuckDB. Install the CLI and point at it,
 # or every run fails looking for a binary that is not there.
-export DUCKLE_DUCKDB_BIN=/usr/local/bin/duckdb    # DuckDB 2.0.0, the pinned version
+export DUCKLE_DUCKDB_BIN=/usr/local/bin/duckdb    # DuckDB 2.0.1, the pinned version
 
 duckle-runner serve --host 0.0.0.0 --port 8080 --workspace /srv/duckle</code></pre>
     <p class="muted">Do not substitute the desktop build for this. <code>Duckle-linux-x64</code> is a Tauri binary that resolves libwebkit2gtk and the GTK stack at load time, so it cannot start on a server with no GUI libraries. The runner is the headless one.</p>
