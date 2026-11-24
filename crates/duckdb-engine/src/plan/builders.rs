@@ -6676,11 +6676,35 @@ fn build_merge_stmt(
     } else {
         format!("WHEN MATCHED THEN UPDATE SET {set} ", set = set_clause)
     };
+    // One input row per key, checked here rather than left to DuckDB. 2.0.0
+    // refused a MERGE in which two input rows matched one target row; 2.0.1
+    // applies every match, so which row's values win is not defined; and on
+    // both, a key not yet in the target was inserted once per input row. A key
+    // with a NULL in it never matches, so it is not counted. The check is a
+    // filter because an error() in a projected column the MERGE never reads is
+    // pruned by the optimizer and does not run (measured on 2.0.0).
+    let present = keys
+        .iter()
+        .map(|k| format!("{} IS NOT NULL", quote_ident(k)))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    let partition = keys.iter().map(|k| quote_ident(k)).collect::<Vec<_>>().join(", ");
+    let key_text = keys
+        .iter()
+        .map(|k| format!("'{}=' || CAST({} AS VARCHAR)", sql_escape(k), quote_ident(k)))
+        .collect::<Vec<_>>()
+        .join(" || ', ' || ");
+    let one_row_per_key = format!(
+        "(SELECT * FROM {from_quoted} QUALIFY CASE WHEN {present} AND count(*) OVER (PARTITION BY {partition}) > 1 \
+         THEN error('{component}: more than one input row has the key ' || {key_text} || \
+         '. Merge writes one row per key; deduplicate before the sink.') ELSE true END)",
+        component = sql_escape(component_id),
+    );
     Ok(format!(
         "MERGE INTO {target} AS tgt USING {from} AS src ON ({on}) \
          {delete_clause}{update_clause}WHEN NOT MATCHED{nmf} THEN INSERT ({ic}) VALUES ({iv})",
         target = target,
-        from = from_quoted,
+        from = one_row_per_key,
         on = on,
         delete_clause = delete_clause,
         update_clause = update_clause,

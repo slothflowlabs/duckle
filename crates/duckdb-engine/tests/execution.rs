@@ -4494,6 +4494,69 @@ fn duckdb_upsert_without_conflict_columns_errors() {
     );
 }
 
+/// Merge writes one row per key, so two input rows for one key are refused
+/// whatever DuckDB does with them. DuckDB 2.0.0 refused them only when the key
+/// was already in the table; 2.0.1 applies every match instead, so which row's
+/// values won was not defined; and a NEW key arriving twice was always inserted
+/// twice. A NULL key never matches anything, so it is not "one key".
+#[test]
+fn duckdb_merge_refuses_two_input_rows_for_one_key() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let dbfile = out_path(tmp.path(), "out.duckdb");
+    let table = |name: &str| -> String {
+        let out = out_path(tmp.path(), &format!("{name}.csv"));
+        let r = engine.execute_pipeline(&doc(
+            json!([
+                node("r", "src.duckdb", json!({ "database": dbfile, "tableName": "people" })),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e", "r", "k")]),
+        ));
+        assert_eq!(r.status, "ok", "read back: {:?}", r.error);
+        let mut lines: Vec<String> =
+            std::fs::read_to_string(&out).unwrap().lines().skip(1).map(String::from).collect();
+        lines.sort();
+        lines.join(" ")
+    };
+    let write = |name: &str, csv: &str, mode: &str| {
+        let input = write_file(tmp.path(), &format!("{name}.csv"), csv);
+        // Merge names the columns it updates, so the source carries its
+        // schema, as an autodetected node does in the editor.
+        let mut source = node("s", "src.csv", json!({ "path": input, "hasHeader": true }));
+        source["data"]["schema"] =
+            json!([{ "name": "id", "type": "int64" }, { "name": "name", "type": "string" }]);
+        engine.execute_pipeline(&doc(
+            json!([
+                source,
+                node("w", "snk.duckdb", json!({
+                    "database": dbfile, "tableName": "people", "mode": mode, "conflictColumns": ["id"]
+                })),
+            ]),
+            json!([main_edge("e", "s", "w")]),
+        ))
+    };
+    assert_eq!(write("seed", "id,name\n1,old\n", "overwrite").status, "ok");
+
+    // A key already in the table, twice.
+    let r = write("matched_twice", "id,name\n1,a\n1,b\n", "merge");
+    assert_eq!(r.status, "error", "two rows for key 1 must be refused");
+    let err = format!("{:?}", r.error);
+    assert!(err.contains("more than one input row") && err.contains("id=1"), "got: {err}");
+    assert_eq!(table("after_matched"), "1,old", "a refused merge must change nothing");
+
+    // A new key, twice: inserted twice before, now refused too.
+    let r = write("new_twice", "id,name\n2,a\n2,b\n", "merge");
+    assert_eq!(r.status, "error", "two rows for new key 2 must be refused");
+    assert!(format!("{:?}", r.error).contains("id=2"), "got: {:?}", r.error);
+    assert_eq!(table("after_new"), "1,old");
+
+    // One row per key merges as before, and NULL keys are each inserted.
+    let r = write("clean", "id,name\n1,new\n3,c\n,x\n,y\n", "merge");
+    assert_eq!(r.status, "ok", "a merge with one row per key: {:?}", r.error);
+    assert_eq!(table("after_clean"), ",x ,y 1,new 3,c");
+}
+
 #[test]
 fn sqlserver_upsert_delete_propagation() {
     let engine = engine_or_skip!();
