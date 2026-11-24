@@ -23,6 +23,9 @@ pub const CANCELLED: &str = "stopped";
 /// The Messages API version every request names.
 const ANTHROPIC_VERSION: &str = "2026-10-21";
 pub const ANTHROPIC_BASE: &str = "https://api.anthropic.com";
+/// The most a Chat Completions turn may write. A local model can loop in its
+/// reasoning and never stop; cut off, it is asked again for a smaller step.
+const MAX_OUTPUT: u64 = 16_384;
 
 /// One tool the model may call.
 pub struct ToolSpec {
@@ -454,6 +457,8 @@ pub struct OpenAiCompatible {
     pub api_key: Option<String>,
     /// Set once the server refused `stream_options`: token counts are not asked for again.
     pub usage_refused: bool,
+    /// Set once the server refused `max_tokens`: the output is not capped again.
+    pub cap_refused: bool,
 }
 
 impl OpenAiCompatible {
@@ -474,6 +479,9 @@ impl OpenAiCompatible {
         // Token counts stream only when asked for.
         if !self.usage_refused {
             body["stream_options"] = json!({ "include_usage": true });
+        }
+        if !self.cap_refused {
+            body["max_tokens"] = json!(MAX_OUTPUT);
         }
         body
     }
@@ -502,12 +510,14 @@ impl Model for OpenAiCompatible {
                 })?;
                 Ok(stream.finish())
             });
-            // A server that forbids fields it does not know names this one: token
-            // counts are not worth a failed turn, so it is asked again without them.
+            // A server can refuse a field by name: one that forbids fields it does not
+            // know refuses stream_options, OpenAI's reasoning models refuse max_tokens.
+            // Neither the counts nor the cap is worth a failed turn: ask again without.
             match answer {
                 Err(e) if !self.usage_refused && e.contains("stream_options") => {
                     self.usage_refused = true
                 }
+                Err(e) if !self.cap_refused && e.contains("max_tokens") => self.cap_refused = true,
                 answer => break answer?,
             }
         };
@@ -1236,6 +1246,7 @@ mod tests {
             model: "m".into(),
             api_key: None,
             usage_refused: false,
+            cap_refused: false,
         };
         let mut history = Vec::new();
         open.tool_results(&mut history, &results);
@@ -1255,6 +1266,7 @@ mod tests {
             model: "m".into(),
             api_key: None,
             usage_refused: false,
+            cap_refused: false,
         };
         assert_eq!(
             open.body("s", &[], &[])["stream_options"],
@@ -1269,8 +1281,26 @@ mod tests {
     }
 
     #[test]
-    fn a_server_that_refuses_stream_options_is_asked_without_it_from_then_on() {
-        // Some servers forbid fields they do not know (Mistral answers 422 and names it).
+    fn chat_completions_requests_cap_a_turns_output() {
+        // A local model can loop in its reasoning and never stop: qwen3 8B in Ollama wrote
+        // 15,378 tokens in one turn, for 33 minutes, until it was stopped.
+        let open = OpenAiCompatible {
+            base_url: String::new(),
+            model: "m".into(),
+            api_key: None,
+            usage_refused: false,
+            cap_refused: false,
+        };
+        assert_eq!(open.body("s", &[], &[])["max_tokens"], json!(16_384));
+    }
+
+    /// A Chat Completions server on this machine that refuses the first request with
+    /// `status` and `refusal`, and answers the next two with "hi". It hands back what
+    /// each request asked for.
+    fn refusing_server(
+        status: &'static str,
+        refusal: &'static str,
+    ) -> (u16, std::thread::JoinHandle<Vec<Value>>) {
         use std::io::{BufRead, BufReader, Read, Write};
         let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = server.local_addr().unwrap().port();
@@ -1294,8 +1324,7 @@ mod tests {
                 reader.read_exact(&mut body).unwrap();
                 bodies.push(serde_json::from_slice::<Value>(&body).unwrap());
                 let reply = if answer == 0 {
-                    let refusal = r#"{"detail":[{"type":"extra_forbidden","loc":["body","stream_options"],"msg":"Extra inputs are not permitted"}]}"#;
-                    format!("HTTP/1.1 422 Unprocessable Entity\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{refusal}", refusal.len())
+                    format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{refusal}", refusal.len())
                 } else {
                     "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_string()
                 };
@@ -1303,11 +1332,17 @@ mod tests {
             }
             bodies
         });
+        (port, bodies)
+    }
+
+    /// Two turns against `port`; both must come back as "hi".
+    fn two_turns(port: u16) {
         let mut open = OpenAiCompatible {
             base_url: format!("http://127.0.0.1:{port}/v1"),
             model: "m".into(),
             api_key: None,
             usage_refused: false,
+            cap_refused: false,
         };
         let cancel = AtomicBool::new(false);
         let mut history = vec![json!({"role": "user", "content": "go"})];
@@ -1317,6 +1352,16 @@ mod tests {
                 .unwrap();
             assert_eq!(turn.text, "hi");
         }
+    }
+
+    #[test]
+    fn a_server_that_refuses_stream_options_is_asked_without_it_from_then_on() {
+        // Some servers forbid fields they do not know (Mistral answers 422 and names it).
+        let (port, bodies) = refusing_server(
+            "422 Unprocessable Entity",
+            r#"{"detail":[{"type":"extra_forbidden","loc":["body","stream_options"],"msg":"Extra inputs are not permitted"}]}"#,
+        );
+        two_turns(port);
         let bodies = bodies.join().unwrap();
         assert_eq!(
             bodies[0]["stream_options"],
@@ -1327,6 +1372,28 @@ mod tests {
             "asked again without it"
         );
         assert!(bodies[2].get("stream_options").is_none(), "and never again");
+    }
+
+    #[test]
+    fn a_server_that_refuses_max_tokens_is_asked_without_it_from_then_on() {
+        // OpenAI's reasoning models refuse the field by name, and a model with a smaller
+        // limit refuses the value: the cap is not worth a failed turn.
+        let (port, bodies) = refusing_server(
+            "400 Bad Request",
+            r#"{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.","type":"invalid_request_error","param":"max_tokens","code":"unsupported_parameter"}}"#,
+        );
+        two_turns(port);
+        let bodies = bodies.join().unwrap();
+        assert_eq!(bodies[0]["max_tokens"], json!(16_384));
+        assert!(
+            bodies[1].get("max_tokens").is_none(),
+            "asked again without it"
+        );
+        assert!(bodies[2].get("max_tokens").is_none(), "and never again");
+        assert!(
+            bodies[2].get("stream_options").is_some(),
+            "the token counts are still asked for"
+        );
     }
 
     #[test]

@@ -32,6 +32,9 @@ const MAX_TURNS: usize = 16;
 /// Empty turns (no text, no tool call) in a row an agent is asked to redo before
 /// its work ends anyway.
 const SILENT_RETRIES: usize = 2;
+/// Turns in a row cut off at the output limit an agent is asked to redo. Past
+/// that the model is looping, not working, and the agent fails.
+const CUT_RETRIES: usize = 2;
 /// Times the Repair stage may run before the run is reported as failing.
 const FIX_ROUNDS: usize = 2;
 /// Agents of a side-by-side stage working at the same moment. A stage may
@@ -405,6 +408,7 @@ pub fn model_for(p: &Provider) -> Result<(Box<dyn Model + Send>, String), String
                     model,
                     api_key,
                     usage_refused: false,
+                    cap_refused: false,
                 }),
                 label,
             ))
@@ -800,7 +804,7 @@ fn work(
     let specs = specs_for(a.stage, &ctx.catalog);
     let mut history = vec![llm::user_message(&kickoff(ctx.goal, notes))];
     let mut last_text = String::new();
-    let mut silent = 0;
+    let (mut silent, mut cut) = (0, 0);
     let emit = ctx.emit;
     for _ in 0..MAX_TURNS {
         if ctx.cancel.load(Ordering::Relaxed) {
@@ -843,6 +847,12 @@ fn work(
             }
             Stop::Truncated => {
                 // Cut off: its tool calls may be incomplete, so none of them run.
+                cut += 1;
+                if cut > CUT_RETRIES {
+                    return Err(format!(
+                        "The model ran past its output limit {cut} turns in a row."
+                    ));
+                }
                 history.pop();
                 history.push(llm::user_message(
                     "Your last reply was cut off at the output limit. Take a smaller step: fewer \
@@ -874,7 +884,7 @@ fn work(
                 verdict: None,
             });
         }
-        silent = 0;
+        (silent, cut) = (0, 0);
         let mut outputs = Vec::new();
         let mut handed: Option<AgentOut> = None;
         for call in &turn.calls {
@@ -2274,6 +2284,54 @@ mod tests {
             && e["agent"] == "architect"
             && e["state"] == "done"
             && e["summary"] == "design"));
+        let _ = std::fs::remove_dir_all(ws);
+    }
+
+    #[test]
+    fn a_model_that_keeps_running_past_its_output_limit_fails_the_agent() {
+        // Cut off at the cap three turns in a row: the model is looping, not working.
+        let ws = workspace();
+        let s = script(
+            vec![
+                ("Scout", "<cut>", vec![]),
+                ("Scout", "<cut>", vec![]),
+                ("Scout", "<cut>", vec![]),
+            ],
+            0,
+        );
+        let (done, events, _) = play(&ws, &s, vec![], false, ok);
+        assert_eq!(s.seen_by("Scout").len(), 3, "asked twice more, then failed");
+        assert_eq!(done["ok"], json!(false));
+        assert!(
+            done["summary"].as_str().unwrap().contains("output limit"),
+            "{done}"
+        );
+        assert!(events
+            .iter()
+            .any(|e| e["type"] == "agent" && e["agent"] == "scout" && e["state"] == "failed"));
+        let _ = std::fs::remove_dir_all(ws);
+    }
+
+    #[test]
+    fn only_cut_off_turns_in_a_row_run_out_of_retries() {
+        let ws = workspace();
+        let s = script(
+            vec![
+                ("Scout", "<cut>", vec![]),
+                ("Scout", "", vec![("list_workspace_files", json!({}))]),
+                ("Scout", "<cut>", vec![]),
+                ("Scout", "<cut>", vec![]),
+                ("Scout", "", vec![hand("data")]),
+                ("Architect", "", vec![hand("design")]),
+                ("Builder", "", vec![hand("no build")]),
+            ],
+            0,
+        );
+        let (_, events, _) = play(&ws, &s, vec![], false, ok);
+        assert!(events.iter().any(|e| e["type"] == "agent"
+            && e["agent"] == "scout"
+            && e["state"] == "done"
+            && e["summary"] == "data"));
         let _ = std::fs::remove_dir_all(ws);
     }
 
