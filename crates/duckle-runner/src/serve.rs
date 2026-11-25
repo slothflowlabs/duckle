@@ -8592,8 +8592,13 @@ mod tests {
         let mut idle = std::collections::HashSet::new();
 
         super::start_due(&state, &in_flight, &mut idle, "p", &overlap_cfg("skip"), &pipes, at(0), at(0), true);
-        eventually("the scheduled run starting", || {
-            state.runs.lock().unwrap().values().any(|r| r.scheduled && r.finished.is_none())
+        // Another server knows the run only by its receipt, which is written
+        // after the run is registered here: asked in between, it finds nothing.
+        eventually("the scheduled run's receipt", || {
+            std::fs::read_dir(duckle_duckdb_engine::retry::dir(&ws)).is_ok_and(|d| {
+                d.flatten()
+                    .any(|e| e.path().extension().is_some_and(|x| x == "json"))
+            })
         });
         let other = local_state_using(&ws, std::path::PathBuf::from("duckdb"));
         assert_eq!(super::stop_runs_of(&other, "p"), 1, "the other server found no run to stop");
