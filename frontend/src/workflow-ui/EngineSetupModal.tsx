@@ -25,6 +25,9 @@ export default function EngineSetupModal({ onReady }: Props) {
     const [dbtInstalled, setDbtInstalled] = useState(false);
     const [dbtBusy, setDbtBusy] = useState(false);
     const [dbtError, setDbtError] = useState<string | null>(null);
+    // The DuckDB version this opened over when it opened for an outdated engine
+    // (#410), which the app no longer runs on; null on a first run.
+    const [upgradeFrom, setUpgradeFrom] = useState<string | null>(null);
 
     const refresh = useCallback(async () => {
         const list = await engineStatus();
@@ -34,7 +37,10 @@ export default function EngineSetupModal({ onReady }: Props) {
     }, []);
 
     useEffect(() => {
-        void refresh();
+        void refresh().then(list => {
+            const duck = list.find(e => e.id === 'duckdb');
+            if (duck?.outdated) setUpgradeFrom(duck.version ?? '');
+        });
         void dbtStatus().then(setDbtInstalled);
     }, [refresh]);
 
@@ -67,7 +73,8 @@ export default function EngineSetupModal({ onReady }: Props) {
             await refresh();
             // Provision dbt Fusion alongside DuckDB on the same first-run pass,
             // so the user sees it install as part of initialising the workspace.
-            if (id === 'duckdb' && !dbtInstalled && !dbtBusy) {
+            // Not on an upgrade, which asked for DuckDB alone.
+            if (id === 'duckdb' && upgradeFrom === null && !dbtInstalled && !dbtBusy) {
                 void installDbt();
             }
         } catch (err) {
@@ -86,11 +93,18 @@ export default function EngineSetupModal({ onReady }: Props) {
                         <Workflow size={28} />
                     </div>
                     <div className="modal-workspace-titles">
-                        <div className="modal-title">Workspace initialisation</div>
+                        <div className="modal-title">
+                            {upgradeFrom !== null ? 'DuckDB upgrade' : 'Workspace initialisation'}
+                        </div>
                         <div className="modal-subtitle">
-                            First-run setup - Duckle stays a tiny download and fetches the DuckDB
-                            engine and dbt Fusion now. Sample pipelines and data are added to a
-                            new workspace so you have something to run right away.
+                            {upgradeFrom !== null
+                                ? `This version of Duckle runs on DuckDB ${duckdb?.target_version ?? ''}` +
+                                  (upgradeFrom ? `, and this machine has ${upgradeFrom}` : '') +
+                                  '. Upgrade it to continue: the new engine replaces the old one and ' +
+                                  'fetches its extensions, and your workspaces and pipelines stay as they are.'
+                                : 'First-run setup - Duckle stays a tiny download and fetches the DuckDB ' +
+                                  'engine and dbt Fusion now. Sample pipelines and data are added to a ' +
+                                  'new workspace so you have something to run right away.'}
                         </div>
                     </div>
                 </div>
@@ -128,7 +142,9 @@ export default function EngineSetupModal({ onReady }: Props) {
                     <span className="modal-engine-hint">
                         {canContinue
                             ? 'DuckDB ready.'
-                            : 'DuckDB is required to run pipelines.'}
+                            : upgradeFrom !== null
+                              ? 'Upgrade DuckDB to continue.'
+                              : 'DuckDB is required to run pipelines.'}
                     </span>
                     <button
                         type="button"

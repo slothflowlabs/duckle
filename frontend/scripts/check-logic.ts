@@ -28,6 +28,7 @@ import { placeTip } from '../src/tour-place';
 import { pipelinesUsingConnections } from '../src/connection-usage';
 import { arrange } from '../src/canvas/arrange';
 import { DEFAULT_CREW, aboutCall, applySwarmEvent, crewProblem, initialSwarmState, newAgentId, working, type SwarmEvent } from '../src/swarm/swarm-state';
+import { engineGateFor } from '../src/engine-gate';
 import { seatsOf } from '../src/swarm/SwarmConstellation';
 import { pipelineDocument } from '../src/pipeline-doc';
 import { parseWkt } from '../src/geo/wkt';
@@ -2680,6 +2681,21 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         big.length === 13 && big[0].id === 'b' && big.every(s => s.scale < 1 && !s.named) && new Set(big.map(s => s.deg)).size === 13,
         JSON.stringify(big.slice(0, 3)),
     );
+}
+
+// ---------------------------------------------------------------------------
+// An outdated DuckDB blocks the app until it is upgraded, like a missing one.
+//
+// It used to open the app with a banner the user could dismiss, so an install
+// went on running the DuckDB it first downloaded (#410): 1.5.4 under a Duckle
+// built for 2.0, whose extensions it then could not find.
+// ---------------------------------------------------------------------------
+{
+    const gate = (installed: boolean, outdated: boolean) => engineGateFor({ installed, outdated });
+    check('engine gate: an outdated DuckDB opens the engine setup, not the app', gate(false, true) === 'engine-setup', gate(false, true));
+    check('engine gate: a missing DuckDB opens the engine setup', gate(false, false) === 'engine-setup' && engineGateFor(undefined) === 'engine-setup', gate(false, false));
+    // A DuckDB the user chose through DUCKLE_DUCKDB_BIN reads installed and never outdated (#373).
+    check('engine gate: the pinned DuckDB, or one the user chose, opens the app', gate(true, false) === 'ready', gate(true, false));
 }
 
 if (failures.length) {

@@ -16,7 +16,6 @@ import { BarChart3, Braces, FolderOpen, GitBranch, LayoutDashboard, Loader2, Moo
 import { useTranslation } from 'react-i18next';
 import LanguageSelector from './i18n/LanguageSelector';
 import { UpdateBanner } from './UpdateBanner';
-import { EngineUpgradeBanner } from './EngineUpgradeBanner';
 import { ReviewPrompt } from './ReviewPrompt';
 import EditorTabs from './workflow-ui/EditorTabs';
 import EditorHeader, { type Job } from './workflow-ui/EditorHeader';
@@ -46,6 +45,7 @@ import { Settings as SettingsIcon } from 'lucide-react';
 import { ClaudeIcon } from './workflow-ui/ClaudeIcon';
 import { DuckleLogo } from './workflow-ui/DuckleLogo';
 import EngineSetupModal from './workflow-ui/EngineSetupModal';
+import { engineGateFor } from './engine-gate';
 import SetupWizard from './workflow-ui/SetupWizard';
 import ChatPanel from './workflow-ui/ChatPanel';
 import SwarmPanel, { type SwarmRunNodes } from './swarm/SwarmPanel';
@@ -414,11 +414,7 @@ export default function App() {
         let cancelled = false;
         void engineStatus().then(list => {
             if (cancelled) return;
-            const duck = list.find(e => e.id === 'duckdb');
-            // A missing engine blocks (pipelines can't run). An OUTDATED engine
-            // still runs, so don't force the install modal - let the app proceed
-            // and let EngineUpgradeBanner offer a non-blocking upgrade instead.
-            setEngineGate(duck?.installed || duck?.outdated ? 'ready' : 'engine-setup');
+            setEngineGate(engineGateFor(list.find(e => e.id === 'duckdb')));
         });
         return () => {
             cancelled = true;
@@ -2889,7 +2885,6 @@ export default function App() {
             </header>
 
             <UpdateBanner />
-            <EngineUpgradeBanner />
             <ReviewPrompt />
 
             {workspaceLoadError ? (
