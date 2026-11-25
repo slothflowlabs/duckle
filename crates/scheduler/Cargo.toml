@@ -17,8 +17,8 @@ chrono = { workspace = true }
 cron = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
-notify = "8"
-notify-debouncer-mini = "0.7"
+notify = "9"
+notify-debouncer-mini = "0.8"
 duckle-duckdb-engine = { workspace = true }
 duckle-secrets = { workspace = true }
 
