@@ -265,6 +265,8 @@ Any model that can call tools:
 - **OpenAI, Hugging Face** (its router), **OpenRouter**, or **any OpenAI-compatible endpoint**.
 - **A local model** through **Ollama** or **LM Studio**: no key, and nothing leaves the machine.
 
+A model that stalls cannot hang a run. An agent whose turn comes back with nothing in it is asked again, in smaller steps, and two such turns in a row end its part; a turn of an OpenAI-compatible model is capped at 16,384 tokens, and three cut off in a row fail the agent. How far a local model gets depends on the model and the machine: qwen3 8B on a 6 GB laptop GPU read the data every time, built the pipeline in one run of four, and finished none.
+
 A key you paste is used for that run only and never saved. A key in the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `HF_TOKEN`, `OPENROUTER_API_KEY` and others) is only ever sent to its own provider, so a custom endpoint needs a key of its own.
 
 The desktop app and the web editor both have it; the work runs in `duckle-mcp swarm`, which the Docker image now ships beside the runner. `ant` is found on `PATH`, in `%LOCALAPPDATA%\Programs\anthropic-cli`, `~/go/bin`, `~/.local/bin` or Homebrew, or wherever `DUCKLE_ANT_BIN` points.
@@ -4895,7 +4897,8 @@ that take their page in a POST body (#407), and editors that blanked the app
   OpenRouter, any OpenAI-compatible endpoint, or a local model through Ollama
   or LM Studio. Desktop and web editor. See
   [Swarm mode](#swarm-mode-a-goal-in-a-tested-pipeline-out). MCP gains the two
-  tools it reads data with: `list_workspace_files` and `inspect_source`.
+  tools it reads data with: `list_workspace_files` and `inspect_source`. A
+  model that stalls cannot hang a run.
 - **Before you upgrade.** Duckle now runs DuckDB 2.0.1, and so does the pip
   package, which had stayed on 1.5.5 (its macOS wheels need macOS 12 or
   newer). The merge write mode refuses two input rows for one key, now also
