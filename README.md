@@ -4883,9 +4883,10 @@ gh release edit vX.Y.Z --draft=false --latest
 ## What's new in v0.9.1
 
 **Swarm mode**, **DuckDB 2.0.1**, **GPU acceleration through NVIDIA Sirius** on
-Linux, and fixes for a run that could write its rows twice (#406), REST APIs
-that take their page in a POST body (#407), and editors that blanked the app
-(#408). Read *Before you upgrade* first.
+Linux, and fixes for a desktop app that never offered its DuckDB an upgrade
+(#410), a run that could write its rows twice (#406), REST APIs that take
+their page in a POST body (#407), and editors that blanked the app (#408).
+Read *Before you upgrade* first.
 
 - **Swarm mode.** Give it a mission, and a crew of agents builds the pipeline
   on the canvas in front of you, in six stages: Discover reads the data,
@@ -4901,14 +4902,18 @@ that take their page in a POST body (#407), and editors that blanked the app
   model that stalls cannot hang a run.
 - **Before you upgrade.** Duckle now runs DuckDB 2.0.1, and so does the pip
   package, which had stayed on 1.5.5 (its macOS wheels need macOS 12 or
-  newer). The merge write mode refuses two input rows for one key, now also
-  when the key is new to the table: DuckDB 2.0.1 stopped refusing them, and
-  which row's values landed was not defined. A `MERGE` or `UPDATE ... FROM` in
-  your own SQL changed the same way, so deduplicate its source. GPU
-  acceleration is on by default where it can be: on Linux with an NVIDIA
-  driver, the first run downloads Sirius's GPU backend (0.7 to 1.2 GB), and
-  each DuckDB process a run starts takes about 1.2 s longer. Set it to Off in
-  Settings, with `--gpu off`, or with `DUCKLE_GPU=off` to skip both.
+  newer). On the desktop, take the engine upgrade the app offers: from v0.8.0
+  it offered none, taking its own DuckDB for one you had chosen yourself, so
+  an install kept the DuckDB it first downloaded, 1.5 included, and loaded
+  that version's extensions (#410). The merge write mode refuses two input
+  rows for one key, now also when the key is new to the table: DuckDB 2.0.1
+  stopped refusing them, and which row's values landed was not defined. A
+  `MERGE` or `UPDATE ... FROM` in your own SQL changed the same way, so
+  deduplicate its source. GPU acceleration is on by default where it can be:
+  on Linux with an NVIDIA driver, the first run downloads Sirius's GPU
+  backend (0.7 to 1.2 GB), and each DuckDB process a run starts takes about
+  1.2 s longer. Set it to Off in Settings, with `--gpu off`, or with
+  `DUCKLE_GPU=off` to skip both.
 - **GPU acceleration (NVIDIA Sirius).** DuckDB 2.0.1 ships Sirius, NVIDIA's GPU
   engine for DuckDB, and on Linux (x86-64 or arm64) with an NVIDIA GPU a run
   can load it: Auto wherever it starts, On fails a run that cannot use the
