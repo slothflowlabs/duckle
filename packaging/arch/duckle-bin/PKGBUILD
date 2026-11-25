@@ -10,7 +10,7 @@
 # provides all three itself.
 
 pkgname=duckle-bin
-pkgver=0.9.0
+pkgver=0.9.1
 pkgrel=1
 pkgdesc="Local-first ETL/ELT and streaming platform with a visual pipeline editor"
 arch=('x86_64' 'aarch64')
@@ -60,8 +60,8 @@ source=("duckle.desktop"
 # Maintained by packaging/arch/bump.py, which the release workflow runs when a
 # release is published. The binary's value is the one the release itself
 # publishes in SHA256SUMS.txt, not one computed separately here.
-sha256sums_x86_64=('c4a0708acdb1440ba55091b8e15244d12cdfe57c44eecd462b6be6fb871d11d1')
-sha256sums_aarch64=('a292e2b55c62cf143938339553a668b8296b85b472c77283e972cfa60d436ca8')
+sha256sums_x86_64=('683821f0ddbd4261874a17e22c3ec60ecafa47326bd92b35704f8f5c2a4f452a')
+sha256sums_aarch64=('cfca4a4e55e837a5d185e7628c3c5bf4a752047f589995edbfe26378922ed81e')
 sha256sums=('34a473a360487e3210fc4a9227b739a25cbccc8419a4117b40a05ef8095b3c81'
             '8dccc57fbe4f2474d01b2e4d15d93a4b27cf3f75c498be5d8e906d961c4b26f8'
             '95935915cc360fbaf736ecbe22229671c404fc0bc53dab63663a58a9352fcea9'
