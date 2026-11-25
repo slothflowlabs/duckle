@@ -740,9 +740,20 @@ fn install_duckdb_extensions<F: FnMut(InstallProgress)>(bin: &Path, on_progress:
 /// offering to "upgrade" it by downloading over the bundled path - which the
 /// runtime would then ignore - would be a lie. A blank value, or a path to
 /// nothing, returns None so the normal engines-dir check still runs.
-fn duckdb_override_status(env_override: Option<&std::ffi::OsStr>) -> Option<EngineStatus> {
+///
+/// #410: nor is Duckle's own engine an override. The desktop publishes it in
+/// DUCKLE_DUCKDB_BIN at startup and a self-update's relaunch inherits it, so
+/// taken for one, an install was never offered an upgrade.
+fn duckdb_override_status(
+    env_override: Option<&std::ffi::OsStr>,
+    own: &Path,
+) -> Option<EngineStatus> {
     let path = env_override.filter(|v| !v.is_empty()).map(PathBuf::from)?;
-    if !path.exists() {
+    let is_own = matches!(
+        (std::fs::canonicalize(&path), std::fs::canonicalize(own)),
+        (Ok(a), Ok(b)) if a == b
+    );
+    if !path.exists() || is_own {
         return None;
     }
     Some(EngineStatus {
@@ -766,7 +777,9 @@ pub fn status(app_data: &Path, duckdb_override: Option<std::ffi::OsString>) -> V
             // #373: an externally-provided DuckDB satisfies the required
             // engine, since that is the one a run would use.
             if s.id == DUCKDB.id {
-                if let Some(st) = duckdb_override_status(duckdb_override.as_deref()) {
+                if let Some(st) =
+                    duckdb_override_status(duckdb_override.as_deref(), &binary_path(app_data, s))
+                {
                     return st;
                 }
             }
@@ -1735,6 +1748,38 @@ mod tests {
             let st = status(tmp.path(), ov);
             let duck = st.iter().find(|e| e.id == "duckdb").unwrap();
             assert!(!duck.installed, "a blank or missing override must not pass the gate");
+        }
+    }
+
+    /// #410: at startup the desktop publishes the engine it resolved into
+    /// DUCKLE_DUCKDB_BIN (issue #2), and engine_status reads that variable back
+    /// for #373, as does the app a self-update relaunches, which inherits it. So
+    /// Duckle's own engine came back as a user's override, installed and never
+    /// outdated: no install was offered an upgrade, and DuckDB 1.5.4 went on
+    /// running under Duckle 0.9.0, which pins 2.0.0.
+    #[test]
+    fn duckles_own_engine_is_not_an_override() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = engine_dir(tmp.path(), &DUCKDB);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(duckdb_path(tmp.path()), b"old-binary").unwrap();
+        std::fs::write(dir.join(".installed-version"), "1.5.4").unwrap();
+
+        // As published, and spelled another way.
+        let respelled = dir
+            .join("..")
+            .join(DUCKDB.id)
+            .join(binary_file_name(&DUCKDB));
+        for published in [duckdb_path(tmp.path()), respelled] {
+            let st = status(tmp.path(), Some(published.clone().into_os_string()));
+            let duck = st.iter().find(|e| e.id == "duckdb").unwrap();
+            assert!(
+                duck.outdated,
+                "{} read as an override, so no upgrade was offered",
+                published.display()
+            );
+            assert!(!duck.installed);
+            assert_eq!(duck.version.as_deref(), Some("1.5.4"));
         }
     }
 
