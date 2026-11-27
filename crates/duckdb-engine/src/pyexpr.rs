@@ -640,6 +640,23 @@ fn emit(ast: &Ast, out: &mut String) -> Result<(), CompileError> {
                     emit(b, out)?;
                     out.push(')');
                 }
+                "%" => {
+                    // Python's result takes the divisor's sign (-7 % 3 == 2);
+                    // SQL's takes the dividend's (-1). Adding b only when the
+                    // signs differ can't overflow a narrow integer type.
+                    let mut m = String::new();
+                    m.push('(');
+                    emit(a, &mut m)?;
+                    m.push_str(" % ");
+                    emit(b, &mut m)?;
+                    m.push(')');
+                    let mut d = String::new();
+                    emit(b, &mut d)?;
+                    let _ = write!(
+                        out,
+                        "CASE WHEN {m} <> 0 AND ({m} < 0) <> ({d} < 0) THEN {m} + {d} ELSE {m} END"
+                    );
+                }
                 _ => {
                     out.push('(');
                     emit(a, out)?;
@@ -711,7 +728,20 @@ fn emit_call(name: &str, args: &[Ast], out: &mut String) -> Result<(), CompileEr
         ("len", 1) => simple("length", out, args),
         ("abs", 1) => simple("abs", out, args),
         ("round", 1) | ("round", 2) => simple("round", out, args),
-        ("int", 1) => cast("BIGINT", out, args),
+        ("int", 1) => {
+            // Python truncates toward zero; a cast to BIGINT rounds (3.7 -> 4).
+            // Whole values keep the exact BIGINT cast.
+            out.push_str("CASE WHEN TRY_CAST(");
+            emit(&args[0], out)?;
+            out.push_str(" AS BIGINT) = TRY_CAST(");
+            emit(&args[0], out)?;
+            out.push_str(" AS DOUBLE) THEN TRY_CAST(");
+            emit(&args[0], out)?;
+            out.push_str(" AS BIGINT) ELSE TRY_CAST(trunc(TRY_CAST(");
+            emit(&args[0], out)?;
+            out.push_str(" AS DOUBLE)) AS BIGINT) END");
+            Ok(())
+        }
         ("float", 1) => cast("DOUBLE", out, args),
         ("str", 1) => cast("VARCHAR", out, args),
         ("bool", 1) => cast("BOOLEAN", out, args),
@@ -804,6 +834,10 @@ mod tests {
         assert_eq!(ok("amount * 1.2"), r#"("amount" * 1.2)"#);
         assert_eq!(ok("a + b - c"), r#"(("a" + "b") - "c")"#);
         assert_eq!(ok("qty // 3"), r#"floor("qty" / 3)"#);
+        assert_eq!(
+            ok("qty % 3"),
+            r#"CASE WHEN ("qty" % 3) <> 0 AND (("qty" % 3) < 0) <> (3 < 0) THEN ("qty" % 3) + 3 ELSE ("qty" % 3) END"#
+        );
         assert_eq!(ok("x ** 2"), r#"power("x", 2)"#);
         assert_eq!(ok("-x"), r#"(- "x")"#);
     }
@@ -846,7 +880,10 @@ mod tests {
     fn builtins_map_to_duckdb() {
         assert_eq!(ok("len(name)"), r#"length("name")"#);
         assert_eq!(ok("round(amount, 2)"), r#"round("amount", 2)"#);
-        assert_eq!(ok("int(qty)"), r#"TRY_CAST("qty" AS BIGINT)"#);
+        assert_eq!(
+            ok("int(qty)"),
+            r#"CASE WHEN TRY_CAST("qty" AS BIGINT) = TRY_CAST("qty" AS DOUBLE) THEN TRY_CAST("qty" AS BIGINT) ELSE TRY_CAST(trunc(TRY_CAST("qty" AS DOUBLE)) AS BIGINT) END"#
+        );
         assert_eq!(ok("max(a, b)"), r#"greatest("a", "b")"#);
     }
 
